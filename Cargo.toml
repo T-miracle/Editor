@@ -1,0 +1,28 @@
+[workspace]
+members = [
+    "crates/editor-app",
+    "crates/editor-core",
+    "crates/platform-windows",
+    "crates/plugin-schema",
+]
+resolver = "2"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+
+[workspace.dependencies]
+anyhow = "1.0"
+dirs = "6.0"
+gpui-kit = { version = "0.6.4", features = ["tree-sitter-languages"] }
+ignore = "0.4"
+# Sorting the explorer by Chinese pronunciation needs a real reading, not a
+# codepoint approximation. `plain` gives toneless ASCII syllables; the tone
+# spellings would sort "chang" and "cháng" apart for no benefit.
+pinyin = { version = "0.11", default-features = false, features = ["plain"] }
+serde = { version = "1.0", features = ["derive"] }
+tempfile = "3.23"
+thiserror = "2.0"
+toml = "0.9"
+

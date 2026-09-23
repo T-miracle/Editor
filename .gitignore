@@ -1,0 +1,17 @@
+/target/
+/dist/
+/.idea/
+/.vscode/
+*.log
+
+# Rust
+**/*.rs.bk
+Cargo.toml.orig
+Cargo.lock.orig
+
+# Rust analyzer and editor state
+/.rustup/
+/.cargo/
+*.swp
+*.swo
+*.tmp

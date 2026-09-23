@@ -1,0 +1,13 @@
+[plugin]
+id = "me.rust"
+name = "Rust"
+version = "0.1.0"
+host_version = ">=0.1.0"
+
+[[languages]]
+id = "rust"
+extensions = ["rs"]
+grammar = "grammar/rust.wasm"
+highlights = "queries/highlights.scm"
+lsp_command = "rust-analyzer"
+
