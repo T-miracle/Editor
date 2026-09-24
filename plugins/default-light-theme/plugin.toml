@@ -1,0 +1,8 @@
+[plugin]
+id = "me.default-light-theme"
+name = "default-light-theme"
+version = "0.1.0"
+host_version = ">=0.1.0"
+
+[theme]
+file = "theme.json"

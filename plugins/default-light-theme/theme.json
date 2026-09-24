@@ -1,0 +1,157 @@
+{
+  "schema_version": 1,
+  "themes": [
+    {
+      "id": "default-light-theme",
+      "name": "default-light-theme",
+      "mode": "light",
+      "colors": {
+        "background": "#ffffff",
+        "surface": "#f7f8fa",
+        "hover": "#ebecf0",
+        "border": "#d3d5db",
+        "foreground": "#1f2329",
+        "muted_foreground": "#6c707e",
+        "selection": "#d4e2ff",
+        "accent": "#3574f0",
+        "accent_hover": "#2f65ca",
+        "accent_active": "#2554a8"
+      },
+      "components": {
+        "app-shell": {
+          "base": { "background": "#ffffff", "foreground": "#1f2329" }
+        },
+        "window-title-bar": {
+          "base": { "background": "#f7f8fa", "foreground": "#1f2329", "border": "#d3d5db" }
+        },
+        "project-badge": {
+          "base": { "background": "#3574f0", "foreground": "#ffffff" }
+        },
+        "explorer-tree": {
+          "base": { "background": "#ffffff", "foreground": "#1f2329" }
+        },
+        "explorer-row": {
+          "hover": { "background": "#ebecf0" },
+          "selected": { "background": "#d4e2ff", "border": "#3574f0" }
+        },
+        "editor-tabs": {
+          "base": { "background": "#f7f8fa", "border": "#d3d5db" },
+          "active": { "background": "#3574f0" }
+        },
+        "editor-tab": {
+          "base": { "background": "#f7f8fa", "foreground": "#6c707e", "border": "#d3d5db" },
+          "selected": { "background": "#ffffff", "foreground": "#1f2329" }
+        },
+        "editor-tab-close": {
+          "hover": { "background": "#ebecf0" }
+        },
+        "editor-tab-drag-preview": {
+          "base": { "background": "#3574f0", "foreground": "#ffffff" }
+        },
+        "editor": {
+          "base": { "background": "#ffffff", "foreground": "#1f2329" }
+        },
+        "scrollbar": {
+          "base": { "background": "#3574f0" },
+          "hover": { "background": "#2f65ca" },
+          "active": { "background": "#2554a8" }
+        },
+        "output-panel": {
+          "base": { "background": "#f7f8fa", "foreground": "#6c707e" }
+        },
+        "panel-toggle": {
+          "selected": { "background": "#d4e2ff", "foreground": "#1f2329" }
+        },
+        "dock-title-bar": {
+          "base": { "background": "#f7f8fa", "foreground": "#1f2329", "border": "#d3d5db" }
+        },
+        "dock-tab": {
+          "base": { "background": "#f7f8fa", "foreground": "#6c707e", "border": "#d3d5db" },
+          "selected": { "background": "#ffffff", "foreground": "#1f2329" }
+        },
+        "dock-drag-preview": {
+          "base": { "background": "#f7f8fa", "border": "#d3d5db" }
+        },
+        "status-bar": {
+          "base": { "background": "#f7f8fa", "foreground": "#6c707e", "border": "#d3d5db" }
+        }
+      }
+    },
+    {
+      "id": "jetbrains-dark",
+      "name": "JetBrains 2023 Dark",
+      "mode": "dark",
+      "colors": {
+        "background": "#1e1f22",
+        "surface": "#2b2d30",
+        "hover": "#393b40",
+        "border": "#43454a",
+        "foreground": "#dfe1e5",
+        "muted_foreground": "#9da0a8",
+        "selection": "#2e436e",
+        "accent": "#3574f0",
+        "accent_hover": "#4682fa",
+        "accent_active": "#2f65ca"
+      },
+      "components": {
+        "app-shell": {
+          "base": { "background": "#1e1f22", "foreground": "#dfe1e5" }
+        },
+        "window-title-bar": {
+          "base": { "background": "#2b2d30", "foreground": "#dfe1e5", "border": "#43454a" }
+        },
+        "project-badge": {
+          "base": { "background": "#3574f0", "foreground": "#ffffff" }
+        },
+        "explorer-tree": {
+          "base": { "background": "#1e1f22", "foreground": "#dfe1e5" }
+        },
+        "explorer-row": {
+          "hover": { "background": "#393b40" },
+          "selected": { "background": "#2e436e", "border": "#3574f0" }
+        },
+        "editor-tabs": {
+          "base": { "background": "#2b2d30", "border": "#43454a" },
+          "active": { "background": "#3574f0" }
+        },
+        "editor-tab": {
+          "base": { "background": "#2b2d30", "foreground": "#9da0a8", "border": "#43454a" },
+          "selected": { "background": "#1e1f22", "foreground": "#dfe1e5" }
+        },
+        "editor-tab-close": {
+          "hover": { "background": "#393b40" }
+        },
+        "editor-tab-drag-preview": {
+          "base": { "background": "#3574f0", "foreground": "#ffffff" }
+        },
+        "editor": {
+          "base": { "background": "#1e1f22", "foreground": "#dfe1e5" }
+        },
+        "scrollbar": {
+          "base": { "background": "#3574f0" },
+          "hover": { "background": "#4682fa" },
+          "active": { "background": "#2f65ca" }
+        },
+        "output-panel": {
+          "base": { "background": "#2b2d30", "foreground": "#9da0a8" }
+        },
+        "panel-toggle": {
+          "selected": { "background": "#2e436e", "foreground": "#dfe1e5" }
+        },
+        "dock-title-bar": {
+          "base": { "background": "#2b2d30", "foreground": "#dfe1e5", "border": "#43454a" }
+        },
+        "dock-tab": {
+          "base": { "background": "#2b2d30", "foreground": "#9da0a8", "border": "#43454a" },
+          "selected": { "background": "#1e1f22", "foreground": "#dfe1e5" }
+        },
+        "dock-drag-preview": {
+          "base": { "background": "#2b2d30", "border": "#43454a" }
+        },
+        "status-bar": {
+          "base": { "background": "#2b2d30", "foreground": "#9da0a8", "border": "#43454a" }
+        }
+      }
+    }
+  ]
+}

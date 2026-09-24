@@ -1,3 +1,4 @@
+mod app_dialog;
 mod assets;
 mod icons;
 mod local_dock;
@@ -7,7 +8,10 @@ mod typography;
 
 use editor_core::{DocumentSession, Workspace};
 use gpui_kit::{
-    InteractiveElement as _,
+    App, AppContext as _, Bounds, Context, Entity, EventEmitter, FocusHandle, Focusable,
+    InteractiveElement as _, IntoElement, KeyBinding, MouseButton, ParentElement, Render,
+    ScrollHandle, ScrollWheelEvent, StatefulInteractiveElement, Styled, Subscription, WeakEntity,
+    Window, WindowBounds, WindowControlArea, actions,
     component::{
         ActiveTheme, Icon, IconName, Root, Sizable, StyledExt, TitleBar,
         button::{Button, ButtonVariants as _},
@@ -19,10 +23,12 @@ use gpui_kit::{
         tree::{TreeEvent, TreeItem, TreeState, tree},
         v_flex,
     },
+    div, point,
     prelude::FluentBuilder,
-    *,
+    px, size,
 };
 use platform_windows::{LocalHistory, NativeFileStore};
+use plugin_schema::ThemeComponent;
 use std::{
     cell::Cell,
     path::{Path, PathBuf},
@@ -34,7 +40,7 @@ use icons::file_icon;
 use local_dock::LocalDock;
 use pinyin::ToPinyin;
 use session_state::SessionState;
-use theme::apply_jetbrains_theme;
+use theme::{apply_theme, builtin_theme, component_styles};
 
 const EXPLORER_INITIAL_WIDTH: f32 = 280.;
 /// Shared height for the Explorer title bar and editor tab bar, in pixels.
@@ -85,6 +91,57 @@ actions!(
     ]
 );
 
+/// Draws the same window glyph and native control region as GPUI Kit's TitleBar.
+fn title_bar_window_control(
+    id: &'static str,
+    icon: IconName,
+    area: WindowControlArea,
+    close: bool,
+    cx: &App,
+) -> impl IntoElement {
+    let hover_foreground = if close {
+        cx.theme().danger_foreground
+    } else {
+        cx.theme().secondary_foreground
+    };
+    let hover_background = if close {
+        cx.theme().danger
+    } else {
+        cx.theme().secondary_hover
+    };
+    let active_background = if close {
+        cx.theme().danger_active
+    } else {
+        cx.theme().secondary_active
+    };
+    div()
+        .id(id)
+        .flex()
+        .w(px(34.))
+        .h_full()
+        .flex_shrink_0()
+        .justify_center()
+        .content_center()
+        .items_center()
+        .text_color(cx.theme().foreground)
+        .hover(|style| style.bg(hover_background).text_color(hover_foreground))
+        .active(|style| style.bg(active_background).text_color(hover_foreground))
+        .when(cfg!(target_os = "windows"), |this| {
+            this.window_control_area(area)
+        })
+        .when(!cfg!(target_os = "windows"), |this| {
+            this.on_click(move |_, window, cx| {
+                cx.stop_propagation();
+                match area {
+                    WindowControlArea::Min => window.minimize_window(),
+                    WindowControlArea::Max => window.zoom_window(),
+                    WindowControlArea::Close => window.remove_window(),
+                    WindowControlArea::Drag => {}
+                }
+            })
+        })
+        .child(Icon::new(icon).small())
+}
 struct EditorApp {
     workspace: Workspace,
     file_store: NativeFileStore,
@@ -97,6 +154,9 @@ struct EditorApp {
     explorer_visibility: Rc<Cell<bool>>,
     tabs_scroll: ScrollHandle,
     tabs_hovered: bool,
+    titlebar_should_move: bool,
+    dialog: Option<Entity<app_dialog::AppDialog>>,
+    hovered_tree_entry: Option<String>,
     tabs: Vec<OpenTab>,
     active_path: Option<PathBuf>,
     status: String,
@@ -121,13 +181,15 @@ struct EditorTabDrag {
 }
 
 impl Render for EditorTabDrag {
-    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let style = component_styles(cx, ThemeComponent::EditorTabDragPreview).base;
         div()
-            .px_2()
-            .py_1()
-            .rounded(px(4.))
-            .bg(rgb(0x3574f0))
-            .text_color(rgb(0xffffff))
+            .px(px(style.padding_x_px.unwrap_or(8.)))
+            .py(px(style.padding_y_px.unwrap_or(4.)))
+            .rounded(px(style.radius_px.unwrap_or(4.)))
+            .text_size(px(style.font_size_px.unwrap_or(12.)))
+            .bg(style.background.unwrap_or(cx.theme().primary))
+            .text_color(style.foreground.unwrap_or(cx.theme().primary_foreground))
             .child(self.label.clone())
     }
 }
@@ -200,16 +262,32 @@ impl dock::BasePanel for EditorDockPanel {
 }
 
 impl DockPanel for EditorDockPanel {
-    fn title(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+    fn title(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         match self.kind {
             EditorDockPanelKind::Explorer => div()
                 .w_full()
                 .h(px(PANEL_HEADER_HEIGHT))
                 .flex()
                 .items_center()
-                .px_2()
-                .text_sm()
+                .px(px(component_styles(cx, ThemeComponent::DockTitleBar)
+                    .base
+                    .padding_x_px
+                    .unwrap_or(8.)))
+                .text_size(px(component_styles(cx, ThemeComponent::DockTitleBar)
+                    .base
+                    .font_size_px
+                    .unwrap_or(14.)))
                 .font_normal()
+                .bg(component_styles(cx, ThemeComponent::DockTitleBar)
+                    .base
+                    .background
+                    .unwrap_or(cx.theme().tab_bar))
+                .text_color(
+                    component_styles(cx, ThemeComponent::DockTitleBar)
+                        .base
+                        .foreground
+                        .unwrap_or(cx.theme().foreground),
+                )
                 .child("资源管理器")
                 .into_any_element(),
             EditorDockPanelKind::Editor => div().child("编辑器").into_any_element(),
@@ -361,6 +439,9 @@ impl EditorApp {
             explorer_visibility,
             tabs_scroll: ScrollHandle::new(),
             tabs_hovered: false,
+            titlebar_should_move: false,
+            dialog: None,
+            hovered_tree_entry: None,
             tabs: Vec::new(),
             active_path: None,
             status: "Ready".into(),
@@ -631,6 +712,12 @@ impl EditorApp {
         cx.notify();
     }
 
+    fn refresh_dialog(&self, cx: &mut Context<Self>) {
+        if let Some(dialog) = &self.dialog {
+            dialog.update(cx, |_, cx| cx.notify());
+        }
+    }
+
     fn toggle_bottom_panel(&mut self, cx: &mut Context<Self>) {
         self.panel_visible = !self.panel_visible;
         self.output_visible.set(self.panel_visible);
@@ -638,6 +725,7 @@ impl EditorApp {
             cx.notify();
         });
         self.persist_session();
+        self.refresh_dialog(cx);
         cx.notify();
     }
 
@@ -646,12 +734,13 @@ impl EditorApp {
         self.explorer_visibility.set(self.explorer_visible);
         self.dock_area.update(cx, |_, cx| cx.notify());
         self.persist_session();
+        self.refresh_dialog(cx);
         cx.notify();
     }
 
     fn toggle_theme(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.dark_theme = !self.dark_theme;
-        apply_jetbrains_theme(self.dark_theme, cx);
+        apply_theme(builtin_theme(self.dark_theme), cx);
         self.status = if self.dark_theme {
             "JetBrains 2023 Dark"
         } else {
@@ -659,6 +748,7 @@ impl EditorApp {
         }
         .into();
         window.refresh();
+        self.refresh_dialog(cx);
         cx.notify();
     }
 
@@ -690,68 +780,110 @@ impl EditorApp {
 
     fn render_file_tree(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let view = cx.entity();
-        let tree = tree(&self.tree_state, move |index, entry, _, _window, cx| {
-            view.update(cx, |_, cx| {
-                let item = entry.item();
-                let is_folder = item.is_folder();
-                let icon = file_icon(Path::new(item.id.as_str()), is_folder, false);
-                let disclosure = if is_folder {
-                    Icon::new(if entry.is_expanded() {
-                        IconName::ChevronDown
+        let tree_style = component_styles(cx, ThemeComponent::ExplorerTree).base;
+        let row_styles = component_styles(cx, ThemeComponent::ExplorerRow);
+        let tree = tree(
+            &self.tree_state,
+            move |index, entry, selected, _window, cx| {
+                let hover_view = view.clone();
+                view.update(cx, |app, cx| {
+                    let item = entry.item();
+                    let row_id = item.id.clone();
+                    let hovered = app
+                        .hovered_tree_entry
+                        .as_deref()
+                        .is_some_and(|id| id == row_id.as_str());
+                    let row_style = if selected {
+                        row_styles.selected
+                    } else if hovered {
+                        row_styles.hover
                     } else {
-                        IconName::ChevronRight
-                    })
-                    .xsmall()
-                    .into_any_element()
-                } else {
-                    div().size(px(12.)).into_any_element()
-                };
-                ListItem::new(index)
-                    .w_full()
-                    .py(px(0.2))
-                    .px_1()
-                    .pl(px(14.) * entry.depth() + px(8.))
-                    .child(
-                        h_flex()
-                            .gap_1()
-                            .child(
-                                div()
-                                    .size(px(12.))
-                                    .flex_shrink_0()
-                                    .justify_center()
-                                    .child(disclosure),
-                            )
-                            .child(div().size(px(16.)).flex_shrink_0().child(icon))
-                            .child(
-                                div()
-                                    .flex_1()
-                                    .min_w(px(0.))
-                                    .truncate()
-                                    .child(item.label.clone()),
-                            ),
-                    )
-                    .on_click(cx.listener({
-                        let item = item.clone();
-                        move |this, _, window, cx| {
-                            if !is_folder {
-                                this.open_file(PathBuf::from(item.id.as_str()), window, cx);
+                        row_styles.base
+                    };
+                    let is_folder = item.is_folder();
+                    let icon = file_icon(Path::new(item.id.as_str()), is_folder, false);
+                    let disclosure = if is_folder {
+                        Icon::new(if entry.is_expanded() {
+                            IconName::ChevronDown
+                        } else {
+                            IconName::ChevronRight
+                        })
+                        .xsmall()
+                        .into_any_element()
+                    } else {
+                        div().size(px(12.)).into_any_element()
+                    };
+                    ListItem::new(index)
+                        .w_full()
+                        .bg(row_style.background.unwrap_or(cx.theme().background))
+                        .text_color(row_style.foreground.unwrap_or(cx.theme().foreground))
+                        .py(px(row_style.padding_y_px.unwrap_or(0.3)))
+                        .px(px(row_style.padding_x_px.unwrap_or(4.)))
+                        .pl(px(14.) * entry.depth() + px(8.))
+                        .when_some(row_style.border, |this, border| {
+                            this.border_l_1().border_color(border)
+                        })
+                        .on_hover(move |is_hovered, _, cx| {
+                            let row_id = row_id.clone();
+                            let _ = hover_view.update(cx, |app, cx| {
+                                if *is_hovered {
+                                    app.hovered_tree_entry = Some(row_id.to_string());
+                                    cx.notify();
+                                } else if app.hovered_tree_entry.as_deref() == Some(row_id.as_str())
+                                {
+                                    app.hovered_tree_entry = None;
+                                    cx.notify();
+                                }
+                            });
+                        })
+                        .child(
+                            h_flex()
+                                .gap_1()
+                                .child(
+                                    div()
+                                        .size(px(12.))
+                                        .flex_shrink_0()
+                                        .justify_center()
+                                        .child(disclosure),
+                                )
+                                .child(div().size(px(16.)).flex_shrink_0().child(icon))
+                                .child(
+                                    div()
+                                        .flex_1()
+                                        .min_w(px(0.))
+                                        .truncate()
+                                        .child(item.label.clone()),
+                                ),
+                        )
+                        .on_click(cx.listener({
+                            let item = item.clone();
+                            move |this, _, window, cx| {
+                                if !is_folder {
+                                    this.open_file(PathBuf::from(item.id.as_str()), window, cx);
+                                }
                             }
-                        }
-                    }))
-            })
-        })
+                        }))
+                })
+            },
+        )
         .p_1()
-        .text_size(px(12.))
+        .text_size(px(tree_style.font_size_px.unwrap_or(12.)))
         .font_family(cx.theme().mono_font_family.clone())
         .flex_1()
         .min_h_0()
-        .bg(rgb(0xffffff))
-        .text_color(rgb(0x1f2329));
+        .bg(tree_style.background.unwrap_or(cx.theme().background))
+        .text_color(tree_style.foreground.unwrap_or(cx.theme().foreground));
 
-        v_flex().size_full().min_h_0().bg(rgb(0xffffff)).child(tree)
+        v_flex()
+            .size_full()
+            .min_h_0()
+            .bg(tree_style.background.unwrap_or(cx.theme().background))
+            .child(tree)
     }
 
     fn render_tabs(&self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let tab_styles = component_styles(cx, ThemeComponent::EditorTab);
+        let close_styles = component_styles(cx, ThemeComponent::EditorTabClose);
         let tabs = self.tabs.iter().map(|tab| {
             let path = tab.session.path().to_path_buf();
             let is_active = self.active_path.as_ref() == Some(&path);
@@ -772,13 +904,48 @@ impl EditorApp {
                 .w(px(190.))
                 .flex_shrink_0()
                 .gap_2()
-                .px_2()
-                .border_r_1()
-                .border_color(cx.theme().border)
-                .bg(if is_active {
-                    cx.theme().background
+                .px(px(tab_styles.base.padding_x_px.unwrap_or(8.)))
+                .text_size(px(if is_active {
+                    tab_styles
+                        .selected
+                        .font_size_px
+                        .or(tab_styles.base.font_size_px)
                 } else {
-                    cx.theme().tab_bar
+                    tab_styles.base.font_size_px
+                }
+                .unwrap_or(14.)))
+                .border_r_1()
+                .border_color(tab_styles.base.border.unwrap_or(cx.theme().border))
+                .bg(if is_active {
+                    tab_styles
+                        .selected
+                        .background
+                        .unwrap_or(cx.theme().background)
+                } else {
+                    tab_styles.base.background.unwrap_or(cx.theme().tab_bar)
+                })
+                .text_color(if is_active {
+                    tab_styles
+                        .selected
+                        .foreground
+                        .unwrap_or(cx.theme().foreground)
+                } else {
+                    tab_styles
+                        .base
+                        .foreground
+                        .unwrap_or(cx.theme().tab_foreground)
+                })
+                .hover(|style| {
+                    style
+                        .bg(tab_styles.hover.background.unwrap_or(if is_active {
+                            tab_styles
+                                .selected
+                                .background
+                                .unwrap_or(cx.theme().background)
+                        } else {
+                            tab_styles.base.background.unwrap_or(cx.theme().tab_bar)
+                        }))
+                        .text_color(tab_styles.hover.foreground.unwrap_or(cx.theme().foreground))
                 })
                 .child(div().size(px(16.)).flex_shrink_0().child(icon))
                 .child(
@@ -793,9 +960,14 @@ impl EditorApp {
                     div()
                         .id(format!("close-editor-tab:{}", path.to_string_lossy()))
                         .flex_shrink_0()
-                        .rounded(px(3.))
+                        .rounded(px(close_styles.base.radius_px.unwrap_or(3.)))
                         .p_1()
-                        .hover(|style| style.bg(cx.theme().list_hover))
+                        .hover(|style| {
+                            style.bg(close_styles
+                                .hover
+                                .background
+                                .unwrap_or(cx.theme().list_hover))
+                        })
                         .child(Icon::new(IconName::Close).xsmall())
                         .on_click(cx.listener(move |this, _, window, cx| {
                             cx.stop_propagation();
@@ -851,8 +1023,16 @@ impl EditorApp {
             .w_full()
             .h(px(PANEL_HEADER_HEIGHT))
             .border_b_1()
-            .border_color(cx.theme().border)
-            .bg(cx.theme().tab_bar)
+            .border_color(
+                component_styles(cx, ThemeComponent::EditorTabs)
+                    .base
+                    .border
+                    .unwrap_or(cx.theme().border),
+            )
+            .bg(component_styles(cx, ThemeComponent::EditorTabs)
+                .base
+                .background
+                .unwrap_or(cx.theme().tab_bar))
             .on_hover(cx.listener(|this, hovered: &bool, _, cx| {
                 this.tabs_hovered = *hovered;
                 cx.notify();
@@ -891,6 +1071,10 @@ impl EditorApp {
                     ),
             )
             .when(max_scroll > px(0.) && self.tabs_hovered, |this| {
+                let thumb_color = component_styles(cx, ThemeComponent::EditorTabs)
+                    .active
+                    .background
+                    .unwrap_or(cx.theme().primary);
                 this.child(
                     div()
                         .absolute()
@@ -898,28 +1082,32 @@ impl EditorApp {
                         .top_0()
                         .w(thumb_width)
                         .h(px(2.))
-                        .bg(cx.theme().primary),
+                        .bg(thumb_color),
                 )
             })
     }
 
     fn render_panel(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let style = component_styles(cx, ThemeComponent::OutputPanel).base;
         v_flex()
             .w_full()
             .size_full()
             .min_h_0()
-            .p_3()
+            .px(px(style.padding_x_px.unwrap_or(12.)))
+            .py(px(style.padding_y_px.unwrap_or(12.)))
             .gap_2()
-            .bg(cx.theme().muted)
+            .bg(style.background.unwrap_or(cx.theme().muted))
             .child(
                 h_flex()
                     .text_sm()
-                    .text_color(cx.theme().muted_foreground)
+                    .text_size(px(style.font_size_px.unwrap_or(14.)))
+                    .text_color(style.foreground.unwrap_or(cx.theme().muted_foreground))
                     .child(self.status.clone()),
             )
     }
 
     fn render_editor_panel(&self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let style = component_styles(cx, ThemeComponent::Editor).base;
         v_flex()
             .size_full()
             .min_h_0()
@@ -930,13 +1118,21 @@ impl EditorApp {
                     .p_0()
                     .flex_1()
                     .min_h_0()
+                    .bg(style.background.unwrap_or(cx.theme().background))
+                    .text_color(style.foreground.unwrap_or(cx.theme().foreground))
                     .font_family(cx.theme().mono_font_family.clone())
-                    .text_size(cx.theme().mono_font_size)
+                    .text_size(
+                        style
+                            .font_size_px
+                            .map(px)
+                            .unwrap_or(cx.theme().mono_font_size),
+                    )
                     .into_any_element(),
             )
     }
 
     fn render_panel_buttons(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let selected_style = component_styles(cx, ThemeComponent::PanelToggle).selected;
         h_flex()
             .items_center()
             .gap_1()
@@ -949,8 +1145,8 @@ impl EditorApp {
                     .tooltip("资源管理器")
                     .when(self.explorer_visible, |button| {
                         button
-                            .bg(cx.theme().list_active)
-                            .text_color(cx.theme().foreground)
+                            .bg(selected_style.background.unwrap_or(cx.theme().list_active))
+                            .text_color(selected_style.foreground.unwrap_or(cx.theme().foreground))
                     })
                     .on_click(cx.listener(|this, _, _, cx| this.toggle_explorer(cx))),
             )
@@ -963,8 +1159,8 @@ impl EditorApp {
                     .tooltip("Output")
                     .when(self.panel_visible, |button| {
                         button
-                            .bg(cx.theme().list_active)
-                            .text_color(cx.theme().foreground)
+                            .bg(selected_style.background.unwrap_or(cx.theme().list_active))
+                            .text_color(selected_style.foreground.unwrap_or(cx.theme().foreground))
                     })
                     .on_click(cx.listener(|this, _, _, cx| this.toggle_bottom_panel(cx))),
             )
@@ -992,6 +1188,10 @@ impl Render for EditorApp {
             .map(|initial| initial.to_uppercase().collect::<String>())
             .unwrap_or_else(|| "M".to_string());
 
+        let shell_style = component_styles(cx, ThemeComponent::AppShell).base;
+        let title_bar_style = component_styles(cx, ThemeComponent::WindowTitleBar).base;
+        let badge_style = component_styles(cx, ThemeComponent::ProjectBadge).base;
+        let status_style = component_styles(cx, ThemeComponent::StatusBar).base;
         v_flex()
             .id("editor-shell")
             .key_context("EditorShell")
@@ -1000,49 +1200,321 @@ impl Render for EditorApp {
             .on_action(cx.listener(Self::on_toggle_panel_action))
             .on_action(cx.listener(Self::on_toggle_theme_action))
             .size_full()
-            .bg(cx.theme().background)
-            .text_color(cx.theme().foreground)
+            .bg(shell_style.background.unwrap_or(cx.theme().background))
+            .text_color(shell_style.foreground.unwrap_or(cx.theme().foreground))
             .child(
-                TitleBar::new().child(
-                    h_flex()
-                        .w_full()
-                        .h_full()
-                        .items_center()
-                        .justify_between()
-                        .gap_2()
-                        .child(
-                            h_flex()
-                                .h_full()
-                                .items_center()
-                                .gap_2()
-                                .px_3()
-                                .child(
-                                    h_flex()
-                                        .size(px(20.))
-                                        .rounded(px(5.))
-                                        .bg(cx.theme().primary)
-                                        .text_color(cx.theme().primary_foreground)
-                                        .text_xs()
-                                        .font_semibold()
-                                        .justify_center()
-                                        .items_center()
-                                        .child(project_initial),
-                                )
-                                .child(div().text_sm().font_semibold().child("Me Editor")),
-                        ),
-                ),
+                h_flex()
+                    .id("custom-title-bar")
+                    .w_full()
+                    .h(px(34.))
+                    .items_center()
+                    .bg(title_bar_style.background.unwrap_or(cx.theme().tab_bar))
+                    .text_color(title_bar_style.foreground.unwrap_or(cx.theme().foreground))
+                    .text_size(px(title_bar_style.font_size_px.unwrap_or(14.)))
+                    .border_b_1()
+                    .border_color(title_bar_style.border.unwrap_or(cx.theme().border))
+                    .child(
+                        h_flex()
+                            .h_full()
+                            .items_center()
+                            .gap_2()
+                            .px_3()
+                            .child(
+                                h_flex()
+                                    .size(px(20.))
+                                    .rounded(px(badge_style.radius_px.unwrap_or(5.)))
+                                    .bg(badge_style.background.unwrap_or(cx.theme().primary))
+                                    .text_color(
+                                        badge_style
+                                            .foreground
+                                            .unwrap_or(cx.theme().primary_foreground),
+                                    )
+                                    .text_size(px(badge_style.font_size_px.unwrap_or(12.)))
+                                    .font_semibold()
+                                    .justify_center()
+                                    .items_center()
+                                    .child(project_initial),
+                            )
+                            .child(div().text_sm().font_semibold().child("Me Editor")),
+                    )
+                    .child(
+                        div()
+                            .id("title-bar-drag-region")
+                            .flex_1()
+                            .h_full()
+                            .window_control_area(WindowControlArea::Drag)
+                            .on_mouse_down(
+                                MouseButton::Left,
+                                cx.listener(|this, _, _, _| this.titlebar_should_move = true),
+                            )
+                            .on_mouse_up(
+                                MouseButton::Left,
+                                cx.listener(|this, _, _, _| this.titlebar_should_move = false),
+                            )
+                            .on_mouse_move(cx.listener(|this, _, window, _| {
+                                if this.titlebar_should_move {
+                                    this.titlebar_should_move = false;
+                                    window.start_window_move();
+                                }
+                            })),
+                    )
+                    .child(self.render_settings_dialog(cx))
+                    .child(self.render_window_controls(window, cx)),
             )
             .child(h_flex().flex_1().min_h_0().child(self.dock_area.clone()))
-            .child(StatusBar::new().left(self.render_panel_buttons(cx)).right(
-                if self.active_path.is_some() {
-                    format!("Ln {}, Col {}", cursor.line + 1, cursor.character + 1)
-                } else {
-                    "Ln –, Col –".to_string()
+            .child(
+                div()
+                    .w_full()
+                    .bg(status_style.background.unwrap_or(cx.theme().background))
+                    .text_color(status_style.foreground.unwrap_or(cx.theme().foreground))
+                    .text_size(px(status_style.font_size_px.unwrap_or(12.)))
+                    .border_t_1()
+                    .border_color(status_style.border.unwrap_or(cx.theme().border))
+                    .child(StatusBar::new().left(self.render_panel_buttons(cx)).right(
+                        if self.active_path.is_some() {
+                            format!("Ln {}, Col {}", cursor.line + 1, cursor.character + 1)
+                        } else {
+                            "Ln –, Col –".to_string()
+                        },
+                    )),
+            )
+            .when_some(self.dialog.clone(), |this, dialog| this.child(dialog))
+    }
+}
+
+impl EditorApp {
+    fn render_window_controls(&self, window: &Window, cx: &Context<Self>) -> impl IntoElement {
+        let supported = window.window_controls();
+        h_flex()
+            .id("window-controls")
+            .h_full()
+            .items_center()
+            .flex_shrink_0()
+            .when(!cfg!(target_os = "macos") && supported.minimize, |this| {
+                this.child(title_bar_window_control(
+                    "minimize",
+                    IconName::WindowMinimize,
+                    WindowControlArea::Min,
+                    false,
+                    cx,
+                ))
+            })
+            .when(!cfg!(target_os = "macos") && supported.maximize, |this| {
+                this.child(title_bar_window_control(
+                    if window.is_maximized() {
+                        "restore"
+                    } else {
+                        "maximize"
+                    },
+                    if window.is_maximized() {
+                        IconName::WindowRestore
+                    } else {
+                        IconName::WindowMaximize
+                    },
+                    WindowControlArea::Max,
+                    false,
+                    cx,
+                ))
+            })
+            .when(!cfg!(target_os = "macos"), |this| {
+                this.child(title_bar_window_control(
+                    "close",
+                    IconName::WindowClose,
+                    WindowControlArea::Close,
+                    true,
+                    cx,
+                ))
+            })
+    }
+
+    fn render_settings_dialog(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let view = cx.entity();
+        let owner = view.clone();
+
+        div()
+            .debug_selector(|| "settings-trigger".into())
+            .child(app_dialog::app_dialog(
+                Button::new("open-settings")
+                    .icon(IconName::Settings)
+                    .small()
+                    .compact()
+                    .ghost()
+                    .tooltip("Settings"),
+                "Settings",
+                move |content, _, cx| {
+                    let (dark, explorer_visible, panel_visible) = {
+                        let settings = view.read(cx);
+                        (
+                            settings.dark_theme,
+                            settings.explorer_visible,
+                            settings.panel_visible,
+                        )
+                    };
+                    let font_size = typography::font_size(cx) / px(1.);
+                    let light_view = view.clone();
+                    let dark_view = view.clone();
+                    let decrease_view = view.clone();
+                    let increase_view = view.clone();
+                    let explorer_view = view.clone();
+                    let panel_view = view.clone();
+                    content.child(
+                        v_flex()
+                            .gap_6()
+                            .py_2()
+                            .child(
+                                v_flex()
+                                    .gap_3()
+                                    .child(div().text_sm().font_semibold().child("Appearance"))
+                                    .child(
+                                        h_flex()
+                                            .items_center()
+                                            .justify_between()
+                                            .child(div().child("Theme"))
+                                            .child(
+                                                h_flex()
+                                                    .gap_2()
+                                                    .child(
+                                                        Button::new("settings-theme-light")
+                                                            .label("Light")
+                                                            .when(!dark, |button| button.primary())
+                                                            .on_click(move |_, window, cx| {
+                                                                light_view.update(
+                                                                    cx,
+                                                                    |this, cx| {
+                                                                        if this.dark_theme {
+                                                                            this.toggle_theme(
+                                                                                window, cx,
+                                                                            );
+                                                                        }
+                                                                    },
+                                                                );
+                                                            }),
+                                                    )
+                                                    .child(
+                                                        Button::new("settings-theme-dark")
+                                                            .label("Dark")
+                                                            .when(dark, |button| button.primary())
+                                                            .on_click(move |_, window, cx| {
+                                                                dark_view.update(cx, |this, cx| {
+                                                                    if !this.dark_theme {
+                                                                        this.toggle_theme(
+                                                                            window, cx,
+                                                                        );
+                                                                    }
+                                                                });
+                                                            }),
+                                                    ),
+                                            ),
+                                    )
+                                    .child(
+                                        h_flex()
+                                            .items_center()
+                                            .justify_between()
+                                            .child(div().child("Interface and editor font size"))
+                                            .child(
+                                                h_flex()
+                                                    .items_center()
+                                                    .gap_2()
+                                                    .child(
+                                                        Button::new("font-size-decrease")
+                                                            .label("−")
+                                                            .on_click(move |_, window, cx| {
+                                                                decrease_view.update(
+                                                                    cx,
+                                                                    |this, cx| {
+                                                                        typography::step_by(cx, -1);
+                                                                        theme::sync_font_sizes(cx);
+                                                                        this.refresh_dialog(cx);
+                                                                        cx.notify();
+                                                                        window.refresh();
+                                                                    },
+                                                                );
+                                                            }),
+                                                    )
+                                                    .child(
+                                                        div()
+                                                            .w(px(52.))
+                                                            .text_center()
+                                                            .child(format!("{font_size:.0} px")),
+                                                    )
+                                                    .child(
+                                                        Button::new("font-size-increase")
+                                                            .label("+")
+                                                            .on_click(move |_, window, cx| {
+                                                                increase_view.update(
+                                                                    cx,
+                                                                    |this, cx| {
+                                                                        typography::step_by(cx, 1);
+                                                                        theme::sync_font_sizes(cx);
+                                                                        this.refresh_dialog(cx);
+                                                                        cx.notify();
+                                                                        window.refresh();
+                                                                    },
+                                                                );
+                                                            }),
+                                                    ),
+                                            ),
+                                    ),
+                            )
+                            .child(
+                                v_flex()
+                                    .gap_3()
+                                    .child(div().text_sm().font_semibold().child("Layout"))
+                                    .child(
+                                        h_flex()
+                                            .items_center()
+                                            .justify_between()
+                                            .child(div().child("File explorer"))
+                                            .child(
+                                                Button::new("settings-explorer-visibility")
+                                                    .label(if explorer_visible {
+                                                        "Visible"
+                                                    } else {
+                                                        "Hidden"
+                                                    })
+                                                    .on_click(move |_, _, cx| {
+                                                        explorer_view.update(cx, |this, cx| {
+                                                            this.toggle_explorer(cx)
+                                                        });
+                                                    }),
+                                            ),
+                                    )
+                                    .child(
+                                        h_flex()
+                                            .items_center()
+                                            .justify_between()
+                                            .child(div().child("Bottom panel"))
+                                            .child(
+                                                Button::new("settings-bottom-panel-visibility")
+                                                    .label(if panel_visible {
+                                                        "Visible"
+                                                    } else {
+                                                        "Hidden"
+                                                    })
+                                                    .on_click(move |_, _, cx| {
+                                                        panel_view.update(cx, |this, cx| {
+                                                            this.toggle_bottom_panel(cx)
+                                                        });
+                                                    }),
+                                            ),
+                                    )
+                                    .child(
+                                        div()
+                                            .text_xs()
+                                            .child("Resize panels by dragging the dividers."),
+                                    ),
+                            ),
+                    )
+                },
+                move |dialog, _, cx| {
+                    owner.update(cx, |this, cx| {
+                        this.dialog = Some(dialog);
+                        cx.notify();
+                    });
                 },
             ))
     }
 }
-
 fn restore_expanded(items: Vec<TreeItem>, expanded: &[String]) -> Vec<TreeItem> {
     items
         .into_iter()
@@ -1179,7 +1651,7 @@ fn main() -> anyhow::Result<()> {
         .run(move |cx| {
             gpui_kit::init(cx);
             typography::init(cx);
-            apply_jetbrains_theme(false, cx);
+            apply_theme(builtin_theme(false), cx);
             cx.activate(true);
             cx.bind_keys([
                 KeyBinding::new("ctrl-s", SaveDocument, Some("EditorShell")),
@@ -1210,4 +1682,44 @@ fn main() -> anyhow::Result<()> {
             .expect("failed to open Me Editor window");
         });
     Ok(())
+}
+
+#[cfg(test)]
+mod settings_dialog_tests {
+    use crate::theme::{apply_theme, builtin_theme};
+    use crate::{EditorApp, typography};
+    use editor_core::Workspace;
+    use gpui_kit::{AppContext as _, TestAppContext, component::Root, gpui, px, size};
+
+    /// Clicking the real title-bar button must paint a dialog in the app window.
+    #[gpui::test]
+    fn settings_button_paints_dialog(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            gpui_kit::init(cx);
+            typography::init(cx);
+            apply_theme(builtin_theme(false), cx);
+            cx.set_reduce_motion(true);
+        });
+        let directory = tempfile::tempdir().unwrap();
+        let workspace = Workspace::open(directory.path()).unwrap();
+        let (_, cx) = cx.add_window_view(move |window, cx| {
+            let view = cx.new(|cx| EditorApp::new(workspace, None, window, cx));
+            Root::new(view, window, cx)
+        });
+        cx.simulate_resize(size(px(1000.), px(800.)));
+        cx.update(|window, cx| window.draw(cx).clear(cx));
+
+        let button = cx
+            .debug_bounds("settings-trigger")
+            .expect("settings button should be visible in the title bar");
+        cx.simulate_click(button.center(), Default::default());
+        cx.run_until_parked();
+        cx.update(|window, cx| window.draw(cx).clear(cx));
+        cx.update(|window, cx| window.draw(cx).clear(cx));
+
+        assert!(
+            cx.debug_bounds("dialog-0").is_some(),
+            "clicking Settings must paint a dialog layer"
+        );
+    }
 }

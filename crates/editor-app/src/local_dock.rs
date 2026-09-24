@@ -6,6 +6,7 @@
 
 use std::{rc::Rc, sync::Arc};
 
+use crate::theme::component_styles;
 use gpui_base::dock::{DockArea, DockAreaRenderer};
 use gpui_kit::{
     AnyElement, AnyView, App, AppContext as _, Context, Empty, Entity, InteractiveElement as _,
@@ -13,13 +14,14 @@ use gpui_kit::{
     Styled as _, Window,
     component::{
         ActiveTheme as _,
-        dock::{DragPanel, PanelHandle, TabGroupContext, TabGroupRenderer},
+        dock::{DragPanel, DropIndicator, PanelHandle, TabGroupContext, TabGroupRenderer},
         h_flex,
     },
     div,
     prelude::FluentBuilder as _,
     px, size,
 };
+use plugin_schema::ThemeComponent;
 
 /// A local Dock appearance with a single shared title/tab-strip height.
 #[derive(Clone, Copy)]
@@ -95,6 +97,8 @@ impl TabGroupRenderer for LocalTabGroupRenderer {
         }
 
         let height = px(self.title_height);
+        let title_style = component_styles(cx, ThemeComponent::DockTitleBar).base;
+        let tab_styles = component_styles(cx, ThemeComponent::DockTab);
         if visible.len() == 1 {
             let (index, panel) = &visible[0];
             if PanelHandle::of(panel).is_some_and(|handle| !handle.title_bar(cx)) {
@@ -108,18 +112,22 @@ impl TabGroupRenderer for LocalTabGroupRenderer {
                 .h(height)
                 .flex_shrink_0()
                 .items_center()
-                .px_2()
-                .text_sm()
+                .px(px(title_style.padding_x_px.unwrap_or(8.)))
+                .text_size(px(title_style.font_size_px.unwrap_or(14.)))
                 .border_b_1()
-                .border_color(cx.theme().border)
-                .bg(cx.theme().tab_bar)
+                .border_color(title_style.border.unwrap_or(cx.theme().border))
+                .bg(title_style.background.unwrap_or(cx.theme().tab_bar))
+                .text_color(title_style.foreground.unwrap_or(cx.theme().foreground))
                 .child(title);
             if let Some(drag) = drag {
+                let panel = panel.clone();
                 title_bar = title_bar.on_drag(drag, move |drag, offset, _, cx| {
                     cx.stop_propagation();
                     drag.set_drag_offset(offset);
                     drag.set_preview_size(size(px(120.), height));
-                    cx.new(|_| LocalDragPreview)
+                    cx.new(|_| LocalDragPreview {
+                        panel: panel.clone(),
+                    })
                 });
             }
             return title_bar.into_any_element();
@@ -139,11 +147,39 @@ impl TabGroupRenderer for LocalTabGroupRenderer {
                     .max_w(px(220.))
                     .flex_shrink_0()
                     .items_center()
-                    .px_2()
+                    .px(px(tab_styles.base.padding_x_px.unwrap_or(8.)))
+                    .text_size(px(tab_styles.base.font_size_px.unwrap_or(14.)))
                     .border_r_1()
-                    .border_color(cx.theme().border)
-                    .when(selected, |this| this.bg(cx.theme().background))
-                    .when(!selected, |this| this.bg(cx.theme().tab_bar))
+                    .border_color(tab_styles.base.border.unwrap_or(cx.theme().border))
+                    .hover(|style| {
+                        style
+                            .bg(tab_styles.hover.background.unwrap_or(
+                                tab_styles.base.background.unwrap_or(cx.theme().tab_bar),
+                            ))
+                            .text_color(tab_styles.hover.foreground.unwrap_or(
+                                tab_styles.base.foreground.unwrap_or(cx.theme().foreground),
+                            ))
+                    })
+                    .text_color(if selected {
+                        tab_styles
+                            .selected
+                            .foreground
+                            .unwrap_or(cx.theme().foreground)
+                    } else {
+                        tab_styles
+                            .base
+                            .foreground
+                            .unwrap_or(cx.theme().tab_foreground)
+                    })
+                    .when(selected, |this| {
+                        this.bg(tab_styles
+                            .selected
+                            .background
+                            .unwrap_or(cx.theme().background))
+                    })
+                    .when(!selected, |this| {
+                        this.bg(tab_styles.base.background.unwrap_or(cx.theme().tab_bar))
+                    })
                     .child(div().flex_1().min_w(px(0.)).truncate().child(title))
                     .on_click({
                         let group = group.clone();
@@ -159,11 +195,14 @@ impl TabGroupRenderer for LocalTabGroupRenderer {
                         }
                     });
                 if let Some(drag) = drag {
+                    let panel = panel.clone();
                     tab = tab.on_drag(drag, move |drag, offset, _, cx| {
                         cx.stop_propagation();
                         drag.set_drag_offset(offset);
                         drag.set_preview_size(size(px(120.), height));
-                        cx.new(|_| LocalDragPreview)
+                        cx.new(|_| LocalDragPreview {
+                            panel: panel.clone(),
+                        })
                     });
                 }
                 tab
@@ -177,8 +216,8 @@ impl TabGroupRenderer for LocalTabGroupRenderer {
             .flex_shrink_0()
             .overflow_x_scroll()
             .border_b_1()
-            .border_color(cx.theme().border)
-            .bg(cx.theme().tab_bar)
+            .border_color(title_style.border.unwrap_or(cx.theme().border))
+            .bg(title_style.background.unwrap_or(cx.theme().tab_bar))
             .children(tabs)
             .into_any_element()
     }
@@ -201,18 +240,48 @@ impl TabGroupRenderer for LocalTabGroupRenderer {
             .child(panel.cached(StyleRefinement::default().absolute().size_full()))
             .into_any_element()
     }
+
+    fn render_drop_indicator(
+        &self,
+        indicator: DropIndicator,
+        _: &mut Window,
+        cx: &mut App,
+    ) -> Option<AnyElement> {
+        let target = indicator.to();
+        Some(
+            div()
+                .absolute()
+                .left(target.origin().x)
+                .top(target.origin().y)
+                .w(target.size().width)
+                .h(target.size().height)
+                .bg(cx.theme().tokens.drop_target)
+                .into_any_element(),
+        )
+    }
 }
 
-struct LocalDragPreview;
+struct LocalDragPreview {
+    panel: Arc<dyn gpui_kit::component::dock::BasePanelView>,
+}
 
 impl Render for LocalDragPreview {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let style = component_styles(cx, ThemeComponent::DockDragPreview).base;
         div()
             .w(px(120.))
             .h(px(28.))
+            .flex()
+            .items_center()
+            .overflow_hidden()
+            .whitespace_nowrap()
+            .px(px(style.padding_x_px.unwrap_or(8.)))
             .border_1()
-            .border_color(cx.theme().border)
-            .bg(cx.theme().tab_bar)
-            .rounded(px(3.))
+            .border_color(style.border.unwrap_or(cx.theme().border))
+            .bg(style.background.unwrap_or(cx.theme().tab_bar))
+            .rounded(px(style.radius_px.unwrap_or(3.)))
+            .text_size(px(style.font_size_px.unwrap_or(14.)))
+            .text_color(style.foreground.unwrap_or(cx.theme().foreground))
+            .child(LocalTabGroupRenderer::panel_title(&self.panel, window, cx))
     }
 }
