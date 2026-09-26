@@ -1,0 +1,121 @@
+_version: 2
+panel.explorer:
+  en: "Explorer"
+  zh-CN: "资源管理器"
+panel.editor:
+  en: "Editor"
+  zh-CN: "编辑器"
+editor.select_file:
+  en: "Select a file from the Explorer"
+  zh-CN: "请从资源管理器中选择一个文件"
+editor.untitled:
+  en: "Untitled"
+  zh-CN: "未命名"
+editor.go_to_definition:
+  en: "Go to Definition"
+  zh-CN: "跳转到定义"
+editor.no_definition:
+  en: "No definition"
+  zh-CN: "暂无定义"
+editor.code_actions:
+  en: "Show Code Actions"
+  zh-CN: "显示代码操作"
+editor.cut:
+  en: "Cut"
+  zh-CN: "剪切"
+editor.copy:
+  en: "Copy"
+  zh-CN: "复制"
+editor.paste:
+  en: "Paste"
+  zh-CN: "粘贴"
+editor.select_all:
+  en: "Select All"
+  zh-CN: "全选"
+status.ready:
+  en: "Ready"
+  zh-CN: "就绪"
+status.workspace_refreshed:
+  en: "Workspace refreshed · %{count} files"
+  zh-CN: "工作区已刷新 · 共 %{count} 个文件"
+status.modified:
+  en: "Modified · revision %{revision}"
+  zh-CN: "已修改 · 修订版本 %{revision}"
+status.open_failed:
+  en: "Open failed: %{error}"
+  zh-CN: "打开失败：%{error}"
+status.opened:
+  en: "Opened %{file_name} · %{language}"
+  zh-CN: "已打开 %{file_name} · %{language}"
+status.save_before_close:
+  en: "Save changes before closing this tab"
+  zh-CN: "关闭此标签页前请先保存更改"
+status.no_open_files:
+  en: "No open files"
+  zh-CN: "没有打开的文件"
+status.nothing_to_save:
+  en: "Nothing to save"
+  zh-CN: "没有可保存的内容"
+status.no_changes_to_save:
+  en: "No changes to save"
+  zh-CN: "没有未保存的更改"
+status.saved:
+  en: "Saved %{path}"
+  zh-CN: "已保存 %{path}"
+status.save_failed:
+  en: "Save failed: %{error}"
+  zh-CN: "保存失败：%{error}"
+status.cursor:
+  en: "Ln %{line}, Col %{column}"
+  zh-CN: "行 %{line}，列 %{column}"
+status.cursor_empty:
+  en: "Ln –, Col –"
+  zh-CN: "行 –，列 –"
+plugins.loading:
+  en: "Loading plugins"
+  zh-CN: "插件加载中"
+plugins.error:
+  en: "Plugin errors"
+  zh-CN: "插件错误"
+plugins.loading_list:
+  en: "Loading plugins"
+  zh-CN: "正在加载的插件"
+plugins.error_list:
+  en: "Plugins that failed to load"
+  zh-CN: "加载失败的插件"
+settings.title:
+  en: "Settings"
+  zh-CN: "设置"
+settings.appearance:
+  en: "Appearance"
+  zh-CN: "外观"
+settings.theme:
+  en: "Theme"
+  zh-CN: "主题"
+settings.light:
+  en: "Light"
+  zh-CN: "浅色"
+settings.dark:
+  en: "Dark"
+  zh-CN: "深色"
+settings.font_size:
+  en: "Interface and editor font size"
+  zh-CN: "界面和编辑器字体大小"
+settings.font_size_value:
+  en: "%{size} px"
+  zh-CN: "%{size} px"
+settings.layout:
+  en: "Layout"
+  zh-CN: "布局"
+settings.file_explorer:
+  en: "File explorer"
+  zh-CN: "文件资源管理器"
+settings.visible:
+  en: "Visible"
+  zh-CN: "显示"
+settings.hidden:
+  en: "Hidden"
+  zh-CN: "隐藏"
+settings.resize_hint:
+  en: "Resize panels by dragging the dividers."
+  zh-CN: "拖动分隔线可调整面板大小。"

@@ -1,0 +1,32 @@
+{
+  "schema_version": 1,
+  "icons": [
+    {
+      "extensions": ["rs"],
+      "light": "icons/rust.svg",
+      "dark": "icons/rust_dark.svg"
+    },
+    {
+      "files": [
+        "Cargo.toml",
+        "rust-toolchain",
+        "rust-toolchain.toml",
+        ".cargo/config",
+        ".cargo/config.toml"
+      ],
+      "light": "icons/rust_config.svg",
+      "dark": "icons/rust_config_dark.svg"
+    },
+    {
+      "files": ["Cargo.lock"],
+      "light": "icons/rust_lock.svg",
+      "dark": "icons/rust_lock_dark.svg"
+    },
+    {
+      "extensions": ["toml"],
+      "project_markers": ["Cargo.toml"],
+      "light": "icons/rust_config.svg",
+      "dark": "icons/rust_config_dark.svg"
+    }
+  ]
+}

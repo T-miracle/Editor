@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="none" viewBox="0 0 16 16">
+  <!-- A narrow green T identifies TOML files without overpowering nearby icons. -->
+  <rect x="2.75" y="3" width="10.5" height="1.6" rx="0.6" fill="#26965C"/>
+  <rect x="7.1" y="4.2" width="1.8" height="8.8" rx="0.6" fill="#26965C"/>
+</svg>

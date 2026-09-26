@@ -8,14 +8,47 @@ pub struct PluginManifest {
     #[serde(default)]
     pub languages: Vec<LanguageContribution>,
     #[serde(default)]
+    /// JSON file that maps plugin file types and names to icon assets.
+    pub file_icons: Option<PathBuf>,
+    #[serde(default)]
     pub theme: Option<ThemeContribution>,
 }
 
+/// Identifies a theme's JSON file containing forced file icon overrides.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct ThemeContribution {
     /// A JSON theme file, relative to the plugin root.
     pub file: PathBuf,
+    /// A JSON file icon map, relative to the plugin root.
+    #[serde(default)]
+    pub file_icons: Option<PathBuf>,
+}
+
+/// A versioned JSON mapping from file selectors to light and dark icon assets.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct FileIconConfig {
+    pub schema_version: u32,
+    #[serde(default)]
+    pub icons: Vec<FileIconRule>,
+}
+
+/// Selects files and points to icon assets relative to the owning plugin or theme.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct FileIconRule {
+    #[serde(default)]
+    pub extensions: Vec<String>,
+    #[serde(default)]
+    pub files: Vec<String>,
+    #[serde(default)]
+    pub folders: bool,
+    /// A file that must occur in the selected file's directory or an ancestor.
+    #[serde(default)]
+    pub project_markers: Vec<String>,
+    pub light: PathBuf,
+    pub dark: PathBuf,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -32,8 +65,41 @@ pub struct LanguageContribution {
     pub extensions: Vec<String>,
     pub grammar: PathBuf,
     pub highlights: PathBuf,
+    /// Tree-sitter language ABI version exported by the grammar module.
+    pub tree_sitter_abi: u32,
     #[serde(default)]
     pub lsp_command: Option<String>,
+    /// Arguments passed directly to the language server executable.
+    #[serde(default)]
+    pub lsp_args: Vec<String>,
+    /// Optional executable patterns searched before the system PATH.
+    #[serde(default)]
+    pub lsp_search_paths: Vec<String>,
+    /// Arguments used to reject unusable executable shims before startup.
+    #[serde(default)]
+    pub lsp_check_args: Vec<String>,
+    /// Optional notification that marks initial workspace analysis complete.
+    #[serde(default)]
+    pub lsp_readiness: Option<LspReadiness>,
+    /// Punctuation that asks the language server for completion suggestions.
+    #[serde(default)]
+    pub completion_triggers: Vec<String>,
+    /// Line suffixes that trigger completion after a space is entered.
+    #[serde(default)]
+    pub completion_after_whitespace: Vec<String>,
+}
+
+/// Describes a boolean readiness signal emitted by a language server.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct LspReadiness {
+    pub notification: String,
+    pub ready_field: String,
+    pub client_capability: String,
+    pub timeout_ms: u64,
+    /// Optional request used to consume readiness notifications while the server is idle.
+    #[serde(default)]
+    pub poll_method: Option<String>,
 }
 
 /// A versioned JSON file containing one or more named editor themes.
@@ -77,7 +143,6 @@ pub enum ThemeComponent {
     EditorTabDragPreview,
     Editor,
     Scrollbar,
-    OutputPanel,
     PanelToggle,
     DockTitleBar,
     DockTab,
@@ -135,6 +200,8 @@ pub enum ManifestError {
     UnsafeAssetPath(String),
     #[error("theme file path is empty")]
     EmptyThemePath,
+    #[error("file icon JSON path is empty")]
+    EmptyFileIconPath,
 }
 
 #[derive(Debug, Error, PartialEq)]
@@ -155,6 +222,22 @@ pub enum ThemeFileError {
     InvalidColor(String, String),
     #[error("invalid metric {1} at {0}; expected a finite value from 0 to 128 pixels")]
     InvalidMetric(String, f32),
+    #[error("file icon JSON path is empty")]
+    EmptyFileIconPath,
+    #[error("unsafe file icon asset path: {0}")]
+    UnsafeFileIconPath(String),
+}
+
+#[derive(Debug, Error, PartialEq, Eq)]
+pub enum FileIconConfigError {
+    #[error("invalid JSON: {0}")]
+    Parse(String),
+    #[error("unsupported file icon schema version {0}")]
+    UnsupportedSchemaVersion(u32),
+    #[error("file icon rule must match an extension, file name, or folder")]
+    MissingSelector,
+    #[error("unsafe file icon asset path: {0}")]
+    UnsafeAssetPath(String),
 }
 
 impl PluginManifest {
@@ -196,6 +279,14 @@ impl PluginManifest {
                 }
             }
         }
+        if let Some(file_icons) = &self.file_icons {
+            if file_icons.as_os_str().is_empty() {
+                return Err(ManifestError::EmptyFileIconPath);
+            }
+            validate_relative_path(file_icons).map_err(|_| {
+                ManifestError::UnsafeAssetPath(file_icons.to_string_lossy().into_owned())
+            })?;
+        }
         if let Some(theme) = &self.theme {
             if theme.file.as_os_str().is_empty() {
                 return Err(ManifestError::EmptyThemePath);
@@ -216,6 +307,14 @@ impl PluginManifest {
                 return Err(ManifestError::UnsafeAssetPath(
                     theme.file.to_string_lossy().into_owned(),
                 ));
+            }
+            if let Some(file_icons) = &theme.file_icons {
+                if file_icons.as_os_str().is_empty() {
+                    return Err(ManifestError::EmptyFileIconPath);
+                }
+                validate_relative_path(file_icons).map_err(|_| {
+                    ManifestError::UnsafeAssetPath(file_icons.to_string_lossy().into_owned())
+                })?;
             }
         }
         Ok(())
@@ -258,6 +357,52 @@ impl ThemeFile {
             }
             validate_palette_colors(theme)?;
             validate_component_metrics(theme)?;
+        }
+        Ok(())
+    }
+}
+
+fn validate_relative_path(path: &std::path::Path) -> Result<(), ()> {
+    if path.is_absolute()
+        || path.components().any(|component| {
+            matches!(
+                component,
+                std::path::Component::ParentDir
+                    | std::path::Component::RootDir
+                    | std::path::Component::Prefix(_)
+            )
+        })
+    {
+        return Err(());
+    }
+    Ok(())
+}
+
+impl FileIconConfig {
+    pub fn parse(source: &str) -> Result<Self, FileIconConfigError> {
+        let config = serde_json::from_str::<Self>(source)
+            .map_err(|error| FileIconConfigError::Parse(error.to_string()))?;
+        config.validate()?;
+        Ok(config)
+    }
+
+    pub fn validate(&self) -> Result<(), FileIconConfigError> {
+        if self.schema_version != 1 {
+            return Err(FileIconConfigError::UnsupportedSchemaVersion(
+                self.schema_version,
+            ));
+        }
+        for rule in &self.icons {
+            if rule.extensions.is_empty() && rule.files.is_empty() && !rule.folders {
+                return Err(FileIconConfigError::MissingSelector);
+            }
+            for path in [&rule.light, &rule.dark] {
+                if path.as_os_str().is_empty() || validate_relative_path(path).is_err() {
+                    return Err(FileIconConfigError::UnsafeAssetPath(
+                        path.to_string_lossy().into_owned(),
+                    ));
+                }
+            }
         }
         Ok(())
     }
@@ -372,7 +517,6 @@ impl ThemeComponent {
             Self::EditorTabDragPreview => "editor-tab-drag-preview",
             Self::Editor => "editor",
             Self::Scrollbar => "scrollbar",
-            Self::OutputPanel => "output-panel",
             Self::PanelToggle => "panel-toggle",
             Self::DockTitleBar => "dock-title-bar",
             Self::DockTab => "dock-tab",
@@ -401,6 +545,7 @@ mod tests {
                 extensions = ["rs"]
                 grammar = "grammar/rust.wasm"
                 highlights = "queries/highlights.scm"
+                tree_sitter_abi = 15
                 lsp_command = "rust-analyzer"
             "#,
         )
@@ -408,5 +553,6 @@ mod tests {
 
         assert_eq!(manifest.plugin.id, "me.rust");
         assert_eq!(manifest.languages[0].extensions, ["rs"]);
+        assert_eq!(manifest.languages[0].tree_sitter_abi, 15);
     }
 }

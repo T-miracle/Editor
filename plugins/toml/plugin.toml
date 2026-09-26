@@ -1,0 +1,14 @@
+file_icons = "icons.json"
+
+[plugin]
+id = "me.toml"
+name = "TOML"
+version = "0.1.0"
+host_version = ">=0.1.0"
+
+[[languages]]
+id = "toml"
+extensions = ["toml"]
+grammar = "grammar/toml.wasm"
+highlights = "queries/highlights.scm"
+tree_sitter_abi = 15

@@ -40,7 +40,7 @@
         },
         "editor-tab": {
           "base": { "background": "#f7f8fa", "foreground": "#6c707e", "border": "#d3d5db" },
-          "selected": { "background": "#ffffff", "foreground": "#1f2329" }
+          "selected": { "background": "#ffffff", "foreground": "#3574f0", "border": "#3574f0" }
         },
         "editor-tab-close": {
           "hover": { "background": "#ebecf0" }
@@ -52,12 +52,9 @@
           "base": { "background": "#ffffff", "foreground": "#1f2329" }
         },
         "scrollbar": {
-          "base": { "background": "#3574f0" },
-          "hover": { "background": "#2f65ca" },
-          "active": { "background": "#2554a8" }
-        },
-        "output-panel": {
-          "base": { "background": "#f7f8fa", "foreground": "#6c707e" }
+          "base": { "background": "#9bd3ff" },
+          "hover": { "background": "#87c8ff" },
+          "active": { "background": "#75bcf5" }
         },
         "panel-toggle": {
           "selected": { "background": "#d4e2ff", "foreground": "#1f2329" }
@@ -116,7 +113,7 @@
         },
         "editor-tab": {
           "base": { "background": "#2b2d30", "foreground": "#9da0a8", "border": "#43454a" },
-          "selected": { "background": "#1e1f22", "foreground": "#dfe1e5" }
+          "selected": { "background": "#1e1f22", "foreground": "#3574f0", "border": "#3574f0" }
         },
         "editor-tab-close": {
           "hover": { "background": "#393b40" }
@@ -128,12 +125,9 @@
           "base": { "background": "#1e1f22", "foreground": "#dfe1e5" }
         },
         "scrollbar": {
-          "base": { "background": "#3574f0" },
-          "hover": { "background": "#4682fa" },
-          "active": { "background": "#2f65ca" }
-        },
-        "output-panel": {
-          "base": { "background": "#2b2d30", "foreground": "#9da0a8" }
+          "base": { "background": "#9bd3ff" },
+          "hover": { "background": "#87c8ff" },
+          "active": { "background": "#75bcf5" }
         },
         "panel-toggle": {
           "selected": { "background": "#2e436e", "foreground": "#dfe1e5" }

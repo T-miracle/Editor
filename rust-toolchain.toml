@@ -1,0 +1,5 @@
+# Use the latest stable version available here; Cargo.toml declares the supported minimum.
+[toolchain]
+channel = "stable"
+profile = "minimal"
+components = ["clippy", "rustfmt"]

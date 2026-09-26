@@ -1,0 +1,12 @@
+//! Window shell, layout, settings, dialogs, and persisted app state.
+
+pub(crate) mod dialog;
+pub(crate) mod dock;
+pub(crate) mod plugins;
+pub(crate) mod session;
+mod settings;
+mod shell;
+
+#[cfg(target_os = "windows")]
+pub(crate) use shell::WindowsTimerResolution;
+pub(crate) use shell::{EditorDockPanel, EditorDockPanelKind};

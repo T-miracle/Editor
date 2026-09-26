@@ -1,0 +1,10 @@
+{
+  "schema_version": 1,
+  "icons": [
+    {
+      "extensions": ["toml"],
+      "light": "icons/file.svg",
+      "dark": "icons/file_dark.svg"
+    }
+  ]
+}

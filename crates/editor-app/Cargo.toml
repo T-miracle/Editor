@@ -2,6 +2,7 @@
 name = "editor-app"
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 license.workspace = true
 
 [dependencies]
@@ -10,11 +11,18 @@ editor-core = { path = "../editor-core" }
 dirs.workspace = true
 gpui-kit.workspace = true
 gpui-base = "0.6.6"
+glob = "0.3"
+lsp-types = "0.97.0"
 platform-windows = { path = "../platform-windows" }
 plugin-schema = { path = "../plugin-schema" }
 pinyin = { version = "0.11", default-features = false, features = ["plain"] }
+rust-i18n.workspace = true
 serde.workspace = true
 serde_json = "1.0"
+# Enable Tree-sitter's Wasmtime-backed runtime for plugin-provided grammars.
+tree-sitter = { version = "0.26.13", features = ["wasm"] }
+tracing = "0.1"
+url = "2.5"
 
 [dev-dependencies]
 gpui-kit = { workspace = true, features = ["test-support"] }

@@ -1,3 +1,5 @@
+file_icons = "icons.json"
+
 [plugin]
 id = "me.rust"
 name = "Rust"
@@ -9,5 +11,24 @@ id = "rust"
 extensions = ["rs"]
 grammar = "grammar/rust.wasm"
 highlights = "queries/highlights.scm"
+tree_sitter_abi = 15
 lsp_command = "rust-analyzer"
+# Rust member paths request completion after their punctuation is typed.
+completion_triggers = [".", ":"]
+# A space after a type annotation or return arrow completes Rust type names.
+completion_after_whitespace = [":", "->"]
+lsp_check_args = ["--version"]
+lsp_search_paths = [
+    "${HOME}/scoop/persist/vscode/data/extensions/rust-lang.rust-analyzer-*/server/rust-analyzer.exe",
+    "${HOME}/.vscode/extensions/rust-lang.rust-analyzer-*/server/rust-analyzer.exe",
+    "${HOME}/.vscode-insiders/extensions/rust-lang.rust-analyzer-*/server/rust-analyzer.exe",
+]
 
+# Rust Analyzer can answer before its workspace has finished loading.
+[languages.lsp_readiness]
+notification = "experimental/serverStatus"
+ready_field = "quiescent"
+client_capability = "serverStatusNotification"
+timeout_ms = 20000
+# Polling consumes server status notifications before the first definition request.
+poll_method = "rust-analyzer/analyzerStatus"

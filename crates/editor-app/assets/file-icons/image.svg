@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="none" viewBox="0 0 16 16">
+  <!-- Simple landscape image icon in the editor's light palette. -->
+  <rect x="2.5" y="2.5" width="11" height="11" rx="1.75" fill="#F4F5F7" stroke="#6C707E"/>
+  <circle cx="10.5" cy="5.75" r="1.25" fill="#EBAF4A"/>
+  <path d="m3.75 11.5 3-3.25 2.1 2.05 1.35-1.35 2.05 2.55" fill="#3574F0" stroke="#3574F0" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>

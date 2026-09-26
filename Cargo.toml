@@ -5,11 +5,19 @@ members = [
     "crates/platform-windows",
     "crates/plugin-schema",
 ]
+# Patched UI dependencies remain outside the application workspace.
+exclude = ["vendor/gpui-base", "vendor/gpui-component"]
 resolver = "2"
+
+# Keep the editor viewport fix and completion menu styling reproducible locally.
+[patch.crates-io]
+gpui-base = { path = "vendor/gpui-base" }
+gpui-component = { path = "vendor/gpui-component" }
 
 [workspace.package]
 version = "0.1.0"
 edition = "2024"
+rust-version = "1.95"
 license = "MIT"
 
 [workspace.dependencies]
@@ -21,6 +29,7 @@ ignore = "0.4"
 # codepoint approximation. `plain` gives toneless ASCII syllables; the tone
 # spellings would sort "chang" and "cháng" apart for no benefit.
 pinyin = { version = "0.11", default-features = false, features = ["plain"] }
+rust-i18n = "4.2.2"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 tempfile = "3.23"

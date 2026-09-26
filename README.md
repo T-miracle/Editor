@@ -4,10 +4,12 @@ Me Editor 是一个 Rust + GPUI Kit 编写的原生桌面代码编辑器初版�
 
 ## 当前可用功能
 
-- 原生三段式界面：文件区、代码编辑区、底部输出区。
+- 原生可调布局：文件区与代码编辑区。
 - 递归文件树，并遵循 `.gitignore`。
 - JetBrains 2023 风格深浅色主题，以及按文件类型显示的彩色 SVG 图标。
 - 打开 UTF-8 文件并按扩展名启用语法高亮。
+- Rust 插件提供 WASM 语法高亮和定义跳转；在符号处按 `F12` 或点击鼠标中键可打开项目文件、Cargo 依赖及已安装的标准库源码。中键点击的位置没有定义时，会短暂显示“暂无定义”。
+- Rust 项目内的 TOML 文件使用 Rust 配置文件图标。
 - 行号、缩进参考线、代码折叠和软换行切换。
 - 编辑脏状态、保存按钮与 `Ctrl+S`。
 - 保存前在用户本地数据目录创建历史快照，不污染项目目录。
@@ -22,20 +24,24 @@ Me Editor 是一个 Rust + GPUI Kit 编写的原生桌面代码编辑器初版�
 .\dist\me-editor.exe
 ```
 
-从源码运行：
-
-日常使用建议采用 Release 构建；`cargo run` 默认生成未优化的 Debug 程序，窗口拖动可能明显卡顿。
+从源码以 Debug 开发模式运行（不打包），`cargo run` 默认生成未优化的 Debug 程序，窗口拖动可能明显卡顿。：
 
 ```powershell
-cd C:\Project\Me\me-editor
-cargo run --release -p editor-app
+cd C:\Projects\RustProjects\Editor
+cargo run -p editor-app -- .
 ```
 
 也可以指定要打开的工作区或文件：
 
 ```powershell
-cargo run --release -p editor-app -- C:\path\to\project
-cargo run --release -p editor-app -- C:\path\to\project\src\main.rs
+cargo run -p editor-app -- C:\path\to\project
+cargo run -p editor-app -- C:\path\to\project\src\main.rs
+```
+
+打包为正式包：
+
+```powershell
+cargo run --release -p editor-app
 ```
 
 ## 验证
@@ -56,7 +62,7 @@ crates/
 └─ plugin-schema/     插件清单稳定格式与校验
 ```
 
-当前版本优先证明编辑闭环可运行。动态 WASM grammar、外部 LSP、Git 写操作、搜索替换预览和 SQLite 历史索引将在后续版本接入现有模块接缝。
+Rust 跳转使用插件清单声明的 `rust-analyzer`。编辑器会查找已安装的语言服务，依赖和标准库源码需要在本机可用。Git 写操作、搜索替换预览和 SQLite 历史索引仍在后续版本接入现有模块接缝。
 
 ## 第三方资源
 
