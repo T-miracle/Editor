@@ -1,0 +1,915 @@
+//! Generic runtime-plugin dock and manager. Feature behavior arrives from installed packages.
+pub(crate) mod contributions;
+mod surface;
+#[cfg(test)]
+mod tests;
+mod worker;
+use crate::*;
+use gpui_kit::component::input::{Input, InputState};
+use gpui_kit::{AnyElement, ClipboardItem, KeyDownEvent, PathPromptOptions, SharedString};
+use plugin_runtime::{
+    Installed, Package,
+    plugin_protocol::{self as protocol, Event as PluginEvent, Request, Scene},
+};
+use std::cell::RefCell;
+use std::collections::BTreeMap;
+use worker::{LifecycleAction, OperationProgress, Work, Worker};
+
+actions!(extensions, [ToggleExtensions, QuitEditor]);
+/// Opens plugin management independently of plugin-owned panel visibility.
+pub fn init(cx: &mut App) {
+    cx.bind_keys([KeyBinding::new(
+        "ctrl-`",
+        ToggleExtensions,
+        Some("EditorShell"),
+    )]);
+}
+
+/// Generic editable field lifecycle; values are returned to the owning plugin on commit.
+struct Editing {
+    id: String,
+    input: Entity<InputState>,
+    _subscriptions: Vec<Subscription>,
+}
+pub struct ExtensionPanel {
+    parent: WeakEntity<EditorApp>,
+    visible: Rc<Cell<bool>>,
+    workspace: PathBuf,
+    root: PathBuf,
+    worker: Arc<Worker>,
+    pub(crate) entries: Vec<Installed>,
+    pub(crate) startup: BTreeMap<String, String>,
+    scenes: HashMap<String, Arc<Scene>>,
+    active: Option<String>,
+    surface_id: Option<String>,
+    panel_title: String,
+    /// Cache package-owned artwork so repainting does not read from disk.
+    panel_icons: [Option<Vec<u8>>; 2],
+    panel_icon_digest: Option<String>,
+    focus: FocusHandle,
+    bounds: Bounds<Pixels>,
+    composition: String,
+    editing: Option<Editing>,
+    /// Prevent a just-committed native input from reopening before the guest reply arrives.
+    committed_edit: Option<String>,
+    scroll: surface::PluginScroll,
+    manager_open: bool,
+    commands_open: bool,
+    pending: Option<Package>,
+    bundled: Vec<PathBuf>,
+    confirm: Option<(String, bool)>,
+    status: Option<String>,
+    progress: Option<OperationProgress>,
+    processes: HashMap<String, usize>,
+    _task: gpui_kit::Task<()>,
+    last_theme: Vec<u32>,
+    last_size: (f32, f32, f32, f32),
+    /// Wait for the final snapshot before the native app shutdown deadline.
+    _quit: Option<Subscription>,
+    _focus_events: Vec<Subscription>,
+}
+impl ExtensionPanel {
+    /// Select the plugin's cached SVG for the active editor palette.
+    fn panel_icon(&self, dark: bool) -> Option<Icon> {
+        self.panel_icons[usize::from(dark)]
+            .as_deref()
+            .map(|bytes| Icon::default().data(bytes).small())
+    }
+    /// Start a worker with explicit workspace/theme context and a private data root.
+    pub fn new(
+        parent: WeakEntity<EditorApp>,
+        workspace: PathBuf,
+        visible: Rc<Cell<bool>>,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        #[cfg(not(test))]
+        let root = std::env::var_os("ME_EDITOR_PLUGIN_HOME")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| {
+                dirs::config_dir()
+                    .unwrap_or_else(std::env::temp_dir)
+                    .join("MeEditor/runtime-plugins")
+            });
+        let environment = environment(&workspace, cx);
+        #[cfg(test)]
+        let root = workspace.join(".runtime-plugin-test");
+        // Installed declarations are available before restored editor tabs are opened.
+        if let Err(error) = contributions::refresh(&root) {
+            tracing::warn!(%error, "installed plugin contributions unavailable");
+        }
+        let worker = Arc::new(Worker::start(root.clone(), environment));
+        // The initial registry snapshot is visible before the background worker starts WASM.
+        let startup = worker.state.lock().unwrap().startup.clone();
+        let shutdown = worker.tx.clone();
+        let quit = cx.on_app_quit(move |_, _| {
+            let (tx, rx) = futures::channel::oneshot::channel();
+            let _ = shutdown.send(Work::Shutdown(Some(tx)));
+            async move {
+                let _ = rx.await;
+            }
+        });
+        let scroll = surface::PluginScroll::new(worker.tx.clone());
+        let task = cx.spawn(async move |this, cx| {
+            loop {
+                cx.background_executor()
+                    .timer(Duration::from_millis(33))
+                    .await;
+                if this.update(cx, |panel, cx| panel.poll(cx)).is_err() {
+                    break;
+                }
+            }
+        });
+        Self {
+            parent,
+            visible,
+            workspace,
+            root,
+            worker,
+            entries: vec![],
+            startup,
+            scenes: HashMap::new(),
+            active: None,
+            surface_id: None,
+            panel_title: "插件管理".into(),
+            panel_icons: [None, None],
+            panel_icon_digest: None,
+            focus: cx.focus_handle(),
+            bounds: Bounds::default(),
+            composition: String::new(),
+            editing: None,
+            committed_edit: None,
+            scroll,
+            manager_open: false,
+            commands_open: false,
+            pending: None,
+            bundled: vec![],
+            confirm: None,
+            status: None,
+            progress: None,
+            processes: HashMap::new(),
+            _task: task,
+            last_theme: vec![],
+            last_size: (0., 0., 0., 0.),
+            _quit: Some(quit),
+            _focus_events: vec![],
+        }
+    }
+    /// Each declared dock surface gets its own native entity while sharing the plugin runtime.
+    fn viewer_parts(
+        parent: WeakEntity<EditorApp>,
+        workspace: PathBuf,
+        root: PathBuf,
+        worker: Arc<Worker>,
+        entries: Vec<Installed>,
+        scenes: HashMap<String, Arc<Scene>>,
+        id: String,
+        panel: protocol::Panel,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        let icon_entry = entries.iter().find(|entry| entry.manifest.id == id);
+        let panel_icons = icon_entry
+            .map(|entry| {
+                [
+                    entry.panel_icon(&root, &panel.id, false),
+                    entry.panel_icon(&root, &panel.id, true),
+                ]
+            })
+            .unwrap_or_default();
+        let panel_icon_digest = icon_entry.map(|entry| entry.digest.clone());
+        let task = cx.spawn(async move |this, cx| {
+            loop {
+                cx.background_executor()
+                    .timer(Duration::from_millis(33))
+                    .await;
+                if this.update(cx, |panel, cx| panel.poll(cx)).is_err() {
+                    break;
+                }
+            }
+        });
+        Self {
+            parent,
+            visible: Rc::new(Cell::new(true)),
+            workspace,
+            root,
+            worker: worker.clone(),
+            entries,
+            startup: BTreeMap::new(),
+            scenes,
+            active: Some(id),
+            surface_id: Some(panel.id),
+            panel_title: panel.title,
+            panel_icons,
+            panel_icon_digest,
+            focus: cx.focus_handle(),
+            bounds: Bounds::default(),
+            composition: String::new(),
+            editing: None,
+            committed_edit: None,
+            scroll: surface::PluginScroll::new(worker.tx.clone()),
+            manager_open: false,
+            commands_open: false,
+            pending: None,
+            bundled: vec![],
+            confirm: None,
+            status: None,
+            progress: None,
+            processes: HashMap::new(),
+            _task: task,
+            last_theme: vec![],
+            last_size: (0., 0., 0., 0.),
+            _quit: None,
+            _focus_events: vec![],
+        }
+    }
+    /// Publish worker results and hand native editor/clipboard requests to the UI thread.
+    fn poll(&mut self, cx: &mut Context<Self>) {
+        let mut changed = false;
+        let mut contributions_changed = false;
+        let effects = {
+            let mut state = self.worker.state.lock().unwrap();
+            // Keep the clicked confirmation visible until its operation finishes successfully.
+            if self.surface_id.is_none() && self.progress.is_some() && state.progress.is_none() {
+                if state.status.is_none() {
+                    match self.progress.as_ref().map(|progress| progress.action) {
+                        Some(LifecycleAction::Install) => self.pending = None,
+                        Some(LifecycleAction::Uninstall) => self.confirm = None,
+                        _ => {}
+                    }
+                }
+            }
+            changed |= self.scenes.len() != state.scenes.len()
+                || state.scenes.iter().any(|(id, scene)| {
+                    self.scenes
+                        .get(id)
+                        .is_none_or(|old| !Arc::ptr_eq(old, scene))
+                })
+                || self.entries.len() != state.entries.len()
+                || self.entries.iter().zip(&state.entries).any(|(a, b)| {
+                    a.enabled != b.enabled || a.digest != b.digest || a.error != b.error
+                })
+                || self.startup != state.startup
+                || self.progress != state.progress;
+            if self.surface_id.is_none() {
+                contributions_changed = self.entries.len() != state.entries.len()
+                    || self.entries.iter().zip(&state.entries).any(|(old, new)| {
+                        old.manifest.id != new.manifest.id
+                            || old.enabled != new.enabled
+                            || old.digest != new.digest
+                            || old.error != new.error
+                    });
+            }
+            self.entries = state.entries.clone();
+            if let (Some(id), Some(panel_id)) = (&self.active, &self.surface_id) {
+                let entry = self.entries.iter().find(|entry| &entry.manifest.id == id);
+                let digest = entry.map(|entry| entry.digest.clone());
+                if self.panel_icon_digest != digest {
+                    // A hot update replaces the cached artwork with the new package version.
+                    self.panel_icons = entry
+                        .map(|entry| {
+                            [
+                                entry.panel_icon(&self.root, panel_id, false),
+                                entry.panel_icon(&self.root, panel_id, true),
+                            ]
+                        })
+                        .unwrap_or_default();
+                    self.panel_icon_digest = digest;
+                    changed = true;
+                }
+            }
+            self.startup = state.startup.clone();
+            self.scenes = state
+                .scenes
+                .iter()
+                .map(|(id, s)| (id.clone(), s.clone()))
+                .collect();
+            self.processes = state
+                .processes
+                .iter()
+                .map(|(id, n)| (id.clone(), *n))
+                .collect();
+            self.progress = state.progress.clone();
+            if self.surface_id.is_none() {
+                if let Some(p) = state.pending.take() {
+                    changed = true;
+                    self.pending = Some(p);
+                    self.manager_open = true;
+                    self.visible.set(true);
+                }
+            }
+            if self.surface_id.is_none() {
+                if let Some(status) = state.status.take() {
+                    changed = true;
+                    self.status = Some(status);
+                }
+            }
+            if self.surface_id.is_none() {
+                std::mem::take(&mut state.effects)
+            } else {
+                vec![]
+            }
+        };
+        if contributions_changed {
+            contributions::refresh_entries(&self.root, &self.entries);
+            let parent = self.parent.clone();
+            cx.defer(move |cx| {
+                let _ = parent.update(cx, |app, cx| {
+                    app.pending_contribution_sync = true;
+                    cx.notify();
+                });
+            });
+        }
+        for (id, effect) in effects {
+            match effect {
+                Request::ClipboardWrite(text) => {
+                    cx.write_to_clipboard(ClipboardItem::new_string(text))
+                }
+                Request::ClipboardRead => {
+                    if let Some(text) = cx.read_from_clipboard().and_then(|item| item.text()) {
+                        self.send_to(&id, PluginEvent::Paste(text));
+                    }
+                }
+                Request::Editor { command } => {
+                    let parent = self.parent.clone();
+                    let tx = self.worker.tx.clone();
+                    let root = self.root.clone();
+                    cx.defer(move |cx| {
+                        let _ = parent.update(cx, |app, cx| {
+                            let mut cwd = None;
+                            let mut text = None;
+                            match command.as_str() {
+                                "selection" => {
+                                    text = Some(app.editor.read(cx).selected_text().to_string())
+                                }
+                                "active_directory" => {
+                                    cwd = Some(
+                                        app.active_path
+                                            .as_deref()
+                                            .and_then(Path::parent)
+                                            .unwrap_or(app.workspace.root())
+                                            .display()
+                                            .to_string(),
+                                    )
+                                }
+                                "save" => app.save_current(cx),
+                                _ => {}
+                            }
+                            let _ = tx.send(Work::Event(
+                                id.clone(),
+                                PluginEvent::Command {
+                                    id: format!("{command}.result"),
+                                    cwd,
+                                    text,
+                                },
+                            ));
+                            if let Some(relative) = command.strip_prefix("open_data:") {
+                                if !relative.contains(['/', '\\', ':'])
+                                    && !relative.starts_with('.')
+                                {
+                                    let path = root.join("data").join(&id).join(relative);
+                                    app.status = format!("插件配置：{}", path.display());
+                                    app.pending_plugin_file = Some(path);
+                                    cx.notify();
+                                }
+                            }
+                        });
+                    });
+                }
+                _ => {}
+            }
+        }
+        changed |= self.scroll.visibility_changed();
+        if changed {
+            cx.notify();
+            if self.surface_id.is_none() {
+                let parent = self.parent.clone();
+                cx.defer(move |cx| {
+                    let _ = parent.update(cx, |app, cx| {
+                        // Close the transient list when the final runtime plugin finishes.
+                        if app.plugin_popup.is_some_and(|(kind, _)| {
+                            kind == PluginPopupKind::Loading && app.plugin_count(kind, cx) == 0
+                        }) {
+                            app.plugin_popup = None;
+                        }
+                        cx.notify();
+                    });
+                });
+            }
+        }
+    }
+    fn send_to(&self, id: &str, event: PluginEvent) {
+        let _ = self.worker.tx.send(Work::Event(id.into(), event));
+    }
+    /// Queue a plugin lifecycle operation and expose its waiting state on this frame.
+    fn queue_lifecycle(&mut self, work: Work) -> bool {
+        if self.worker.queue_lifecycle(work) {
+            self.status = None;
+            self.progress = self.worker.state.lock().unwrap().progress.clone();
+            true
+        } else {
+            false
+        }
+    }
+    fn send(&self, event: PluginEvent) {
+        if let Some(id) = &self.active {
+            let event = if let Some(panel) = &self.surface_id {
+                PluginEvent::Surface {
+                    panel: panel.clone(),
+                    event: Box::new(event),
+                }
+            } else {
+                event
+            };
+            self.send_to(id, event);
+        }
+    }
+    fn command(&self, id: String) {
+        self.send(PluginEvent::Command {
+            id,
+            cwd: None,
+            text: None,
+        });
+    }
+    pub fn focus(&self, window: &mut Window, cx: &mut App) {
+        self.focus.focus(window, cx);
+    }
+    fn current_scene(&self) -> Option<Arc<Scene>> {
+        self.active
+            .as_ref()
+            .and_then(|id| {
+                self.scenes.get(&format!(
+                    "{id}/{}",
+                    self.surface_id.as_deref().unwrap_or_default()
+                ))
+            })
+            .cloned()
+    }
+    /// Dispatch manifest shortcuts without registering terminal-specific native actions.
+    pub fn shortcut(
+        &mut self,
+        event: &KeyDownEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        for entry in &self.entries {
+            if !entry.enabled {
+                continue;
+            }
+            for command in &entry.manifest.commands {
+                if command
+                    .shortcut
+                    .as_ref()
+                    .is_some_and(|s| key_matches(s, event))
+                {
+                    let id = entry.manifest.id.clone();
+                    let command = command.id.clone();
+                    if self.surface_id.is_some() {
+                        self.visible.set(true);
+                    }
+                    self.send_to(
+                        &id,
+                        PluginEvent::Command {
+                            id: command,
+                            cwd: None,
+                            text: None,
+                        },
+                    );
+                    let parent = self.parent.clone();
+                    window.defer(cx, move |window, cx| {
+                        let _ = parent.update(cx, |app, cx| {
+                            if let Some(panel) = app
+                                .plugin_panels
+                                .iter()
+                                .find(|(key, _)| key.starts_with(&format!("{id}/")))
+                                .map(|(_, panel)| panel.clone())
+                            {
+                                panel.update(cx, |panel, cx| {
+                                    panel.visible.set(true);
+                                    panel.focus(window, cx);
+                                });
+                                app.dock_area.update(cx, |_, cx| cx.notify());
+                            }
+                        });
+                    });
+                    cx.stop_propagation();
+                    return true;
+                }
+            }
+        }
+        false
+    }
+    /// Use the native file picker; unsigned packages show their requested capabilities before install.
+    fn choose_package(&mut self, cx: &mut Context<Self>) {
+        let receiver = cx.prompt_for_paths(PathPromptOptions {
+            files: true,
+            directories: false,
+            multiple: false,
+            prompt: Some("选择插件包 (.zip)".into()),
+        });
+        let tx = self.worker.tx.clone();
+        cx.spawn(async move |_, _| {
+            if let Ok(Ok(Some(paths))) = receiver.await {
+                if let Some(path) = paths.first() {
+                    let _ = tx.send(Work::Inspect(path.clone()));
+                }
+            }
+        })
+        .detach();
+    }
+    fn commit_edit(&mut self, cx: &mut Context<Self>) {
+        if let Some(editing) = self.editing.take() {
+            self.committed_edit = Some(editing.id.clone());
+            self.send(PluginEvent::Edit {
+                id: editing.id,
+                text: editing.input.read(cx).value().to_string(),
+            });
+            cx.notify();
+        }
+    }
+    /// Plugin fields use the same native input control as the rest of the editor.
+    fn sync_edit(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.editing.is_some() {
+            return;
+        }
+        let Some(widget) = self
+            .current_scene()
+            .and_then(|s| s.widgets.iter().find(|w| w.edit).cloned())
+        else {
+            self.committed_edit = None;
+            return;
+        };
+        if self.committed_edit.as_ref() == Some(&widget.id) {
+            return;
+        }
+        let input = cx.new(|cx| InputState::new(window, cx).default_value(widget.label));
+        let enter = cx.subscribe_in(&input, window, |this, _, event: &InputEvent, window, cx| {
+            if matches!(event, InputEvent::PressEnter { .. }) {
+                this.commit_edit(cx);
+                this.focus(window, cx);
+            }
+        });
+        let blur = cx.on_focus_out(&input.focus_handle(cx), window, |this, _, _, cx| {
+            this.commit_edit(cx)
+        });
+        input.focus_handle(cx).focus(window, cx);
+        self.editing = Some(Editing {
+            id: widget.id,
+            input,
+            _subscriptions: vec![enter, blur],
+        });
+    }
+}
+/// Convert current host palette into explicit plugin context.
+fn environment(workspace: &Path, cx: &App) -> protocol::Environment {
+    fn color(c: gpui_kit::Hsla) -> u32 {
+        let c = gpui_kit::Rgba::from(c);
+        ((c.r * 255.) as u32) << 16 | ((c.g * 255.) as u32) << 8 | (c.b * 255.) as u32
+    }
+    protocol::Environment {
+        workspace: workspace.display().to_string(),
+        os: std::env::consts::OS.into(),
+        background: color(cx.theme().background),
+        foreground: color(cx.theme().foreground),
+        muted: color(cx.theme().tab_bar),
+        border: color(cx.theme().border),
+        accent: color(cx.theme().primary),
+        selection: color(cx.theme().list_active),
+    }
+}
+fn key_matches(shortcut: &str, event: &KeyDownEvent) -> bool {
+    let parts: Vec<_> = shortcut.split('-').collect();
+    let m = event.keystroke.modifiers;
+    parts.last().is_some_and(|key| *key == event.keystroke.key)
+        && parts.contains(&"ctrl") == m.control
+        && parts.contains(&"alt") == m.alt
+        && parts.contains(&"shift") == m.shift
+}
+
+impl EventEmitter<PanelEvent> for ExtensionPanel {}
+impl Focusable for ExtensionPanel {
+    fn focus_handle(&self, _: &App) -> FocusHandle {
+        self.focus.clone()
+    }
+}
+impl dock::BasePanel for ExtensionPanel {
+    fn panel_name(&self) -> &'static str {
+        "Extensions"
+    }
+    fn closable(&self, _: &App) -> bool {
+        false
+    }
+    fn zoomable(&self, _: &App) -> bool {
+        false
+    }
+    fn visible(&self, _: &App) -> bool {
+        self.visible.get()
+    }
+}
+impl DockPanel for ExtensionPanel {
+    /// Toolbar labels and commands come from installed manifests.
+    fn title(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let title = self.panel_title.clone();
+        let icon = self.panel_icon(cx.theme().is_dark());
+        let mut controls = h_flex().items_center();
+        if let Some(entry) = self
+            .entries
+            .iter()
+            .find(|p| Some(&p.manifest.id) == self.active.as_ref())
+        {
+            for command in &entry.manifest.commands {
+                if let Some(label) = &command.toolbar {
+                    let id = command.id.clone();
+                    controls = controls.child(
+                        Button::new(SharedString::from(id.clone()))
+                            .label(label.clone())
+                            .tooltip(command.title.clone())
+                            .small()
+                            .compact()
+                            .ghost()
+                            .on_click(cx.listener(move |this, _, _, _| this.command(id.clone()))),
+                    );
+                }
+            }
+        }
+        h_flex()
+            .w_full()
+            .justify_between()
+            .child(
+                h_flex()
+                    .items_center()
+                    .gap_2()
+                    .when_some(icon, |row, icon| row.child(icon))
+                    .child(title),
+            )
+            .child(
+                controls
+                    .child(
+                        Button::new("plugin-command-menu")
+                            .label("≡")
+                            .tooltip("插件命令")
+                            .small()
+                            .compact()
+                            .ghost()
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.commands_open = !this.commands_open;
+                                cx.notify();
+                            })),
+                    )
+                    .child(
+                        Button::new("plugin-manager")
+                            .label("插件")
+                            .small()
+                            .compact()
+                            .ghost()
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                // Release the panel borrow before opening the manager window.
+                                let parent = this.parent.clone();
+                                window.defer(cx, move |window, cx| {
+                                    let _ = parent
+                                        .update(cx, |app, cx| app.toggle_extensions(window, cx));
+                                });
+                            })),
+                    )
+                    .child(
+                        Button::new("plugin-hide")
+                            .label("—")
+                            .small()
+                            .compact()
+                            .ghost()
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.visible.set(false);
+                                let _ = this.parent.update(cx, |app, cx| {
+                                    app.dock_area.update(cx, |_, cx| cx.notify());
+                                    cx.notify();
+                                });
+                            })),
+                    ),
+            )
+    }
+    fn title_bar(&self, _: &App) -> bool {
+        true
+    }
+}
+impl EditorApp {
+    /// Keep the window alive while snapshots finish; GPUI's final quit grace is only 200 ms.
+    pub(crate) fn shutdown_plugins(&mut self, cx: &mut Context<Self>) {
+        if self.shutting_down {
+            return;
+        }
+        self.shutting_down = true;
+        self.persist_session();
+        self.status = "正在保存插件状态…".into();
+        cx.notify();
+        let (tx, rx) = futures::channel::oneshot::channel();
+        let _ = self
+            .extensions
+            .read(cx)
+            .worker
+            .tx
+            .send(Work::Shutdown(Some(tx)));
+        cx.spawn(async move |_, cx| {
+            let _ = rx.await;
+            let _ = cx.update(|cx| cx.quit());
+        })
+        .detach();
+    }
+    /// Each installed dock contribution has its own visibility toggle in the editor status bar.
+    pub(crate) fn plugin_panel_buttons(&self, cx: &mut Context<Self>) -> Vec<AnyElement> {
+        // Keep the status order declarative; plugin identities remain opaque to the host.
+        let orders = self
+            .extensions
+            .read(cx)
+            .entries
+            .iter()
+            .flat_map(|entry| {
+                entry.manifest.panels.iter().map(|panel| {
+                    (
+                        format!("{}/{}", entry.manifest.id, panel.id),
+                        panel.status_order.unwrap_or(1000),
+                    )
+                })
+            })
+            .collect::<HashMap<_, _>>();
+        let mut panels = self.plugin_panels.iter().collect::<Vec<_>>();
+        panels.sort_by_key(|(key, _)| (orders.get(*key).copied().unwrap_or(1000), (*key).clone()));
+        panels
+            .into_iter()
+            .map(|(key, panel)| {
+                let panel = panel.clone();
+                let key = key.clone();
+                let title = panel.read(cx).panel_title.clone();
+                let icon = panel.read(cx).panel_icon(cx.theme().is_dark());
+                // A declared panel icon replaces its label while the tooltip keeps its name.
+                let button =
+                    Button::new(SharedString::from(format!("toggle-{key}"))).tooltip(title.clone());
+                let button = if let Some(icon) = icon {
+                    button.icon(icon)
+                } else {
+                    button.label(title)
+                };
+                button
+                    .small()
+                    .compact()
+                    .ghost()
+                    .on_click(cx.listener(move |app, _, window, cx| {
+                        panel.update(cx, |panel, cx| {
+                            let visible = !panel.visible.get();
+                            panel.visible.set(visible);
+                            if visible {
+                                panel.focus(window, cx);
+                            }
+                            cx.notify();
+                        });
+                        app.dock_area.update(cx, |_, cx| cx.notify());
+                        app.session_state
+                            .plugin_panel_visibility
+                            .insert(key.clone(), panel.read(cx).visible.get());
+                        app.persist_session();
+                    }))
+                    .into_any_element()
+            })
+            .collect()
+    }
+    /// Register and remove native panels directly from installed manifest contributions.
+    pub(crate) fn sync_plugin_panels(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let contributions: Vec<_> = self
+            .extensions
+            .read(cx)
+            .entries
+            .iter()
+            .filter(|entry| entry.enabled)
+            .flat_map(|entry| {
+                entry.manifest.panels.iter().map(|panel| {
+                    (
+                        format!("{}/{}", entry.manifest.id, panel.id),
+                        entry.manifest.id.clone(),
+                        panel.clone(),
+                    )
+                })
+            })
+            .collect();
+        let obsolete: Vec<_> = self
+            .plugin_panels
+            .keys()
+            .filter(|key| !contributions.iter().any(|(id, _, _)| id == *key))
+            .cloned()
+            .collect();
+        for key in obsolete {
+            if let Some(panel) = self.plugin_panels.remove(&key) {
+                self.dock_area
+                    .update(cx, |area, cx| area.remove_panel(panel, window, cx));
+            }
+        }
+        for (key, id, descriptor) in contributions {
+            let owner = self.extensions.clone();
+            let dock_size = self
+                .session_state
+                .plugin_dock_sizes
+                .get(&descriptor.position)
+                .copied()
+                .unwrap_or(280.)
+                .clamp(140., 1200.);
+            let placement = match descriptor.position.as_str() {
+                "left" => gpui_base::dock::DockPlacement::Left,
+                "right" => gpui_base::dock::DockPlacement::Right,
+                _ => gpui_base::dock::DockPlacement::Bottom,
+            };
+            if let Some(panel) = self.plugin_panels.get(&key) {
+                // Reattach a hidden panel when reopened after its empty region was removed.
+                let panel_id = gpui_base::dock::PanelId::from(panel.entity_id());
+                if panel.read(cx).visible.get() && self.dock_area.read(cx).panel(panel_id).is_none()
+                {
+                    self.dock_area.update(cx, |area, cx| {
+                        area.add_panel_view(
+                            dock::panel_handle(panel.clone()),
+                            placement,
+                            Some(px(dock_size)),
+                            window,
+                            cx,
+                        );
+                    });
+                }
+                continue;
+            }
+            let panel = cx.new(|cx| {
+                let owner = owner.read(cx);
+                let parent = owner.parent.clone();
+                let workspace = owner.workspace.clone();
+                let root = owner.root.clone();
+                let worker = owner.worker.clone();
+                let entries = owner.entries.clone();
+                let scenes = owner.scenes.clone();
+                ExtensionPanel::viewer_parts(
+                    parent, workspace, root, worker, entries, scenes, id, descriptor, cx,
+                )
+            });
+            self.dock_area.update(cx, |area, cx| {
+                area.add_panel_view(
+                    dock::panel_handle(panel.clone()),
+                    placement,
+                    Some(px(dock_size)),
+                    window,
+                    cx,
+                )
+            });
+            if let Some(visible) = self.session_state.plugin_panel_visibility.get(&key) {
+                panel.update(cx, |panel, _| panel.visible.set(*visible));
+            }
+            self.plugin_panels.insert(key, panel);
+        }
+        // Upstream retains empty dock regions. Remove their layout boxes at the app boundary,
+        // while plugin entities and saved sizes remain available for reopening.
+        for placement in [
+            gpui_base::dock::DockPlacement::Left,
+            gpui_base::dock::DockPlacement::Right,
+            gpui_base::dock::DockPlacement::Bottom,
+        ] {
+            if self.dock_area.read(cx).has_dock(placement)
+                && self.dock_area.read(cx).is_empty(placement, cx)
+            {
+                self.dock_area
+                    .update(cx, |area, cx| area.remove_dock(placement, window, cx));
+            }
+        }
+    }
+    /// Places the supplied plugin artwork beside settings in the window title bar.
+    pub(crate) fn render_extensions_button(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        div().debug_selector(|| "extensions-trigger".into()).child(
+            Button::new("open-extensions")
+                .icon(Icon::default().data(include_bytes!("../assets/plugin-status/plugins.svg")))
+                .small()
+                .compact()
+                .ghost()
+                .tooltip("插件管理 Ctrl+`")
+                .on_click(cx.listener(|this, _, window, cx| this.toggle_extensions(window, cx))),
+        )
+    }
+
+    /// Opens or activates the manager without recreating any running plugin surface.
+    pub(crate) fn toggle_extensions(&mut self, _: &mut Window, cx: &mut Context<Self>) {
+        if let Some(handle) = self.extensions_window
+            && handle
+                .update(cx, |_, window, _| window.activate_window())
+                .is_ok()
+        {
+            return;
+        }
+        let manager = self.extensions.clone();
+        let (_, handle) = app_dialog::open_dialog(
+            "插件管理",
+            move |content, _, _| content.h_full().child(manager.clone()),
+            cx,
+        );
+        let window_id = handle.window_id();
+        let owner = cx.entity().downgrade();
+        self._extensions_closed_subscription = Some(cx.on_window_closed(move |cx, closed_id| {
+            if closed_id == window_id {
+                let _ = owner.update(cx, |this, cx| {
+                    this.extensions_window = None;
+                    cx.notify();
+                });
+            }
+        }));
+        self.extensions_window = Some(handle);
+        cx.notify();
+    }
+}

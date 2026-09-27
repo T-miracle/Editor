@@ -4,7 +4,7 @@ use std::{collections::BTreeMap, sync::LazyLock, time::Duration};
 
 use gpui_kit::{
     App, Global, Hsla,
-    component::{Theme, ThemeMode, input::CompletionMenuStyle},
+    component::{Theme, ThemeMode},
     px, rgb,
 };
 use plugin_schema::{
@@ -111,11 +111,6 @@ pub fn apply_theme(theme: &ThemeDefinition, cx: &mut App) {
         .and_then(|styles| styles.base.background.as_deref())
         .map(color)
         .unwrap_or(accent);
-    let row_selected_foreground = explorer_row
-        .and_then(|styles| styles.selected.as_ref())
-        .and_then(|styles| styles.foreground.as_deref())
-        .map(color)
-        .unwrap_or(foreground);
     let scrollbar_thumb_hover = scrollbar
         .and_then(|styles| styles.hover.as_ref())
         .and_then(|styles| styles.background.as_deref())
@@ -186,19 +181,6 @@ pub fn apply_theme(theme: &ThemeDefinition, cx: &mut App) {
     }
     sync_font_sizes(cx);
     Theme::sync_base(cx);
-
-    // The completion list shares the editor font and explorer selection colors.
-    cx.set_global(CompletionMenuStyle {
-        font_family: Some(Theme::global(cx).mono_font_family.clone()),
-        font_size: Some(crate::typography::editor_font_size(cx)),
-        foreground: Some(foreground),
-        detail_foreground: Some(muted_foreground),
-        match_foreground: Some(accent),
-        hover_background: Some(row_hover),
-        selected_background: Some(row_selected),
-        selected_foreground: Some(row_selected_foreground),
-        selected_border: Some(row_selected_border),
-    });
 
     let base_theme = gpui_base::Theme::global_mut(cx);
     let scrollbar = base_theme.scrollbar.clone();
@@ -288,8 +270,10 @@ pub fn sync_font_sizes(cx: &mut App) {
     let theme = Theme::global_mut(cx);
     theme.font_size = base;
     theme.mono_font_size = editor;
-    // Font controls also resize the completion menu without changing other popovers.
-    if cx.has_global::<CompletionMenuStyle>() {
-        cx.global_mut::<CompletionMenuStyle>().font_size = Some(editor);
-    }
+    // Upstream popovers inherit the shared theme typography.
+}
+
+/// Prefer an enabled theme package while retaining a usable palette before installation.
+pub fn active_theme(dark: bool) -> ThemeDefinition {
+    crate::extensions::contributions::theme(dark).unwrap_or_else(|| builtin_theme(dark).clone())
 }

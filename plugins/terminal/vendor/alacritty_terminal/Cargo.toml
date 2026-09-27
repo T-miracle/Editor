@@ -1,0 +1,19 @@
+[package]
+name = "alacritty_terminal"
+version = "0.26.0"
+edition = "2024"
+license = "Apache-2.0"
+description = "WASM-capable Alacritty terminal emulation modules for the Editor terminal plugin"
+
+[features]
+default = []
+serde = ["dep:serde", "bitflags/serde", "vte/serde"]
+
+[dependencies]
+base64 = "0.22"
+bitflags = "2.4"
+log = "0.4"
+regex-automata = "0.4"
+unicode-width = "0.2"
+vte = { version = "0.15", default-features = false, features = ["std", "ansi"] }
+serde = { version = "1", features = ["derive", "rc"], optional = true }

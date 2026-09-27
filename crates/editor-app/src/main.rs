@@ -1,6 +1,7 @@
 mod app;
 mod editor;
 mod explorer;
+mod extensions;
 pub mod language;
 #[cfg(test)]
 mod tests;
@@ -13,16 +14,18 @@ use editor_core::{DocumentSession, Workspace};
 use gpui_base::input::RopeExt as _;
 use gpui_kit::{
     App, AppContext as _, Bounds, Context, Entity, EventEmitter, FocusHandle, Focusable,
-    InteractiveElement as _, IntoElement, KeyBinding, Modifiers, MouseButton, MouseDownEvent,
-    MouseUpEvent, ParentElement, Pixels, PlatformInput, Point, Render, ScrollHandle,
-    ScrollStrategy, ScrollWheelEvent, StatefulInteractiveElement, Styled, Subscription, WeakEntity,
-    Window, WindowBounds, WindowControlArea, actions,
+    HighlightStyle, InteractiveElement as _, IntoElement, KeyBinding, Modifiers, MouseButton,
+    MouseDownEvent, MouseUpEvent, ParentElement, Pixels, PlatformInput, Point, Render,
+    ScrollHandle, ScrollStrategy, ScrollWheelEvent, StatefulInteractiveElement, Styled,
+    Subscription, WeakEntity, Window, WindowBounds, WindowControlArea, WindowHandle, actions,
     component::{
         ActiveTheme, Icon, IconName, Root, Sizable, StyledExt, TitleBar,
         button::{Button, ButtonVariants as _},
         dock::{self as dock, DockArea, DockEvent, DockLayout, Panel as DockPanel, PanelEvent},
         h_flex,
-        input::{Editor, EditorState, InputEvent, TabSize},
+        input::{
+            Editor, EditorState, InputEvent, TabSize, TextDecoration, TextDecorationCollection,
+        },
         list::ListItem,
         status_bar::StatusBar,
         tooltip::Tooltip,
@@ -60,7 +63,9 @@ use language::navigation as language_navigation;
 pub use language::plugins as language_plugins;
 use local_dock::LocalDock;
 use session_state::SessionState;
-use theme::{apply_theme, builtin_theme, component_styles};
+#[cfg(test)]
+use theme::builtin_theme;
+use theme::{apply_theme, component_styles};
 use ui::{assets, icons, theme, typography};
 
 const EXPLORER_INITIAL_WIDTH: f32 = 280.;
@@ -85,12 +90,29 @@ struct EditorApp {
     editor: Entity<EditorState>,
     tree_state: Entity<TreeState>,
     dock_area: Entity<DockArea>,
+    /// Generic runtime plugin dock; packages own all feature behavior.
+    extensions: Entity<extensions::ExtensionPanel>,
+    /// Installed manifests dynamically contribute native dock panel entities.
+    plugin_panels: HashMap<String, Entity<extensions::ExtensionPanel>>,
+    /// The manager owns a modal window independently from settings and plugin dock surfaces.
+    extensions_window: Option<WindowHandle<Root>>,
+    _extensions_closed_subscription: Option<Subscription>,
+    /// Deferred native editor navigation requested by a permission-checked plugin.
+    pending_plugin_file: Option<PathBuf>,
+    /// Native close waits for plugin snapshots before requesting platform shutdown.
+    shutting_down: bool,
     explorer_visible: bool,
     explorer_visibility: Rc<Cell<bool>>,
     tabs_scroll: ScrollHandle,
     tabs_hovered: bool,
     titlebar_should_move: bool,
     dialog: Option<Entity<app_dialog::AppDialog>>,
+    /// Native settings window handle used to activate an already open window.
+    dialog_window: Option<WindowHandle<Root>>,
+    /// Removes the settings view when its native window closes.
+    _dialog_closed_subscription: Option<Subscription>,
+    /// Remembers the selected settings category while the dialog is reopened.
+    settings_section: app::SettingsSection,
     hovered_tree_entry: Option<String>,
     tabs: Vec<OpenTab>,
     active_path: Option<PathBuf>,
@@ -98,6 +120,10 @@ struct EditorApp {
     definition_notice: Option<DefinitionNotice>,
     definition_request_id: u64,
     plugin_loads: Vec<PluginLoadEntry>,
+    /// Rejects completion from a grammar task belonging to an older package version.
+    plugin_loading_generation: u64,
+    /// Apply package lifecycle changes on the next frame with access to the editor window.
+    pending_contribution_sync: bool,
     plugin_popup: Option<(PluginPopupKind, Point<Pixels>)>,
     dark_theme: bool,
     session_state: SessionState,
@@ -116,6 +142,9 @@ struct DefinitionNotice {
 struct OpenTab {
     session: DocumentSession,
     editor: Entity<EditorState>,
+    /// A separate decoration layer keeps a definition jump visible for two seconds.
+    definition_highlight: TextDecorationCollection,
+    definition_highlight_generation: u64,
     _subscription: Subscription,
 }
 
@@ -126,6 +155,11 @@ impl EditorApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
+        let closing = cx.entity().downgrade();
+        window.on_window_should_close(cx, move |_, cx| {
+            let _ = closing.update(cx, |app, cx| app.shutdown_plugins(cx));
+            false
+        });
         let editor = cx.new(|cx| {
             EditorState::new(window, cx)
                 .language("text".to_string())
@@ -158,6 +192,7 @@ impl EditorApp {
         });
         let parent = cx.entity().downgrade();
         let explorer_visibility = Rc::new(Cell::new(session_state.explorer_visible));
+        let extension_visibility = Rc::new(Cell::new(false));
         let explorer_panel = cx.new(|cx| {
             EditorDockPanel::new(
                 parent.clone(),
@@ -180,8 +215,16 @@ impl EditorApp {
             window,
             cx,
         );
+        let extensions = cx.new(|cx| {
+            extensions::ExtensionPanel::new(
+                parent.clone(),
+                workspace.root().to_owned(),
+                extension_visibility.clone(),
+                cx,
+            )
+        });
         dock_area.update(cx, |area, cx| {
-            // The editor occupies the full center area after removing the output panel.
+            // Explorer and the editor share the center; plugin management has its own window.
             area.set_center(
                 DockLayout::h_split()
                     .child(
@@ -199,6 +242,18 @@ impl EditorApp {
         let dock_subscription = cx.subscribe(&dock_area, |this, area, event, cx| {
             if matches!(event, DockEvent::LayoutChanged) {
                 let layout = area.read(cx).dump(cx);
+                for (name, dock) in [
+                    ("left", &layout.left_dock),
+                    ("right", &layout.right_dock),
+                    ("bottom", &layout.bottom_dock),
+                ] {
+                    if let Some(dock) = dock {
+                        this.session_state
+                            .plugin_dock_sizes
+                            .insert(name.into(), dock.size() / px(1.));
+                    }
+                }
+                // Explorer width belongs directly to the horizontal center split.
                 if let Some(width) = layout.center.info.sizes().and_then(|sizes| sizes.first()) {
                     this.session_state.explorer_width = *width / px(1.);
                 }
@@ -213,19 +268,30 @@ impl EditorApp {
             editor,
             tree_state,
             dock_area,
+            extensions,
+            plugin_panels: HashMap::new(),
+            extensions_window: None,
+            _extensions_closed_subscription: None,
+            pending_plugin_file: None,
+            shutting_down: false,
             explorer_visible: session_state.explorer_visible,
             explorer_visibility,
             tabs_scroll: ScrollHandle::new(),
             tabs_hovered: false,
             titlebar_should_move: false,
             dialog: None,
+            dialog_window: None,
+            _dialog_closed_subscription: None,
+            settings_section: app::SettingsSection::AppearanceAndBehavior,
             hovered_tree_entry: None,
             tabs: Vec::new(),
             active_path: None,
             status: t!("status.ready").to_string(),
             definition_notice: None,
             definition_request_id: 0,
-            plugin_loads: PluginLoadEntry::initial(&session_state.disabled_plugins),
+            plugin_loads: PluginLoadEntry::initial(),
+            plugin_loading_generation: 0,
+            pending_contribution_sync: false,
             plugin_popup: None,
             dark_theme: false,
             session_state,
@@ -263,7 +329,7 @@ impl EditorApp {
 
         let focus = this.editor.focus_handle(cx);
         window.defer(cx, move |window, cx| focus.focus(window, cx));
-        this.start_plugin_loading(window, cx);
+        this.start_plugin_loading(cx);
         this
     }
 
@@ -297,7 +363,7 @@ impl EditorApp {
 
     fn toggle_theme(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.dark_theme = !self.dark_theme;
-        apply_theme(builtin_theme(self.dark_theme), cx);
+        apply_theme(&theme::active_theme(self.dark_theme), cx);
         self.status = if self.dark_theme {
             "JetBrains 2023 Dark"
         } else {
@@ -425,7 +491,7 @@ impl EditorApp {
                     .is_some_and(|location| {
                         app.open_definition_uri(
                             &location.target_uri,
-                            Some(location.target_selection_range.start),
+                            Some(location.target_selection_range),
                             window,
                             cx,
                         )
@@ -508,14 +574,31 @@ fn main() -> anyhow::Result<()> {
         .run(move |cx| {
             gpui_kit::init(cx);
             typography::init(cx);
-            apply_theme(builtin_theme(false), cx);
+            apply_theme(&theme::active_theme(false), cx);
             cx.activate(true);
+            extensions::init(cx);
             cx.bind_keys([
-                KeyBinding::new("ctrl-s", SaveDocument, Some("EditorShell")),
-                KeyBinding::new("ctrl-shift-r", RefreshWorkspace, Some("EditorShell")),
+                KeyBinding::new(
+                    "ctrl-s",
+                    SaveDocument,
+                    Some("EditorShell && !PluginSurface"),
+                ),
+                KeyBinding::new(
+                    "ctrl-shift-r",
+                    RefreshWorkspace,
+                    Some("EditorShell && !PluginSurface"),
+                ),
                 KeyBinding::new("ctrl-alt-t", ToggleTheme, Some("EditorShell")),
-                KeyBinding::new("f12", NavigateToDefinition, Some("EditorShell")),
-                KeyBinding::new("ctrl-i", ShowDefinitionDetails, Some("EditorShell")),
+                KeyBinding::new(
+                    "f12",
+                    NavigateToDefinition,
+                    Some("EditorShell && !PluginSurface"),
+                ),
+                KeyBinding::new(
+                    "ctrl-i",
+                    ShowDefinitionDetails,
+                    Some("EditorShell && !PluginSurface"),
+                ),
             ]);
 
             let bounds = Bounds::centered(

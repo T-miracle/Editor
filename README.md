@@ -15,6 +15,7 @@ Me Editor 是一个 Rust + GPUI Kit 编写的原生桌面代码编辑器初版�
 - 保存前在用户本地数据目录创建历史快照，不污染项目目录。
 - 声明式插件清单解析和校验骨架。
 - 统一命令注册表骨架。
+- WebAssembly 运行时插件：本机安装、热更新、权限确认、状态保存与通用 GPUI 停靠界面。终端插件内的 Alacritty 核心、右侧 Tab 与交互均在插件内，详见 [运行时插件平台](docs/runtime-plugins.md) 和 [终端插件使用说明](plugins/terminal/README.md)。
 
 ## 运行
 
@@ -66,4 +67,8 @@ Rust 跳转使用插件清单声明的 `rust-analyzer`。编辑器会查找已�
 
 ## 第三方资源
 
+GPUI 界面依赖使用 crates.io 发布的上游版本，由 `Cargo.lock` 锁定；项目不使用 `gpui-base` 或 `gpui-component` 的本地源码覆盖。插件停靠区的显隐适配保留在应用层，补全与悬浮提示采用上游组件行为。
+
 文件图标来自 [peakoss/vscode-jetbrains-icon-theme](https://github.com/peakoss/vscode-jetbrains-icon-theme/tree/main/assets/2023)，按 MIT 许可证使用。完整许可文本位于 `THIRD_PARTY_LICENSES/vscode-jetbrains-icon-theme-LICENSE.md`。
+
+终端 WASM 插件使用内置的 Alacritty 0.26.0 WASM 适配核心和上游 `vte`；详见 [运行时插件文档](docs/runtime-plugins.md)。

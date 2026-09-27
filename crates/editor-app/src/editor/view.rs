@@ -66,7 +66,7 @@ impl EditorApp {
                     let icon = file_icon(
                         Path::new(item.id.as_str()),
                         is_folder,
-                        builtin_theme(app.dark_theme),
+                        &theme::active_theme(app.dark_theme),
                     );
                     let disclosure = if is_folder {
                         Icon::new(if entry.is_expanded() {
@@ -169,7 +169,7 @@ impl EditorApp {
                 .file_name()
                 .map(str::to_owned)
                 .unwrap_or_else(|_| t!("editor.untitled").to_string());
-            let icon = file_icon(&path, false, builtin_theme(self.dark_theme));
+            let icon = file_icon(&path, false, &theme::active_theme(self.dark_theme));
             let activate_path = path.clone();
             let close_path = path.clone();
             let middle_close_path = path.clone();
@@ -425,6 +425,8 @@ impl EditorApp {
         };
         let app = cx.entity().downgrade();
         v_flex()
+            // Expose the editor extent for layout regression checks when docks disappear.
+            .debug_selector(|| "editor-panel-content".into())
             .size_full()
             .min_h_0()
             .child(self.render_tabs(window, cx))

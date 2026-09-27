@@ -9,39 +9,13 @@ use plugin_schema::{LanguageContribution, PluginManifest};
 use std::{
     fs,
     path::{Path, PathBuf},
-    sync::{Arc, LazyLock},
+    sync::Arc,
 };
 use tree_sitter::{Parser, WasmStore, wasmtime::Engine};
 
-/// Keep language identities and server configuration in plugin manifests.
-static BUNDLED_LANGUAGES: LazyLock<Vec<LanguageContribution>> = LazyLock::new(|| {
-    [
-        include_str!("../../../../plugins/rust/plugin.toml"),
-        include_str!("../../../../plugins/toml/plugin.toml"),
-    ]
-    .into_iter()
-    .flat_map(|source| {
-        match PluginManifest::parse(source) {
-            Ok(manifest) => manifest.languages,
-            Err(error) => {
-                // Startup still opens a window so the status bar can report the broken plugin.
-                tracing::warn!(%error, "bundled language plugin manifest is invalid");
-                Vec::new()
-            }
-        }
-    })
-    .collect()
-});
-
 /// Finds the plugin contribution responsible for a source file's extension.
-pub fn language_for_path(path: &Path) -> Option<&'static LanguageContribution> {
-    let extension = path.extension()?.to_str()?;
-    BUNDLED_LANGUAGES.iter().find(|language| {
-        language
-            .extensions
-            .iter()
-            .any(|candidate| candidate.eq_ignore_ascii_case(extension))
-    })
+pub fn language_for_path(path: &Path) -> Option<LanguageContribution> {
+    crate::extensions::contributions::language_for_path(path).map(|(_, language)| language)
 }
 
 /// The bundled plugins are individually tracked so one failure cannot hide another result.
@@ -88,27 +62,37 @@ pub fn prepare_bundled_plugins() {
     }
 }
 
-/// Validate and register one bundled grammar without delaying the initial window.
+/// Validate and register one installed grammar without delaying the initial window.
 pub fn load_bundled_plugin(plugin: BundledPlugin) -> anyhow::Result<()> {
-    let (source, grammar, query) = match plugin {
-        BundledPlugin::Rust => (
-            include_str!("../../../../plugins/rust/plugin.toml"),
-            include_bytes!("../../../../plugins/rust/grammar/rust.wasm").as_slice(),
-            include_str!("../../../../plugins/rust/queries/highlights.scm"),
-        ),
-        BundledPlugin::Toml => (
-            include_str!("../../../../plugins/toml/plugin.toml"),
-            include_bytes!("../../../../plugins/toml/grammar/toml.wasm").as_slice(),
-            include_str!("../../../../plugins/toml/queries/highlights.scm"),
-        ),
-    };
-    let manifest = PluginManifest::parse(source)
-        .with_context(|| format!("parse bundled {} plugin manifest", plugin.name()))?;
-    for contribution in &manifest.languages {
-        register_language(contribution, grammar.to_vec(), query.to_owned())
-            .with_context(|| format!("register bundled {} grammar", contribution.id))?;
-    }
+    let root = crate::extensions::contributions::plugin_root(plugin.manifest_id())
+        .ok_or_else(|| anyhow::anyhow!("{} plugin is not installed and enabled", plugin.name()))?;
+    let source = fs::read_to_string(root.join("plugin.toml"))?;
+    let manifest = PluginManifest::parse(&source)?;
+    let contribution = manifest
+        .languages
+        .iter()
+        .find(|language| language.id == plugin.language_id())
+        .ok_or_else(|| anyhow::anyhow!("{} grammar is missing from its package", plugin.name()))?;
+    let (grammar, query) = load_plugin_language(&root, contribution)?;
+    // A disabled or replaced package must not publish a parser after its worker finishes.
+    ensure!(
+        crate::extensions::contributions::plugin_root(plugin.manifest_id()).as_deref()
+            == Some(root.as_path()),
+        "plugin changed while its grammar was loading"
+    );
+    register_language_config(LanguageRegistry::singleton(), contribution, grammar, query);
     Ok(())
+}
+
+/// Remove a plugin parser immediately when its installed package is disabled or uninstalled.
+pub fn mask_language(language_id: &str) {
+    let registry = LanguageRegistry::singleton();
+    registry.register(language_id, &GrammarConfig::plain(language_id.to_owned()));
+    // GPUI Kit has no parser-factory removal API, so an inert factory masks the old WASM parser.
+    registry.register_parser_factory(
+        language_id,
+        Arc::new(|| Err(anyhow::anyhow!("language plugin is disabled"))),
+    );
 }
 
 /// Load every grammar declared by a plugin directory and register its parser and query.
@@ -164,23 +148,6 @@ fn load_plugin_language(
     let query = fs::read_to_string(&highlights_path)
         .with_context(|| format!("read highlights {}", highlights_path.display()))?;
     load_language(contribution, grammar_bytes, query)
-}
-
-/// Register a loaded plugin language or leave it inert if validation failed.
-fn register_language(
-    contribution: &LanguageContribution,
-    grammar_bytes: Vec<u8>,
-    query: String,
-) -> anyhow::Result<()> {
-    let registry = LanguageRegistry::singleton();
-    register_plain_language(registry, contribution);
-    match load_language(contribution, grammar_bytes, query) {
-        Ok((grammar, query)) => {
-            register_language_config(registry, contribution, grammar, query);
-            Ok(())
-        }
-        Err(error) => Err(error),
-    }
 }
 
 /// Replace a static language entry with an inert one before plugin validation.
@@ -309,13 +276,16 @@ fn create_parser(grammar: &LoadedGrammar) -> anyhow::Result<(Parser, tree_sitter
 mod tests {
     use super::*;
 
-    /// Startup reports each bundled grammar's validation outcome independently.
+    /// Source plugin assets still validate independently before packaging.
     #[test]
-    fn bundled_plugins_load_independently() {
+    fn source_plugins_load_independently() {
         prepare_bundled_plugins();
-        for plugin in BundledPlugin::ALL {
-            load_bundled_plugin(plugin)
-                .unwrap_or_else(|error| panic!("{} failed to load: {error:#}", plugin.name()));
+        for (name, directory) in [("Rust", "rust"), ("TOML", "toml")] {
+            let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .join("../../plugins")
+                .join(directory);
+            register_plugin(&root)
+                .unwrap_or_else(|error| panic!("{name} failed to load: {error:#}"));
         }
     }
 

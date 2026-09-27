@@ -7,14 +7,16 @@
 use std::{rc::Rc, sync::Arc};
 
 use crate::theme::component_styles;
-use gpui_base::dock::{DockArea, DockAreaRenderer};
+use gpui_base::dock::{DockArea, DockAreaRenderer, DockContext};
 use gpui_kit::{
     AnyElement, AnyView, App, AppContext as _, Context, Empty, Entity, InteractiveElement as _,
     IntoElement, ParentElement as _, Render, StatefulInteractiveElement as _, StyleRefinement,
     Styled as _, Window,
     component::{
         ActiveTheme as _,
-        dock::{DragPanel, DropIndicator, PanelHandle, TabGroupContext, TabGroupRenderer},
+        dock::{
+            DockSkin, DragPanel, DropIndicator, PanelHandle, TabGroupContext, TabGroupRenderer,
+        },
         h_flex,
     },
     div,
@@ -42,18 +44,34 @@ impl LocalDock {
         window: &mut Window,
         cx: &mut App,
     ) -> Entity<DockArea> {
-        let renderer: Rc<dyn DockAreaRenderer> = Rc::new(LocalDockRenderer {
-            title_height: self.title_height,
-        });
-        cx.new(|cx| DockArea::new(id, version, window, cx).with_renderer(renderer))
+        cx.new(|cx| {
+            let renderer: Rc<dyn DockAreaRenderer> = Rc::new(LocalDockRenderer {
+                title_height: self.title_height,
+                chrome: DockSkin::new(cx),
+            });
+            DockArea::new(id, version, window, cx).with_renderer(renderer)
+        })
     }
 }
 
 struct LocalDockRenderer {
     title_height: f32,
+    /// Retains the standard dock edge handles and their window-wide drag tracking.
+    chrome: Rc<DockSkin>,
 }
 
 impl DockAreaRenderer for LocalDockRenderer {
+    /// Reuse native dock resizing while retaining the editor's custom title/tab strips.
+    fn render_dock(
+        &self,
+        dock: &DockContext,
+        content: AnyElement,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> AnyElement {
+        self.chrome.render_dock(dock, content, window, cx)
+    }
+
     fn tab_group_renderer(&self) -> Rc<dyn TabGroupRenderer> {
         Rc::new(LocalTabGroupRenderer {
             title_height: self.title_height,

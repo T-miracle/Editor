@@ -21,18 +21,15 @@ pub(crate) struct PluginLoadEntry {
 }
 
 impl PluginLoadEntry {
-    pub(crate) fn initial(disabled_plugins: &[String]) -> Vec<Self> {
+    pub(crate) fn initial() -> Vec<Self> {
         language_plugins::BundledPlugin::ALL
             .into_iter()
+            .filter(|plugin| extensions::contributions::plugin_root(plugin.manifest_id()).is_some())
             .map(|plugin| Self {
                 plugin,
                 grammar_loaded: false,
                 server_loading: false,
-                state: if disabled_plugins.iter().any(|id| id == plugin.manifest_id()) {
-                    PluginLoadState::Disabled
-                } else {
-                    PluginLoadState::Loading
-                },
+                state: PluginLoadState::Loading,
             })
             .collect()
     }
@@ -51,12 +48,18 @@ impl EditorApp {
         self.plugin_loads
             .iter()
             .find(|entry| entry.plugin.language_id() == language_id)
-            .is_none_or(|entry| entry.state != PluginLoadState::Disabled)
+            .is_some_and(|entry| entry.state != PluginLoadState::Disabled)
     }
 
     /// Run independent grammar validation off the UI thread and publish each result.
-    pub(crate) fn start_plugin_loading(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        for plugin in language_plugins::BundledPlugin::ALL {
+    pub(crate) fn start_plugin_loading(&mut self, cx: &mut Context<Self>) {
+        let generation = self.plugin_loading_generation;
+        for plugin in self
+            .plugin_loads
+            .iter()
+            .map(|entry| entry.plugin)
+            .collect::<Vec<_>>()
+        {
             if self
                 .plugin_loads
                 .iter()
@@ -64,12 +67,15 @@ impl EditorApp {
             {
                 continue;
             }
-            cx.spawn_in(window, async move |this, cx| {
+            cx.spawn(async move |this, cx| {
                 let result = cx
                     .background_executor()
                     .spawn(async move { language_plugins::load_bundled_plugin(plugin) })
                     .await;
                 let _ = this.update_in(cx, |app, _, cx| {
+                    if app.plugin_loading_generation != generation {
+                        return;
+                    }
                     let state = match result {
                         Ok(()) => PluginLoadState::Enabled,
                         Err(error) => {
@@ -82,6 +88,100 @@ impl EditorApp {
             })
             .detach();
         }
+    }
+
+    /// Reconcile installed package changes with open editors and active theme resources.
+    pub(crate) fn sync_runtime_contributions(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.plugin_loading_generation = self.plugin_loading_generation.wrapping_add(1);
+        let previous = self
+            .plugin_loads
+            .iter()
+            .map(|entry| entry.plugin)
+            .collect::<Vec<_>>();
+        self.plugin_loads = PluginLoadEntry::initial();
+        for plugin in previous {
+            if !self.plugin_loads.iter().any(|entry| entry.plugin == plugin) {
+                language_plugins::mask_language(plugin.language_id());
+                self.language_servers.remove(plugin.language_id());
+                for tab in &self.tabs {
+                    if tab
+                        .session
+                        .path()
+                        .extension()
+                        .and_then(|part| part.to_str())
+                        == Some(if plugin == language_plugins::BundledPlugin::Rust {
+                            "rs"
+                        } else {
+                            "toml"
+                        })
+                    {
+                        tab.editor.update(cx, |editor, cx| {
+                            editor.set_highlighter("text".to_owned(), cx)
+                        });
+                    }
+                }
+            }
+        }
+        for entry in &self.plugin_loads {
+            // A hot update masks the previous version until the new grammar passes validation.
+            language_plugins::mask_language(entry.plugin.language_id());
+            self.language_servers.remove(entry.plugin.language_id());
+        }
+        let mut newly_created_servers = Vec::new();
+        for tab in &self.tabs {
+            let path = tab.session.path();
+            let Some(contribution) = language_plugins::language_for_path(path) else {
+                // A removed plugin must release its native editor LSP providers.
+                if matches!(
+                    path.extension().and_then(|part| part.to_str()),
+                    Some("rs" | "toml")
+                ) {
+                    editor::detach_language_server(&tab.editor, cx);
+                }
+                continue;
+            };
+            editor::detach_language_server(&tab.editor, cx);
+            if contribution.lsp_command.is_none() {
+                continue;
+            }
+            let server = if let Some(server) = self.language_servers.get(&contribution.id) {
+                server.clone()
+            } else if let Some(server) = language_navigation::LanguageServer::new(
+                self.workspace.root(),
+                contribution.clone(),
+            ) {
+                let server = Arc::new(server);
+                self.language_servers
+                    .insert(contribution.id.clone(), server.clone());
+                newly_created_servers.push((contribution.id.clone(), server.clone()));
+                server
+            } else {
+                continue;
+            };
+            editor::attach_language_server(&tab.editor, path, server, cx.entity().downgrade(), cx);
+        }
+        for (language, server) in newly_created_servers {
+            self.begin_server_loading(&language, cx);
+            cx.spawn_in(window, async move |this, cx| {
+                let result = cx
+                    .background_executor()
+                    .scheduler_executor()
+                    .spawn_dedicated(move |_| async move { server.prepare_until_ready() })
+                    .await;
+                let _ = this.update_in(cx, |app, _, cx| {
+                    app.finish_server_loading(&language, result, cx)
+                });
+            })
+            .detach();
+        }
+        // A hot package update may replace a grammar or theme without changing its ID.
+        apply_theme(&theme::active_theme(self.dark_theme), cx);
+        self.start_plugin_loading(cx);
+        cx.notify();
     }
 
     /// Grammar availability activates highlighting even when server startup is pending.
@@ -180,7 +280,7 @@ impl EditorApp {
             self.activate_plugin_highlighting(plugin, cx);
         }
         if self.plugin_popup.is_some_and(|(kind, _)| {
-            kind == PluginPopupKind::Loading && self.plugin_count(kind) == 0
+            kind == PluginPopupKind::Loading && self.plugin_count(kind, cx) == 0
         }) {
             self.plugin_popup = None;
         }
@@ -204,14 +304,25 @@ impl EditorApp {
         }
     }
 
-    pub(crate) fn plugin_count(&self, kind: PluginPopupKind) -> usize {
-        self.plugin_loads
+    pub(crate) fn plugin_count(&self, kind: PluginPopupKind, cx: &App) -> usize {
+        let bundled = self
+            .plugin_loads
             .iter()
             .filter(|entry| match kind {
                 PluginPopupKind::Loading => entry.state == PluginLoadState::Loading,
                 PluginPopupKind::Error => matches!(entry.state, PluginLoadState::Error(_)),
             })
-            .count()
+            .count();
+        let runtime = self.extensions.read(cx);
+        bundled
+            + match kind {
+                PluginPopupKind::Loading => runtime.startup.len(),
+                PluginPopupKind::Error => runtime
+                    .entries
+                    .iter()
+                    .filter(|entry| entry.error.is_some())
+                    .count(),
+            }
     }
 
     /// Place the detail card above the pointer that activated its indicator.
@@ -235,7 +346,7 @@ impl EditorApp {
         kind: PluginPopupKind,
         cx: &Context<Self>,
     ) -> impl IntoElement {
-        let count = self.plugin_count(kind);
+        let count = self.plugin_count(kind, cx);
         let (id, label) = match kind {
             PluginPopupKind::Loading => ("plugin-loading-indicator", t!("plugins.loading")),
             PluginPopupKind::Error => ("plugin-error-indicator", t!("plugins.error")),
@@ -282,6 +393,25 @@ impl EditorApp {
             PluginPopupKind::Loading => t!("plugins.loading_list"),
             PluginPopupKind::Error => t!("plugins.error_list"),
         };
+        // Runtime plugin names and startup failures share the existing status popup.
+        let runtime = self.extensions.read(cx);
+        let runtime_details: Vec<_> = match kind {
+            PluginPopupKind::Loading => runtime
+                .startup
+                .values()
+                .map(|name| (name.clone(), t!("plugins.loading").to_string()))
+                .collect(),
+            PluginPopupKind::Error => runtime
+                .entries
+                .iter()
+                .filter_map(|entry| {
+                    entry
+                        .error
+                        .as_ref()
+                        .map(|error| (entry.manifest.name.clone(), error.clone()))
+                })
+                .collect(),
+        };
         // GPUI measures the card before placing it above the clicked window point.
         gpui_base::Positioner::side(Bounds::new(position, size(px(1.), px(1.))))
             .placement(gpui_base::Placement::Top)
@@ -322,6 +452,12 @@ impl EditorApp {
                                 .child(div().font_semibold().child(entry.plugin.name()))
                                 .child(div().text_xs().child(detail)),
                         )
+                    }))
+                    .children(runtime_details.into_iter().map(|(name, detail)| {
+                        v_flex()
+                            .gap_1()
+                            .child(div().font_semibold().child(name))
+                            .child(div().text_xs().child(detail))
                     })),
             )
             .into_any_element()
@@ -332,26 +468,65 @@ impl EditorApp {
 mod tests {
     use super::*;
     use gpui_kit::{TestAppContext, component::Root, gpui, px, size};
-    use std::{cell::RefCell, rc::Rc};
+    use std::{cell::RefCell, collections::BTreeMap, rc::Rc};
 
-    /// Every bundled language starts with an observable loading entry.
-    #[test]
-    fn initial_state_covers_bundled_plugins() {
-        let entries = PluginLoadEntry::initial(&[]);
-        assert_eq!(entries.len(), language_plugins::BundledPlugin::ALL.len());
+    /// A previously installed runtime plugin must appear in the startup indicator.
+    #[gpui::test]
+    fn installed_runtime_plugin_is_visible_while_starting(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            gpui_kit::init(cx);
+            typography::init(cx);
+            apply_theme(builtin_theme(false), cx);
+        });
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path().join(".runtime-plugin-test");
+        std::fs::create_dir_all(&root).unwrap();
+        let manifest = serde_json::from_str::<plugin_runtime::plugin_protocol::Manifest>(
+            include_str!("../../../../plugins/terminal/manifest.json"),
+        )
+        .unwrap();
+        let installed = plugin_runtime::Installed {
+            manifest: manifest.clone(),
+            digest: "fixture".into(),
+            grants: manifest.permissions.clone(),
+            enabled: true,
+            error: None,
+        };
+        std::fs::write(
+            root.join("registry.json"),
+            serde_json::to_vec(&BTreeMap::from([(manifest.id, installed)])).unwrap(),
+        )
+        .unwrap();
+        let workspace = Workspace::open(directory.path()).unwrap();
+        let (_, cx) = cx.add_window_view(move |window, cx| {
+            Root::new(
+                cx.new(|cx| EditorApp::new(workspace, None, window, cx)),
+                window,
+                cx,
+            )
+        });
+        cx.simulate_resize(size(px(1000.), px(800.)));
+        cx.update(|window, cx| window.draw(cx).clear(cx));
         assert!(
-            entries
-                .iter()
-                .all(|entry| entry.state == PluginLoadState::Loading)
+            cx.debug_bounds("plugin-loading-indicator").is_some(),
+            "an enabled runtime plugin must show startup loading in the status bar"
         );
     }
 
-    /// A workspace exclusion is recorded as disabled and never scheduled to load.
+    /// No language reports loading until an installed package declares it.
     #[test]
-    fn disabled_plugin_has_a_distinct_startup_state() {
-        let entries = PluginLoadEntry::initial(&["me.rust".to_owned()]);
-        assert_eq!(entries[0].state, PluginLoadState::Disabled);
-        assert_eq!(entries[1].state, PluginLoadState::Loading);
+    fn initial_state_requires_installed_plugins() {
+        let directory = tempfile::tempdir().unwrap();
+        extensions::contributions::refresh(directory.path()).unwrap();
+        assert!(PluginLoadEntry::initial().is_empty());
+    }
+
+    /// Installed package enablement is the source of truth for language availability.
+    #[test]
+    fn missing_plugin_does_not_start_its_language_server() {
+        let directory = tempfile::tempdir().unwrap();
+        extensions::contributions::refresh(directory.path()).unwrap();
+        assert!(PluginLoadEntry::initial().is_empty());
     }
 
     /// Both transient states expose clickable icons and anchored plugin lists.
@@ -374,18 +549,16 @@ mod tests {
         });
         let view = view_slot.borrow_mut().take().unwrap();
         cx.run_until_parked();
-        cx.update(|_, cx| {
-            assert!(
-                view.read(cx)
-                    .plugin_loads
-                    .iter()
-                    .all(|entry| entry.state == PluginLoadState::Enabled),
-                "bundled plugins should settle after background startup loading"
-            );
-        });
         cx.simulate_resize(size(px(1000.), px(800.)));
         cx.update(|window, cx| {
             view.update(cx, |app, cx| {
+                // The status UI also renders failures from packages loaded after startup.
+                app.plugin_loads.push(PluginLoadEntry {
+                    plugin: language_plugins::BundledPlugin::Rust,
+                    state: PluginLoadState::Loading,
+                    grammar_loaded: false,
+                    server_loading: false,
+                });
                 app.set_plugin_state(
                     language_plugins::BundledPlugin::Rust,
                     PluginLoadState::Error("missing grammar".to_owned()),

@@ -4,15 +4,14 @@ members = [
     "crates/editor-core",
     "crates/platform-windows",
     "crates/plugin-schema",
+    "crates/plugin-protocol",
+    "crates/plugin-runtime",
+    "plugins/terminal",
+    "plugins/example",
 ]
-# Patched UI dependencies remain outside the application workspace.
-exclude = ["vendor/gpui-base", "vendor/gpui-component"]
+# UI and terminal parsing crates come from crates.io; inactive legacy copies are not workspace members.
+exclude = ["vendor/gpui-base", "vendor/gpui-component", "plugins/terminal/vendor/alacritty_terminal"]
 resolver = "2"
-
-# Keep the editor viewport fix and completion menu styling reproducible locally.
-[patch.crates-io]
-gpui-base = { path = "vendor/gpui-base" }
-gpui-component = { path = "vendor/gpui-component" }
 
 [workspace.package]
 version = "0.1.0"

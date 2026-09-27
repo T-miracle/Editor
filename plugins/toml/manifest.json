@@ -1,0 +1,9 @@
+{
+  "id": "me.toml",
+  "name": "TOML",
+  "version": "0.1.0",
+  "protocol": 1,
+  "contributions": "plugin.toml",
+  "permissions": [],
+  "storage_limit": 1024
+}

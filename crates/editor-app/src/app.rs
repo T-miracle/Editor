@@ -7,6 +7,8 @@ pub(crate) mod session;
 mod settings;
 mod shell;
 
+pub(crate) use settings::SettingsSection;
+
 #[cfg(target_os = "windows")]
 pub(crate) use shell::WindowsTimerResolution;
 pub(crate) use shell::{EditorDockPanel, EditorDockPanelKind};

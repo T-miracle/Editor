@@ -1,0 +1,14 @@
+{
+  "id":"me.example",
+  "name":"插件示例：计数与笔记",
+  "version":"0.1.0",
+  "protocol":1,
+  "component":"example.wasm",
+  "permissions":[],
+  "storage_limit":1048576,
+  "panels":[
+    {"id":"counter","title":"计数器","position":"right"},
+    {"id":"notes","title":"笔记","position":"bottom"}
+  ],
+  "commands":[{"id":"increment","title":"示例：增加一次","menu":true}]
+}

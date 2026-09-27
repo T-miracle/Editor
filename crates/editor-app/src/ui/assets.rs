@@ -32,14 +32,6 @@ file_icons! {
     "file-icons/markdown_dark.svg" => "../../assets/file-icons/markdown_dark.svg",
     "file-icons/text.svg" => "../../assets/file-icons/text.svg",
     "file-icons/text_dark.svg" => "../../assets/file-icons/text_dark.svg",
-    "plugins/rust/icons/rust.svg" => "../../../../plugins/rust/icons/rust.svg",
-    "plugins/rust/icons/rust_dark.svg" => "../../../../plugins/rust/icons/rust_dark.svg",
-    "plugins/rust/icons/rust_config.svg" => "../../../../plugins/rust/icons/rust_config.svg",
-    "plugins/rust/icons/rust_config_dark.svg" => "../../../../plugins/rust/icons/rust_config_dark.svg",
-    "plugins/rust/icons/rust_lock.svg" => "../../../../plugins/rust/icons/rust_lock.svg",
-    "plugins/rust/icons/rust_lock_dark.svg" => "../../../../plugins/rust/icons/rust_lock_dark.svg",
-    "plugins/toml/icons/file.svg" => "../../../../plugins/toml/icons/file.svg",
-    "plugins/toml/icons/file_dark.svg" => "../../../../plugins/toml/icons/file_dark.svg",
 }
 
 /// Combines GPUI Kit's monochrome UI icons with the editor's file icons.
@@ -49,6 +41,9 @@ impl AssetSource for AppAssets {
     fn load(&self, path: &str) -> Result<Option<Cow<'static, [u8]>>> {
         if let Some(icon) = file_icon(path) {
             return Ok(Some(Cow::Borrowed(icon)));
+        }
+        if let Some(icon) = crate::extensions::contributions::asset(path) {
+            return Ok(Some(Cow::Owned(icon)));
         }
         Assets.load(path)
     }

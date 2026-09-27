@@ -61,9 +61,9 @@ impl EditorApp {
             if !already_selected {
                 state.set_selected_item(Some(&selected), cx);
             }
-            // Nearest reveals tab and definition targets without moving a clicked visible row.
+            // Keep the selected file centered when navigation reveals it in the explorer.
             if let Some(index) = state.selected_index() {
-                state.scroll_to_item(index, ScrollStrategy::Nearest);
+                state.scroll_to_item(index, ScrollStrategy::Center);
                 cx.notify();
             }
         });
@@ -78,7 +78,7 @@ impl EditorApp {
 
         match DocumentSession::open(&self.file_store, path) {
             Ok(opened) => {
-                let language = language_for_path(opened.session.path()).to_string();
+                let language = language_for_path(opened.session.path());
                 let mut newly_created_server = None;
                 // Plugin manifests supply the language server for every matching source file.
                 let server = language_plugins::language_for_path(opened.session.path())
@@ -114,47 +114,14 @@ impl EditorApp {
                 let app = cx.entity().downgrade();
                 editor.update(cx, |editor, cx| {
                     editor.set_value(contents, window, cx);
+                });
+                if let Some(server) = server {
                     // All tabs for a plugin language share its workspace server.
-                    if let Some(server) = server
-                        && let Some(provider) = language_navigation::LanguageDefinitionProvider::new(
-                            &document_path,
-                            server.clone(),
-                        )
-                    {
-                        let app = app.clone();
-                        editor.lsp_mut().show_document = Some(Rc::new(
-                            move |params: &lsp_types::ShowDocumentParams,
-                                  window: &mut Window,
-                                  cx: &mut App| {
-                                let target_position =
-                                    params.selection.as_ref().map(|range| range.start);
-                                app.update(cx, |app, cx| {
-                                    app.open_definition_uri(
-                                        &params.uri,
-                                        target_position,
-                                        window,
-                                        cx,
-                                    )
-                                })
-                                .unwrap_or(false)
-                            },
-                        ));
-                        editor.lsp_mut().definition_provider = Some(Rc::new(provider));
-                        // The plugin's hover response renders through GPUI Kit's popover.
-                        if let Some(provider) = crate::language::hover::LanguageHoverProvider::new(
-                            &document_path,
-                            server.clone(),
-                        ) {
-                            editor.lsp_mut().hover_provider = Some(Rc::new(provider));
-                        }
-                        // The plugin's LSP also supplies the editor's native completion menu.
-                        if let Some(provider) = crate::language::completion::LanguageCompletionProvider::new(
-                            &document_path,
-                            server,
-                        ) {
-                            editor.lsp_mut().completion_provider = Some(Rc::new(provider));
-                        }
-                    }
+                    attach_language_server(&editor, &document_path, server, app, cx);
+                }
+                // Definition markers use their own layer beside plugin syntax highlighting.
+                let definition_highlight = editor.update(cx, |editor, cx| {
+                    editor.create_decorations_collection(Vec::new(), cx)
                 });
                 if let Some(server) = newly_created_server {
                     // Keep the plugin loading through the handshake and first workspace analysis.
@@ -190,6 +157,8 @@ impl EditorApp {
                 self.tabs.push(OpenTab {
                     session: opened.session,
                     editor,
+                    definition_highlight,
+                    definition_highlight_generation: 0,
                     _subscription: subscription,
                 });
                 self.activate_tab(self.tabs.len() - 1, window, cx);
@@ -215,7 +184,7 @@ impl EditorApp {
     pub(crate) fn open_definition_uri(
         &mut self,
         uri: &lsp_types::Uri,
-        position: Option<lsp_types::Position>,
+        selection: Option<lsp_types::Range>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> bool {
@@ -228,12 +197,92 @@ impl EditorApp {
         if !path.is_file() {
             return false;
         }
-        self.open_file(path, window, cx);
-        if let (Some(index), Some(position)) = (self.active_tab_index(), position) {
-            let editor = self.tabs[index].editor.clone();
-            editor.update(cx, |editor, cx| {
-                editor.set_cursor_position(position, window, cx);
-            });
+        let path = path.canonicalize().unwrap_or(path);
+        self.open_file(path.clone(), window, cx);
+        // Opening can fail; do not move the caret in the previously active file.
+        if self.active_path.as_deref() != Some(path.as_path()) {
+            return false;
+        }
+        let (Some(index), Some(selection)) = (self.active_tab_index(), selection) else {
+            return true;
+        };
+        let editor = self.tabs[index].editor.clone();
+        let (cursor_position, highlight_range) = editor.update(cx, |editor, cx| {
+            // LSP columns use UTF-16, while editor decorations use UTF-8 byte offsets.
+            let start = lsp_position_to_offset(editor.text(), selection.start);
+            let end = lsp_position_to_offset(editor.text(), selection.end);
+            let cursor_position = editor.text().offset_to_position(start);
+            let highlight_range = if end > start {
+                start..end
+            } else {
+                editor
+                    .text()
+                    .word_range(start)
+                    .or_else(|| {
+                        start
+                            .checked_sub(1)
+                            .and_then(|at| editor.text().word_range(at))
+                    })
+                    .unwrap_or(start..start)
+            };
+            // A folded definition must be exposed before moving the caret to it.
+            editor.unfold_at(cursor_position, cx);
+            editor.set_cursor_position(cursor_position, window, cx);
+            // Existing tabs can center immediately; new tabs wait for layout below.
+            let _ = center_editor_cursor(editor, cx);
+            (cursor_position, highlight_range)
+        });
+
+        let tab = &mut self.tabs[index];
+        tab.definition_highlight_generation = tab.definition_highlight_generation.wrapping_add(1);
+        let generation = tab.definition_highlight_generation;
+        let marker = tab.definition_highlight.clone();
+        let editor_id = editor.entity_id();
+        let has_highlight = !highlight_range.is_empty();
+        let decorations = has_highlight
+            .then(|| {
+                TextDecoration::new(
+                    highlight_range,
+                    HighlightStyle {
+                        background_color: Some(cx.theme().selection),
+                        ..Default::default()
+                    },
+                )
+            })
+            .into_iter()
+            .collect();
+        marker.set(decorations, cx);
+
+        // A newly opened editor may need more than one frame to acquire its layout.
+        let app = cx.entity().downgrade();
+        let target_revision = tab.session.revision();
+        reveal_definition_after_layout(
+            app,
+            editor,
+            cursor_position,
+            target_revision,
+            generation,
+            false,
+            12,
+            window,
+        );
+
+        if has_highlight {
+            // Earlier timers cannot clear a newer jump in the same document.
+            cx.spawn_in(window, async move |this, cx| {
+                cx.background_executor().timer(Duration::from_secs(2)).await;
+                let _ = this.update_in(cx, |app, _, cx| {
+                    if let Some(tab) = app
+                        .tabs
+                        .iter()
+                        .find(|tab| tab.editor.entity_id() == editor_id)
+                        && tab.definition_highlight_generation == generation
+                    {
+                        marker.clear(cx);
+                    }
+                });
+            })
+            .detach();
         }
         true
     }
@@ -382,10 +431,119 @@ impl EditorApp {
     }
 }
 
-fn language_for_path(path: &Path) -> &'static str {
-    // Bundled plugin manifests own their extensions and language identities.
+/// Revisit a definition jump until its displayed row reaches the viewport center.
+fn reveal_definition_after_layout(
+    app: WeakEntity<EditorApp>,
+    target_editor: Entity<EditorState>,
+    position: lsp_types::Position,
+    revision: u64,
+    generation: u64,
+    has_centered_once: bool,
+    remaining_frames: u8,
+    window: &mut Window,
+) {
+    window.on_next_frame(move |window, cx| {
+        let mut needs_another_frame = false;
+        let mut centered_this_frame = false;
+        let _ = app.update(cx, |app, cx| {
+            // A later jump, edit, or tab switch must cancel this pending reveal.
+            if app.editor.entity_id() != target_editor.entity_id()
+                || app.active_tab_index().is_none_or(|index| {
+                    let tab = &app.tabs[index];
+                    tab.session.revision() != revision
+                        || tab.definition_highlight_generation != generation
+                })
+            {
+                return;
+            }
+
+            // Leave a user's later caret move in place instead of restoring the old jump.
+            if target_editor.read(cx).cursor_position() != position {
+                return;
+            }
+            let centered = target_editor.update(cx, |editor, cx| center_editor_cursor(editor, cx));
+            match centered {
+                Some(already_centered) => {
+                    // Verify on the following painted frame, including after unfolding.
+                    centered_this_frame = true;
+                    needs_another_frame = !already_centered || !has_centered_once;
+                }
+                None => {
+                    // A new tab cannot center the cursor until it has painted once.
+                    needs_another_frame = true;
+                    window.refresh();
+                }
+            }
+        });
+        if needs_another_frame && remaining_frames > 0 {
+            reveal_definition_after_layout(
+                app,
+                target_editor,
+                position,
+                revision,
+                generation,
+                has_centered_once || centered_this_frame,
+                remaining_frames - 1,
+                window,
+            );
+        }
+    });
+}
+
+/// Convert an LSP UTF-16 line/column to the editor's UTF-8 byte offset.
+fn lsp_position_to_offset(text: &gpui_base::input::Rope, position: lsp_types::Position) -> usize {
+    let line = text.slice_line(position.line as usize);
+    let column = (position.character as usize).min(line.len_utf16());
+    text.line_start_offset(position.line as usize) + line.utf16_to_byte_idx(column)
+}
+
+/// Attach a shared workspace server to a newly opened or newly supported document.
+pub(crate) fn attach_language_server(
+    editor: &Entity<EditorState>,
+    document_path: &Path,
+    server: Arc<language_navigation::LanguageServer>,
+    app: WeakEntity<EditorApp>,
+    cx: &mut Context<EditorApp>,
+) {
+    editor.update(cx, |editor, _| {
+        let Some(provider) =
+            language_navigation::LanguageDefinitionProvider::new(document_path, server.clone())
+        else {
+            return;
+        };
+        editor.lsp_mut().show_document = Some(Rc::new(
+            move |params: &lsp_types::ShowDocumentParams, window: &mut Window, cx: &mut App| {
+                app.update(cx, |app, cx| {
+                    app.open_definition_uri(&params.uri, params.selection, window, cx)
+                })
+                .unwrap_or(false)
+            },
+        ));
+        editor.lsp_mut().definition_provider = Some(Rc::new(provider));
+        // Native hover and completion controls use the same server connection.
+        editor.lsp_mut().hover_provider =
+            crate::language::hover::LanguageHoverProvider::new(document_path, server.clone())
+                .map(|provider| Rc::new(provider) as _);
+        editor.lsp_mut().completion_provider =
+            crate::language::completion::LanguageCompletionProvider::new(document_path, server)
+                .map(|provider| Rc::new(provider) as _);
+    });
+}
+
+/// Remove providers when their package is disabled so stale servers cannot answer requests.
+pub(crate) fn detach_language_server(editor: &Entity<EditorState>, cx: &mut Context<EditorApp>) {
+    editor.update(cx, |editor, _| {
+        editor.lsp_mut().show_document = None;
+        editor.lsp_mut().definition_provider = None;
+        editor.lsp_mut().hover_provider = None;
+        editor.lsp_mut().completion_provider = None;
+    });
+}
+
+fn language_for_path(path: &Path) -> String {
+    // Installed plugin manifests own their extensions and language identities.
     if let Some(language) = language_plugins::language_for_path(path) {
-        return &language.id;
+        return language.id;
     }
     match path
         .extension()
@@ -402,4 +560,18 @@ fn language_for_path(path: &Path) -> &'static str {
         "yaml" | "yml" => "yaml",
         _ => "text",
     }
+    .to_owned()
+}
+
+/// Centers the painted caret using upstream viewport APIs; scrolling is clamped by the editor.
+fn center_editor_cursor(editor: &mut EditorState, cx: &mut Context<EditorState>) -> Option<bool> {
+    let (cursor, line_height) = editor.cursor_layout()?;
+    let bounds = editor.text_bounds()?;
+    let offset = editor.scroll_offset();
+    let delta = bounds.center().y - (cursor.top() + line_height / 2.);
+    if delta.abs() < px(1.) {
+        return Some(true);
+    }
+    editor.set_scroll_offset(point(offset.x, (offset.y + delta).min(px(0.))), cx);
+    Some(false)
 }

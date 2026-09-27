@@ -82,7 +82,9 @@ fn title_bar_window_control(
                 match area {
                     WindowControlArea::Min => window.minimize_window(),
                     WindowControlArea::Max => window.zoom_window(),
-                    WindowControlArea::Close => window.remove_window(),
+                    WindowControlArea::Close => {
+                        window.dispatch_action(Box::new(extensions::QuitEditor), cx)
+                    }
                     WindowControlArea::Drag => {}
                 }
             })
@@ -208,25 +210,39 @@ impl Render for EditorDockPanel {
 impl EditorApp {
     fn render_panel_buttons(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let selected_style = component_styles(cx, ThemeComponent::PanelToggle).selected;
-        h_flex().items_center().gap_1().child(
-            Button::new("explorer-panel-toggle")
-                .icon(IconName::PanelLeft)
-                .small()
-                .compact()
-                .ghost()
-                .tooltip(t!("panel.explorer").to_string())
-                .when(self.explorer_visible, |button| {
-                    button
-                        .bg(selected_style.background.unwrap_or(cx.theme().list_active))
-                        .text_color(selected_style.foreground.unwrap_or(cx.theme().foreground))
-                })
-                .on_click(cx.listener(|this, _, _, cx| this.toggle_explorer(cx))),
-        )
+        h_flex()
+            .items_center()
+            .gap_1()
+            .child(
+                Button::new("explorer-panel-toggle")
+                    // Match the supplied Explorer artwork to the active theme palette.
+                    .icon(Icon::default().data(if cx.theme().is_dark() {
+                        include_bytes!("../../assets/status-icons/explorer_dark.svg").as_slice()
+                    } else {
+                        include_bytes!("../../assets/status-icons/explorer_light.svg").as_slice()
+                    }))
+                    .small()
+                    .compact()
+                    .ghost()
+                    .tooltip(t!("panel.explorer").to_string())
+                    .when(self.explorer_visible, |button| {
+                        button
+                            .bg(selected_style.background.unwrap_or(cx.theme().list_active))
+                            .text_color(selected_style.foreground.unwrap_or(cx.theme().foreground))
+                    })
+                    .on_click(cx.listener(|this, _, _, cx| this.toggle_explorer(cx))),
+            )
+            // The explorer owns the first status slot; plugin panels follow it.
+            .children(self.plugin_panel_buttons(cx))
     }
 }
 
 impl Render for EditorApp {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        if std::mem::take(&mut self.pending_contribution_sync) {
+            // The render frame provides the window needed to attach LSP providers to open tabs.
+            self.sync_runtime_contributions(window, cx);
+        }
         if self._bounds_subscription.is_none() {
             self._bounds_subscription =
                 Some(cx.observe_window_bounds(window, |this, window, _cx| {
@@ -235,6 +251,11 @@ impl Render for EditorApp {
                     this.session_state.window_height = bounds.size.height / px(1.);
                     this.session_state.save();
                 }));
+        }
+        // Open plugin-owned settings through the normal editor document path.
+        self.sync_plugin_panels(window, cx);
+        if let Some(path) = self.pending_plugin_file.take() {
+            self.open_file(path, window, cx);
         }
         let cursor = self.editor.read(cx).cursor_position();
         let project_initial = self
@@ -263,7 +284,22 @@ impl Render for EditorApp {
                     }
                 }),
             )
+            .on_key_down(
+                cx.listener(|this, event: &gpui_kit::KeyDownEvent, window, cx| {
+                    this.extensions.update(cx, |panel, cx| {
+                        panel.shortcut(event, window, cx);
+                    });
+                }),
+            )
             .on_action(cx.listener(Self::on_save_action))
+            .on_action(
+                cx.listener(|this, _: &extensions::QuitEditor, _, cx| this.shutdown_plugins(cx)),
+            )
+            .on_action(
+                cx.listener(|this, _: &extensions::ToggleExtensions, window, cx| {
+                    this.toggle_extensions(window, cx)
+                }),
+            )
             .on_action(cx.listener(Self::on_refresh_action))
             .on_action(cx.listener(Self::on_toggle_theme_action))
             .on_action(cx.listener(Self::on_navigate_to_definition))
@@ -327,6 +363,7 @@ impl Render for EditorApp {
                                 }
                             })),
                     )
+                    .child(self.render_extensions_button(cx))
                     .child(self.render_settings_dialog(cx))
                     .child(self.render_window_controls(window, cx)),
             )
@@ -343,12 +380,12 @@ impl Render for EditorApp {
                         StatusBar::new()
                             .left(self.render_panel_buttons(cx))
                             // Keep plugin indicators immediately before the cursor position.
-                            .when(self.plugin_count(PluginPopupKind::Loading) > 0, |bar| {
+                            .when(self.plugin_count(PluginPopupKind::Loading, cx) > 0, |bar| {
                                 bar.right(
                                     self.render_plugin_indicator(PluginPopupKind::Loading, cx),
                                 )
                             })
-                            .when(self.plugin_count(PluginPopupKind::Error) > 0, |bar| {
+                            .when(self.plugin_count(PluginPopupKind::Error, cx) > 0, |bar| {
                                 bar.right(self.render_plugin_indicator(PluginPopupKind::Error, cx))
                             })
                             .right(if self.active_path.is_some() {
@@ -383,7 +420,6 @@ impl Render for EditorApp {
                         .child(t!("editor.no_definition").to_string()),
                 )
             })
-            .when_some(self.dialog.clone(), |this, dialog| this.child(dialog))
     }
 }
 

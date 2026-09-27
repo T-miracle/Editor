@@ -16,6 +16,16 @@ pub struct SessionState {
     pub explorer_width: f32,
     #[serde(default = "default_true")]
     pub explorer_visible: bool,
+    /// Generic plugin-manager dock dimensions persist independently of plugin-owned state.
+    #[serde(default = "default_extension_height", alias = "terminal_height")]
+    pub extension_height: f32,
+    #[serde(default = "default_true", alias = "terminal_visible")]
+    pub extensions_visible: bool,
+    /// Native dock dimensions and panel visibility are generic host presentation state.
+    #[serde(default)]
+    pub plugin_dock_sizes: std::collections::BTreeMap<String, f32>,
+    #[serde(default)]
+    pub plugin_panel_visibility: std::collections::BTreeMap<String, bool>,
     pub open_tabs: Vec<String>,
     pub active_file: Option<String>,
     pub expanded_directories: Vec<String>,
@@ -32,6 +42,10 @@ impl SessionState {
             window_height: 820.,
             explorer_width: 280.,
             explorer_visible: true,
+            extension_height: default_extension_height(),
+            extensions_visible: true,
+            plugin_dock_sizes: Default::default(),
+            plugin_panel_visibility: Default::default(),
             open_tabs: Vec::new(),
             active_file: None,
             expanded_directories: Vec::new(),
@@ -59,6 +73,7 @@ impl SessionState {
                         state.window_width = state.window_width.clamp(800., 7680.);
                         state.window_height = state.window_height.clamp(500., 4320.);
                         state.explorer_width = state.explorer_width.clamp(220., 520.);
+                        state.extension_height = state.extension_height.clamp(140., 1200.);
                     }
                 }
             }
@@ -82,4 +97,9 @@ impl SessionState {
 
 fn default_true() -> bool {
     true
+}
+
+/// Initial plugin manager height leaves room for editing at the default window size.
+fn default_extension_height() -> f32 {
+    280.
 }

@@ -1,0 +1,25 @@
+[package]
+name = "plugin-runtime"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+plugin-protocol = { path = "../plugin-protocol" }
+plugin-schema = { path = "../plugin-schema" }
+serde.workspace = true
+serde_json.workspace = true
+wasmtime = { version = "36.0.16", default-features = false, features = ["component-model", "cranelift", "runtime", "std"] }
+wasmtime-wasi = "36.0.16"
+portable-pty = "0.9"
+semver = "1"
+zip = { version = "4", default-features = false, features = ["deflate"] }
+sha2 = "0.10"
+tempfile.workspace = true
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_System_JobObjects", "Win32_System_Threading", "Win32_Security"] }
+
+[dev-dependencies]
+tempfile.workspace = true

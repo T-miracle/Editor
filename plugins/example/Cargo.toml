@@ -1,0 +1,13 @@
+[package]
+name = "example-guest"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+plugin-protocol = { path = "../../crates/plugin-protocol" }
+serde_json.workspace = true
+wit-bindgen = "0.45.1"

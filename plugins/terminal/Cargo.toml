@@ -1,0 +1,19 @@
+[package]
+name = "terminal-guest"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+# The Alacritty emulator runs inside the WASM guest; the host supplies PTY capabilities.
+alacritty_terminal = { path = "vendor/alacritty_terminal" }
+vte = "0.15"
+plugin-protocol = { path = "../../crates/plugin-protocol" }
+serde.workspace = true
+serde_json.workspace = true
+anyhow.workspace = true
+wit-bindgen = "0.45.1"
+base64 = "0.22"

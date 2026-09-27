@@ -86,6 +86,18 @@ plugins.error_list:
 settings.title:
   en: "Settings"
   zh-CN: "设置"
+settings.appearance_and_behavior:
+  en: "Appearance & Behavior"
+  zh-CN: "外观与行为"
+settings.keymap:
+  en: "Keymap"
+  zh-CN: "按键映射"
+settings.editor:
+  en: "Editor"
+  zh-CN: "编辑器设置"
+settings.keymap_empty:
+  en: "Keyboard shortcut settings are not available yet."
+  zh-CN: "暂未提供快捷键设置。"
 settings.appearance:
   en: "Appearance"
   zh-CN: "外观"

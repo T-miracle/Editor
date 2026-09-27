@@ -1,0 +1,283 @@
+//! Exercise dynamic native panels, declarative input commits and shortcut isolation.
+use super::*;
+use gpui_kit::{EntityInputHandler, TestAppContext, gpui};
+
+/// Both plugin-owned SVG variants must render with their intended foreground ink.
+#[test]
+fn terminal_theme_icons_render_in_opposite_colors() {
+    use gpui_kit::{Image, ImageFormat, SvgRenderer};
+
+    for (bytes, expected) in [
+        (
+            include_bytes!("../../../../plugins/terminal/icons/terminal_light.svg").as_slice(),
+            0,
+        ),
+        (
+            include_bytes!("../../../../plugins/terminal/icons/terminal_dark.svg").as_slice(),
+            255,
+        ),
+    ] {
+        let image = Image::from_bytes(ImageFormat::Svg, bytes.to_vec());
+        let rendered = image
+            .to_image_data(SvgRenderer::new(Arc::new(())))
+            .expect("terminal SVG should render");
+        let pixels = rendered.as_bytes(0).expect("SVG should have a frame");
+        assert!(
+            pixels.chunks_exact(4).any(|pixel| {
+                pixel[3] > 0 && pixel[..3].iter().all(|channel| *channel == expected)
+            }),
+            "terminal icon did not contain the expected light or dark ink"
+        );
+    }
+}
+
+/// A manifest dynamically adds a bottom dock; generic input commits Enter and blur once.
+#[gpui::test]
+fn plugin_panel_registration_input_and_ime(cx: &mut TestAppContext) {
+    cx.update(|cx| {
+        gpui_kit::init(cx);
+        typography::init(cx);
+        apply_theme(builtin_theme(false), cx);
+        init(cx);
+        cx.bind_keys([KeyBinding::new(
+            "ctrl-s",
+            SaveDocument,
+            Some("EditorShell && !PluginSurface"),
+        )]);
+    });
+    let directory = tempfile::tempdir().unwrap();
+    let workspace = Workspace::open(directory.path()).unwrap();
+    let slot = Rc::new(RefCell::new(None));
+    let capture = slot.clone();
+    let (_, cx) = cx.add_window_view(move |window, cx| {
+        let app = cx.new(|cx| EditorApp::new(workspace, None, window, cx));
+        *capture.borrow_mut() = Some(app.clone());
+        Root::new(app, window, cx)
+    });
+    let app = slot.borrow_mut().take().unwrap();
+    let manifest: protocol::Manifest =
+        serde_json::from_str(include_str!("../../../../plugins/terminal/manifest.json")).unwrap();
+    let scene = Scene {
+        panel: "terminal".into(),
+        font: "Cascadia Mono".into(),
+        font_size: 14.,
+        cursor: protocol::Rect {
+            x: 8.,
+            y: 8.,
+            w: 8.,
+            h: 20.,
+        },
+        ..Scene::default()
+    };
+    cx.simulate_resize(size(px(1100.), px(800.)));
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+    let full_editor = cx.debug_bounds("editor-panel-content").unwrap();
+    let (owner, panel) = cx.update(|window, cx| {
+        let owner = app.read(cx).extensions.clone();
+        owner.update(cx, |owner, cx| {
+            let mut state = owner.worker.state.lock().unwrap();
+            state.entries = vec![Installed {
+                manifest: manifest.clone(),
+                digest: "fixture".into(),
+                grants: manifest.permissions.clone(),
+                enabled: true,
+                error: None,
+            }];
+            state
+                .scenes
+                .insert("me.terminal/terminal".into(), Arc::new(scene.clone()));
+            drop(state);
+            owner.poll(cx);
+        });
+        app.update(cx, |app, cx| app.sync_plugin_panels(window, cx));
+        let panel = app.read(cx).plugin_panels["me.terminal/terminal"].clone();
+        panel.update(cx, |panel, cx| {
+            panel.poll(cx);
+            panel.focus(window, cx);
+        });
+        window.draw(cx).clear(cx);
+        (owner, panel)
+    });
+    let bounds = cx
+        .debug_bounds("plugin-surface")
+        .expect("manifest panel is visible without restarting");
+    assert!(bounds.top() > px(300.));
+    assert!(bounds.size.height > px(100.));
+    cx.simulate_keystrokes("ctrl-s");
+    // A shell command must retain spaces through the native keyboard/text input path.
+    cx.simulate_keystrokes("space");
+    cx.update(|window, cx| {
+        panel.update(cx, |panel, cx| {
+            panel.replace_text_in_range(None, "中文", window, cx)
+        })
+    });
+    let messages = cx.update(|_, cx| {
+        owner
+            .read(cx)
+            .worker
+            .recorded
+            .lock()
+            .unwrap()
+            .try_iter()
+            .collect::<Vec<_>>()
+    });
+    fn event(work: &Work) -> Option<&PluginEvent> {
+        if let Work::Event(_, event) = work {
+            if let PluginEvent::Surface { event, .. } = event {
+                Some(event)
+            } else {
+                Some(event)
+            }
+        } else {
+            None
+        }
+    }
+    assert!(
+        messages
+            .iter()
+            .filter_map(event)
+            .any(|event| matches!(event,PluginEvent::Key{key,ctrl:true,..}if key=="s"))
+    );
+    assert!(
+        messages
+            .iter()
+            .filter_map(event)
+            .any(|event| matches!(event,PluginEvent::Text(text)if text=="中文"))
+    );
+    assert_eq!(
+        messages
+            .iter()
+            .filter_map(event)
+            .filter(|event| matches!(event, PluginEvent::Text(text) if text == " "))
+            .count(),
+        1,
+        "the space key must deliver a printable space to the plugin"
+    );
+    // Drag the dock's upper edge, then verify both the visible size and persisted height.
+    let edge = point(bounds.center().x, bounds.top() - px(PANEL_HEADER_HEIGHT));
+    let target = edge - point(px(0.), px(100.));
+    cx.simulate_mouse_down(edge, MouseButton::Left, Default::default());
+    cx.simulate_mouse_move(
+        edge - point(px(0.), px(10.)),
+        MouseButton::Left,
+        Default::default(),
+    );
+    cx.simulate_mouse_move(target, MouseButton::Left, Default::default());
+    cx.simulate_mouse_up(target, MouseButton::Left, Default::default());
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+    let resized = cx.debug_bounds("plugin-surface").unwrap();
+    assert!(
+        resized.size.height > bounds.size.height + px(60.),
+        "dragging the dock edge must enlarge the terminal: {bounds:?} -> {resized:?}"
+    );
+    cx.update(|_, cx| {
+        let height = app.read(cx).session_state.plugin_dock_sizes["bottom"];
+        assert!((height - (resized.size.height / px(1.) + PANEL_HEADER_HEIGHT)).abs() < 2.);
+    });
+    // The same handle must shrink the dock and forward its new viewport to the guest.
+    let edge = point(resized.center().x, resized.top() - px(PANEL_HEADER_HEIGHT));
+    let target = edge + point(px(0.), px(70.));
+    cx.simulate_mouse_down(edge, MouseButton::Left, Default::default());
+    cx.simulate_mouse_move(
+        edge + point(px(0.), px(10.)),
+        MouseButton::Left,
+        Default::default(),
+    );
+    cx.simulate_mouse_move(target, MouseButton::Left, Default::default());
+    cx.simulate_mouse_up(target, MouseButton::Left, Default::default());
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+    let shrunk = cx.debug_bounds("plugin-surface").unwrap();
+    assert!(shrunk.size.height < resized.size.height - px(40.));
+    let messages = cx.update(|_, cx| {
+        owner
+            .read(cx)
+            .worker
+            .recorded
+            .lock()
+            .unwrap()
+            .try_iter()
+            .collect::<Vec<_>>()
+    });
+    assert!(messages.iter().filter_map(event).any(|event| matches!(event, PluginEvent::Resize { height, .. } if (*height - shrunk.size.height / px(1.)).abs() < 2.)));
+    cx.update(|window, cx| {
+        panel.update(cx, |panel, cx| {
+            let mut scene = scene.clone();
+            scene.widgets.push(protocol::Widget {
+                id: "rename:1".into(),
+                rect: protocol::Rect {
+                    x: 600.,
+                    y: 0.,
+                    w: 150.,
+                    h: 28.,
+                },
+                label: "powershell".into(),
+                edit: true,
+            });
+            panel
+                .scenes
+                .insert("me.terminal/terminal".into(), Arc::new(scene));
+            panel.sync_edit(window, cx);
+            let input = panel.editing.as_ref().unwrap().input.clone();
+            input.update(cx, |input, cx| input.set_value("构建任务", window, cx));
+        });
+        window.draw(cx).clear(cx);
+    });
+    cx.simulate_keystrokes("enter");
+    let messages = cx.update(|_, cx| {
+        owner
+            .read(cx)
+            .worker
+            .recorded
+            .lock()
+            .unwrap()
+            .try_iter()
+            .collect::<Vec<_>>()
+    });
+    assert_eq!(messages.iter().filter_map(event).filter(|event|matches!(event,PluginEvent::Edit{id,text}if id=="rename:1"&&text=="构建任务")).count(),1);
+    // Hiding the last dock panel must return its entire height to the editor.
+    cx.update(|window, cx| {
+        panel.update(cx, |panel, cx| {
+            panel.visible.set(false);
+            cx.notify();
+        });
+        app.read(cx)
+            .dock_area
+            .clone()
+            .update(cx, |_, cx| cx.notify());
+        window.draw(cx).clear(cx);
+    });
+    assert_eq!(
+        cx.debug_bounds("editor-panel-content").unwrap(),
+        full_editor,
+        "hiding the terminal must not leave an empty bottom dock"
+    );
+    // Showing it again preserves the user's chosen dock height.
+    cx.update(|window, cx| {
+        panel.update(cx, |panel, cx| {
+            panel.visible.set(true);
+            cx.notify();
+        });
+        app.read(cx)
+            .dock_area
+            .clone()
+            .update(cx, |_, cx| cx.notify());
+        window.draw(cx).clear(cx);
+    });
+    assert_eq!(cx.debug_bounds("plugin-surface").unwrap().size, shrunk.size);
+    // Uninstall removes the last native contribution and must also reclaim its region.
+    cx.update(|window, cx| {
+        owner.update(cx, |owner, cx| {
+            owner.entries.clear();
+            owner.worker.state.lock().unwrap().entries.clear();
+            cx.notify();
+        });
+        app.update(cx, |app, cx| app.sync_plugin_panels(window, cx));
+        assert!(app.read(cx).plugin_panels.is_empty());
+        window.draw(cx).clear(cx);
+    });
+    assert_eq!(
+        cx.debug_bounds("editor-panel-content").unwrap(),
+        full_editor,
+        "uninstalling the last plugin must not leave an empty bottom dock"
+    );
+}

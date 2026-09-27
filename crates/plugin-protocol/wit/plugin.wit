@@ -1,0 +1,11 @@
+package editor:plugin@0.1.0;
+
+// JSON payloads use the versioned plugin-protocol types; WASI has no ambient files.
+interface host {
+    request: func(payload: string) -> result<string, string>;
+}
+
+world plugin {
+    import host;
+    export dispatch: func(payload: string) -> result<string, string>;
+}

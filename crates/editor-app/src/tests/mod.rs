@@ -3,14 +3,18 @@
 #[cfg(test)]
 mod settings_dialog_tests {
     use crate::theme::{apply_theme, builtin_theme};
-    use crate::{EditorApp, typography};
+    use crate::{EditorApp, PANEL_HEADER_HEIGHT, typography};
     use editor_core::Workspace;
-    use gpui_kit::{AppContext as _, TestAppContext, component::Root, gpui, px, size};
+    use gpui_kit::{
+        AppContext as _, TestAppContext, VisualTestContext, component::Root, gpui, px, size,
+    };
+    use std::{cell::RefCell, rc::Rc};
 
-    /// Clicking the real title-bar button must paint a dialog in the app window.
+    /// Settings must use a separate modal window and close with Escape.
     #[gpui::test]
-    fn settings_button_paints_dialog(cx: &mut TestAppContext) {
-        cx.update(|cx| {
+    fn settings_button_opens_modal_window(cx: &mut TestAppContext) {
+        let app_cx = cx;
+        app_cx.update(|cx| {
             gpui_kit::init(cx);
             typography::init(cx);
             apply_theme(builtin_theme(false), cx);
@@ -18,24 +22,76 @@ mod settings_dialog_tests {
         });
         let directory = tempfile::tempdir().unwrap();
         let workspace = Workspace::open(directory.path()).unwrap();
-        let (_, cx) = cx.add_window_view(move |window, cx| {
+        let view_slot = Rc::new(RefCell::new(None));
+        let capture = view_slot.clone();
+        let (_, editor_cx) = app_cx.add_window_view(move |window, cx| {
             let view = cx.new(|cx| EditorApp::new(workspace, None, window, cx));
+            *capture.borrow_mut() = Some(view.clone());
             Root::new(view, window, cx)
         });
-        cx.simulate_resize(size(px(1000.), px(800.)));
-        cx.update(|window, cx| window.draw(cx).clear(cx));
+        let editor_view = view_slot.borrow_mut().take().unwrap();
+        let editor_window = editor_cx.update(|window, _| window.window_handle());
+        editor_cx.simulate_resize(size(px(1000.), px(800.)));
+        editor_cx.update(|window, cx| window.draw(cx).clear(cx));
 
-        let button = cx
+        let button = editor_cx
             .debug_bounds("settings-trigger")
             .expect("settings button should be visible in the title bar");
-        cx.simulate_click(button.center(), Default::default());
-        cx.run_until_parked();
-        cx.update(|window, cx| window.draw(cx).clear(cx));
-        cx.update(|window, cx| window.draw(cx).clear(cx));
+        editor_cx.simulate_click(button.center(), Default::default());
+        editor_cx.run_until_parked();
+        editor_cx.update(|window, cx| window.draw(cx).clear(cx));
 
+        assert!(editor_cx.debug_bounds("dialog-0").is_none());
+        let windows = editor_cx.update(|_, cx| cx.windows());
+        assert_eq!(windows.len(), 2);
+        let dialog_window = windows
+            .into_iter()
+            .find(|handle| *handle != editor_window)
+            .expect("settings must have a separate window");
+        let dialog_cx = VisualTestContext::from_window(dialog_window, app_cx).into_mut();
+        dialog_cx.update(|window, cx| window.draw(cx).clear(cx));
         assert!(
-            cx.debug_bounds("dialog-0").is_some(),
-            "clicking Settings must paint a dialog layer"
+            dialog_cx.debug_bounds("dialog-0").is_some(),
+            "the settings window must render its own content"
+        );
+        let title = dialog_cx
+            .debug_bounds("app-dialog-title-bar")
+            .expect("the dialog must render a title bar");
+        assert_eq!(title.size.height, px(PANEL_HEADER_HEIGHT));
+        let keymap = dialog_cx
+            .debug_bounds("settings-nav-keymap")
+            .expect("the settings sidebar must show Keymap");
+        dialog_cx.simulate_click(keymap.center(), Default::default());
+        dialog_cx.run_until_parked();
+        dialog_cx.update(|window, cx| window.draw(cx).clear(cx));
+        assert!(
+            dialog_cx.debug_bounds("settings-keymap-empty").is_some(),
+            "selecting Keymap must replace the settings page"
+        );
+        let editor = dialog_cx
+            .debug_bounds("settings-nav-editor")
+            .expect("the settings sidebar must show Editor");
+        dialog_cx.simulate_click(editor.center(), Default::default());
+        dialog_cx.run_until_parked();
+        dialog_cx.update(|window, cx| window.draw(cx).clear(cx));
+        assert!(
+            dialog_cx.debug_bounds("settings-font-size").is_some(),
+            "selecting Editor must show the existing font size control"
+        );
+        dialog_cx.simulate_keystrokes("escape");
+        dialog_cx.run_until_parked();
+        assert_eq!(app_cx.windows().len(), 1);
+        assert!(app_cx.read(|cx| editor_view.read(cx).dialog.is_none()));
+
+        let editor_cx = VisualTestContext::from_window(editor_window, app_cx).into_mut();
+        editor_cx.update(|window, cx| window.draw(cx).clear(cx));
+        let button = editor_cx.debug_bounds("settings-trigger").unwrap();
+        editor_cx.simulate_click(button.center(), Default::default());
+        editor_cx.run_until_parked();
+        assert_eq!(
+            editor_cx.update(|_, cx| cx.windows().len()),
+            2,
+            "closing the modal window must allow it to reopen"
         );
     }
 }

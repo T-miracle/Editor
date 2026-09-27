@@ -1,0 +1,22 @@
+{
+  "id": "me.terminal",
+  "name": "终端",
+  "version": "0.4.3",
+  "protocol": 1,
+  "component": "terminal.wasm",
+  "permissions": ["process.pty", "workspace.read", "storage", "clipboard", "editor.commands"],
+  "storage_limit": 16777216,
+  "panels": [{"id":"terminal", "title":"终端", "position":"bottom", "status_order":0, "icon_light":"icons/terminal_light.svg", "icon_dark":"icons/terminal_dark.svg"}],
+  "commands": [
+    {"id":"terminal.new","title":"新建终端","shortcut":"ctrl-shift-t","menu":true,"toolbar":"+"},
+    {"id":"terminal.menu","title":"终端菜单","menu":false,"toolbar":"⌄"},
+    {"id":"terminal.run","title":"运行项目","menu":true},
+    {"id":"terminal.here","title":"在当前目录新建终端","shortcut":"ctrl-alt-enter","menu":true},
+    {"id":"terminal.selection","title":"发送选中内容","shortcut":"ctrl-shift-enter","menu":true},
+    {"id":"terminal.close","title":"关闭终端","shortcut":"ctrl-shift-w","menu":true},
+    {"id":"terminal.next","title":"下一个终端","shortcut":"ctrl-pagedown","menu":true},
+    {"id":"terminal.previous","title":"上一个终端","shortcut":"ctrl-pageup","menu":true},
+    {"id":"terminal.settings","title":"终端主题与配置","menu":true},
+    {"id":"terminal.reload","title":"重新加载终端配置","menu":true}
+  ]
+}
