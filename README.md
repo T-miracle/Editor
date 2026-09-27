@@ -69,6 +69,6 @@ Rust 跳转使用插件清单声明的 `rust-analyzer`。编辑器会查找已�
 
 GPUI 界面依赖使用 crates.io 发布的上游版本，由 `Cargo.lock` 锁定；项目不使用 `gpui-base` 或 `gpui-component` 的本地源码覆盖。插件停靠区的显隐适配保留在应用层，补全与悬浮提示采用上游组件行为。
 
-文件图标来自 [peakoss/vscode-jetbrains-icon-theme](https://github.com/peakoss/vscode-jetbrains-icon-theme/tree/main/assets/2023)，按 MIT 许可证使用。完整许可文本位于 `THIRD_PARTY_LICENSES/vscode-jetbrains-icon-theme-LICENSE.md`。
+文件图标由当前插件资源提供。
 
 终端 WASM 插件使用内置的 Alacritty 0.26.0 WASM 适配核心和上游 `vte`；详见 [运行时插件文档](docs/runtime-plugins.md)。

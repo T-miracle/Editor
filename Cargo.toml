@@ -9,8 +9,8 @@ members = [
     "plugins/terminal",
     "plugins/example",
 ]
-# UI and terminal parsing crates come from crates.io; inactive legacy copies are not workspace members.
-exclude = ["vendor/gpui-base", "vendor/gpui-component", "plugins/terminal/vendor/alacritty_terminal"]
+# The terminal plugin keeps its adapted parser outside the root workspace.
+exclude = ["plugins/terminal/vendor/alacritty_terminal"]
 resolver = "2"
 
 [workspace.package]
