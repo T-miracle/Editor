@@ -3,6 +3,15 @@ use super::*;
 use gpui_kit::component::WindowExt as _;
 use gpui_kit::{EntityInputHandler, TestAppContext, VisualTestContext, gpui};
 
+/// Market versions select the same action used by the confirmation dialog.
+#[test]
+fn market_version_actions_cover_install_update_and_downgrade() {
+    assert_eq!(surface::package_action("2.0.0", None), "安装");
+    assert_eq!(surface::package_action("2.0.0", Some("1.0.0")), "更新");
+    assert_eq!(surface::package_action("1.0.0", Some("2.0.0")), "降级安装");
+    assert_eq!(surface::package_action("2.0.0", Some("2.0.0")), "已安装");
+}
+
 /// Clicking a market install action must immediately publish an inspecting state.
 #[gpui::test]
 fn market_install_button_reports_loading_before_inspection(cx: &mut TestAppContext) {
@@ -238,6 +247,124 @@ fn second_market_install_shows_visible_consent(cx: &mut TestAppContext) {
         }),
         "confirming the reopened dialog must queue installation"
     );
+}
+
+/// Uninstall choices belong to a modal and dispatch the selected data policy.
+#[gpui::test]
+fn uninstall_dialog_offers_both_data_choices(cx: &mut TestAppContext) {
+    cx.update(|cx| {
+        gpui_kit::init(cx);
+        typography::init(cx);
+        apply_theme(builtin_theme(false), cx);
+        cx.set_reduce_motion(true);
+    });
+    let directory = tempfile::tempdir().unwrap();
+    let workspace = Workspace::open(directory.path()).unwrap();
+    let slot = Rc::new(RefCell::new(None));
+    let capture = slot.clone();
+    let (_, editor_cx) = cx.add_window_view(move |window, cx| {
+        let app = cx.new(|cx| EditorApp::new(workspace, None, window, cx));
+        *capture.borrow_mut() = Some(app.clone());
+        Root::new(app, window, cx)
+    });
+    let app = slot.borrow_mut().take().unwrap();
+    let editor_window = editor_cx.update(|window, _| window.window_handle());
+    let manifest: protocol::Manifest =
+        serde_json::from_str(include_str!("../../../../plugins/example/manifest.json")).unwrap();
+    editor_cx.update(|window, cx| {
+        let owner = app.read(cx).extensions.clone();
+        owner.update(cx, |owner, cx| {
+            let mut state = owner.worker.state.lock().unwrap();
+            state.entries = vec![Installed {
+                manifest: manifest.clone(),
+                digest: "fixture".into(),
+                grants: manifest.permissions.clone(),
+                enabled: true,
+                project_enabled: Default::default(),
+                global_enabled: Some(true),
+                error: None,
+            }];
+            drop(state);
+            owner.poll(cx);
+        });
+        app.update(cx, |app, cx| app.toggle_extensions(window, cx));
+    });
+    let dialog_window = editor_cx
+        .update(|_, cx| cx.windows())
+        .into_iter()
+        .find(|handle| *handle != editor_window)
+        .unwrap();
+    let dialog_cx = VisualTestContext::from_window(dialog_window, cx).into_mut();
+    dialog_cx.update(|window, cx| window.draw(cx).clear(cx));
+    let uninstall = dialog_cx
+        .debug_bounds("plugin-primary-action-region")
+        .unwrap();
+    dialog_cx.simulate_click(uninstall.center(), Default::default());
+    dialog_cx.run_until_parked();
+    dialog_cx.update(|window, cx| window.draw(cx).clear(cx));
+    dialog_cx.update(|window, cx| window.draw(cx).clear(cx));
+    assert!(dialog_cx.update(|window, cx| window.has_active_dialog(cx)));
+    assert!(dialog_cx.debug_bounds("plugin-remove-cancel").is_some());
+    assert!(dialog_cx.debug_bounds("plugin-remove-preserve").is_some());
+    assert!(dialog_cx.debug_bounds("plugin-remove-delete").is_some());
+    assert!(dialog_cx.debug_bounds("plugin-readme-region").is_some());
+    let cancel = dialog_cx.debug_bounds("plugin-remove-cancel").unwrap();
+    dialog_cx.simulate_click(cancel.center(), Default::default());
+    dialog_cx.run_until_parked();
+    assert!(!dialog_cx.update(|window, cx| window.has_active_dialog(cx)));
+    assert!(dialog_cx.update(|_, cx| app.read(cx).extensions.read(cx).confirm.is_none()));
+    // The first retry keeps data; the next retry removes it.
+    for delete_data in [false, true] {
+        dialog_cx.update(|window, cx| window.draw(cx).clear(cx));
+        let uninstall = dialog_cx
+            .debug_bounds("plugin-primary-action-region")
+            .unwrap();
+        dialog_cx.simulate_click(uninstall.center(), Default::default());
+        dialog_cx.run_until_parked();
+        dialog_cx.update(|window, cx| window.draw(cx).clear(cx));
+        dialog_cx.update(|window, cx| window.draw(cx).clear(cx));
+        let button = if delete_data {
+            "plugin-remove-delete"
+        } else {
+            "plugin-remove-preserve"
+        };
+        let action = dialog_cx.debug_bounds(button).unwrap();
+        dialog_cx.simulate_click(action.center(), Default::default());
+        assert!(
+            dialog_cx.update(|_, cx| {
+                app.read(cx)
+                    .extensions
+                    .read(cx)
+                    .worker
+                    .recorded
+                    .lock()
+                    .unwrap()
+                    .try_iter()
+                    .any(|work| {
+                        matches!(work, Work::Uninstall(id, delete) if id == manifest.id && delete == delete_data)
+                    })
+            }),
+            "the selected data policy must reach the worker"
+        );
+        assert!(
+            dialog_cx.update(|_, cx| {
+                let owner = app.read(cx).extensions.clone();
+                owner.read(cx).progress.as_ref().is_some_and(|progress| {
+                    progress.action == LifecycleAction::Uninstall
+                        && progress.delete_data == Some(delete_data)
+                })
+            }),
+            "the uninstall button must expose the selected operation as loading"
+        );
+        dialog_cx.update(|_, cx| {
+            let owner = app.read(cx).extensions.clone();
+            owner.update(cx, |owner, cx| {
+                owner.worker.state.lock().unwrap().progress = None;
+                owner.poll(cx);
+            });
+        });
+        dialog_cx.run_until_parked();
+    }
 }
 
 /// Both plugin-owned SVG variants must render with their intended foreground ink.

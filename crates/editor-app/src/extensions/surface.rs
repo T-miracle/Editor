@@ -286,6 +286,15 @@ impl ExtensionPanel {
         let executable = package.manifest.component.is_some();
         let name = package.manifest.name.clone();
         let version = package.manifest.version.clone();
+        let current = self
+            .entries
+            .iter()
+            .find(|entry| entry.manifest.id == package.manifest.id)
+            .map(|entry| entry.manifest.version.as_str());
+        let action = match package_action(&version, current) {
+            "已安装" => "重新安装",
+            action => action,
+        };
         let source = package.source.clone();
         let permissions = package.manifest.permissions.clone();
         let owner = cx.entity().downgrade();
@@ -298,7 +307,7 @@ impl ExtensionPanel {
             let install_owner = install_owner.clone();
             let cancel_owner = owner.clone();
             dialog
-                .title(format!("安装插件 · {name} v{version}"))
+                .title(format!("{action}插件 · {name} v{version}"))
                 .width(px(520.))
                 .overlay_closable(false)
                 .close_button(false)
@@ -316,9 +325,9 @@ impl ExtensionPanel {
                         details = details.child(format!("来源：{source}"));
                     }
                     details = details.child(if executable {
-                        "安装后将允许以下能力："
+                        format!("{action}后将允许以下能力：")
                     } else {
-                        "此插件仅提供声明式资源，无需额外运行权限。"
+                        "此插件仅提供声明式资源，无需额外运行权限。".to_owned()
                     });
                     for permission in &permissions {
                         let explanation = match permission.as_str() {
@@ -334,9 +343,14 @@ impl ExtensionPanel {
                         details = details.child(format!("• {explanation}"));
                     }
                     details = details.child(if executable {
-                        "更新将停止插件当前运行的程序，保存会话后启动新程序。原有命令不会自动重跑。"
+                        if action == "安装" {
+                            "安装后插件即可启动声明的程序。".to_owned()
+                        } else {
+                            "将停止插件当前运行的程序，保存会话后启动新程序。原有命令不会自动重跑。"
+                                .to_owned()
+                        }
                     } else {
-                        "更新后会重新加载语法、主题或图标资源。"
+                        format!("{action}后会加载语法、主题或图标资源。")
                     });
                     content.child(details)
                 })
@@ -356,7 +370,7 @@ impl ExtensionPanel {
                                 .child(
                                     DialogAction::new().child(
                                         Button::new("confirm-plugin-install")
-                                            .label("确认安装")
+                                            .label(format!("确认{action}"))
                                             .primary(),
                                     ),
                                 ),
@@ -380,6 +394,146 @@ impl ExtensionPanel {
                     let _ = cancel_owner.update(cx, |this, cx| {
                         this.pending = None;
                         this.pending_dialog_open = false;
+                        cx.notify();
+                    });
+                    true
+                })
+        });
+    }
+
+    /// Confirm the uninstall impact and keep both data-retention choices visible.
+    fn open_remove_dialog(
+        &mut self,
+        id: String,
+        remove: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let entry = self.entries.iter().find(|entry| entry.manifest.id == id);
+        let name = entry
+            .map(|entry| entry.manifest.name.clone())
+            .unwrap_or_else(|| id.strip_prefix("me.").unwrap_or(&id).to_owned());
+        let executable = entry.is_some_and(|entry| entry.manifest.component.is_some());
+        let count = self.processes.get(&id).copied().unwrap_or(0);
+        let impact = if executable {
+            format!("将关闭 {count} 个运行中的程序。")
+        } else {
+            "将撤销此插件提供的语法、主题或图标资源。".to_owned()
+        };
+        let owner = cx.entity().downgrade();
+        window.open_dialog(cx, move |dialog, _, _| {
+            let preserve_owner = owner.clone();
+            let delete_owner = owner.clone();
+            let cancel_owner = owner.clone();
+            let preserve_id = id.clone();
+            let delete_id = id.clone();
+            let impact = impact.clone();
+            dialog
+                .title(format!(
+                    "{}插件 · {name}",
+                    if remove { "卸载" } else { "停用" }
+                ))
+                .width(px(520.))
+                .overlay_closable(false)
+                .close_button(false)
+                .content(move |content, _, cx| {
+                    content.child(
+                        v_flex()
+                            .id("plugin-remove-consent")
+                            .debug_selector(|| "plugin-remove-consent".into())
+                            .gap_3()
+                            .child(impact.clone())
+                            .when(remove, |details| {
+                                details.child(
+                                    div()
+                                        .text_color(cx.theme().muted_foreground)
+                                        .child("可保留插件配置，也可同时删除插件保存的数据。"),
+                                )
+                            }),
+                    )
+                })
+                // Base Dialog renders these explicit choices in its visible footer.
+                .footer(
+                    DialogFooter::new()
+                        .child(
+                            div()
+                                .id("plugin-remove-cancel")
+                                .debug_selector(|| "plugin-remove-cancel".into())
+                                .child(DialogClose::new().trigger(|button| button.label("取消"))),
+                        )
+                        .child(
+                            div()
+                                .id("plugin-remove-preserve")
+                                .debug_selector(|| "plugin-remove-preserve".into())
+                                .child(
+                                    DialogAction::new().child(
+                                        Button::new("confirm-plugin-preserve")
+                                            .label(if remove {
+                                                "卸载，保留数据"
+                                            } else {
+                                                "确认停用"
+                                            })
+                                            .primary(),
+                                    ),
+                                ),
+                        )
+                        .when(remove, |footer| {
+                            footer.child(
+                                div()
+                                    .id("plugin-remove-delete")
+                                    .debug_selector(|| "plugin-remove-delete".into())
+                                    .child(
+                                        Button::new("confirm-plugin-delete")
+                                            .label("卸载并删除数据")
+                                            .danger()
+                                            .on_click(move |_, window, cx| {
+                                                let queued = delete_owner
+                                                    .update(cx, |this, cx| {
+                                                        let queued =
+                                                            this.queue_lifecycle(Work::Uninstall(
+                                                                delete_id.clone(),
+                                                                true,
+                                                            ));
+                                                        if queued {
+                                                            this.confirm = None;
+                                                            this.confirm_dialog_open = false;
+                                                            cx.notify();
+                                                        }
+                                                        queued
+                                                    })
+                                                    .unwrap_or(false);
+                                                if queued {
+                                                    window.close_dialog(cx);
+                                                }
+                                            }),
+                                    ),
+                            )
+                        }),
+                )
+                .on_ok(move |_, _, cx| {
+                    preserve_owner
+                        .update(cx, |this, cx| {
+                            let queued = if remove {
+                                this.queue_lifecycle(Work::Uninstall(preserve_id.clone(), false))
+                            } else {
+                                this.worker
+                                    .tx
+                                    .send(Work::Disable(preserve_id.clone()))
+                                    .is_ok()
+                            };
+                            if queued {
+                                this.confirm = None;
+                                this.confirm_dialog_open = false;
+                                cx.notify();
+                            }
+                            queued
+                        })
+                        .unwrap_or(false)
+                })
+                .on_cancel(move |_, _, cx| {
+                    let _ = cancel_owner.update(cx, |this, cx| {
+                        this.confirm = None;
+                        this.confirm_dialog_open = false;
                         cx.notify();
                     });
                     true
@@ -412,6 +566,15 @@ impl ExtensionPanel {
                     .is_some_and(|pending| pending.digest == package.digest)
                 {
                     this.open_install_dialog(package, window, cx);
+                }
+            });
+        }
+        if let Some((id, remove)) = self.confirm.clone().filter(|_| !self.confirm_dialog_open) {
+            // The confirmation opens after the manager has finished this render pass.
+            self.confirm_dialog_open = true;
+            cx.defer_in(window, move |this, window, cx| {
+                if this.confirm.as_ref() == Some(&(id.clone(), remove)) {
+                    this.open_remove_dialog(id, remove, window, cx);
                 }
             });
         }
@@ -541,6 +704,7 @@ impl ExtensionPanel {
                         this.manager_selected = Some(row_id.clone());
                         this.pending = None;
                         this.confirm = None;
+                        this.confirm_dialog_open = false;
                         cx.notify();
                     })),
             );
@@ -610,19 +774,10 @@ impl ExtensionPanel {
         if let Some(manifest) = selected_manifest {
             let id = manifest.id.clone();
             let installed_version = selected_entry.map(|entry| entry.manifest.version.as_str());
-            let action = if !self.manager_market {
-                "卸载"
-            } else if let Some(current) = installed_version {
-                match (
-                    semver::Version::parse(&manifest.version),
-                    semver::Version::parse(current),
-                ) {
-                    (Ok(available), Ok(installed)) if available > installed => "更新",
-                    (Ok(available), Ok(installed)) if available < installed => "降级安装",
-                    _ => "已安装",
-                }
+            let action = if self.manager_market {
+                package_action(&manifest.version, installed_version)
             } else {
-                "安装"
+                "卸载"
             };
             let package_path = self
                 .manager_market
@@ -641,7 +796,10 @@ impl ExtensionPanel {
             // Both ZIP inspection and installation keep the selected action visibly busy.
             let primary_loading = self.progress.as_ref().is_some_and(|progress| {
                 progress.action == LifecycleAction::Inspect
-                    || (progress.action == LifecycleAction::Install && progress.id == id)
+                    || (matches!(
+                        progress.action,
+                        LifecycleAction::Install | LifecycleAction::Uninstall
+                    ) && progress.id == id)
             });
             let project_id = id.clone();
             let project_owner = cx.entity().downgrade();
@@ -684,6 +842,7 @@ impl ExtensionPanel {
                                                     this.queue_lifecycle(Work::Inspect(path));
                                                 } else {
                                                     this.confirm = Some((action_id.clone(), true));
+                                                    this.confirm_dialog_open = false;
                                                 }
                                                 cx.notify();
                                             })),
@@ -718,7 +877,7 @@ impl ExtensionPanel {
                             }),
                     ),
             );
-            if self.confirm.is_none() && self.status.is_none() {
+            if self.status.is_none() {
                 let readme = self
                     .manager_market
                     .then_some(selected_package)
@@ -771,127 +930,6 @@ impl ExtensionPanel {
             ));
         }
         let mut content = detail;
-        if let Some((id, uninstall)) = &self.confirm {
-            let id = id.clone();
-            let uninstalling = self.progress.as_ref().is_some_and(|progress| {
-                progress.action == LifecycleAction::Uninstall && progress.id == id
-            });
-            let remove = *uninstall;
-            let preserve_id = id.clone();
-            let delete_id = id.clone();
-            let count = self.processes.get(&id).copied().unwrap_or(0);
-            let executable = self
-                .entries
-                .iter()
-                .find(|entry| entry.manifest.id == id)
-                .is_some_and(|entry| entry.manifest.component.is_some());
-            // The package ID stays stable internally, while confirmations use its display name.
-            let name = self
-                .entries
-                .iter()
-                .find(|entry| entry.manifest.id == id)
-                .map(|entry| entry.manifest.name.as_str())
-                .unwrap_or_else(|| id.strip_prefix("me.").unwrap_or(&id));
-            content = content
-                .child(if executable {
-                    format!(
-                        "{} {}：将关闭 {count} 个运行中的程序。",
-                        if remove { "卸载" } else { "停用" },
-                        name
-                    )
-                } else {
-                    format!(
-                        "{} {}：将撤销其声明式资源。",
-                        if remove { "卸载" } else { "停用" },
-                        name
-                    )
-                })
-                .child(
-                    h_flex()
-                        .gap_2()
-                        .child(
-                            Button::new("confirm-plugin-preserve")
-                                .label(if remove {
-                                    "卸载，保留数据"
-                                } else {
-                                    "确认停用"
-                                })
-                                .when(
-                                    uninstalling
-                                        && self
-                                            .progress
-                                            .as_ref()
-                                            .is_some_and(|p| p.delete_data == Some(false)),
-                                    |button| button.icon(IconName::Loader),
-                                )
-                                .loading(
-                                    uninstalling
-                                        && self
-                                            .progress
-                                            .as_ref()
-                                            .is_some_and(|p| p.delete_data == Some(false)),
-                                )
-                                .disabled(busy)
-                                .on_click(cx.listener(move |this, _, _, cx| {
-                                    let queued = if remove {
-                                        this.queue_lifecycle(Work::Uninstall(
-                                            preserve_id.clone(),
-                                            false,
-                                        ))
-                                    } else {
-                                        this.worker
-                                            .tx
-                                            .send(Work::Disable(preserve_id.clone()))
-                                            .is_ok()
-                                    };
-                                    if queued {
-                                        if !remove {
-                                            this.confirm = None;
-                                        }
-                                    }
-                                    cx.notify();
-                                })),
-                        )
-                        .when(remove, |row| {
-                            row.child(
-                                Button::new("confirm-plugin-delete")
-                                    .label("卸载并删除数据")
-                                    .when(
-                                        uninstalling
-                                            && self
-                                                .progress
-                                                .as_ref()
-                                                .is_some_and(|p| p.delete_data == Some(true)),
-                                        |button| button.icon(IconName::Loader),
-                                    )
-                                    .loading(
-                                        uninstalling
-                                            && self
-                                                .progress
-                                                .as_ref()
-                                                .is_some_and(|p| p.delete_data == Some(true)),
-                                    )
-                                    .disabled(busy)
-                                    .on_click(cx.listener(move |this, _, _, cx| {
-                                        this.queue_lifecycle(Work::Uninstall(
-                                            delete_id.clone(),
-                                            true,
-                                        ));
-                                        cx.notify();
-                                    })),
-                            )
-                        })
-                        .child(
-                            Button::new("cancel-plugin-remove")
-                                .label("取消")
-                                .disabled(busy)
-                                .on_click(cx.listener(|this, _, _, cx| {
-                                    this.confirm = None;
-                                    cx.notify();
-                                })),
-                        ),
-                );
-        }
         if let Some(status) = &self.status {
             content = content.child(div().text_color(cx.theme().danger).child(status.clone()));
         }
@@ -905,6 +943,22 @@ impl ExtensionPanel {
             .into_any_element()
     }
 }
+
+/// Use the same version comparison for the market button and its confirmation.
+pub(super) fn package_action(available: &str, installed: Option<&str>) -> &'static str {
+    let Some(current) = installed else {
+        return "安装";
+    };
+    match (
+        semver::Version::parse(available),
+        semver::Version::parse(current),
+    ) {
+        (Ok(available), Ok(installed)) if available > installed => "更新",
+        (Ok(available), Ok(installed)) if available < installed => "降级安装",
+        _ => "已安装",
+    }
+}
+
 fn rect_bounds(rect: protocol::Rect, origin: Point<Pixels>) -> Bounds<Pixels> {
     Bounds::new(
         origin + point(px(rect.x), px(rect.y)),

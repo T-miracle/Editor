@@ -74,6 +74,8 @@ pub struct ExtensionPanel {
     manager_scope_global: Option<bool>,
     manager_scope_subscription: Option<Subscription>,
     confirm: Option<(String, bool)>,
+    /// Keep an uninstall confirmation to one overlay per click.
+    confirm_dialog_open: bool,
     status: Option<String>,
     progress: Option<OperationProgress>,
     processes: HashMap<String, usize>,
@@ -199,6 +201,7 @@ impl ExtensionPanel {
             manager_scope_global: None,
             manager_scope_subscription: None,
             confirm: None,
+            confirm_dialog_open: false,
             status: None,
             progress: None,
             processes: HashMap::new(),
@@ -277,6 +280,7 @@ impl ExtensionPanel {
             manager_scope_global: None,
             manager_scope_subscription: None,
             confirm: None,
+            confirm_dialog_open: false,
             status: None,
             progress: None,
             processes: HashMap::new(),
@@ -299,7 +303,10 @@ impl ExtensionPanel {
                 if state.status.is_none() {
                     match self.progress.as_ref().map(|progress| progress.action) {
                         Some(LifecycleAction::Install) => self.pending = None,
-                        Some(LifecycleAction::Uninstall) => self.confirm = None,
+                        Some(LifecycleAction::Uninstall) => {
+                            self.confirm = None;
+                            self.confirm_dialog_open = false;
+                        }
                         _ => {}
                     }
                 }
