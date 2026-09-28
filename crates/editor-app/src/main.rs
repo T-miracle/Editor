@@ -125,6 +125,8 @@ struct EditorApp {
     status: String,
     definition_notice: Option<DefinitionNotice>,
     definition_request_id: u64,
+    /// Invalidates delayed hover requests whenever the pointer moves again.
+    hover_request_id: u64,
     plugin_loads: Vec<PluginLoadEntry>,
     /// Rejects completion from a grammar task belonging to an older package version.
     plugin_loading_generation: u64,
@@ -304,6 +306,7 @@ impl EditorApp {
             status: t!("status.ready").to_string(),
             definition_notice: None,
             definition_request_id: 0,
+            hover_request_id: 0,
             plugin_loads: PluginLoadEntry::initial(),
             plugin_loading_generation: 0,
             pending_contribution_sync: false,

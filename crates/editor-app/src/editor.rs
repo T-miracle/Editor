@@ -1,6 +1,7 @@
 //! Document lifecycle and editor-area presentation.
 
 mod documents;
+mod hover;
 mod popovers;
 mod view;
 

@@ -305,6 +305,8 @@ fn render_hover(
                     .overflow_y_scroll()
                     .font_family(cx.theme().mono_font_family.clone())
                     .text_size(typography::editor_font_size(cx))
+                    // Moving within the card should not request obscured editor text.
+                    .on_mouse_move(|_, _, cx| cx.stop_propagation())
                     .child(markdown_view("editor-definition-details", markdown, cx)),
             ),
         )
