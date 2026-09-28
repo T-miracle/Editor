@@ -29,6 +29,7 @@ lsp_search_paths = [
 notification = "experimental/serverStatus"
 ready_field = "quiescent"
 client_capability = "serverStatusNotification"
-timeout_ms = 20000
+# Workspace loading and cache priming can exceed a minute while builds are running.
+timeout_ms = 120000
 # Polling consumes server status notifications before the first definition request.
 poll_method = "rust-analyzer/analyzerStatus"

@@ -17,6 +17,24 @@ use std::{
     time::{Duration, Instant},
 };
 
+#[cfg(test)]
+mod readiness_tests {
+    use super::*;
+
+    /// Exercises the bundled plugin against the locally installed server and workspace.
+    #[test]
+    #[ignore = "run scripts/rust-readiness-smoke.ps1 with a local Rust language server"]
+    fn local_rust_server_readiness() {
+        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let manifest = plugin_schema::PluginManifest::parse(
+            &std::fs::read_to_string(root.join("plugins/rust/plugin.toml")).unwrap(),
+        )
+        .unwrap();
+        let server = LanguageServer::new(&root, manifest.languages[0].clone()).unwrap();
+        server.prepare_until_ready().unwrap();
+    }
+}
+
 /// Shares one language server and its document state across language tabs.
 pub struct LanguageServer {
     root: PathBuf,
@@ -71,7 +89,8 @@ impl LanguageServer {
         let Some(poll_method) = readiness.poll_method else {
             return Ok(());
         };
-        let timeout = Duration::from_millis(readiness.timeout_ms.min(60_000));
+        // Initial workspace indexing needs a larger budget than interactive navigation.
+        let timeout = Duration::from_millis(readiness.timeout_ms.min(300_000));
         let started = Instant::now();
         while connection.ready != Some(true) && started.elapsed() < timeout {
             // A request drives the existing JSON-RPC reader and consumes status notifications.
