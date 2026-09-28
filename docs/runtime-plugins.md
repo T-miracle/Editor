@@ -1,13 +1,13 @@
 # 运行时插件平台
 
-编辑器提供通用安装接口。终端和示例插件通过 WebAssembly Component Model 执行；Rust、TOML 和默认主题是由宿主管理生命周期的声明式资源包。终端核心使用插件目录内的 Alacritty 0.26.0 WASM 适配版，元数据解析使用上游 `vte`。语言插件包携带 Tree-sitter WASM grammar，主题插件包携带主题和图标资源；声明式资源由宿主验证并注册。
+编辑器提供通用安装接口。终端和示例插件通过 WebAssembly Component Model 执行；Rust 和 TOML 是由宿主管理生命周期的声明式资源包。亮色与深色基础主题内置于编辑器，首次启动默认使用亮色主题。终端核心使用插件目录内的 Alacritty 0.26.0 WASM 适配版，元数据解析使用上游 `vte`。语言插件包携带 Tree-sitter WASM grammar；其他主题插件仍可携带主题和图标资源，由宿主验证并注册。
 
 ## 构建与安装
 
 ```powershell
 # 只需在开发机器安装一次目标工具链。
 rustup target add wasm32-wasip2
-# 独立构建终端、示例、语言及主题插件，不重新编译编辑器。
+# 独立构建终端、示例及语言插件，不重新编译编辑器。
 ./scripts/build-plugins.ps1
 # 构建编辑器。
 cargo build -p editor-app
@@ -15,15 +15,15 @@ cargo build -p editor-app
 ./scripts/package-editor.ps1
 ```
 
-开发输出包含 `dist/plugins/terminal.zip`、`example.zip`、`rust.zip`、`toml.zip` 和 `default-light-theme.zip`。插件包是标准 ZIP，都包含 `manifest.json`；可执行插件另含组件 `.wasm`，声明式插件只包含各自资源。打包后的使用者不需要 Rust、Cargo 或源代码。
+开发输出包含 `dist/plugins/terminal.zip`、`example.zip`、`rust.zip` 和 `toml.zip`。插件包是标准 ZIP，都包含 `manifest.json`；可执行插件另含组件 `.wasm`，声明式插件只包含各自资源。打包后的使用者不需要 Rust、Cargo 或源代码。
 
 面板可在清单中声明 `icon_light` 和 `icon_dark`，分别指向包内 SVG。宿主验证并读取这两份资源，在浅色、深色主题间切换时自动更新面板标题和底部切换按钮。终端插件的图标位于 `plugins/terminal/icons/`；更新已经安装的终端插件时，选择新版 `terminal.zip` 即可替换图标。
 
 打开编辑器标题栏的“插件管理”，选择“安装 / 更新本机插件包”，确认来源及权限后即可使用。也可选择“查看随附插件”。安装成功会注册清单中的停靠面板、标题工具按钮、命令菜单和快捷键，或加载语言、主题和图标资源。终端默认停靠底部，示例包声明右侧计数器和底部笔记两个面板。面板尺寸可以像资源管理器一样拖动调整，底部按钮可以隐藏和显示各面板。
 
-Rust 和 TOML 插件安装后才提供对应文件的语法、图标及语言服务配置；停用或卸载会撤销这些贡献。默认主题包安装后覆盖编辑器的同名基础配色，停用或卸载后回退到内置基础配色，以确保设置界面仍可使用。三个声明式包的 `contributions` 字段指向各自包内的 `plugin.toml`，由宿主直接管理安装、启用、停用和卸载；更新这些包无需重新编译编辑器。
+Rust 和 TOML 插件安装后才提供对应文件的语法、图标及语言服务配置；停用或卸载会撤销这些贡献。内置主题无需安装插件，也可在设置中切换亮色和深色。两个声明式包的 `contributions` 字段指向各自包内的 `plugin.toml`，由宿主直接管理安装、启用、停用和卸载；更新这些包无需重新编译编辑器。
 
-可用 `cargo run -p plugin-runtime --example declarative_smoke -- dist/plugins` 验证三个包的安装、启用、停用和卸载。
+可用 `cargo run -p plugin-runtime --example declarative_smoke -- dist/plugins` 验证两个包的安装、启用、停用和卸载。
 
 同 ID 插件包执行更新，版本号与协议版本分别校验。编辑器进程保持运行。停用、卸载先显示关闭程序确认；卸载可以保留或删除该插件的全部私有数据，插件代码包会移除。保留数据后重装可以恢复。
 
@@ -39,6 +39,8 @@ Rust 和 TOML 插件安装后才提供对应文件的语法、图标及语言服
 | `plugins/example` | 不申请系统权限的计数器与笔记，用于验证宿主的通用性 |
 
 主程序不识别终端命令、ANSI、光标模式、Shell 类型或终端 Tab。它绘制插件描述的矩形、文本及标准按钮/输入控件，并把原生事件连同面板 ID 发回插件。新增功能无需修改主程序中的枚举或终端专用槽位。
+
+主题通过通用环境传给插件：背景、文字、弱化文字、边框、强调色、选区、明暗模式，以及主题文件 `themes[].plugin_colors` 中的命名颜色。插件自行解释属于自己的键；宿主只验证颜色格式并在主题变化时发送新的环境。终端使用 `me.terminal.*` 命名空间，全部颜色键和优先级见[终端插件说明](../plugins/terminal/README.md)。
 
 ## 契约与权限
 

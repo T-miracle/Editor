@@ -39,6 +39,20 @@ pub fn refresh(root: &Path) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// Restore contributions enabled only for the active workspace before tabs load.
+pub fn refresh_for_workspace(root: &Path, workspace: &Path) -> anyhow::Result<()> {
+    let key = workspace.display().to_string();
+    let installed = Manager::read_registry(root)?
+        .into_values()
+        .map(|mut entry| {
+            entry.enabled |= entry.project_enabled.contains(&key);
+            entry
+        })
+        .collect::<Vec<_>>();
+    refresh_entries(root, &installed);
+    Ok(())
+}
+
 /// The worker's live error state prevents failed components from contributing assets.
 pub fn refresh_entries(root: &Path, installed: &[Installed]) {
     let mut catalog = Catalog::default();
@@ -236,7 +250,7 @@ mod tests {
 
     /// Source assets use the same validated directory format copied into each ZIP.
     #[test]
-    fn declarative_packages_expose_their_distinct_resources() {
+    fn declarative_language_packages_expose_their_distinct_resources() {
         let plugins = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../plugins");
         let digest = "a".repeat(64);
         let rust =
@@ -246,17 +260,6 @@ mod tests {
         let toml =
             Contribution::read(&plugins.join("toml"), "plugin.toml", "me.toml", &digest).unwrap();
         assert_eq!(toml.manifest.languages[0].id, "toml");
-        let theme = Contribution::read(
-            &plugins.join("default-light-theme"),
-            "plugin.toml",
-            "me.default-light-theme",
-            &digest,
-        )
-        .unwrap();
-        assert!(theme.theme.as_ref().is_some_and(|file| {
-            file.themes
-                .iter()
-                .any(|theme| theme.mode == ThemeMode::Dark)
-        }));
+        assert!(rust.theme.is_none() && toml.theme.is_none());
     }
 }

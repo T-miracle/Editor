@@ -7,6 +7,7 @@ mod scene;
 mod shell;
 #[cfg(test)]
 mod tests;
+mod theme;
 use config::{Profile, Settings};
 use plugin_protocol::*;
 use serde::{Deserialize, Serialize};
@@ -14,6 +15,18 @@ use std::{cell::RefCell, collections::BTreeMap};
 wit_bindgen::generate!({ path: "../../crates/plugin-protocol/wit", world: "plugin" });
 struct TerminalPlugin;
 thread_local! { static APP: RefCell<Option<Terminal>> = const { RefCell::new(None) }; }
+// Keep the terminal usable while allowing a wider session list for long names.
+const DEFAULT_TAB_WIDTH: f32 = 180.;
+const MIN_TAB_WIDTH: f32 = 112.;
+const MAX_TAB_WIDTH: f32 = 480.;
+const MIN_CONTENT_WIDTH: f32 = 80.;
+// The resize target belongs to the tab bar, immediately inside its left edge.
+const TAB_RESIZE_HANDLE_WIDTH: f32 = 8.;
+
+/// Older snapshots did not store the width of the terminal's tab list.
+fn default_tab_width() -> f32 {
+    DEFAULT_TAB_WIDTH
+}
 impl Guest for TerminalPlugin {
     /// A serial event loop keeps parsing and UI mutation in the same isolated instance.
     fn dispatch(payload: String) -> Result<String, String> {
@@ -88,6 +101,8 @@ struct Saved {
     next_id: u64,
     counts: BTreeMap<String, usize>,
     settings: Settings,
+    #[serde(default = "default_tab_width")]
+    tab_width: f32,
 }
 #[derive(Serialize, Deserialize)]
 struct SavedTab {
@@ -106,6 +121,7 @@ struct Terminal {
     counts: BTreeMap<String, usize>,
     width: f32,
     height: f32,
+    tab_width: f32,
     cw: f32,
     ch: f32,
     menu: bool,
@@ -115,6 +131,7 @@ struct Terminal {
     selecting: bool,
     error: Option<String>,
     drag: Option<usize>,
+    resizing_tab_bar: bool,
 }
 impl Terminal {
     /// Validate and migrate saved data without acquiring any OS resources.
@@ -153,6 +170,7 @@ impl Terminal {
             counts: BTreeMap::new(),
             width: 800.,
             height: 240.,
+            tab_width: DEFAULT_TAB_WIDTH,
             cw: 8.4,
             ch: 21.,
             menu: false,
@@ -162,6 +180,7 @@ impl Terminal {
             selecting: false,
             error: None,
             drag: None,
+            resizing_tab_bar: false,
         };
         if let Some(snapshot) = snapshot {
             if snapshot.schema != 1 {
@@ -178,6 +197,10 @@ impl Terminal {
             }
             app.next_id = saved.next_id;
             app.counts = saved.counts;
+            // Snapshot data is user-controlled; reject non-finite layout values.
+            if saved.tab_width.is_finite() {
+                app.tab_width = saved.tab_width.clamp(MIN_TAB_WIDTH, MAX_TAB_WIDTH);
+            }
             for saved in saved.tabs {
                 app.restore_tab(saved);
             }
@@ -214,7 +237,9 @@ impl Terminal {
             self.settings.history,
         );
         term.process(saved.output.as_bytes());
-        if !saved.output.is_empty() {
+        // Reinstalling a package must not append another identical history separator.
+        if !saved.output.is_empty() && !saved.output.contains("--- restored session; new shell ---")
+        {
             term.process(b"\r\n\x1b[0m--- restored session; new shell ---\r\n");
         }
         // Never replay query responses when restoring a snapshot.
@@ -233,9 +258,19 @@ impl Terminal {
     }
     fn extent(&self) -> Extent {
         Extent {
-            columns: ((self.width - 204.) / self.cw).floor().clamp(2., 1000.) as usize,
+            columns: ((self.tab_left() - 24.) / self.cw).floor().clamp(2., 1000.) as usize,
             rows: ((self.height - 16.) / self.ch).floor().clamp(1., 500.) as usize,
         }
+    }
+    /// Limit the divider to the available panel while preserving terminal space.
+    fn effective_tab_width(&self) -> f32 {
+        self.tab_width
+            .clamp(MIN_TAB_WIDTH.min(self.width.max(0.)), MAX_TAB_WIDTH)
+            .min((self.width - MIN_CONTENT_WIDTH).max(0.))
+    }
+    /// Share one divider coordinate across painting, hit testing and PTY sizing.
+    fn tab_left(&self) -> f32 {
+        (self.width - self.effective_tab_width()).max(0.)
     }
     /// Count each shell independently; process OSC titles cannot replace user names.
     fn add(&mut self, profile: usize, cwd: String) {
@@ -349,6 +384,7 @@ impl Terminal {
                 next_id: self.next_id,
                 counts: self.counts.clone(),
                 settings: self.settings.clone(),
+                tab_width: self.tab_width,
             })
             .unwrap(),
         }

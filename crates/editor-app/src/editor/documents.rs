@@ -154,12 +154,20 @@ impl EditorApp {
                             cx.notify();
                         }
                     });
+                // Host-owned popovers follow upstream menu and hover notifications.
+                let panel = self.editor_panel.downgrade();
+                let observer = cx.observe(&editor, move |this, changed_editor, cx| {
+                    if this.editor.entity_id() == changed_editor.entity_id() {
+                        let _ = panel.update(cx, |_, cx| cx.notify());
+                    }
+                });
                 self.tabs.push(OpenTab {
                     session: opened.session,
                     editor,
                     definition_highlight,
                     definition_highlight_generation: 0,
                     _subscription: subscription,
+                    _observer: observer,
                 });
                 self.activate_tab(self.tabs.len() - 1, window, cx);
                 let editor = self.tabs.last().unwrap().editor.downgrade();
@@ -306,6 +314,8 @@ impl EditorApp {
 
         self.active_path = Some(path.clone());
         self.editor = tab.editor.clone();
+        // A completion index belongs to one document and must not cross tabs.
+        self.completion_selection.set((0, 0));
         // Every activation path, including tabs and definition jumps, updates the explorer.
         if path.starts_with(self.workspace.root()) {
             self.select_file_in_tree(&path, cx);

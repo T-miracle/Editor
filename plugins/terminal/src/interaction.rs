@@ -16,23 +16,7 @@ impl Terminal {
                 self.height = height;
                 self.cw = cell_width.max(1.);
                 self.ch = cell_height.max(1.);
-                let extent = self.extent();
-                for tab in &mut self.tabs {
-                    tab.term.replies_mut().cell_size = (cell_width as u16, cell_height as u16);
-                    let dimensions = (extent.rows as u16, extent.columns as u16);
-                    // Dock drag emits pixel changes even when the PTY cell grid is unchanged.
-                    // Repeated ConPTY notifications can make interactive shells redraw prompts.
-                    if tab.term.screen().size() != dimensions {
-                        tab.term.resize(dimensions.0, dimensions.1);
-                        if let Some(handle) = tab.handle {
-                            let _ = host(Request::Resize {
-                                handle,
-                                columns: dimensions.1,
-                                rows: dimensions.0,
-                            });
-                        }
-                    }
-                }
+                self.resize_grid();
             }
             Event::Theme(env) => self.env = env,
             Event::ProcessOutput { handle, bytes } => {
@@ -102,7 +86,7 @@ impl Terminal {
                 shift,
             } => self.pointer(&kind, x, y, button, clicks, shift),
             Event::Wheel { delta, shift, x, y } => {
-                if x >= self.width - 180. {
+                if x >= self.tab_left() {
                     self.tab_scroll = (self.tab_scroll as i32 - delta.round() as i32).clamp(
                         0,
                         self.tabs
@@ -174,6 +158,25 @@ impl Terminal {
                     .is_some_and(|t| t.term.focus_mode())
                 {
                     self.send(if focused { b"\x1b[I" } else { b"\x1b[O" }.to_vec());
+                }
+            }
+        }
+    }
+    /// Synchronize the emulator and PTY only when the divider changes the cell grid.
+    fn resize_grid(&mut self) {
+        let extent = self.extent();
+        for tab in &mut self.tabs {
+            tab.term.replies_mut().cell_size = (self.cw as u16, self.ch as u16);
+            let dimensions = (extent.rows as u16, extent.columns as u16);
+            // Pixel drag events need no ConPTY call until the cell count changes.
+            if tab.term.screen().size() != dimensions {
+                tab.term.resize(dimensions.0, dimensions.1);
+                if let Some(handle) = tab.handle {
+                    let _ = host(Request::Resize {
+                        handle,
+                        columns: dimensions.1,
+                        rows: dimensions.0,
+                    });
                 }
             }
         }
@@ -323,7 +326,32 @@ impl Terminal {
     }
     /// Hit testing, tab ordering and selection are terminal behavior.
     fn pointer(&mut self, kind: &str, x: f32, y: f32, button: u8, clicks: u8, shift: bool) {
-        let right = self.width - 180.;
+        let right = self.tab_left();
+        // Capture the divider before terminal mouse reporting or tab hit testing.
+        if self.resizing_tab_bar {
+            if kind == "move" {
+                self.tab_width = (self.width - x).clamp(MIN_TAB_WIDTH, MAX_TAB_WIDTH);
+                self.resize_grid();
+                return;
+            }
+            if kind == "up" {
+                self.resizing_tab_bar = false;
+                return;
+            }
+            // A new press can arrive if the previous release was outside the panel.
+            self.resizing_tab_bar = false;
+        }
+        // The right-hand tab list is resized from its left edge, inside the list.
+        if kind == "down"
+            && button == 0
+            && x >= right
+            && x < right + TAB_RESIZE_HANDLE_WIDTH.min(self.effective_tab_width())
+        {
+            self.resizing_tab_bar = true;
+            self.drag = None;
+            self.selecting = false;
+            return;
+        }
         if x >= right {
             let index = (y / 32.).max(0.) as usize + self.tab_scroll;
             if index < self.tabs.len() {
@@ -334,6 +362,8 @@ impl Terminal {
                         self.active = index;
                         self.drag = Some(index);
                         if clicks >= 2 {
+                            // Editing owns the tab pointer until blur, so no drag remains pending.
+                            self.drag = None;
                             self.rename = Some(self.tabs[index].id);
                         }
                     }
@@ -364,12 +394,13 @@ impl Terminal {
         let Some(tab) = self.tabs.get_mut(self.active) else {
             return;
         };
+        let (rows, columns) = tab.term.screen().size();
         let col = ((x - 8.) / self.cw)
             .floor()
-            .clamp(0., (tab.term.screen().size().1 as usize - 1) as f32) as usize;
+            .clamp(0., (columns as usize - 1) as f32) as usize;
         let row = ((y - 8.) / self.ch)
             .floor()
-            .clamp(0., (tab.term.screen().size().0 as usize - 1) as f32) as i32;
+            .clamp(0., (rows as usize - 1) as f32) as i32;
         let mouse = tab.term.screen().mouse_protocol_mode();
         if !shift && mouse != MouseProtocolMode::None {
             if (kind == "move"
@@ -408,9 +439,19 @@ impl Terminal {
             self.command("copy", None, None);
             return;
         }
-        if kind == "down" {
-            tab.term.select(row as u16, col as u16, clicks);
-            self.selecting = true;
+        if kind == "down" && button == 0 {
+            // The unused grid and panel padding must not begin a local text selection.
+            let in_grid = x >= 8.
+                && y >= 8.
+                && x < 8. + columns as f32 * self.cw
+                && y < 8. + rows as f32 * self.ch;
+            if in_grid && col < tab.term.screen().content_end(row as u16) as usize {
+                tab.term.select(row as u16, col as u16, clicks);
+                self.selecting = true;
+            } else {
+                tab.term.clear_selection();
+                self.selecting = false;
+            }
         } else if kind == "move" && self.selecting {
             tab.term.extend_selection(row as u16, col as u16);
         } else if kind == "up" {

@@ -1817,6 +1817,7 @@ dependencies = [
  "plugin-runtime",
  "plugin-schema",
  "rust-i18n",
+ "semver",
  "serde",
  "serde_json",
  "tempfile",
@@ -7449,6 +7450,7 @@ dependencies = [
  "plugin-protocol",
  "serde",
  "serde_json",
+ "unicode-width",
  "vte",
  "wit-bindgen 0.45.1",
 ]

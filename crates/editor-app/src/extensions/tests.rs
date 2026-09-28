@@ -1,6 +1,244 @@
 //! Exercise dynamic native panels, declarative input commits and shortcut isolation.
 use super::*;
-use gpui_kit::{EntityInputHandler, TestAppContext, gpui};
+use gpui_kit::component::WindowExt as _;
+use gpui_kit::{EntityInputHandler, TestAppContext, VisualTestContext, gpui};
+
+/// Clicking a market install action must immediately publish an inspecting state.
+#[gpui::test]
+fn market_install_button_reports_loading_before_inspection(cx: &mut TestAppContext) {
+    cx.update(|cx| {
+        gpui_kit::init(cx);
+        typography::init(cx);
+        apply_theme(builtin_theme(false), cx);
+    });
+    let directory = tempfile::tempdir().unwrap();
+    let workspace = Workspace::open(directory.path()).unwrap();
+    let slot = Rc::new(RefCell::new(None));
+    let capture = slot.clone();
+    let (_, editor_cx) = cx.add_window_view(move |window, cx| {
+        let app = cx.new(|cx| EditorApp::new(workspace, None, window, cx));
+        *capture.borrow_mut() = Some(app.clone());
+        Root::new(app, window, cx)
+    });
+    let app = slot.borrow_mut().take().unwrap();
+    let editor_window = editor_cx.update(|window, _| window.window_handle());
+    editor_cx.update(|window, cx| {
+        let owner = app.read(cx).extensions.clone();
+        owner.update(cx, |owner, cx| {
+            let manifest: protocol::Manifest =
+                serde_json::from_str(include_str!("../../../../plugins/example/manifest.json"))
+                    .unwrap();
+            owner.manager_market = true;
+            owner.manager_packages = vec![Package {
+                manifest,
+                files: Default::default(),
+                digest: "fixture".into(),
+                source: Some("first.zip".into()),
+            }];
+            cx.notify();
+        });
+        app.update(cx, |app, cx| app.toggle_extensions(window, cx));
+    });
+    let dialog_window = editor_cx
+        .update(|_, cx| cx.windows())
+        .into_iter()
+        .find(|handle| *handle != editor_window)
+        .unwrap();
+    let dialog_cx = VisualTestContext::from_window(dialog_window, cx).into_mut();
+    dialog_cx.update(|window, cx| window.draw(cx).clear(cx));
+    let install = dialog_cx
+        .debug_bounds("plugin-primary-action-region")
+        .unwrap();
+    dialog_cx.simulate_click(install.center(), Default::default());
+    let action =
+        dialog_cx.update(|_, cx| {
+            let owner = app.read(cx).extensions.clone();
+            let inspected = owner.read(cx).worker.recorded.lock().unwrap().try_iter()
+            .any(|work| matches!(work, Work::Inspect(path) if path == PathBuf::from("first.zip")));
+            assert!(inspected, "the first install click must reach the worker");
+            owner
+                .read(cx)
+                .progress
+                .as_ref()
+                .map(|progress| progress.action)
+        });
+    assert!(
+        action.is_some(),
+        "inspection must mark the install action as loading"
+    );
+}
+
+/// A second package's consent opens in a dialog above even a long README.
+#[gpui::test]
+fn second_market_install_shows_visible_consent(cx: &mut TestAppContext) {
+    cx.update(|cx| {
+        gpui_kit::init(cx);
+        typography::init(cx);
+        apply_theme(builtin_theme(false), cx);
+        cx.set_reduce_motion(true);
+    });
+    let directory = tempfile::tempdir().unwrap();
+    let workspace = Workspace::open(directory.path()).unwrap();
+    let slot = Rc::new(RefCell::new(None));
+    let capture = slot.clone();
+    let (_, editor_cx) = cx.add_window_view(move |window, cx| {
+        let app = cx.new(|cx| EditorApp::new(workspace, None, window, cx));
+        *capture.borrow_mut() = Some(app.clone());
+        Root::new(app, window, cx)
+    });
+    let app = slot.borrow_mut().take().unwrap();
+    let editor_window = editor_cx.update(|window, _| window.window_handle());
+    let first_manifest: protocol::Manifest =
+        serde_json::from_str(include_str!("../../../../plugins/example/manifest.json")).unwrap();
+    let second_manifest: protocol::Manifest =
+        serde_json::from_str(include_str!("../../../../plugins/rust/manifest.json")).unwrap();
+    let first = Package {
+        manifest: first_manifest.clone(),
+        files: Default::default(),
+        digest: "first".into(),
+        source: Some("first.zip".into()),
+    };
+    let second = Package {
+        manifest: second_manifest.clone(),
+        digest: "second".into(),
+        source: Some("second.zip".into()),
+        files: BTreeMap::from([(
+            "README.md".into(),
+            format!("# Rust\n\n{}", "A long explanation.\n\n".repeat(160)).into_bytes(),
+        )]),
+    };
+    editor_cx.update(|window, cx| {
+        let owner = app.read(cx).extensions.clone();
+        owner.update(cx, |owner, cx| {
+            owner.manager_market = true;
+            owner.manager_selected = Some(second_manifest.id.clone());
+            owner.manager_packages = vec![first, second.clone()];
+            let mut state = owner.worker.state.lock().unwrap();
+            state.entries = vec![Installed {
+                manifest: first_manifest.clone(),
+                digest: "first".into(),
+                grants: first_manifest.permissions.clone(),
+                enabled: true,
+                project_enabled: Default::default(),
+                global_enabled: Some(true),
+                error: None,
+            }];
+            drop(state);
+            owner.poll(cx);
+        });
+        app.update(cx, |app, cx| app.toggle_extensions(window, cx));
+    });
+    let dialog_window = editor_cx
+        .update(|_, cx| cx.windows())
+        .into_iter()
+        .find(|handle| *handle != editor_window)
+        .unwrap();
+    let dialog_cx = VisualTestContext::from_window(dialog_window, cx).into_mut();
+    dialog_cx.update(|window, cx| window.draw(cx).clear(cx));
+    let install = dialog_cx
+        .debug_bounds("plugin-primary-action-region")
+        .unwrap();
+    dialog_cx.simulate_click(install.center(), Default::default());
+    dialog_cx.update(|_, cx| {
+        let owner = app.read(cx).extensions.clone();
+        let inspected = owner
+            .read(cx)
+            .worker
+            .recorded
+            .lock()
+            .unwrap()
+            .try_iter()
+            .any(|work| matches!(work, Work::Inspect(path) if path == PathBuf::from("second.zip")));
+        assert!(inspected, "the second install click must reach the worker");
+        owner.update(cx, |owner, cx| {
+            let mut state = owner.worker.state.lock().unwrap();
+            state.pending = Some(second.clone());
+            state.progress = None;
+            drop(state);
+            owner.poll(cx);
+        });
+    });
+    dialog_cx.update(|window, cx| window.draw(cx).clear(cx));
+    let open = dialog_cx.update(|window, cx| window.has_active_dialog(cx));
+    assert!(
+        open,
+        "the second installation must open a confirmation dialog"
+    );
+    dialog_cx.run_until_parked();
+    dialog_cx.update(|window, cx| window.draw(cx).clear(cx));
+    dialog_cx.update(|window, cx| window.draw(cx).clear(cx));
+    assert!(
+        dialog_cx.debug_bounds("plugin-install-consent").is_some(),
+        "package origin and permissions should render inside the dialog"
+    );
+    assert!(
+        dialog_cx.debug_bounds("plugin-install-cancel").is_some(),
+        "the dialog must show a cancel button"
+    );
+    assert!(
+        dialog_cx.debug_bounds("plugin-install-confirm").is_some(),
+        "the dialog must show a confirm button"
+    );
+    let viewport_height = dialog_cx.update(|window, _| window.viewport_size().height);
+    assert!(
+        dialog_cx
+            .debug_bounds("plugin-install-confirm")
+            .unwrap()
+            .bottom()
+            <= viewport_height,
+        "the confirm button must stay within the visible window"
+    );
+    assert!(
+        dialog_cx.debug_bounds("plugin-readme-region").is_some(),
+        "README should remain in the detail pane behind the dialog"
+    );
+    let cancel = dialog_cx.debug_bounds("plugin-install-cancel").unwrap();
+    dialog_cx.simulate_click(cancel.center(), Default::default());
+    dialog_cx.run_until_parked();
+    assert!(
+        !dialog_cx.update(|window, cx| window.has_active_dialog(cx)),
+        "the cancel button should dismiss the install confirmation"
+    );
+    assert!(
+        dialog_cx.update(|_, cx| app.read(cx).extensions.read(cx).pending.is_none()),
+        "dismissing the dialog must clear the pending package"
+    );
+    // Reopen the same package to prove cancellation does not block its next install.
+    dialog_cx.update(|window, cx| window.draw(cx).clear(cx));
+    let install = dialog_cx
+        .debug_bounds("plugin-primary-action-region")
+        .unwrap();
+    dialog_cx.simulate_click(install.center(), Default::default());
+    dialog_cx.update(|_, cx| {
+        let owner = app.read(cx).extensions.clone();
+        owner.update(cx, |owner, cx| {
+            let mut state = owner.worker.state.lock().unwrap();
+            state.pending = Some(second.clone());
+            state.progress = None;
+            drop(state);
+            owner.poll(cx);
+        });
+    });
+    dialog_cx.run_until_parked();
+    dialog_cx.update(|window, cx| window.draw(cx).clear(cx));
+    dialog_cx.update(|window, cx| window.draw(cx).clear(cx));
+    let confirm = dialog_cx.debug_bounds("plugin-install-confirm").unwrap();
+    dialog_cx.simulate_click(confirm.center(), Default::default());
+    assert!(
+        dialog_cx.update(|_, cx| {
+            app.read(cx)
+                .extensions
+                .read(cx)
+                .worker
+                .recorded
+                .lock()
+                .unwrap()
+                .try_iter()
+                .any(|work| matches!(work, Work::Install(package) if package.digest == "second"))
+        }),
+        "confirming the reopened dialog must queue installation"
+    );
+}
 
 /// Both plugin-owned SVG variants must render with their intended foreground ink.
 #[test]
@@ -81,6 +319,8 @@ fn plugin_panel_registration_input_and_ime(cx: &mut TestAppContext) {
                 digest: "fixture".into(),
                 grants: manifest.permissions.clone(),
                 enabled: true,
+                project_enabled: Default::default(),
+                global_enabled: None,
                 error: None,
             }];
             state

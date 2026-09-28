@@ -112,8 +112,8 @@ fn selected_tab_has_no_left_separator() {
     let app = app();
     let right = app.width - 180.;
     let scene = app.scene();
-    assert!(!scene.paint.iter().any(|p|matches!(p,Paint::Fill{rect,color}if rect.x==right&&rect.y==0.&&rect.w==1.&&*color==app.env.border)));
-    assert!(scene.paint.iter().any(|p|matches!(p,Paint::Fill{rect,color}if rect.x==right&&rect.y==32.&&rect.w==1.&&*color==app.env.border)));
+    assert!(!scene.paint.iter().any(|p|matches!(p,Paint::Fill{rect,color,..}if rect.x==right&&rect.y==0.&&rect.w==1.&&*color==app.env.border)));
+    assert!(scene.paint.iter().any(|p|matches!(p,Paint::Fill{rect,color,..}if rect.x==right&&rect.y==32.&&rect.w==1.&&*color==app.env.border)));
 }
 
 /// Cwd metadata remains intact even when ConPTY splits an escape across reads.
@@ -195,6 +195,210 @@ fn unicode_colors_and_legacy_snapshot_round_trip() {
         writes().is_empty(),
         "restoring old output must not execute shell input"
     );
+}
+
+/// Named, bold, dim and default SGR text use distinct plugin palette entries.
+#[test]
+fn sgr_text_uses_named_intensity_and_default_theme_colors() {
+    let mut terminal = app();
+    output(
+        &mut terminal,
+        b"\x1b[31mR\x1b[0m\x1b[1;31mB\x1b[0m\x1b[2;31mD\x1b[0m\x1b[2mM\x1b[0m",
+    );
+    let screen = terminal.tabs[0].term.screen();
+    for (column, index) in [(0, 1), (1, 9), (2, 260), (3, 268)] {
+        assert_eq!(
+            screen.cell(0, column).unwrap().fgcolor(),
+            emulator::Color::Idx(index)
+        );
+    }
+    let scene = terminal.scene();
+    for (glyph, index) in [('R', 1), ('B', 9), ('D', 260), ('M', 268)] {
+        assert!(scene.paint.iter().any(|paint| matches!(
+            paint,
+            Paint::Text { text, color, .. } if text == &glyph.to_string() && *color == terminal.color(index)
+        )));
+    }
+}
+
+/// Theme tokens cover every named color while user settings retain precedence.
+#[test]
+fn editor_theme_can_override_every_terminal_palette_role() {
+    let mut terminal = app();
+    let names = [
+        "black",
+        "red",
+        "green",
+        "yellow",
+        "blue",
+        "magenta",
+        "cyan",
+        "white",
+        "bright_black",
+        "bright_red",
+        "bright_green",
+        "bright_yellow",
+        "bright_blue",
+        "bright_magenta",
+        "bright_cyan",
+        "bright_white",
+    ];
+    let mut environment = terminal.env.clone();
+    for (index, name) in names.iter().enumerate() {
+        environment
+            .theme_colors
+            .insert(format!("me.terminal.ansi.{name}"), 0x112200 + index as u32);
+    }
+    for (index, name) in names[..8].iter().enumerate() {
+        environment.theme_colors.insert(
+            format!("me.terminal.ansi.dim_{name}"),
+            0x223300 + index as u32,
+        );
+    }
+    for (name, value) in [
+        ("foreground", 0x334401),
+        ("background", 0x334402),
+        ("cursor", 0x334403),
+        ("cursor_text", 0x334404),
+        ("selection", 0x334405),
+        ("bright_foreground", 0x334406),
+        ("dim_foreground", 0x334407),
+        ("indexed.200", 0x334408),
+    ] {
+        environment
+            .theme_colors
+            .insert(format!("me.terminal.{name}"), value);
+    }
+    terminal.event(Event::Theme(environment));
+    for index in 0..16 {
+        assert_eq!(terminal.color(index), 0x112200 + index as u32);
+    }
+    for index in 0..8 {
+        assert_eq!(terminal.color(index + 259), 0x223300 + index as u32);
+    }
+    for (index, value) in [
+        (256, 0x334401),
+        (257, 0x334402),
+        (258, 0x334403),
+        (267, 0x334406),
+        (268, 0x334407),
+        (200, 0x334408),
+    ] {
+        assert_eq!(terminal.color(index), value);
+    }
+    assert_eq!(terminal.cursor_text_color(), 0x334404);
+    assert_eq!(terminal.selection_color(), 0x334405);
+    terminal.settings.theme.foreground = Some("#ABCDEF".into());
+    terminal.settings.theme.ansi = Some(std::array::from_fn(|_| "#123456".into()));
+    assert_eq!(terminal.color(256), 0xabcdef);
+    assert_eq!(terminal.color(1), 0x123456);
+}
+
+/// A live editor mode change recolors existing terminal cells without recreating the Shell.
+#[test]
+fn live_dark_mode_recolors_existing_output() {
+    let mut terminal = app();
+    output(&mut terminal, b"\x1b[33mY");
+    let handle = terminal.tabs[0].handle;
+    assert_eq!(terminal.color(3), 0x8a5a00);
+    let mut environment = terminal.env.clone();
+    environment.dark = true;
+    environment.background = 0x1e1f22;
+    environment.foreground = 0xdfe1e5;
+    terminal.event(Event::Theme(environment));
+    assert_eq!(terminal.tabs[0].handle, handle);
+    assert_eq!(terminal.color(3), 0xd7ba7d);
+    assert!(terminal.scene().paint.iter().any(|paint| matches!(
+        paint,
+        Paint::Text { text, color: 0xd7ba7d, .. } if text == "Y"
+    )));
+}
+
+/// The default caret is a narrow beam, while a Shell-requested block is honored.
+#[test]
+fn default_caret_is_beam_and_shell_can_request_block() {
+    let mut terminal = app();
+    assert_eq!(terminal.tabs[0].term.cursor_shape(), 5);
+    let cursor = terminal.scene().cursor;
+    assert!(terminal.scene().paint.iter().any(|paint| matches!(
+        paint,
+        Paint::Fill { rect, color, .. }
+            if rect.x == cursor.x && rect.y == cursor.y && rect.w == 2.
+                && rect.h == cursor.h && *color == terminal.color(258)
+    )));
+    output(&mut terminal, b"\x1b[2 q");
+    assert_eq!(terminal.tabs[0].term.cursor_shape(), 1);
+    output(&mut terminal, b"\x1b[0 q");
+    assert_eq!(terminal.tabs[0].term.cursor_shape(), 5);
+}
+
+/// Blank rows and trailing grid cells cannot start or visually extend local selection.
+#[test]
+fn selection_starts_only_within_printed_line_content() {
+    let mut terminal = app();
+    output(&mut terminal, b"hello world");
+    for (x, y) in [(200., 9.), (9., 8. + terminal.ch * 3.), (1., 9.)] {
+        terminal.event(Event::Pointer {
+            kind: "down".into(),
+            x,
+            y,
+            button: 0,
+            clicks: 1,
+            shift: false,
+        });
+        terminal.event(Event::Pointer {
+            kind: "move".into(),
+            x: x + 30.,
+            y,
+            button: 0,
+            clicks: 1,
+            shift: false,
+        });
+        assert!(terminal.tabs[0].term.selected_range().is_none());
+    }
+    // A printed line may contain a space between words, which remains selectable.
+    terminal.event(Event::Pointer {
+        kind: "down".into(),
+        x: 8. + terminal.cw * 5. + 1.,
+        y: 9.,
+        button: 0,
+        clicks: 1,
+        shift: false,
+    });
+    assert!(terminal.tabs[0].term.selected_range().is_some());
+    terminal.event(Event::Pointer {
+        kind: "move".into(),
+        x: 300.,
+        y: 9.,
+        button: 0,
+        clicks: 1,
+        shift: false,
+    });
+    let line_end = 8. + terminal.cw * 11.;
+    assert!(!terminal.scene().paint.iter().any(|paint| matches!(
+        paint,
+        Paint::Fill { rect, color, .. }
+            if rect.y == 8. && rect.x >= line_end && rect.x < terminal.tab_left()
+                && *color == terminal.selection_color()
+    )));
+}
+
+/// TUI mouse reporting still receives presses on blank cells before local hit testing.
+#[test]
+fn blank_cells_still_report_mouse_to_tui() {
+    let mut terminal = app();
+    output(&mut terminal, b"\x1b[?1000h\x1b[?1006h");
+    CALLS.with(|calls| calls.borrow_mut().clear());
+    terminal.event(Event::Pointer {
+        kind: "down".into(),
+        x: 200.,
+        y: 9.,
+        button: 0,
+        clicks: 1,
+        shift: false,
+    });
+    assert_eq!(writes(), b"\x1b[<0;23;1M");
+    assert!(terminal.tabs[0].term.selected_range().is_none());
 }
 
 /// Application arrows, bracketed paste, status queries and focus events reach the PTY once.

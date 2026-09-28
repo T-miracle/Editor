@@ -6,7 +6,7 @@ use gpui_kit::{
     ParentElement, Render, SharedString, Styled, Window, WindowBounds, WindowControlArea,
     WindowHandle, WindowKind,
     component::{
-        ActiveTheme, IconName, Root, Sizable, StyledExt, TitleBar,
+        ActiveTheme, IconName, Root, Sizable, StyledExt, TitleBar, WindowExt as _,
         button::{Button, ButtonVariants as _},
         dialog::DialogContent,
         h_flex, v_flex,
@@ -53,6 +53,10 @@ impl AppDialog {
         cx: &mut Context<Self>,
     ) {
         if event.keystroke.key == "escape" && event.keystroke.modifiers == Default::default() {
+            // The active child Dialog owns Escape while its confirmation is open.
+            if window.has_active_dialog(cx) {
+                return;
+            }
             cx.stop_propagation();
             window.remove_window();
         }
@@ -83,56 +87,64 @@ impl AppDialog {
 
 impl Render for AppDialog {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        v_flex()
-            .id("app-dialog-window")
-            .debug_selector(|| "dialog-0".into())
+        // Native settings and plugin windows share the component Dialog overlay layer.
+        let dialog_layer = Root::render_dialog_layer(window, cx);
+        div()
+            .relative()
             .size_full()
-            .bg(cx.theme().tokens.background)
-            .track_focus(&self.focus)
-            .capture_key_down(cx.listener(Self::close_on_escape))
-            .child(
-                h_flex()
-                    .id("app-dialog-title-bar")
-                    .debug_selector(|| "app-dialog-title-bar".into())
-                    .h(px(PANEL_HEADER_HEIGHT))
-                    .w_full()
-                    .flex_shrink_0()
-                    .items_center()
-                    .bg(rgb(0xf7f8fa))
-                    .text_color(rgb(0x202124))
-                    .border_b_1()
-                    .border_color(cx.theme().border)
-                    .child(
-                        h_flex()
-                            .id("app-dialog-drag-region")
-                            .flex_1()
-                            .h_full()
-                            .items_center()
-                            .px_3()
-                            .font_semibold()
-                            .window_control_area(WindowControlArea::Drag)
-                            .on_mouse_down(MouseButton::Left, cx.listener(Self::start_drag))
-                            .on_mouse_up(MouseButton::Left, cx.listener(Self::stop_drag))
-                            .on_mouse_move(cx.listener(Self::move_window))
-                            .child((self.title)(window, cx)),
-                    )
-                    .child(
-                        Button::new("app-dialog-close")
-                            .icon(IconName::Close)
-                            .small()
-                            .ghost()
-                            .on_click(|_, window, _| window.remove_window()),
-                    )
-                    .child(div().w(px(8.))),
-            )
             .child(
                 v_flex()
-                    .id("app-dialog-body")
-                    .flex_1()
-                    .min_h_0()
-                    .overflow_hidden()
-                    .child((self.content)(DialogContent::new(), window, cx)),
+                    .id("app-dialog-window")
+                    .debug_selector(|| "dialog-0".into())
+                    .size_full()
+                    .bg(cx.theme().tokens.background)
+                    .track_focus(&self.focus)
+                    .capture_key_down(cx.listener(Self::close_on_escape))
+                    .child(
+                        h_flex()
+                            .id("app-dialog-title-bar")
+                            .debug_selector(|| "app-dialog-title-bar".into())
+                            .h(px(PANEL_HEADER_HEIGHT))
+                            .w_full()
+                            .flex_shrink_0()
+                            .items_center()
+                            .bg(rgb(0xf7f8fa))
+                            .text_color(rgb(0x202124))
+                            .border_b_1()
+                            .border_color(cx.theme().border)
+                            .child(
+                                h_flex()
+                                    .id("app-dialog-drag-region")
+                                    .flex_1()
+                                    .h_full()
+                                    .items_center()
+                                    .px_3()
+                                    .font_semibold()
+                                    .window_control_area(WindowControlArea::Drag)
+                                    .on_mouse_down(MouseButton::Left, cx.listener(Self::start_drag))
+                                    .on_mouse_up(MouseButton::Left, cx.listener(Self::stop_drag))
+                                    .on_mouse_move(cx.listener(Self::move_window))
+                                    .child((self.title)(window, cx)),
+                            )
+                            .child(
+                                Button::new("app-dialog-close")
+                                    .icon(IconName::Close)
+                                    .small()
+                                    .ghost()
+                                    .on_click(|_, window, _| window.remove_window()),
+                            )
+                            .child(div().w(px(8.))),
+                    )
+                    .child(
+                        v_flex()
+                            .id("app-dialog-body")
+                            .flex_1()
+                            .min_h_0()
+                            .overflow_hidden()
+                            .child((self.content)(DialogContent::new(), window, cx)),
+                    ),
             )
+            .children(dialog_layer)
     }
 }
 
@@ -199,6 +211,8 @@ fn app_dialog_with_builders(
             window_title.clone(),
             Rc::clone(&title),
             Rc::clone(&content),
+            DIALOG_WIDTH,
+            DIALOG_BODY_HEIGHT,
             cx,
         );
         on_open(dialog, handle, parent_window, cx);
@@ -217,6 +231,28 @@ pub(crate) fn open_dialog(
         title,
         Rc::new(move |_, _| div().child(label.clone()).into_any_element()),
         Rc::new(content),
+        DIALOG_WIDTH,
+        DIALOG_BODY_HEIGHT,
+        cx,
+    )
+}
+
+/// Give content-heavy dialogs a larger initial canvas while sharing modal chrome.
+pub(crate) fn open_dialog_sized(
+    title: impl Into<SharedString>,
+    width: f32,
+    body_height: f32,
+    content: impl Fn(DialogContent, &mut Window, &mut App) -> DialogContent + 'static,
+    cx: &mut App,
+) -> (Entity<AppDialog>, WindowHandle<Root>) {
+    let title = title.into();
+    let label = title.clone();
+    open_dialog_with_builders(
+        title,
+        Rc::new(move |_, _| div().child(label.clone()).into_any_element()),
+        Rc::new(content),
+        width,
+        body_height,
         cx,
     )
 }
@@ -226,6 +262,8 @@ fn open_dialog_with_builders(
     window_title: SharedString,
     title: TitleBuilder,
     content: ContentBuilder,
+    width: f32,
+    body_height: f32,
     cx: &mut App,
 ) -> (Entity<AppDialog>, WindowHandle<Root>) {
     let dialog = cx.new(|cx| AppDialog::new(Rc::clone(&title), Rc::clone(&content), cx));
@@ -233,10 +271,7 @@ fn open_dialog_with_builders(
     let dialog_view = dialog.clone();
     let bounds = Bounds::centered(
         None,
-        size(
-            px(DIALOG_WIDTH),
-            px(DIALOG_BODY_HEIGHT + PANEL_HEADER_HEIGHT),
-        ),
+        size(px(width), px(body_height + PANEL_HEADER_HEIGHT)),
         cx,
     );
     let mut options = TitleBar::window_options();

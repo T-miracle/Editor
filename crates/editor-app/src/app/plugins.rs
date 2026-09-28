@@ -490,6 +490,8 @@ mod tests {
             digest: "fixture".into(),
             grants: manifest.permissions.clone(),
             enabled: true,
+            project_enabled: Default::default(),
+            global_enabled: None,
             error: None,
         };
         std::fs::write(

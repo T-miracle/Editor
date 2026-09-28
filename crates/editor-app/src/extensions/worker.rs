@@ -12,6 +12,8 @@ pub(super) enum Work {
     Install(Package),
     Enable(String),
     Disable(String),
+    /// Persist a per-workspace override without changing the global default.
+    SetProjectEnabled(String, bool),
     Uninstall(String, bool),
     Event(String, Event),
     Shutdown(Option<futures::channel::oneshot::Sender<()>>),
@@ -20,6 +22,11 @@ impl Work {
     /// Identify the operation whose button should show loading while queued or running.
     fn lifecycle(&self) -> Option<OperationProgress> {
         match self {
+            Self::Inspect(path) => Some(OperationProgress {
+                id: path.display().to_string(),
+                action: LifecycleAction::Inspect,
+                delete_data: None,
+            }),
             Self::Install(package) => Some(OperationProgress {
                 id: package.manifest.id.clone(),
                 action: LifecycleAction::Install,
@@ -28,6 +35,11 @@ impl Work {
             Self::Enable(id) => Some(OperationProgress {
                 id: id.clone(),
                 action: LifecycleAction::Enable,
+                delete_data: None,
+            }),
+            Self::Disable(id) => Some(OperationProgress {
+                id: id.clone(),
+                action: LifecycleAction::Disable,
                 delete_data: None,
             }),
             Self::Uninstall(id, delete_data) => Some(OperationProgress {
@@ -42,8 +54,10 @@ impl Work {
 /// The operation type maps directly to the loading button in plugin management.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum LifecycleAction {
+    Inspect,
     Install,
     Enable,
+    Disable,
     Uninstall,
 }
 /// Shared worker state remains visible even while a synchronous manager call is running.
@@ -63,6 +77,8 @@ pub(super) struct Published {
     pub status: Option<String>,
     pub progress: Option<OperationProgress>,
     pub generation: u64,
+    /// Changes when a plugin instance is replaced, even by the same package digest.
+    pub instance_epochs: BTreeMap<String, u64>,
     pub processes: BTreeMap<String, usize>,
 }
 /// The channel disconnect also shuts down when the last UI owner is released.
@@ -74,11 +90,14 @@ pub(super) struct Worker {
 }
 impl Worker {
     /// Publish enabled registry entries before the worker compiles any component.
-    fn initial_state(root: &std::path::Path) -> Published {
+    fn initial_state(root: &std::path::Path, environment: &Environment) -> Published {
         let startup = Manager::read_registry(root)
             .unwrap_or_default()
             .into_iter()
-            .filter_map(|(id, entry)| entry.enabled.then_some((id, entry.manifest.name)))
+            .filter_map(|(id, entry)| {
+                (entry.enabled || entry.project_enabled.contains(&environment.workspace))
+                    .then_some((id, entry.manifest.name))
+            })
             .collect();
         Published {
             startup,
@@ -105,18 +124,18 @@ impl Worker {
     }
     /// UI tests observe the real message seam without reading user state or launching processes.
     #[cfg(test)]
-    pub fn start(root: PathBuf, _: Environment) -> Self {
+    pub fn start(root: PathBuf, environment: Environment) -> Self {
         let (tx, rx) = mpsc::channel();
         Self {
             tx,
-            state: Arc::new(Mutex::new(Self::initial_state(&root))),
+            state: Arc::new(Mutex::new(Self::initial_state(&root, &environment))),
             recorded: Mutex::new(rx),
         }
     }
     #[cfg(not(test))]
     pub fn start(root: PathBuf, environment: Environment) -> Self {
         let (tx, rx) = mpsc::channel();
-        let state = Arc::new(Mutex::new(Self::initial_state(&root)));
+        let state = Arc::new(Mutex::new(Self::initial_state(&root, &environment)));
         let output = state.clone();
         std::thread::spawn(move || {
             let mut manager = match Manager::open(root, environment) {
@@ -136,6 +155,12 @@ impl Worker {
                     Err(_) => break,
                 };
                 let lifecycle = work.as_ref().and_then(Work::lifecycle);
+                // A successful replacement needs a fresh surface Resize event.
+                let restarted_plugin = match work.as_ref() {
+                    Some(Work::Install(package)) => Some(package.manifest.id.clone()),
+                    Some(Work::Enable(id)) => Some(id.clone()),
+                    _ => None,
+                };
                 let result = match work {
                     Some(Work::Shutdown(ack)) => {
                         drop(manager);
@@ -151,6 +176,9 @@ impl Worker {
                     }
                     Some(Work::Enable(id)) => manager.enable(&id),
                     Some(Work::Disable(id)) => manager.disable(&id),
+                    Some(Work::SetProjectEnabled(id, enabled)) => {
+                        manager.set_project_enabled(&id, enabled)
+                    }
                     Some(Work::Uninstall(id, delete)) => manager.uninstall(&id, delete),
                     Some(Work::Event(id, event)) => manager.event(&id, event),
                     None => Ok(()),
@@ -178,6 +206,7 @@ impl Worker {
                     last_save = Instant::now();
                 }
                 let mut published = output.lock().unwrap();
+                let replacement_succeeded = result.is_ok();
                 // Startup loading ends only after Manager::open has restored every enabled plugin.
                 published.startup.clear();
                 if let Err(e) = result {
@@ -190,7 +219,23 @@ impl Worker {
                 if lifecycle.is_some() {
                     published.progress = None;
                 }
-                published.entries = manager.installed.values().cloned().collect();
+                if replacement_succeeded {
+                    if let Some(id) = restarted_plugin {
+                        *published.instance_epochs.entry(id).or_default() += 1;
+                    }
+                }
+                published.entries = manager
+                    .installed
+                    .values()
+                    .map(|entry| {
+                        // Publish the effective state while preserving the global choice for controls.
+                        let mut visible = entry.clone();
+                        visible.global_enabled = Some(entry.enabled);
+                        visible.enabled =
+                            entry.enabled || entry.project_enabled.contains(manager.workspace());
+                        visible
+                    })
+                    .collect();
                 published.scenes = scenes;
                 published.processes = processes;
                 published.effects.extend(effects);
@@ -205,8 +250,10 @@ impl LifecycleAction {
     /// Keep error labels aligned with the action shown by the loading button.
     fn label(self) -> &'static str {
         match self {
+            Self::Inspect => "检查插件包",
             Self::Install => "安装 / 更新",
             Self::Enable => "启用",
+            Self::Disable => "禁用",
             Self::Uninstall => "卸载",
         }
     }

@@ -33,6 +33,15 @@ mod settings_dialog_tests {
         let editor_window = editor_cx.update(|window, _| window.window_handle());
         editor_cx.simulate_resize(size(px(1000.), px(800.)));
         editor_cx.update(|window, cx| window.draw(cx).clear(cx));
+        // Opening a separate window must not change the editor's measured row height.
+        let line_height_before = editor_cx.update(|_, cx| {
+            editor_view
+                .read(cx)
+                .editor
+                .read(cx)
+                .line_height()
+                .expect("editor layout should be measured before opening settings")
+        });
 
         let button = editor_cx
             .debug_bounds("settings-trigger")
@@ -40,6 +49,15 @@ mod settings_dialog_tests {
         editor_cx.simulate_click(button.center(), Default::default());
         editor_cx.run_until_parked();
         editor_cx.update(|window, cx| window.draw(cx).clear(cx));
+        let line_height_after = editor_cx.update(|_, cx| {
+            editor_view
+                .read(cx)
+                .editor
+                .read(cx)
+                .line_height()
+                .expect("editor layout should remain measured with settings open")
+        });
+        assert_eq!(line_height_after, line_height_before);
 
         assert!(editor_cx.debug_bounds("dialog-0").is_none());
         let windows = editor_cx.update(|_, cx| cx.windows());
@@ -93,6 +111,43 @@ mod settings_dialog_tests {
             2,
             "closing the modal window must allow it to reopen"
         );
+    }
+
+    /// Plugin management renders its sidebar, detail pane and underline tab strip in a modal.
+    #[gpui::test]
+    fn plugin_manager_renders_two_panes(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            gpui_kit::init(cx);
+            typography::init(cx);
+            apply_theme(builtin_theme(false), cx);
+            cx.set_reduce_motion(true);
+        });
+        let directory = tempfile::tempdir().unwrap();
+        let workspace = Workspace::open(directory.path()).unwrap();
+        let slot = Rc::new(RefCell::new(None));
+        let capture = slot.clone();
+        let (_, editor_cx) = cx.add_window_view(move |window, cx| {
+            let view = cx.new(|cx| EditorApp::new(workspace, None, window, cx));
+            *capture.borrow_mut() = Some(view.clone());
+            Root::new(view, window, cx)
+        });
+        let editor = slot.borrow_mut().take().unwrap();
+        let editor_window = editor_cx.update(|window, _| window.window_handle());
+        editor_cx
+            .update(|window, cx| editor.update(cx, |app, cx| app.toggle_extensions(window, cx)));
+        let dialog_window = editor_cx
+            .update(|_, cx| cx.windows())
+            .into_iter()
+            .find(|handle| *handle != editor_window)
+            .unwrap();
+        let dialog_cx = VisualTestContext::from_window(dialog_window, cx).into_mut();
+        dialog_cx.run_until_parked();
+        dialog_cx.update(|window, cx| window.draw(cx).clear(cx));
+        assert!(dialog_cx.debug_bounds("dialog-0").is_some());
+        assert!(dialog_cx.debug_bounds("runtime-plugin-manager").is_some());
+        assert!(dialog_cx.debug_bounds("plugin-manager-sidebar").is_some());
+        assert!(dialog_cx.debug_bounds("plugin-manager-detail").is_some());
+        assert!(dialog_cx.debug_bounds("plugin-manager-tab-strip").is_some());
     }
 }
 

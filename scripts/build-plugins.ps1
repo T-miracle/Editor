@@ -8,17 +8,20 @@ try {
     if ($LASTEXITCODE -ne 0) { throw 'WASM plugin build failed' }
     New-Item -ItemType Directory -Force $Output | Out-Null
     Add-Type -AssemblyName System.IO.Compression
-    # Remove the five old package filenames so the bundled-plugin list shows one ZIP per plugin.
-    foreach ($name in @('terminal', 'example', 'rust', 'toml', 'default-light-theme')) {
+    # Remove legacy package filenames, including the theme now built into the editor.
+    foreach ($name in @('terminal', 'example', 'rust', 'toml')) {
         Remove-Item -LiteralPath (Join-Path $Output "me.$name.zip") -Force -ErrorAction SilentlyContinue
     }
+    Remove-Item -LiteralPath (Join-Path $Output 'me.default-light-theme.zip') -Force -ErrorAction SilentlyContinue
+    Remove-Item -LiteralPath (Join-Path $Output 'default-light-theme.zip') -Force -ErrorAction SilentlyContinue
     foreach ($plugin in @(@('terminal', 'terminal_guest'), @('example', 'example_guest'))) {
     # Plugin packages are ordinary ZIP archives with the standard .zip extension.
     $destination = [IO.Path]::GetFullPath((Join-Path $Output "$($plugin[0]).zip"))
     $stream = [IO.File]::Create($destination)
     $archive = [IO.Compression.ZipArchive]::new($stream, [IO.Compression.ZipArchiveMode]::Create)
     try {
-        $packageFiles = @(@('manifest.json', "plugins/$($plugin[0])/manifest.json"), @("$($plugin[0]).wasm", "target/wasm32-wasip2/release/$($plugin[1]).wasm"))
+        # The manager reads README.md from the installed package version.
+        $packageFiles = @(@('manifest.json', "plugins/$($plugin[0])/manifest.json"), @('README.md', "plugins/$($plugin[0])/README.md"), @("$($plugin[0]).wasm", "target/wasm32-wasip2/release/$($plugin[1]).wasm"))
         if ($plugin[0] -eq 'terminal') {
             # Bundle license notices for the adapted Alacritty core and its VTE dependency.
             $packageFiles += ,@('licenses/alacritty-LICENSE-APACHE', 'plugins/terminal/vendor/alacritty_terminal/LICENSE-APACHE')
@@ -36,8 +39,8 @@ try {
     } finally { $archive.Dispose(); $stream.Dispose() }
     Write-Output $destination
     }
-    foreach ($name in @('rust', 'toml', 'default-light-theme')) {
-        # Declarative language and theme packages contain only resources; the host owns their lifecycle.
+    foreach ($name in @('rust', 'toml')) {
+        # Declarative language packages contain only resources; the host owns their lifecycle.
         $destination = [IO.Path]::GetFullPath((Join-Path $Output "$name.zip"))
         $stream = [IO.File]::Create($destination)
         $archive = [IO.Compression.ZipArchive]::new($stream, [IO.Compression.ZipArchiveMode]::Create)

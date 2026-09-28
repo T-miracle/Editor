@@ -5,7 +5,9 @@ use alacritty_terminal::grid::{Dimensions, Grid, Scroll};
 use alacritty_terminal::index::{Column, Line, Point};
 use alacritty_terminal::term::cell::{Cell, Flags};
 use alacritty_terminal::term::{Config, TermMode};
-use alacritty_terminal::vte::ansi::{Color as CoreColor, NamedColor, Processor, Rgb};
+use alacritty_terminal::vte::ansi::{
+    Color as CoreColor, CursorShape, CursorStyle, NamedColor, Processor, Rgb,
+};
 use std::cell::{RefCell, RefMut};
 use std::collections::VecDeque;
 use std::rc::Rc;
@@ -14,7 +16,7 @@ use std::rc::Rc;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum Color {
     Default,
-    Idx(u8),
+    Idx(u16),
     Rgb(u8, u8, u8),
 }
 
@@ -22,11 +24,12 @@ pub(super) enum Color {
 fn color(value: CoreColor) -> Color {
     match value {
         CoreColor::Spec(rgb) => Color::Rgb(rgb.r, rgb.g, rgb.b),
-        CoreColor::Indexed(index) => Color::Idx(index),
+        CoreColor::Indexed(index) => Color::Idx(index as u16),
         CoreColor::Named(NamedColor::Foreground | NamedColor::Background | NamedColor::Cursor) => {
             Color::Default
         }
-        CoreColor::Named(named) => Color::Idx((named as usize).min(255) as u8),
+        // Keep 259..268 intact: clamping named dim colors to 255 made them pale gray.
+        CoreColor::Named(named) => Color::Idx(named as u16),
     }
 }
 
@@ -165,6 +168,18 @@ impl<'a> Screen<'a> {
         }
         self.cell_line(row as i32 - self.scrollback() as i32, col)
     }
+    /// Exclude unused terminal columns while retaining spaces inside actual line content.
+    pub(super) fn content_end(&self, row: u16) -> u16 {
+        (0..self.size().1)
+            .rev()
+            .find_map(|col| {
+                self.cell(row, col)
+                    .filter(|cell| cell.has_contents())
+                    .map(|cell| col + if cell.is_wide() { 2 } else { 1 })
+            })
+            .unwrap_or(0)
+            .min(self.size().1)
+    }
     pub(super) fn cell_line(&self, line: i32, col: u16) -> Option<CellView<'a>> {
         if col as usize >= self.grid.columns()
             || line < -(self.grid.history_size() as i32)
@@ -219,7 +234,19 @@ impl CellView<'_> {
         self.0.flags.contains(Flags::WIDE_CHAR)
     }
     pub(super) fn fgcolor(&self) -> Color {
-        color(self.0.fg)
+        let foreground = color(self.0.fg);
+        // The terminal core stores SGR intensity as flags; resolve named colors for painting.
+        match foreground {
+            Color::Default if self.0.flags.contains(Flags::DIM) => Color::Idx(268),
+            Color::Default if self.0.flags.contains(Flags::BOLD) => Color::Idx(267),
+            Color::Idx(index @ 0..=7) if self.0.flags.contains(Flags::DIM) => {
+                Color::Idx(index + 259)
+            }
+            Color::Idx(index @ 0..=7) if self.0.flags.contains(Flags::BOLD) => {
+                Color::Idx(index + 8)
+            }
+            _ => foreground,
+        }
     }
     pub(super) fn bgcolor(&self) -> Color {
         color(self.0.bg)
@@ -261,6 +288,11 @@ impl Emulator {
         }));
         let config = Config {
             scrolling_history: limit,
+            // A beam is the plugin default; explicit Shell/TUI cursor sequences still win.
+            default_cursor_style: CursorStyle {
+                shape: CursorShape::Beam,
+                blinking: false,
+            },
             ..Config::default()
         };
         let size = Size {
@@ -344,6 +376,10 @@ impl Emulator {
             end: point,
             clicks,
         });
+    }
+    /// A press outside printed content removes an old selection without creating a new one.
+    pub fn clear_selection(&mut self) {
+        self.selection = None;
     }
     /// Extend a selection while preserving its history-relative anchor.
     pub fn extend_selection(&mut self, row: u16, col: u16) {
@@ -508,7 +544,16 @@ fn ansi_color(out: &mut String, color: Color, background: bool) {
     let base = if background { 48 } else { 38 };
     match color {
         Color::Rgb(r, g, b) => out.push_str(&format!("\x1b[{base};2;{r};{g};{b}m")),
-        Color::Idx(index) => out.push_str(&format!("\x1b[{base};5;{index}m")),
+        Color::Idx(index) if index <= 255 => out.push_str(&format!("\x1b[{base};5;{index}m")),
+        // Snapshot SGR must stay legal even when Alacritty stores a derived named color.
+        Color::Idx(index @ 259..=266) => {
+            out.push_str("\x1b[2m");
+            let base = if background { 40 } else { 30 };
+            out.push_str(&format!("\x1b[{}m", base + index - 259));
+        }
+        Color::Idx(267) => out.push_str("\x1b[1m"),
+        Color::Idx(268) => out.push_str("\x1b[2m"),
+        Color::Idx(_) => {}
         Color::Default => {}
     }
 }

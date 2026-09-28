@@ -119,6 +119,9 @@ pub struct ThemeDefinition {
     pub colors: ThemeColors,
     #[serde(default)]
     pub components: BTreeMap<ThemeComponent, ComponentStyles>,
+    /// Optional color tokens consumed by runtime plugins, keyed by plugin-owned names.
+    #[serde(default)]
+    pub plugin_colors: BTreeMap<String, String>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -437,6 +440,13 @@ fn validate_palette_colors(theme: &ThemeDefinition) -> Result<(), ThemeFileError
             }
         }
     }
+    // A theme may override plugin colors without giving the host plugin-specific rules.
+    colors.extend(
+        theme
+            .plugin_colors
+            .iter()
+            .map(|(key, value)| (format!("plugin_colors.{key}"), value.as_str())),
+    );
     for (path, value) in colors {
         if !is_hex_color(value) {
             return Err(ThemeFileError::InvalidColor(path, value.to_owned()));
@@ -554,5 +564,24 @@ mod tests {
         assert_eq!(manifest.plugin.id, "me.rust");
         assert_eq!(manifest.languages[0].extensions, ["rs"]);
         assert_eq!(manifest.languages[0].tree_sitter_abi, 15);
+    }
+
+    /// Theme files accept plugin-owned color tokens and reject malformed overrides.
+    #[test]
+    fn validates_plugin_color_tokens() {
+        let source = include_str!("../../editor-app/assets/themes/default.json");
+        let mut file = ThemeFile::parse(source).unwrap();
+        file.themes[0]
+            .plugin_colors
+            .insert("me.terminal.ansi.yellow".into(), "#795100".into());
+        file.validate().unwrap();
+        file.themes[0]
+            .plugin_colors
+            .insert("me.terminal.ansi.yellow".into(), "yellow".into());
+        assert!(matches!(
+            file.validate(),
+            Err(ThemeFileError::InvalidColor(path, _))
+                if path == "plugin_colors.me.terminal.ansi.yellow"
+        ));
     }
 }

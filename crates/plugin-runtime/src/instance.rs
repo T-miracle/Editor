@@ -173,6 +173,11 @@ fn validate_scene(scene: &Scene) -> anyhow::Result<()> {
             .all(|w| rect(&w.rect) && w.id.len() <= 256 && w.label.len() <= 65536),
         "Invalid widget"
     );
+    // Cursor hit areas come from untrusted guests and must stay bounded like widgets.
+    anyhow::ensure!(
+        scene.column_resize_regions.len() <= 16 && scene.column_resize_regions.iter().all(rect),
+        "Invalid cursor region"
+    );
     if let Some(scroll) = &scene.scroll {
         anyhow::ensure!(
             rect(&scroll.rect)

@@ -14,6 +14,12 @@ pub struct Installed {
     pub digest: String,
     pub grants: BTreeSet<String>,
     pub enabled: bool,
+    /// Workspace paths whose plugin instance may run despite the global default.
+    #[serde(default)]
+    pub project_enabled: BTreeSet<String>,
+    /// UI snapshots distinguish the global preference from effective availability.
+    #[serde(skip)]
+    pub global_enabled: Option<bool>,
     #[serde(skip)]
     pub error: Option<String>,
 }
@@ -64,6 +70,10 @@ pub struct Manager {
     pub live: BTreeMap<String, Instance>,
 }
 impl Manager {
+    /// Identify the workspace whose override is active in this runtime.
+    pub fn workspace(&self) -> &str {
+        &self.environment.workspace
+    }
     /// Read installed plugin metadata without starting their WASM components.
     pub fn read_registry(root: &Path) -> anyhow::Result<BTreeMap<String, Installed>> {
         let installed = match std::fs::read(root.join("registry.json")) {
@@ -87,14 +97,20 @@ impl Manager {
         let ids: Vec<_> = manager
             .installed
             .iter()
-            .filter(|(_, p)| p.enabled)
-            .map(|(id, _)| id.clone())
+            .filter(|(_, p)| {
+                p.enabled || p.project_enabled.contains(&manager.environment.workspace)
+            })
+            .map(|(id, p)| (id.clone(), p.enabled))
             .collect();
-        for id in ids {
+        for (id, global_enabled) in ids {
             if let Err(error) = manager.enable(&id) {
                 manager.installed.get_mut(&id).unwrap().error = Some(format!("{error:#}"));
             }
+            // Runtime activation must not silently rewrite a disabled global default.
+            manager.installed.get_mut(&id).unwrap().enabled = global_enabled;
         }
+        // Startup activation may temporarily persist an enabled value; restore global defaults.
+        manager.save_registry()?;
         Ok(manager)
     }
     pub fn data_directory(&self, id: &str) -> PathBuf {
@@ -187,6 +203,11 @@ impl Manager {
                     digest: package.digest.clone(),
                     grants,
                     enabled: true,
+                    project_enabled: previous
+                        .as_ref()
+                        .map(|entry| entry.project_enabled.clone())
+                        .unwrap_or_default(),
+                    global_enabled: None,
                     error: None,
                 },
             );
@@ -195,8 +216,8 @@ impl Manager {
         })();
         match result {
             Ok(()) => {
-                self.live.insert(id, next);
-                Ok(())
+                self.live.insert(id.clone(), next);
+                self.restore_install_scope(&id, previous.as_ref())
             }
             Err(error) => {
                 next.stop();
@@ -238,6 +259,11 @@ impl Manager {
         }
         let version = self.root.join("packages").join(&id).join(&package.digest);
         package.extract(&version)?;
+        let prior_projects = self
+            .installed
+            .get(&id)
+            .map(|entry| entry.project_enabled.clone())
+            .unwrap_or_default();
         let previous = self.installed.insert(
             id.clone(),
             Installed {
@@ -245,6 +271,8 @@ impl Manager {
                 digest: package.digest.clone(),
                 grants,
                 enabled: true,
+                project_enabled: prior_projects,
+                global_enabled: None,
                 error: None,
             },
         );
@@ -260,11 +288,32 @@ impl Manager {
         if let Some(mut old) = self.live.remove(&id) {
             old.stop();
         }
+        self.restore_install_scope(&id, previous.as_ref())
+    }
+    /// Package replacement keeps the user's global default and project override.
+    fn restore_install_scope(
+        &mut self,
+        id: &str,
+        previous: Option<&Installed>,
+    ) -> anyhow::Result<()> {
+        if let Some(previous) = previous.filter(|entry| !entry.enabled) {
+            let locally_enabled = previous
+                .project_enabled
+                .contains(&self.environment.workspace);
+            self.disable(id)?;
+            if locally_enabled {
+                self.set_project_enabled(id, true)?;
+            }
+        }
         Ok(())
     }
     /// Re-enable from the last committed version and plugin-owned snapshot.
     pub fn enable(&mut self, id: &str) -> anyhow::Result<()> {
         if self.live.contains_key(id) {
+            if let Some(entry) = self.installed.get_mut(id) {
+                entry.enabled = true;
+            }
+            self.save_registry()?;
             return Ok(());
         }
         let entry = self
@@ -351,10 +400,36 @@ impl Manager {
             }
         }
         self.live.remove(id);
-        self.installed
+        let entry = self
+            .installed
             .get_mut(id)
+            .ok_or_else(|| anyhow::anyhow!("Unknown plugin"))?;
+        entry.enabled = false;
+        entry.project_enabled.remove(&self.environment.workspace);
+        self.save_registry()
+    }
+    /// Override a globally disabled plugin for the current workspace only.
+    pub fn set_project_enabled(&mut self, id: &str, enabled: bool) -> anyhow::Result<()> {
+        let workspace = self.environment.workspace.clone();
+        let globally_enabled = self
+            .installed
+            .get(id)
             .ok_or_else(|| anyhow::anyhow!("Unknown plugin"))?
-            .enabled = false;
+            .enabled;
+        anyhow::ensure!(!globally_enabled, "Global default is already enabled");
+        if enabled {
+            self.enable(id)?;
+            let entry = self.installed.get_mut(id).unwrap();
+            entry.enabled = false;
+            entry.project_enabled.insert(workspace);
+        } else {
+            self.disable(id)?;
+            self.installed
+                .get_mut(id)
+                .unwrap()
+                .project_enabled
+                .remove(&workspace);
+        }
         self.save_registry()
     }
     /// Uninstall keeps state unless the user explicitly chose deletion in the manager UI.
@@ -466,6 +541,7 @@ mod icon_tests {
                     id: "main".into(),
                     title: "Main".into(),
                     position: "bottom".into(),
+                    default_visible: true,
                     status_order: None,
                     icon_light: Some("icons/light.svg".into()),
                     icon_dark: Some("icons/dark.svg".into()),
@@ -476,6 +552,8 @@ mod icon_tests {
             digest,
             grants: BTreeSet::new(),
             enabled: true,
+            project_enabled: BTreeSet::new(),
+            global_enabled: None,
             error: None,
         };
         assert_eq!(
@@ -485,6 +563,77 @@ mod icon_tests {
         assert_eq!(
             installed.panel_icon(root.path(), "main", true).unwrap(),
             dark
+        );
+    }
+}
+
+#[cfg(test)]
+mod scope_tests {
+    use super::*;
+
+    /// A project override starts its plugin without rewriting the global default.
+    #[test]
+    fn project_override_survives_reopen() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path().join("plugins");
+        let digest = "a".repeat(64);
+        let contribution = root
+            .join("packages/me.example")
+            .join(&digest)
+            .join("plugin.toml");
+        std::fs::create_dir_all(contribution.parent().unwrap()).unwrap();
+        std::fs::write(contribution, "").unwrap();
+        let manifest = Manifest {
+            id: "me.example".into(),
+            name: "Example".into(),
+            version: "1.0.0".into(),
+            protocol: 1,
+            component: None,
+            contributions: Some("plugin.toml".into()),
+            permissions: BTreeSet::new(),
+            panels: vec![],
+            commands: vec![],
+            storage_limit: 0,
+        };
+        let installed = Installed {
+            manifest,
+            digest,
+            grants: BTreeSet::new(),
+            enabled: false,
+            project_enabled: BTreeSet::from(["project-a".into()]),
+            global_enabled: None,
+            error: None,
+        };
+        std::fs::write(
+            root.join("registry.json"),
+            serde_json::to_vec(&BTreeMap::from([("me.example", installed)])).unwrap(),
+        )
+        .unwrap();
+        let environment = Environment {
+            workspace: "project-a".into(),
+            ..Environment::default()
+        };
+        let mut manager = Manager::open(root.clone(), environment).unwrap();
+        assert!(!manager.installed["me.example"].enabled);
+        assert!(
+            manager.installed["me.example"]
+                .project_enabled
+                .contains("project-a")
+        );
+        assert!(!Manager::read_registry(&root).unwrap()["me.example"].enabled);
+        manager.set_project_enabled("me.example", false).unwrap();
+        assert!(
+            !manager.installed["me.example"]
+                .project_enabled
+                .contains("project-a")
+        );
+        manager.set_project_enabled("me.example", true).unwrap();
+        let persisted = Manager::read_registry(&root).unwrap();
+        assert!(!persisted["me.example"].enabled);
+        assert!(
+            persisted["me.example"]
+                .project_enabled
+                .contains("project-a")
         );
     }
 }

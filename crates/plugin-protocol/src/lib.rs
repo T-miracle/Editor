@@ -33,6 +33,9 @@ pub struct Panel {
     pub id: String,
     pub title: String,
     pub position: String,
+    /// Used only when this panel has no saved visibility preference yet.
+    #[serde(default = "panel_visible_by_default")]
+    pub default_visible: bool,
     /// Optional status-bar position among plugin panels; lower values appear first.
     #[serde(default)]
     pub status_order: Option<i32>,
@@ -42,6 +45,11 @@ pub struct Panel {
     /// Optional package-relative SVG used when the editor has a dark theme.
     #[serde(default)]
     pub icon_dark: Option<String>,
+}
+
+/// Existing manifests continue to open their panels unless they opt out.
+fn panel_visible_by_default() -> bool {
+    true
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Command {
@@ -53,6 +61,9 @@ pub struct Command {
     pub menu: bool,
     #[serde(default)]
     pub toolbar: Option<String>,
+    /// Optional icon path from the host's shared `gpui-kit-assets` catalog.
+    #[serde(default)]
+    pub toolbar_icon: Option<String>,
 }
 
 /// Opaque plugin-owned data; the host never interprets or migrates its contents.
@@ -63,16 +74,25 @@ pub struct Snapshot {
 }
 
 /// Host theme and workspace context are supplied explicitly, without ambient access.
-#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Environment {
     pub workspace: String,
     pub os: String,
     pub background: u32,
     pub foreground: u32,
     pub muted: u32,
+    /// Editor text color used for subdued terminal text and metadata.
+    #[serde(default)]
+    pub muted_foreground: u32,
     pub border: u32,
     pub accent: u32,
     pub selection: u32,
+    /// Whether the active editor theme requests a dark terminal palette.
+    #[serde(default)]
+    pub dark: bool,
+    /// Generic theme color tokens; plugins interpret only keys they own.
+    #[serde(default)]
+    pub theme_colors: std::collections::BTreeMap<String, u32>,
 }
 
 /// Physical surface coordinates let a guest lay out its own interface.
@@ -96,6 +116,9 @@ pub enum Paint {
     Fill {
         rect: Rect,
         color: u32,
+        /// Fill through the current native canvas bottom while resize events catch up.
+        #[serde(default)]
+        extend_to_bottom: bool,
     },
     Text {
         x: f32,
@@ -135,6 +158,9 @@ pub struct Scene {
     pub panel: String,
     pub paint: Vec<Paint>,
     pub widgets: Vec<Widget>,
+    /// Invisible guest-defined hit areas that use the native column-resize cursor.
+    #[serde(default)]
+    pub column_resize_regions: Vec<Rect>,
     pub scroll: Option<ScrollInfo>,
     pub font: String,
     pub font_size: f32,

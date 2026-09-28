@@ -5,6 +5,7 @@
 ## 架构
 
 - 保持 `editor-app`、`editor-core`、`platform-windows`、`plugin-schema` 四个 crate；未经明确要求，不将每个逻辑模块拆为 crate。
+- 上游组件无法保留项目已确认的样式时，在项目 UI 层重写外观；状态与交互逻辑可继续使用上游实现，不重新引入整套 vendor 源码覆盖。
 - `EditorState` 是唯一内存文本真相来源。不得创建第二份可变 Rope 或 Undo/Redo 栈，也不得绕过 `DocumentSession` 写入文本。
 - 文档、语言结果和替换计划必须使用 revision；过期异步结果必须丢弃。
 - grammar 必须来自插件 WASM 动态加载；不得为高亮重新启用宿主内建 grammar。
@@ -37,6 +38,7 @@
 
 - 不经用户允许，不提交 Git。
 - 使用 `apply_patch` 编辑文件，保留用户既有改动。
+- 修改并交付插件包时，同步提升该插件清单中的版本号；后续会话继续遵守此规则。
 - 每完成一个阶段至少运行：
 
   ```powershell

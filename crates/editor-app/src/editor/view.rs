@@ -466,56 +466,65 @@ impl EditorApp {
                         });
                     })
                     .child(
-                        Editor::new(&self.editor)
-                            .context_menu(move |menu, _, cx| {
-                                // Route the menu action through the same fresh LSP request as F12.
-                                menu.menu_with_disabled(
-                                    t!("editor.go_to_definition").to_string(),
-                                    !(enabled && has_definition),
-                                    Box::new(NavigateToDefinition),
+                        super::popovers::render(
+                            &self.editor,
+                            &self.completion_selection,
+                            style,
+                            window,
+                            cx,
+                        )
+                        .unwrap_or_else(|| {
+                            Editor::new(&self.editor)
+                                .context_menu(move |menu, _, cx| {
+                                    // Route the menu action through the same fresh LSP request as F12.
+                                    menu.menu_with_disabled(
+                                        t!("editor.go_to_definition").to_string(),
+                                        !(enabled && has_definition),
+                                        Box::new(NavigateToDefinition),
+                                    )
+                                    .menu_with_disabled(
+                                        t!("editor.code_actions").to_string(),
+                                        !(editable && has_code_actions),
+                                        Box::new(gpui_base::input::ToggleCodeActions),
+                                    )
+                                    .separator()
+                                    // Cut and Copy validate the live selection when their actions run.
+                                    .menu_with_disabled(
+                                        t!("editor.cut").to_string(),
+                                        !editable,
+                                        Box::new(gpui_base::input::Cut),
+                                    )
+                                    .menu_with_disabled(
+                                        t!("editor.copy").to_string(),
+                                        !enabled,
+                                        Box::new(gpui_base::input::Copy),
+                                    )
+                                    .menu_with_disabled(
+                                        t!("editor.paste").to_string(),
+                                        !(editable && cx.read_from_clipboard().is_some()),
+                                        Box::new(gpui_base::input::Paste),
+                                    )
+                                    .separator()
+                                    .menu(
+                                        t!("editor.select_all").to_string(),
+                                        Box::new(gpui_base::input::SelectAll),
+                                    )
+                                })
+                                .bordered(false)
+                                .p_0()
+                                .size_full()
+                                .min_h_0()
+                                .bg(style.background.unwrap_or(cx.theme().background))
+                                .text_color(style.foreground.unwrap_or(cx.theme().foreground))
+                                .font_family(cx.theme().mono_font_family.clone())
+                                .text_size(
+                                    style
+                                        .font_size_px
+                                        .map(px)
+                                        .unwrap_or(cx.theme().mono_font_size),
                                 )
-                                .menu_with_disabled(
-                                    t!("editor.code_actions").to_string(),
-                                    !(editable && has_code_actions),
-                                    Box::new(gpui_base::input::ToggleCodeActions),
-                                )
-                                .separator()
-                                // Cut and Copy validate the live selection when their actions run.
-                                .menu_with_disabled(
-                                    t!("editor.cut").to_string(),
-                                    !editable,
-                                    Box::new(gpui_base::input::Cut),
-                                )
-                                .menu_with_disabled(
-                                    t!("editor.copy").to_string(),
-                                    !enabled,
-                                    Box::new(gpui_base::input::Copy),
-                                )
-                                .menu_with_disabled(
-                                    t!("editor.paste").to_string(),
-                                    !(editable && cx.read_from_clipboard().is_some()),
-                                    Box::new(gpui_base::input::Paste),
-                                )
-                                .separator()
-                                .menu(
-                                    t!("editor.select_all").to_string(),
-                                    Box::new(gpui_base::input::SelectAll),
-                                )
-                            })
-                            .bordered(false)
-                            .p_0()
-                            .size_full()
-                            .min_h_0()
-                            .bg(style.background.unwrap_or(cx.theme().background))
-                            .text_color(style.foreground.unwrap_or(cx.theme().foreground))
-                            .font_family(cx.theme().mono_font_family.clone())
-                            .text_size(
-                                style
-                                    .font_size_px
-                                    .map(px)
-                                    .unwrap_or(cx.theme().mono_font_size),
-                            )
-                            .into_any_element(),
+                                .into_any_element()
+                        }),
                     ),
             )
     }

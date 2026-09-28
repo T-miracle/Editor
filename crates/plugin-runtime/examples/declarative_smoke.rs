@@ -1,4 +1,4 @@
-//! Verify host-managed Rust, TOML, and theme packages through real lifecycle calls.
+//! Verify host-managed Rust and TOML packages through real lifecycle calls.
 
 use plugin_runtime::{Manager, Package, plugin_protocol::Environment};
 use std::{
@@ -27,7 +27,7 @@ fn main() -> anyhow::Result<()> {
         manager.live.contains_key("me.rust"),
         "legacy guest did not start"
     );
-    for name in ["rust", "toml", "default-light-theme"] {
+    for name in ["rust", "toml"] {
         let package = Package::read(&packages.join(format!("{name}.zip")))?;
         // Declarative packages install without a guest instance; the host owns their state.
         manager.install(&package, Default::default())?;
@@ -57,16 +57,17 @@ fn main() -> anyhow::Result<()> {
         );
         manager.enable(&package.manifest.id)?;
     }
-    manager.uninstall("me.default-light-theme", false)?;
+    // Uninstall one resource package to verify its registry entry disappears.
+    manager.uninstall("me.toml", false)?;
     anyhow::ensure!(
-        !manager.installed.contains_key("me.default-light-theme"),
+        !manager.installed.contains_key("me.toml"),
         "uninstall did not remove package"
     );
     // Restart restores enabled resource packages from the registry without guest instances.
     drop(manager);
     let manager = Manager::open(root.path().to_owned(), Environment::default())?;
     anyhow::ensure!(
-        manager.installed["me.rust"].enabled && manager.installed["me.toml"].enabled,
+        manager.installed["me.rust"].enabled && !manager.installed.contains_key("me.toml"),
         "enabled packages were not restored"
     );
     anyhow::ensure!(

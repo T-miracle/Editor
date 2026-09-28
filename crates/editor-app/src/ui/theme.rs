@@ -12,11 +12,10 @@ use plugin_schema::{
     ThemeMode as FileThemeMode,
 };
 
+// Both palettes ship with the editor so first launch does not depend on plugin installation.
 static BUILTIN_THEME_FILE: LazyLock<ThemeFile> = LazyLock::new(|| {
-    ThemeFile::parse(include_str!(
-        "../../../../plugins/default-light-theme/theme.json"
-    ))
-    .expect("the bundled theme file must satisfy the plugin schema")
+    ThemeFile::parse(include_str!("../../assets/themes/default.json"))
+        .expect("the bundled theme file must satisfy the plugin schema")
 });
 
 #[derive(Clone, Copy, Default)]
@@ -41,6 +40,7 @@ pub struct ResolvedComponentStyles {
 #[derive(Default)]
 struct RuntimeStyles {
     components: BTreeMap<ThemeComponent, ResolvedComponentStyles>,
+    plugin_colors: BTreeMap<String, u32>,
 }
 
 impl Global for RuntimeStyles {}
@@ -220,10 +220,26 @@ pub fn apply_theme(theme: &ThemeDefinition, cx: &mut App) {
         .iter()
         .map(|(component, styles)| (*component, resolve_component_styles(styles)))
         .collect();
+    // Theme validation guarantees #RRGGBB, so plugins receive numeric colors only.
+    let plugin_colors = theme
+        .plugin_colors
+        .iter()
+        .map(|(key, value)| {
+            (
+                key.clone(),
+                u32::from_str_radix(value.trim_start_matches('#'), 16).unwrap(),
+            )
+        })
+        .collect();
     if cx.has_global::<RuntimeStyles>() {
-        cx.global_mut::<RuntimeStyles>().components = components;
+        let runtime = cx.global_mut::<RuntimeStyles>();
+        runtime.components = components;
+        runtime.plugin_colors = plugin_colors;
     } else {
-        cx.set_global(RuntimeStyles { components });
+        cx.set_global(RuntimeStyles {
+            components,
+            plugin_colors,
+        });
     }
 }
 
@@ -270,10 +286,31 @@ pub fn sync_font_sizes(cx: &mut App) {
     let theme = Theme::global_mut(cx);
     theme.font_size = base;
     theme.mono_font_size = editor;
-    // Upstream popovers inherit the shared theme typography.
+}
+
+/// Expose validated theme tokens through the generic runtime-plugin environment.
+pub fn plugin_colors(cx: &App) -> BTreeMap<String, u32> {
+    cx.global::<RuntimeStyles>().plugin_colors.clone()
 }
 
 /// Prefer an enabled theme package while retaining a usable palette before installation.
 pub fn active_theme(dark: bool) -> ThemeDefinition {
     crate::extensions::contributions::theme(dark).unwrap_or_else(|| builtin_theme(dark).clone())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The embedded palettes remain available even when no theme plugin is installed.
+    #[test]
+    fn builtin_themes_include_default_light_and_dark_palettes() {
+        let light = builtin_theme(false);
+        let dark = builtin_theme(true);
+        assert_eq!(light.id, "builtin-light");
+        assert_eq!(light.mode, FileThemeMode::Light);
+        assert_eq!(light.colors.background, "#ffffff");
+        assert_eq!(dark.mode, FileThemeMode::Dark);
+        assert_eq!(dark.colors.background, "#1e1f22");
+    }
 }

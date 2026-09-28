@@ -88,6 +88,12 @@ struct EditorApp {
     file_store: NativeFileStore,
     history: Option<LocalHistory>,
     editor: Entity<EditorState>,
+    /// The dock entity must repaint when editor-owned popover state changes.
+    editor_panel: Entity<EditorDockPanel>,
+    /// Keeps keyboard selection in the project-owned completion popover.
+    completion_selection: Rc<Cell<(u64, usize)>>,
+    /// Repaint the host when the upstream editor publishes a hover or completion.
+    _editor_observer: Subscription,
     tree_state: Entity<TreeState>,
     dock_area: Entity<DockArea>,
     /// Generic runtime plugin dock; packages own all feature behavior.
@@ -146,6 +152,7 @@ struct OpenTab {
     definition_highlight: TextDecorationCollection,
     definition_highlight_generation: u64,
     _subscription: Subscription,
+    _observer: Subscription,
 }
 
 impl EditorApp {
@@ -209,6 +216,11 @@ impl EditorApp {
                 cx,
             )
         });
+        let popover_panel = editor_panel.downgrade();
+        // The editor dock is a separate view, so notify it when LSP state changes.
+        let editor_observer = cx.observe(&editor, move |_, _, cx| {
+            let _ = popover_panel.update(cx, |_, cx| cx.notify());
+        });
         let dock_area = LocalDock::new(PANEL_HEADER_HEIGHT).create_area(
             "me-editor-layout",
             Some(1),
@@ -232,7 +244,7 @@ impl EditorApp {
                         Some(px(session_state.explorer_width)),
                     )
                     .child(
-                        DockLayout::tabs().panel_view(dock::panel_handle(editor_panel), cx),
+                        DockLayout::tabs().panel_view(dock::panel_handle(editor_panel.clone()), cx),
                         None,
                     ),
                 window,
@@ -266,6 +278,9 @@ impl EditorApp {
             file_store: NativeFileStore,
             history: LocalHistory::for_current_user().ok(),
             editor,
+            editor_panel,
+            completion_selection: Rc::new(Cell::new((0, 0))),
+            _editor_observer: editor_observer,
             tree_state,
             dock_area,
             extensions,

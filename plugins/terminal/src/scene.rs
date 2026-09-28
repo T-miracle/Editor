@@ -1,6 +1,7 @@
 //! Translate emulator cells into generic native drawing operations.
 use super::*;
 use crate::emulator::Color;
+use unicode_width::UnicodeWidthChar;
 /// Alacritty allocates history only when real rows leave the screen.
 pub(super) fn visible_history(tab: &Tab) -> usize {
     tab.term.history()
@@ -10,14 +11,31 @@ impl Terminal {
     pub(super) fn scene(&self) -> Scene {
         let bg = self.color(257);
         let fg = self.color(256);
-        let right = (self.width - 180.).max(0.);
+        let right = self.tab_left();
+        let tab_width = self.effective_tab_width();
         let mut scene = Scene {
             panel: "terminal".into(),
             font: self.settings.font_family.clone(),
             font_size: self.settings.font_size,
             ..Scene::default()
         };
-        fill(
+        // During a drag the resize cursor follows the pointer across the panel.
+        scene.column_resize_regions.push(if self.resizing_tab_bar {
+            Rect {
+                x: 0.,
+                y: 0.,
+                w: self.width,
+                h: self.height,
+            }
+        } else {
+            Rect {
+                x: right,
+                y: 0.,
+                w: TAB_RESIZE_HANDLE_WIDTH.min(tab_width),
+                h: self.height,
+            }
+        });
+        fill_to_bottom(
             &mut scene,
             Rect {
                 x: 0.,
@@ -27,12 +45,12 @@ impl Terminal {
             },
             bg,
         );
-        fill(
+        fill_to_bottom(
             &mut scene,
             Rect {
                 x: right,
                 y: 0.,
-                w: 180.,
+                w: tab_width,
                 h: self.height,
             },
             self.env.muted,
@@ -48,7 +66,7 @@ impl Terminal {
                     Rect {
                         x: right,
                         y,
-                        w: 180.,
+                        w: tab_width,
                         h: 32.,
                     },
                     bg,
@@ -65,30 +83,47 @@ impl Terminal {
                     self.env.border,
                 );
             }
-            text(
-                &mut scene,
-                right + 8.,
-                y + 5.,
-                format!("{}{}", tab.name, if tab.exited { " · 已退出" } else { "" }),
-                fg,
-                14.,
-                false,
-            );
-            text(
-                &mut scene,
-                self.width - 22.,
-                y + 5.,
-                "×".into(),
-                fg,
-                14.,
-                false,
-            );
+            if self.rename != Some(tab.id) {
+                let label = format!("{}{}", tab.name, if tab.exited { " · 已退出" } else { "" });
+                // Reserve the close-button area and shorten only the painted label.
+                let label_cell_width = (self.cw * 14. / self.settings.font_size).max(1.);
+                let label_cells = ((tab_width - 38.) / label_cell_width).floor().max(0.) as usize;
+                text(
+                    &mut scene,
+                    right + 8.,
+                    y + 5.,
+                    tab_display_name(&label, label_cells),
+                    fg,
+                    14.,
+                    false,
+                );
+                // Hide the close target while the native input owns the whole tab.
+                fill(
+                    &mut scene,
+                    Rect {
+                        x: self.width - 30.,
+                        y,
+                        w: 30.,
+                        h: 31.,
+                    },
+                    if i == self.active { bg } else { self.env.muted },
+                );
+                text(
+                    &mut scene,
+                    self.width - 22.,
+                    y + 5.,
+                    "×".into(),
+                    fg,
+                    14.,
+                    false,
+                );
+            }
             fill(
                 &mut scene,
                 Rect {
                     x: right,
                     y: y + 31.,
-                    w: 180.,
+                    w: tab_width,
                     h: 1.,
                 },
                 self.env.border,
@@ -96,11 +131,12 @@ impl Terminal {
             if self.rename == Some(tab.id) {
                 scene.widgets.push(Widget {
                     id: format!("rename:{}", tab.id),
+                    // Native editing replaces the entire tab until focus leaves the input.
                     rect: Rect {
-                        x: right + 4.,
-                        y: y + 2.,
-                        w: 150.,
-                        h: 28.,
+                        x: right,
+                        y,
+                        w: tab_width,
+                        h: 32.,
                     },
                     label: tab.name.clone(),
                     edit: true,
@@ -108,7 +144,7 @@ impl Terminal {
             }
         }
         let below = self.tabs.len().saturating_sub(self.tab_scroll) as f32 * 32.;
-        fill(
+        fill_to_bottom(
             &mut scene,
             Rect {
                 x: right,
@@ -124,6 +160,7 @@ impl Terminal {
             let (rows, cols) = screen.size();
             let selection = tab.term.selected_range();
             for row in 0..rows {
+                let content_end = screen.content_end(row);
                 for col in 0..cols {
                     let cell = screen.cell(row, col).unwrap();
                     if cell.is_wide_continuation() {
@@ -138,14 +175,11 @@ impl Terminal {
                         std::mem::swap(&mut foreground, &mut background);
                     }
                     let point = (row as i32 - offset as i32, col);
-                    if selection.is_some_and(|(start, end)| start <= point && point <= end) {
-                        background = self
-                            .settings
-                            .theme
-                            .selection
-                            .as_deref()
-                            .and_then(|s| u32::from_str_radix(s.trim_start_matches('#'), 16).ok())
-                            .unwrap_or(self.env.selection);
+                    // Do not paint selection into columns with no printed text.
+                    if col < content_end
+                        && selection.is_some_and(|(start, end)| start <= point && point <= end)
+                    {
+                        background = self.selection_color();
                     }
                     if background != bg {
                         fill(
@@ -218,7 +252,7 @@ impl Terminal {
                             x,
                             y,
                             cell.contents(),
-                            bg,
+                            self.cursor_text_color(),
                             self.settings.font_size,
                             cell.bold(),
                         );
@@ -274,56 +308,12 @@ impl Terminal {
                 8.,
                 (self.height - 24.).max(0.),
                 error.chars().take(120).collect(),
-                0xc03030,
+                self.color(1),
                 13.,
                 false,
             );
         }
         scene
-    }
-    /// Map user palette, indexed colors and true color without host terminal knowledge.
-    pub(super) fn color(&self, index: usize) -> u32 {
-        const ANSI: [u32; 16] = [
-            0x1e1e1e, 0xcd3131, 0x0dbc79, 0xe5e510, 0x2472c8, 0xbc3fbc, 0x11a8cd, 0xe5e5e5,
-            0x666666, 0xf14c4c, 0x23d18b, 0xf5f543, 0x3b8eea, 0xd670d6, 0x29b8db, 0xffffff,
-        ];
-        let parse = |s: &str| u32::from_str_radix(s.trim_start_matches('#'), 16).ok();
-        match index {
-            0..=15 => self
-                .settings
-                .theme
-                .ansi
-                .as_ref()
-                .and_then(|p| parse(&p[index]))
-                .unwrap_or(ANSI[index]),
-            16..=231 => {
-                let n = index - 16;
-                let c = |v| if v == 0 { 0 } else { 55 + 40 * v };
-                ((c(n / 36) << 16) | (c(n / 6 % 6) << 8) | c(n % 6)) as u32
-            }
-            232..=255 => (8 + (index - 232) as u32 * 10) * 0x010101,
-            257 => self
-                .settings
-                .theme
-                .background
-                .as_deref()
-                .and_then(parse)
-                .unwrap_or(self.env.background),
-            258 => self
-                .settings
-                .theme
-                .cursor
-                .as_deref()
-                .and_then(parse)
-                .unwrap_or(self.env.foreground),
-            _ => self
-                .settings
-                .theme
-                .foreground
-                .as_deref()
-                .and_then(parse)
-                .unwrap_or(self.env.foreground),
-        }
     }
     /// Resolve Alacritty colors with per-session OSC overrides and the user's palette.
     fn resolve(&self, color: Color, tab: &Tab, background: bool) -> u32 {
@@ -343,8 +333,42 @@ impl Terminal {
             .unwrap_or_else(|| self.color(index))
     }
 }
+/// Fit a tab label by Unicode display cells, retaining the full name for editing.
+fn tab_display_name(label: &str, max_cells: usize) -> String {
+    let total: usize = label.chars().map(|c| c.width().unwrap_or(0)).sum();
+    if total <= max_cells {
+        return label.to_owned();
+    }
+    if max_cells == 0 {
+        return String::new();
+    }
+    let mut result = String::new();
+    let mut used = 0;
+    for ch in label.chars() {
+        let width = ch.width().unwrap_or(0);
+        if used + width >= max_cells {
+            break;
+        }
+        result.push(ch);
+        used += width;
+    }
+    result.push('…');
+    result
+}
 fn fill(scene: &mut Scene, rect: Rect, color: u32) {
-    scene.paint.push(Paint::Fill { rect, color });
+    scene.paint.push(Paint::Fill {
+        rect,
+        color,
+        extend_to_bottom: false,
+    });
+}
+/// Allow full-height backgrounds to reach the native canvas bottom during Dock drag.
+fn fill_to_bottom(scene: &mut Scene, rect: Rect, color: u32) {
+    scene.paint.push(Paint::Fill {
+        rect,
+        color,
+        extend_to_bottom: true,
+    });
 }
 fn text(scene: &mut Scene, x: f32, y: f32, text: String, color: u32, size: f32, bold: bool) {
     scene.paint.push(Paint::Text {

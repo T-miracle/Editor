@@ -17,3 +17,4 @@ serde_json.workspace = true
 anyhow.workspace = true
 wit-bindgen = "0.45.1"
 base64 = "0.22"
+unicode-width = "0.2"

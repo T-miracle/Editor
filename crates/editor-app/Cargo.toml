@@ -19,6 +19,7 @@ pinyin = { version = "0.11", default-features = false, features = ["plain"] }
 rust-i18n.workspace = true
 serde.workspace = true
 serde_json = "1.0"
+semver = "1"
 # Enable Tree-sitter's Wasmtime-backed runtime for plugin-provided grammars.
 tree-sitter = { version = "0.26.13", features = ["wasm"] }
 tracing = "0.1"

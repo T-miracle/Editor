@@ -2,8 +2,8 @@
   "schema_version": 1,
   "themes": [
     {
-      "id": "default-light-theme",
-      "name": "default-light-theme",
+      "id": "builtin-light",
+      "name": "Default Light",
       "mode": "light",
       "colors": {
         "background": "#ffffff",
