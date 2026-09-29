@@ -3,6 +3,8 @@
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 
+pub mod ui;
+
 /// A package's identity, compatibility range and explicitly requested capabilities.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -74,7 +76,7 @@ pub struct Snapshot {
 }
 
 /// Host theme and workspace context are supplied explicitly, without ambient access.
-#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct Environment {
     pub workspace: String,
     pub os: String,
@@ -93,6 +95,51 @@ pub struct Environment {
     /// Generic theme color tokens; plugins interpret only keys they own.
     #[serde(default)]
     pub theme_colors: std::collections::BTreeMap<String, u32>,
+    /// Resolved editor fonts are the fallback for every plugin's own text roles.
+    #[serde(default)]
+    pub ui_font: FontStyle,
+    #[serde(default)]
+    pub mono_font: FontStyle,
+    /// Plugin-owned text roles, updated together with colors by Event::Theme.
+    #[serde(default)]
+    pub theme_text_styles: std::collections::BTreeMap<String, FontStyle>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct FontStyle {
+    pub family: Option<String>,
+    pub size_px: Option<f32>,
+    pub bold: Option<bool>,
+}
+
+impl FontStyle {
+    pub fn over(self, base: Self) -> Self {
+        Self {
+            family: self.family.or(base.family),
+            size_px: self.size_px.or(base.size_px),
+            bold: self.bold.or(base.bold),
+        }
+    }
+}
+
+impl Environment {
+    /// A plugin consumes its own role without knowing how themes are installed or switched.
+    pub fn font_style(&self, plugin: &str, role: &str, monospace: bool) -> FontStyle {
+        let base = if monospace {
+            &self.mono_font
+        } else {
+            &self.ui_font
+        };
+        self.theme_text_styles
+            .get(&format!("{plugin}.{role}"))
+            .cloned()
+            .unwrap_or_default()
+            .over(base.clone())
+    }
+
+    pub fn color(&self, plugin: &str, role: &str) -> Option<u32> {
+        self.theme_colors.get(&format!("{plugin}.{role}")).copied()
+    }
 }
 
 /// Physical surface coordinates let a guest lay out its own interface.
@@ -127,6 +174,8 @@ pub enum Paint {
         color: u32,
         size: f32,
         bold: bool,
+        #[serde(default)]
+        font: Option<String>,
     },
 }
 
@@ -137,6 +186,23 @@ pub struct Widget {
     pub rect: Rect,
     pub label: String,
     pub edit: bool,
+    #[serde(default)]
+    pub style: WidgetStyle,
+}
+
+/// Optional native-control styling resolved by the plugin from its current theme.
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct WidgetStyle {
+    #[serde(default)]
+    pub font: FontStyle,
+    #[serde(default)]
+    pub foreground: Option<u32>,
+    #[serde(default)]
+    pub background: Option<u32>,
+    #[serde(default)]
+    pub hover_background: Option<u32>,
+    #[serde(default)]
+    pub active_background: Option<u32>,
 }
 
 /// Scrollbars are rendered with the same host control used by the file explorer.
@@ -153,6 +219,12 @@ pub struct ScrollInfo {
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct Scene {
+    /// Protocol 2 native view tree. Omit to use the legacy canvas surface.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ui: Option<ui::Document>,
+    /// Protocol 3: native sidebar and popup controls surrounding a canvas surface.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub chrome: Option<ui::CanvasChrome>,
     /// Declared panel receiving this scene; multiple panels can publish independently.
     #[serde(default)]
     pub panel: String,
@@ -180,6 +252,8 @@ pub enum Message {
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum Event {
+    /// Native UI events are scoped by the enclosing Surface message.
+    Ui(ui::UiEvent),
     /// Native events retain their originating panel when a plugin declares several surfaces.
     Surface {
         panel: String,
@@ -300,5 +374,45 @@ impl Request {
             Self::ClipboardWrite(_) | Self::ClipboardRead => "clipboard",
             Self::Editor { .. } => "editor.commands",
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn theme_roles_override_only_declared_font_properties() {
+        let mut environment = Environment {
+            ui_font: FontStyle {
+                family: Some("Editor UI".into()),
+                size_px: Some(14.),
+                bold: Some(false),
+            },
+            ..Default::default()
+        };
+        environment.theme_text_styles.insert(
+            "me.example.body".into(),
+            FontStyle {
+                size_px: Some(18.),
+                ..Default::default()
+            },
+        );
+        environment
+            .theme_colors
+            .insert("me.example.body.foreground".into(), 0x123456);
+        assert_eq!(
+            environment.font_style("me.example", "body", false),
+            FontStyle {
+                family: Some("Editor UI".into()),
+                size_px: Some(18.),
+                bold: Some(false),
+            }
+        );
+        assert_eq!(
+            environment.color("me.example", "body.foreground"),
+            Some(0x123456)
+        );
+        assert_eq!(environment.color("another.plugin", "body.foreground"), None);
     }
 }

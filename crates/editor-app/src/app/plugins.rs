@@ -1,7 +1,7 @@
 //! Tracks startup plugin loading and presents its progress beside the status bar.
 
+use crate::ui::controls::Spinner;
 use crate::*;
-use gpui_kit::component::spinner::Spinner;
 
 /// A plugin has exactly one visible lifecycle state during this launch.
 #[derive(Clone, Debug, PartialEq, Eq)]

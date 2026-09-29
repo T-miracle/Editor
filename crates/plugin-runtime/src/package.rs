@@ -73,7 +73,10 @@ impl Package {
             "Invalid plugin identity"
         );
         semver::Version::parse(&manifest.version)?;
-        anyhow::ensure!(manifest.protocol == 1, "Unsupported plugin protocol");
+        anyhow::ensure!(
+            matches!(manifest.protocol, 1..=3),
+            "Unsupported plugin protocol"
+        );
         anyhow::ensure!(
             (1024..=32 * 1024 * 1024).contains(&manifest.storage_limit),
             "Invalid storage quota"

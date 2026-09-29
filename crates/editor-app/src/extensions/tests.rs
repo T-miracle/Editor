@@ -3,6 +3,63 @@ use super::*;
 use gpui_kit::component::WindowExt as _;
 use gpui_kit::{EntityInputHandler, TestAppContext, VisualTestContext, gpui};
 
+/// Installed theme definitions use the generic plugin environment API.
+#[gpui::test]
+fn editor_theme_api_publishes_external_terminal_overrides(cx: &mut TestAppContext) {
+    cx.update(|cx| {
+        gpui_kit::init(cx);
+        typography::init(cx);
+        let mut external = builtin_theme(true).clone();
+        external.id = "external-dark".into();
+        external.typography.ui.family = Some("External UI".into());
+        external.typography.ui.size_px = Some(16.);
+        external.typography.mono.family = Some("External Mono".into());
+        external.plugins.clear();
+        external.plugins.insert(
+            "me.terminal".into(),
+            plugin_schema::PluginTheme {
+                colors: std::collections::BTreeMap::from([(
+                    "ansi".into(),
+                    plugin_schema::PluginThemeColor::Group(std::collections::BTreeMap::from([(
+                        "red".into(),
+                        plugin_schema::PluginThemeColor::Color("#f08070".into()),
+                    )])),
+                )]),
+                typography: std::collections::BTreeMap::from([(
+                    "tab".into(),
+                    plugin_schema::PluginTextStyle {
+                        family: Some("External Tabs".into()),
+                        size_px: Some(18.),
+                        bold: Some(true),
+                    },
+                )]),
+                ..Default::default()
+            },
+        );
+        apply_theme(&external, cx);
+
+        let environment = environment(std::path::Path::new("workspace"), cx);
+        assert!(environment.dark);
+        assert_eq!(environment.background, 0x1e1f22);
+        assert_eq!(environment.theme_colors.len(), 1);
+        assert_eq!(environment.theme_colors["me.terminal.ansi.red"], 0xf08070);
+        assert_eq!(environment.ui_font.family.as_deref(), Some("External UI"));
+        assert_eq!(environment.ui_font.size_px, Some(16.));
+        assert_eq!(
+            environment.mono_font.family.as_deref(),
+            Some("External Mono")
+        );
+        assert_eq!(
+            environment.font_style("me.terminal", "tab", false),
+            protocol::FontStyle {
+                family: Some("External Tabs".into()),
+                size_px: Some(18.),
+                bold: Some(true),
+            }
+        );
+    });
+}
+
 /// Market versions select the same action used by the confirmation dialog.
 #[test]
 fn market_version_actions_cover_install_update_and_downgrade() {
@@ -420,8 +477,10 @@ fn plugin_panel_registration_input_and_ime(cx: &mut TestAppContext) {
         Root::new(app, window, cx)
     });
     let app = slot.borrow_mut().take().unwrap();
-    let manifest: protocol::Manifest =
+    let mut manifest: protocol::Manifest =
         serde_json::from_str(include_str!("../../../../plugins/terminal/manifest.json")).unwrap();
+    // This test explicitly opens the dock; the packaged terminal now starts hidden.
+    manifest.panels[0].default_visible = true;
     let scene = Scene {
         panel: "terminal".into(),
         font: "Cascadia Mono".into(),
@@ -579,17 +638,33 @@ fn plugin_panel_registration_input_and_ime(cx: &mut TestAppContext) {
                 },
                 label: "powershell".into(),
                 edit: true,
+                style: Default::default(),
             });
             panel
                 .scenes
+                .insert("me.terminal/terminal".into(), Arc::new(scene.clone()));
+            panel
+                .worker
+                .state
+                .lock()
+                .unwrap()
+                .scenes
                 .insert("me.terminal/terminal".into(), Arc::new(scene));
             panel.sync_edit(window, cx);
-            let input = panel.editing.as_ref().unwrap().input.clone();
-            input.update(cx, |input, cx| input.set_value("构建任务", window, cx));
+            cx.notify();
         });
         window.draw(cx).clear(cx);
     });
+    // Native input mounting focuses on the deferred UI turn; Enter must follow it.
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+        let input = panel.read(cx).editing.as_ref().unwrap().input.clone();
+        input.update(cx, |input, cx| input.replace_all("构建任务", window, cx));
+        assert_eq!(input.read(cx).value().as_str(), "构建任务");
+        window.draw(cx).clear(cx);
+    });
     cx.simulate_keystrokes("enter");
+    cx.run_until_parked();
     let messages = cx.update(|_, cx| {
         owner
             .read(cx)

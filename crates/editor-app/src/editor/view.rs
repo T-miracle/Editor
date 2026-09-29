@@ -28,9 +28,10 @@ impl EditorApp {
         let view = cx.entity();
         let tree_style = component_styles(cx, ThemeComponent::ExplorerTree).base;
         let row_styles = component_styles(cx, ThemeComponent::ExplorerRow);
-        let tree = tree(
-            &self.tree_state,
-            move |index, entry, selected, _window, cx| {
+        let tree_scroll = self.tree_state.read(cx).scroll_handle().clone();
+        let tree = gpui_base::Tree::new(&self.tree_state)
+            .item(move |index, entry, entry_state, _window, cx| {
+                let selected = entry_state.is_selected();
                 let hover_view = view.clone();
                 view.update(cx, |app, cx| {
                     let item = entry.item();
@@ -62,13 +63,13 @@ impl EditorApp {
                     } else {
                         row_style.border
                     };
-                    let is_folder = item.is_folder();
+                    let is_folder = Path::new(item.id.as_str()).is_dir();
                     let icon = file_icon(
                         Path::new(item.id.as_str()),
                         is_folder,
                         &theme::active_theme(app.dark_theme),
                     );
-                    let disclosure = if is_folder {
+                    let disclosure = if entry.is_folder() {
                         Icon::new(if entry.is_expanded() {
                             IconName::ChevronDown
                         } else {
@@ -79,8 +80,11 @@ impl EditorApp {
                     } else {
                         div().size(px(12.)).into_any_element()
                     };
-                    ListItem::new(index)
+                    div()
+                        .id(format!("explorer-row-{index}"))
+                        .debug_selector(move || format!("explorer-row-{index}").into())
                         .w_full()
+                        .min_h(px(24.))
                         .bg(row_background)
                         .when(selected, |this| {
                             this.rounded(px(row_style.radius_px.unwrap_or(5.)))
@@ -105,6 +109,21 @@ impl EditorApp {
                                 }
                             });
                         })
+                        .on_mouse_down(
+                            MouseButton::Right,
+                            cx.listener({
+                                let path = PathBuf::from(item.id.as_str());
+                                move |this, event: &MouseDownEvent, window, cx| {
+                                    cx.stop_propagation();
+                                    this.open_explorer_menu(
+                                        Some(path.clone()),
+                                        event.position,
+                                        window,
+                                        cx,
+                                    );
+                                }
+                            }),
+                        )
                         .child(
                             h_flex()
                                 .gap_1()
@@ -132,28 +151,47 @@ impl EditorApp {
                                 }
                             }
                         }))
+                        .into_any_element()
                 })
-            },
-        )
-        .p_1()
-        // Explorer and editor text share the user's live font size by default.
-        .text_size(
-            tree_style
-                .font_size_px
-                .map(px)
-                .unwrap_or(typography::font_size(cx)),
-        )
-        .font_family(cx.theme().mono_font_family.clone())
-        .flex_1()
-        .min_h_0()
-        .bg(tree_style.background.unwrap_or(cx.theme().background))
-        .text_color(tree_style.foreground.unwrap_or(cx.theme().foreground));
+            })
+            .list_style(StyleRefinement::default().flex_grow_1().size_full())
+            .p_1()
+            // Explorer and editor text share the user's live font size by default.
+            .text_size(
+                tree_style
+                    .font_size_px
+                    .map(px)
+                    .unwrap_or(typography::font_size(cx)),
+            )
+            .font_family(cx.theme().mono_font_family.clone())
+            .flex_1()
+            .min_h_0()
+            .bg(tree_style.background.unwrap_or(cx.theme().background))
+            .text_color(tree_style.foreground.unwrap_or(cx.theme().foreground));
 
         v_flex()
+            .id("explorer-root")
+            .debug_selector(|| "explorer-root".into())
             .size_full()
             .min_h_0()
             .bg(tree_style.background.unwrap_or(cx.theme().background))
+            .relative()
             .child(tree)
+            .child(
+                div()
+                    .absolute()
+                    .right_0()
+                    .top_0()
+                    .bottom_0()
+                    .w(px(8.))
+                    .child(ui::controls::vertical_scrollbar(&tree_scroll, cx)),
+            )
+            .on_mouse_down(
+                MouseButton::Right,
+                cx.listener(|this, event: &MouseDownEvent, window, cx| {
+                    this.open_explorer_menu(None, event.position, window, cx);
+                }),
+            )
     }
 
     fn render_tabs(&self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {

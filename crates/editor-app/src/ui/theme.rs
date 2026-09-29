@@ -8,8 +8,8 @@ use gpui_kit::{
     px, rgb,
 };
 use plugin_schema::{
-    ComponentStyles, StyleProperties, ThemeComponent, ThemeDefinition, ThemeFile,
-    ThemeMode as FileThemeMode,
+    ComponentStyles, PluginTextStyle, StyleProperties, ThemeComponent, ThemeDefinition, ThemeFile,
+    ThemeMode as FileThemeMode, ThemeTypography,
 };
 
 // Both palettes ship with the editor so first launch does not depend on plugin installation.
@@ -41,6 +41,8 @@ pub struct ResolvedComponentStyles {
 struct RuntimeStyles {
     components: BTreeMap<ThemeComponent, ResolvedComponentStyles>,
     plugin_colors: BTreeMap<String, u32>,
+    plugin_text_styles: BTreeMap<String, PluginTextStyle>,
+    typography: ThemeTypography,
 }
 
 impl Global for RuntimeStyles {}
@@ -66,6 +68,10 @@ pub fn component_styles(cx: &App, component: ThemeComponent) -> ResolvedComponen
         .unwrap_or_default()
 }
 
+pub fn typography(cx: &App) -> ThemeTypography {
+    cx.global::<RuntimeStyles>().typography.clone()
+}
+
 pub fn apply_theme(theme: &ThemeDefinition, cx: &mut App) {
     let dark = theme.mode == FileThemeMode::Dark;
     Theme::change(
@@ -79,6 +85,7 @@ pub fn apply_theme(theme: &ThemeDefinition, cx: &mut App) {
     );
 
     let palette = &theme.colors;
+    let theme_typography = &theme.typography;
     let background = color(&palette.background);
     let surface = color(&palette.surface);
     let hover = color(&palette.hover);
@@ -178,8 +185,14 @@ pub fn apply_theme(theme: &ThemeDefinition, cx: &mut App) {
             .and_then(|styles| styles.base.border.as_deref())
             .map(color)
             .unwrap_or(border);
+        if let Some(family) = &theme_typography.ui.family {
+            theme.font_family = family.clone().into();
+        }
+        if let Some(family) = &theme_typography.mono.family {
+            theme.mono_font_family = family.clone().into();
+        }
     }
-    sync_font_sizes(cx);
+    apply_font_sizes(cx, theme_typography);
     Theme::sync_base(cx);
 
     let base_theme = gpui_base::Theme::global_mut(cx);
@@ -222,23 +235,29 @@ pub fn apply_theme(theme: &ThemeDefinition, cx: &mut App) {
         .collect();
     // Theme validation guarantees #RRGGBB, so plugins receive numeric colors only.
     let plugin_colors = theme
-        .plugin_colors
-        .iter()
+        .plugin_colors()
+        .into_iter()
         .map(|(key, value)| {
             (
-                key.clone(),
+                key,
                 u32::from_str_radix(value.trim_start_matches('#'), 16).unwrap(),
             )
         })
         .collect();
+    let plugin_text_styles = theme.plugin_text_styles();
+    let typography = theme.typography.clone();
     if cx.has_global::<RuntimeStyles>() {
         let runtime = cx.global_mut::<RuntimeStyles>();
         runtime.components = components;
         runtime.plugin_colors = plugin_colors;
+        runtime.plugin_text_styles = plugin_text_styles;
+        runtime.typography = typography;
     } else {
         cx.set_global(RuntimeStyles {
             components,
             plugin_colors,
+            plugin_text_styles,
+            typography,
         });
     }
 }
@@ -280,17 +299,29 @@ fn color(value: &str) -> Hsla {
 
 /// Publishes the shared typography size to GPUI Kit's global theme.
 pub fn sync_font_sizes(cx: &mut App) {
+    let typography = cx
+        .has_global::<RuntimeStyles>()
+        .then(|| cx.global::<RuntimeStyles>().typography.clone())
+        .unwrap_or_default();
+    apply_font_sizes(cx, &typography);
+}
+
+fn apply_font_sizes(cx: &mut App, typography: &ThemeTypography) {
     let base = crate::typography::font_size(cx);
     let editor = crate::typography::editor_font_size(cx);
 
     let theme = Theme::global_mut(cx);
-    theme.font_size = base;
-    theme.mono_font_size = editor;
+    theme.font_size = typography.ui.size_px.map(px).unwrap_or(base);
+    theme.mono_font_size = typography.mono.size_px.map(px).unwrap_or(editor);
 }
 
 /// Expose validated theme tokens through the generic runtime-plugin environment.
 pub fn plugin_colors(cx: &App) -> BTreeMap<String, u32> {
     cx.global::<RuntimeStyles>().plugin_colors.clone()
+}
+
+pub fn plugin_text_styles(cx: &App) -> BTreeMap<String, PluginTextStyle> {
+    cx.global::<RuntimeStyles>().plugin_text_styles.clone()
 }
 
 /// Prefer an enabled theme package while retaining a usable palette before installation.
@@ -312,5 +343,15 @@ mod tests {
         assert_eq!(light.colors.background, "#ffffff");
         assert_eq!(dark.mode, FileThemeMode::Dark);
         assert_eq!(dark.colors.background, "#1e1f22");
+        for theme in [light, dark] {
+            let ansi = theme
+                .plugin_colors()
+                .keys()
+                .filter(|key| key.starts_with("me.terminal.ansi."))
+                .count();
+            assert_eq!(ansi, 16, "{} must define all ANSI colors", theme.id);
+        }
+        assert_eq!(light.plugin_colors()["me.terminal.ansi.yellow"], "#8a5a00");
+        assert_eq!(dark.plugin_colors()["me.terminal.ansi.yellow"], "#d7ba7d");
     }
 }

@@ -8,14 +8,13 @@ use gpui_kit::{
     component::{
         ActiveTheme, IconName, Root, Sizable, StyledExt, TitleBar, WindowExt as _,
         button::{Button, ButtonVariants as _},
-        dialog::DialogContent,
         h_flex, v_flex,
     },
     div, px, rgb, size,
 };
 use std::rc::Rc;
 
-use crate::PANEL_HEADER_HEIGHT;
+use crate::{PANEL_HEADER_HEIGHT, ui::controls::DialogContent};
 
 type ContentBuilder = Rc<dyn Fn(DialogContent, &mut Window, &mut App) -> DialogContent>;
 type TitleBuilder = Rc<dyn Fn(&mut Window, &mut App) -> AnyElement>;

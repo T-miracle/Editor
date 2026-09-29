@@ -1,13 +1,18 @@
 //! Two independent dock panels prove that the host does not special-case terminals.
 use plugin_protocol::*;
+mod views;
 use std::cell::RefCell;
-wit_bindgen::generate!({path:"../../crates/plugin-protocol/wit",world:"plugin"});
+wit_bindgen::generate!({path:"../sdk/wit",world:"plugin"});
 struct Example;
 #[derive(Default)]
 struct State {
     count: u64,
     note: String,
     editing: bool,
+    revision: u64,
+    checked: bool,
+    selected: Option<String>,
+    tab: String,
     env: Environment,
 }
 thread_local! {static STATE:RefCell<State>=RefCell::new(State::default());}
@@ -64,55 +69,31 @@ impl Guest for Example {
 export!(Example);
 impl State {
     fn event(&mut self, event: Event) {
+        self.revision += 1;
         match event {
             Event::Surface { event, .. } => self.event(*event),
             Event::Theme(env) => self.env = env,
             Event::Command { id, .. } if id == "increment" => self.count += 1,
             Event::Command { id, .. } if id == "edit" => self.editing = true,
+            Event::Ui(event) => match (event.node.as_str(), event.action) {
+                ("increment", ui::Action::Click) => self.count += 1,
+                ("note", ui::Action::Change(value) | ui::Action::Submit(value)) => {
+                    self.note = value
+                }
+                ("enabled", ui::Action::Toggle(value)) => self.checked = value,
+                ("mode", ui::Action::Select(value)) => self.selected = Some(value),
+                ("pages", ui::Action::Select(value)) => self.tab = value,
+                ("open-dialog", ui::Action::Click) => self.editing = true,
+                ("sample-dialog", ui::Action::Dismiss) | ("close-dialog", ui::Action::Click) => {
+                    self.editing = false
+                }
+                _ => {}
+            },
             Event::Edit { text, .. } => {
                 self.note = text;
                 self.editing = false;
             }
             _ => {}
-        }
-    }
-    /// UI consists of ordinary native text/button/input widgets, with plugin-owned state.
-    fn scene(&self, panel: &str) -> Scene {
-        let counter = panel == "counter";
-        Scene {
-            panel: panel.into(),
-            font: "Segoe UI".into(),
-            font_size: 14.,
-            paint: vec![Paint::Text {
-                x: 12.,
-                y: 12.,
-                text: if counter {
-                    format!("点击次数：{}", self.count)
-                } else {
-                    format!("笔记：{}", self.note)
-                },
-                color: self.env.foreground,
-                size: 14.,
-                bold: false,
-            }],
-            widgets: vec![Widget {
-                id: if counter { "increment" } else { "edit" }.into(),
-                rect: Rect {
-                    x: 12.,
-                    y: 48.,
-                    w: 220.,
-                    h: 30.,
-                },
-                label: if counter {
-                    "增加一次".into()
-                } else if self.editing {
-                    self.note.clone()
-                } else {
-                    "编辑笔记".into()
-                },
-                edit: !counter && self.editing,
-            }],
-            ..Scene::default()
         }
     }
 }

@@ -1,6 +1,6 @@
 //! Builds and locates entries in the workspace explorer tree.
 
-use gpui_kit::component::tree::TreeItem;
+use gpui_base::TreeItem;
 use pinyin::ToPinyin;
 use std::path::{Path, PathBuf};
 
@@ -27,7 +27,11 @@ pub(crate) fn find_tree_item<'a>(items: &'a [TreeItem], path: &Path) -> Option<&
     })
 }
 
-pub(crate) fn tree_items<'a>(root: &Path, files: impl Iterator<Item = &'a Path>) -> Vec<TreeItem> {
+pub(crate) fn tree_items<'a>(
+    root: &Path,
+    files: impl Iterator<Item = &'a Path>,
+    directories: impl Iterator<Item = &'a Path>,
+) -> Vec<TreeItem> {
     #[derive(Default)]
     struct Node {
         path: PathBuf,
@@ -64,7 +68,10 @@ pub(crate) fn tree_items<'a>(root: &Path, files: impl Iterator<Item = &'a Path>)
         path: root.to_path_buf(),
         ..Default::default()
     };
-    for file in files {
+    for (file, is_file) in files
+        .map(|path| (path, true))
+        .chain(directories.map(|path| (path, false)))
+    {
         let Ok(relative) = file.strip_prefix(root) else {
             continue;
         };
@@ -80,7 +87,9 @@ pub(crate) fn tree_items<'a>(root: &Path, files: impl Iterator<Item = &'a Path>)
                 path: current.clone(),
                 ..Default::default()
             });
-            node.file = index + 1 == parts.len();
+            if index + 1 == parts.len() {
+                node.file = is_file;
+            }
         }
     }
     into_items(root_node)
@@ -95,4 +104,18 @@ fn tree_sort_key(name: &str) -> String {
         }
         key
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn empty_directory_is_present_in_tree() {
+        let root = Path::new("workspace");
+        let folder = root.join("empty");
+        let items = tree_items(root, std::iter::empty(), std::iter::once(folder.as_path()));
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].label.as_str(), "empty");
+    }
 }

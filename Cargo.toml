@@ -6,11 +6,9 @@ members = [
     "crates/plugin-schema",
     "crates/plugin-protocol",
     "crates/plugin-runtime",
-    "plugins/terminal",
-    "plugins/example",
 ]
-# The terminal plugin keeps its adapted parser outside the root workspace.
-exclude = ["plugins/terminal/vendor/alacritty_terminal"]
+# Guests build from the SDK exported by the packaged host, after the host is built.
+exclude = ["plugins/terminal", "plugins/example", "plugins/sdk", "plugins/terminal/vendor/alacritty_terminal"]
 resolver = "2"
 
 [workspace.package]

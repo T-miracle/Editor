@@ -6,8 +6,13 @@ impl EditorApp {
     pub(crate) fn refresh_files(&mut self, cx: &mut Context<Self>) {
         let root = self.workspace.root().to_path_buf();
         let files = self.workspace.files();
+        let directories = self.workspace.directories();
         let items = restore_expanded(
-            tree_items(&root, files.iter().map(|file| file.absolute_path.as_path())),
+            tree_items(
+                &root,
+                files.iter().map(|file| file.absolute_path.as_path()),
+                directories.iter().map(PathBuf::as_path),
+            ),
             &self.session_state.expanded_directories,
         );
         // External tabs keep the last project file highlighted across a tree refresh.

@@ -4,7 +4,9 @@ use crate::emulator::{MouseProtocolEncoding, MouseProtocolMode};
 impl Terminal {
     /// Native input is forwarded as data and interpreted only by this plugin.
     pub(super) fn event(&mut self, event: Event) {
+        self.ui_revision = self.ui_revision.wrapping_add(1);
         match event {
+            Event::Ui(event) => self.ui_event(event),
             Event::Surface { event, .. } => self.event(*event),
             Event::Resize {
                 width,
@@ -86,24 +88,7 @@ impl Terminal {
                 shift,
             } => self.pointer(&kind, x, y, button, clicks, shift),
             Event::Wheel { delta, shift, x, y } => {
-                if x >= self.tab_left() {
-                    self.tab_scroll = (self.tab_scroll as i32 - delta.round() as i32).clamp(
-                        0,
-                        self.tabs
-                            .len()
-                            .saturating_sub((self.height / 32.).floor() as usize)
-                            as i32,
-                    ) as usize;
-                    return;
-                }
-                if self.menu {
-                    self.menu_scroll = (self.menu_scroll as i32 - delta.round() as i32).clamp(
-                        0,
-                        self.menu_actions()
-                            .len()
-                            .saturating_sub((self.height / 28.).floor() as usize)
-                            as i32,
-                    ) as usize;
+                if x >= self.tab_left() || self.menu {
                     return;
                 }
                 if !shift
@@ -163,7 +148,7 @@ impl Terminal {
         }
     }
     /// Synchronize the emulator and PTY only when the divider changes the cell grid.
-    fn resize_grid(&mut self) {
+    pub(super) fn resize_grid(&mut self) {
         let extent = self.extent();
         for tab in &mut self.tabs {
             tab.term.replies_mut().cell_size = (self.cw as u16, self.ch as u16);
@@ -182,13 +167,16 @@ impl Terminal {
         }
     }
     /// Menu entries and declared host commands converge on these guest-owned actions.
-    fn command(&mut self, id: &str, cwd: Option<String>, text: Option<String>) {
+    pub(super) fn command(&mut self, id: &str, cwd: Option<String>, text: Option<String>) {
         match id.trim_start_matches("terminal.") {
             "new" => self.add(
                 self.settings.default_profile,
                 cwd.unwrap_or(self.env.workspace.clone()),
             ),
-            "menu" => self.menu = !self.menu,
+            "menu" => {
+                self.menu = !self.menu;
+                self.menu_position = (0., 0.);
+            }
             "close" => self.close(self.active),
             "next" => {
                 if !self.tabs.is_empty() {
@@ -326,69 +314,7 @@ impl Terminal {
     }
     /// Hit testing, tab ordering and selection are terminal behavior.
     fn pointer(&mut self, kind: &str, x: f32, y: f32, button: u8, clicks: u8, shift: bool) {
-        let right = self.tab_left();
-        // Capture the divider before terminal mouse reporting or tab hit testing.
-        if self.resizing_tab_bar {
-            if kind == "move" {
-                self.tab_width = (self.width - x).clamp(MIN_TAB_WIDTH, MAX_TAB_WIDTH);
-                self.resize_grid();
-                return;
-            }
-            if kind == "up" {
-                self.resizing_tab_bar = false;
-                return;
-            }
-            // A new press can arrive if the previous release was outside the panel.
-            self.resizing_tab_bar = false;
-        }
-        // The right-hand tab list is resized from its left edge, inside the list.
-        if kind == "down"
-            && button == 0
-            && x >= right
-            && x < right + TAB_RESIZE_HANDLE_WIDTH.min(self.effective_tab_width())
-        {
-            self.resizing_tab_bar = true;
-            self.drag = None;
-            self.selecting = false;
-            return;
-        }
-        if x >= right {
-            let index = (y / 32.).max(0.) as usize + self.tab_scroll;
-            if index < self.tabs.len() {
-                if kind == "down" {
-                    if x > self.width - 28. || button == 1 {
-                        self.close(index);
-                    } else {
-                        self.active = index;
-                        self.drag = Some(index);
-                        if clicks >= 2 {
-                            // Editing owns the tab pointer until blur, so no drag remains pending.
-                            self.drag = None;
-                            self.rename = Some(self.tabs[index].id);
-                        }
-                    }
-                } else if kind == "up" {
-                    if let Some(from) = self.drag.take() {
-                        if from != index && from < self.tabs.len() {
-                            let tab = self.tabs.remove(from);
-                            self.tabs.insert(index, tab);
-                            self.active = index;
-                        }
-                    }
-                }
-            }
-            return;
-        }
-        if self.menu {
-            let index = ((y - 4.) / 28.).max(0.) as usize + self.menu_scroll;
-            if kind == "down" {
-                let actions = self.menu_actions();
-                if let Some((id, _)) = actions.get(index) {
-                    let id = id.clone();
-                    self.menu = false;
-                    self.command(&id, None, None);
-                }
-            }
+        if x >= self.tab_left() || self.menu {
             return;
         }
         let Some(tab) = self.tabs.get_mut(self.active) else {

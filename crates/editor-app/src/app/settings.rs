@@ -1,10 +1,8 @@
 //! Owns the settings navigation and the content shown by each category.
 
+use crate::ui::controls::DialogContent;
 use crate::*;
-use gpui_kit::{
-    AnyElement, App, Entity,
-    component::{dialog::DialogContent, scroll::ScrollableElement},
-};
+use gpui_kit::{AnyElement, App, Entity, component::scroll::ScrollableElement};
 
 /// Top-level settings categories shown in the navigation sidebar.
 #[derive(Clone, Copy, PartialEq, Eq)]

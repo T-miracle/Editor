@@ -32,6 +32,75 @@ editor.paste:
 editor.select_all:
   en: "Select All"
   zh-CN: "全选"
+explorer.copy:
+  en: "Copy"
+  zh-CN: "复制"
+explorer.paste:
+  en: "Paste"
+  zh-CN: "粘贴"
+explorer.new:
+  en: "New"
+  zh-CN: "新建"
+explorer.directory:
+  en: "Directory"
+  zh-CN: "目录"
+explorer.file:
+  en: "File"
+  zh-CN: "文件"
+explorer.new_directory:
+  en: "New directory"
+  zh-CN: "新建目录"
+explorer.new_file:
+  en: "New file"
+  zh-CN: "新建文件"
+explorer.rename:
+  en: "Rename"
+  zh-CN: "重命名"
+explorer.refresh:
+  en: "Refresh"
+  zh-CN: "刷新"
+explorer.confirm:
+  en: "Confirm"
+  zh-CN: "确定"
+explorer.cancel:
+  en: "Cancel"
+  zh-CN: "取消"
+explorer.copied:
+  en: "File copied to clipboard"
+  zh-CN: "文件已复制到剪贴板"
+explorer.close_before_rename:
+  en: "Close open files in this path before renaming"
+  zh-CN: "重命名前请关闭该路径下已打开的文件"
+explorer.invalid_name:
+  en: "Enter a valid file name"
+  zh-CN: "请输入有效的文件名"
+explorer.exists:
+  en: "A file or directory with this name already exists"
+  zh-CN: "文件或目录已存在"
+explorer.no_clipboard_files:
+  en: "The clipboard contains no files"
+  zh-CN: "剪贴板中没有文件"
+explorer.invalid_source:
+  en: "Invalid source file name"
+  zh-CN: "来源文件名无效"
+explorer.target_exists:
+  en: "Destination already exists: %{path}"
+  zh-CN: "目标已存在：%{path}"
+explorer.source_missing:
+  en: "Source does not exist: %{path}"
+  zh-CN: "来源不存在：%{path}"
+explorer.self_paste:
+  en: "Cannot paste a directory inside itself"
+  zh-CN: "无法将目录粘贴到其自身内部"
+explorer.symlink:
+  en: "Cannot copy symbolic link: %{path}"
+  zh-CN: "无法复制符号链接：%{path}"
+explorer.clipboard_failed:
+  en: "Could not copy file to clipboard"
+  zh-CN: "无法复制文件到剪贴板"
+explorer.clipboard_unsupported:
+  en: "File copy is not supported on this platform"
+  zh-CN: "当前平台暂不支持复制文件"
 status.ready:
   en: "Ready"
   zh-CN: "就绪"

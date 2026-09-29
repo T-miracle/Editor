@@ -3,6 +3,7 @@ mod editor;
 mod explorer;
 mod extensions;
 pub mod language;
+mod sdk_export;
 #[cfg(test)]
 mod tests;
 mod ui;
@@ -11,25 +12,24 @@ mod ui;
 rust_i18n::i18n!("locales", fallback = "en");
 
 use editor_core::{DocumentSession, Workspace};
+use gpui_base::dock::{DockArea, DockEvent, DockLayout, PanelEvent};
 use gpui_base::input::RopeExt as _;
+use gpui_base::input::{
+    EditorState, InputEvent, TabSize, TextDecoration, TextDecorationCollection,
+};
+use gpui_base::{TreeEvent, TreeItem, TreeState};
 use gpui_kit::{
     App, AppContext as _, Bounds, Context, Entity, EventEmitter, FocusHandle, Focusable,
     HighlightStyle, InteractiveElement as _, IntoElement, KeyBinding, Modifiers, MouseButton,
     MouseDownEvent, MouseUpEvent, ParentElement, Pixels, PlatformInput, Point, Render,
-    ScrollHandle, ScrollStrategy, ScrollWheelEvent, StatefulInteractiveElement, Styled,
-    Subscription, WeakEntity, Window, WindowBounds, WindowControlArea, WindowHandle, actions,
+    ScrollHandle, ScrollStrategy, ScrollWheelEvent, StatefulInteractiveElement, StyleRefinement,
+    Styled, Subscription, WeakEntity, Window, WindowBounds, WindowControlArea, WindowHandle,
+    actions,
     component::{
-        ActiveTheme, Icon, IconName, Root, Sizable, StyledExt, TitleBar,
-        button::{Button, ButtonVariants as _},
-        dock::{self as dock, DockArea, DockEvent, DockLayout, Panel as DockPanel, PanelEvent},
+        ActiveTheme, IconName, Root, StyledExt, TitleBar,
+        dock::{self as dock, Panel as DockPanel},
         h_flex,
-        input::{
-            Editor, EditorState, InputEvent, TabSize, TextDecoration, TextDecorationCollection,
-        },
-        list::ListItem,
-        status_bar::StatusBar,
-        tooltip::Tooltip,
-        tree::{TreeEvent, TreeItem, TreeState, tree},
+        input::Editor,
         v_flex,
     },
     div, point,
@@ -56,7 +56,9 @@ use app::plugins::{PluginLoadEntry, PluginPopupKind};
 use app::session as session_state;
 use app::{EditorDockPanel, EditorDockPanelKind};
 use assets::AppAssets;
+use explorer::menu::ExplorerMenu;
 use explorer::tree as explorer_tree;
+use explorer::{ExplorerEdit, ExplorerEditKind};
 use explorer_tree::{find_tree_item, restore_expanded, tree_items};
 use icons::file_icon;
 use language::navigation as language_navigation;
@@ -66,6 +68,7 @@ use session_state::SessionState;
 #[cfg(test)]
 use theme::builtin_theme;
 use theme::{apply_theme, component_styles};
+use ui::controls::{Button, Icon, StatusBar, Tooltip};
 use ui::{assets, icons, theme, typography};
 
 const EXPLORER_INITIAL_WIDTH: f32 = 280.;
@@ -124,6 +127,9 @@ struct EditorApp {
     /// Remembers the selected settings category while the dialog is reopened.
     settings_section: app::SettingsSection,
     hovered_tree_entry: Option<String>,
+    /// Temporary name field for create and rename commands in the explorer.
+    explorer_edit: Option<ExplorerEdit>,
+    explorer_menu: Option<ExplorerMenu>,
     tabs: Vec<OpenTab>,
     active_path: Option<PathBuf>,
     status: String,
@@ -306,6 +312,8 @@ impl EditorApp {
             _dialog_closed_subscription: None,
             settings_section: app::SettingsSection::AppearanceAndBehavior,
             hovered_tree_entry: None,
+            explorer_edit: None,
+            explorer_menu: None,
             tabs: Vec::new(),
             active_path: None,
             status: t!("status.ready").to_string(),
@@ -581,6 +589,10 @@ fn resolve_startup_target() -> anyhow::Result<(Workspace, Option<PathBuf>)> {
 }
 
 fn main() -> anyhow::Result<()> {
+    if let Some(target) = sdk_export::requested_target()? {
+        sdk_export::export(&target)?;
+        return Ok(());
+    }
     // Use Simplified Chinese by default while keeping locale changes centralized.
     rust_i18n::set_locale("zh-CN");
 

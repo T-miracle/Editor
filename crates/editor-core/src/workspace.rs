@@ -47,6 +47,18 @@ impl Workspace {
     }
 
     pub fn files(&self) -> Vec<WorkspaceFile> {
+        self.scan(false)
+    }
+
+    /// Directories are scanned separately so empty folders remain visible in the explorer.
+    pub fn directories(&self) -> Vec<PathBuf> {
+        self.scan(true)
+            .into_iter()
+            .map(|entry| entry.absolute_path)
+            .collect()
+    }
+
+    fn scan(&self, directories: bool) -> Vec<WorkspaceFile> {
         let mut walker = WalkBuilder::new(&self.root);
         walker
             .hidden(false)
@@ -61,7 +73,15 @@ impl Workspace {
         let mut files = walker
             .build()
             .filter_map(Result::ok)
-            .filter(|entry| entry.file_type().is_some_and(|kind| kind.is_file()))
+            .filter(|entry| {
+                entry.file_type().is_some_and(|kind| {
+                    if directories {
+                        kind.is_dir()
+                    } else {
+                        kind.is_file()
+                    }
+                })
+            })
             .filter_map(|entry| {
                 let absolute_path = entry.into_path();
                 let relative_path = absolute_path.strip_prefix(&self.root).ok()?.to_path_buf();
@@ -101,5 +121,17 @@ mod tests {
         assert!(names.contains(&PathBuf::from("visible.rs")));
         assert!(!names.contains(&PathBuf::from("ignored.txt")));
         assert!(!names.contains(&PathBuf::from("target/generated.rs")));
+    }
+
+    #[test]
+    fn scan_includes_empty_directories() {
+        let directory = tempfile::tempdir().unwrap();
+        std::fs::create_dir(directory.path().join("empty")).unwrap();
+        let workspace = Workspace::open(directory.path()).unwrap();
+        assert!(
+            workspace
+                .directories()
+                .contains(&workspace.root().join("empty"))
+        );
     }
 }

@@ -1,10 +1,10 @@
 # 终端 WebAssembly 插件
 
-终端的Alacritty 终端核心、屏幕网格、滚动历史、Tab、主题、Shell 配置和交互全部运行在 `plugins/terminal`。主程序只提供受控 PTY、编辑器操作和通用 GPUI 绘制接口。架构与包格式见 [运行时插件说明](../../docs/runtime-plugins.md)。
+0.5.0 使用清单 protocol 3：侧边 Tab 栏、菜单、重命名、滚动和拖动行为由主程序原生模块提供，菜单样式与资源管理器右键菜单共用。插件通过 `src/chrome.rs` 提交条目并处理类型化事件；Alacritty 核心、屏幕网格、滚动历史、会话状态和 Shell 配置仍由插件持有。需要使用支持 protocol 3 的新版编辑器。架构与包格式见 [运行时插件说明](../../docs/runtime-plugins.md)。
 
 ## 安装与更新
 
-本目录同时包含插件源码与打包清单：`src/` 为终端功能实现，`Cargo.toml` 为 WASM crate，`manifest.json` 为安装声明，终端核心使用目录内的 `vendor/alacritty_terminal`（上游 0.26.0 的 WASM 适配版），Shell 目录元数据使用 `vte`，许可文本随插件包分发。仅共享宿主协议引用仓库的 `crates/plugin-protocol`。Cargo 包名仍为 `terminal-guest`，已有构建命令不变。
+本目录同时包含插件源码与打包清单：`src/` 为终端功能实现，`Cargo.toml` 为 WASM crate，`manifest.json` 为安装声明，终端核心使用目录内的 `vendor/alacritty_terminal`（上游 0.26.0 的 WASM 适配版），Shell 目录元数据使用 `vte`，许可文本随插件包分发。编译时只依赖同级的 `sdk/`；它由已打包的主程序执行 `--export-plugin-sdk` 导出，插件不读取主程序源码。Cargo 包名仍为 `terminal-guest`。
 
 执行 `./scripts/build-plugins.ps1` 生成标准 ZIP 包 `dist/plugins/terminal.zip`。点击设置左侧的插件图标，在“插件管理”弹窗中选择该包，确认来源与权限。也可使用“查看随附插件”。安装后立即显示底部终端，无需重启编辑器。
 
@@ -57,23 +57,37 @@
 }
 ```
 
-JSON 不支持注释。`enabled` 控制是否允许新建会话，正式停用请使用插件管理；`default_profile` 从 0 开始；字号为 8–32，历史最多 100000 行。颜色使用 `#RRGGBB`，空值表示继承编辑器主题；`ansi` 可填 16 个颜色。`run_command` 仅在用户执行“运行项目”时运行。
+JSON 不支持注释。`enabled` 控制是否允许新建会话，正式停用请使用插件管理；`default_profile` 从 0 开始；字号为 8–32，历史最多 100000 行。颜色使用 `#RRGGBB`，`ansi` 可填 16 个颜色。`run_command` 仅在用户执行“运行项目”时运行。字体和颜色设置作为插件备用值；当前编辑器主题提供同名属性时，主题优先。
 
-终端插件内置与 Editor 浅色、深色代码区域相配的两套配色，随编辑器主题模式切换。默认文字和背景取编辑器主题本身的颜色；终端命名色、弱化色及光标使用插件内的可读性配色。优先级是用户 `settings.json` 中的颜色、编辑器主题的插件颜色、插件内置颜色。若用户配置了固定的 `theme.background`、`theme.foreground`、`theme.cursor` 或 `theme.ansi`，这些值会覆盖后续主题切换；改成 `null` 即恢复跟随主题。
+终端插件内置与 Editor 浅色、深色代码区域相配的两套配色，随编辑器主题模式切换。编辑器内置的浅色、深色主题也各自声明完整的 16 色 ANSI 覆盖。当前主题的 `plugins["me.terminal"]` 颜色优先；未声明的 ANSI 色依次取插件私有配置和插件内置配色。默认文字、背景、光标与选区优先取当前主题的专属颜色或通用颜色。当前主题的字体角色优先于插件私有字体设置。
 
-编辑器主题 JSON 的每个 `themes[]` 项可写入 `plugin_colors`，按浅色和深色分别覆盖终端颜色，例如：
+**外部主题对接接口：**安装并启用的编辑器主题包与内置主题使用同一套 `themes[].plugins` 契约。宿主自动把当前主题的通用颜色、字体及插件专属样式放入 `Environment`，切换主题或更新主题包时发送 `Event::Theme`；终端收到后立即重算样式，无需主题包直接调用终端插件。主题包可按浅色和深色分别覆盖终端颜色与字体，例如：
 
 ```json
-"plugin_colors": {
-  "me.terminal.ansi.yellow": "#795100",
-  "me.terminal.ansi.dim_red": "#9D4A43",
-  "me.terminal.selection": "#D4E2FF"
+"plugins": {
+  "me.terminal": {
+    "typography": {
+      "content": { "family": "Cascadia Mono", "size_px": 15 },
+      "tab": { "family": "Segoe UI", "size_px": 14, "bold": true },
+      "menu": { "family": "Segoe UI", "size_px": 14 },
+      "error": { "family": "Segoe UI", "size_px": 13 }
+    },
+    "ansi": {
+      "yellow": "#795100",
+      "dim_red": "#9D4A43"
+    },
+    "selection": "#D4E2FF",
+    "ui": {
+      "tab_bar": { "background": "#F7F8FA" },
+      "menu": { "background": "#FFFFFF" }
+    }
+  }
 }
 ```
 
-可覆盖的终端文字类型与主题键如下；每个键都是独立的 `#RRGGBB` 值，省略时继承插件或编辑器默认值。
+终端只读取 `plugins["me.terminal"]` 下的配置。外部主题未声明的 ANSI 键继续使用插件私有配置或内置配色，不继承内置编辑器主题的 ANSI 覆盖；通用背景、文字等颜色仍取当前外部主题。`typography` 的 `content`、`tab`、`menu`、`error` 分别控制终端内容、标签、菜单和错误文字；各角色未声明的字体属性继承主题的 `typography.mono` 或 `typography.ui`。可覆盖的终端文字类型与主题键如下；每个键都是独立的 `#RRGGBB` 值，省略时继承插件或编辑器默认值。
 
-| 终端内容 | `me.terminal.` 后的主题键 |
+| 终端内容 | `plugins["me.terminal"]` 下的主题键 |
 | --- | --- |
 | 默认文字、背景、光标、光标内文字、选区背景 | `foreground`、`background`、`cursor`、`cursor_text`、`selection` |
 | ANSI 标准文字 0–7 | `ansi.black`、`ansi.red`、`ansi.green`、`ansi.yellow`、`ansi.blue`、`ansi.magenta`、`ansi.cyan`、`ansi.white` |
@@ -82,13 +96,28 @@ JSON 不支持注释。`enabled` 控制是否允许新建会话，正式停用�
 | 加粗、弱化的默认文字 | `bright_foreground`、`dim_foreground` |
 | 256 色索引 16–255 | `indexed.16` 至 `indexed.255`，可只覆盖需要调整的索引 |
 
+终端自行绘制的界面也可在 `plugins["me.terminal"].ui` 下逐项覆盖，省略时沿用当前编辑器通用颜色或终端默认色：
+
+| 终端界面 | `ui` 下的主题键 |
+| --- | --- |
+| 标签栏底色、外侧分隔线 | `tab_bar.background`、`tab_bar.border` |
+| 标签行分隔线 | `tab.border` |
+| 选中标签底色、文字 | `tab.active.background`、`tab.active.foreground` |
+| 未选中标签底色、文字 | `tab.inactive.background`、`tab.inactive.foreground` |
+| 关闭按钮底色、文字 | `tab.close.background`、`tab.close.foreground` |
+| 标签重命名输入框底色、文字 | `tab.rename.background`、`tab.rename.foreground` |
+| 终端菜单底色、文字 | `menu.background`、`menu.foreground` |
+| 错误提示文字 | `error.foreground` |
+
+终端所在 Dock 的标题栏、切换按钮和滚动条由编辑器绘制，外部主题通过通用 `colors` 与 `components` 中的 `dock-title-bar`、`dock-tab`、`panel-toggle`、`scrollbar` 等项控制。标签重命名输入框由宿主提供原生编辑能力，终端将 `tab` 字体及 `tab.rename.*` 颜色交给宿主绘制。
+
 ANSI 颜色 0–15 同时可用于前景或背景；加粗、弱化属性将标准前景文字映射到对应的高亮色或弱化色。未覆盖的 256 色索引仍按标准色盘计算。应用自行指定的 RGB 真彩色保持原值，Shell 通过 OSC 动态设定的颜色优先于主题。其他界面文字和边框继续使用编辑器提供的通用主题颜色。
 
 历史还受快照总容量限制，超额时舍弃最旧输出。旧输出以带颜色的显示内容保存，不包含可自动执行的 Shell 命令。卸载时可选择保留或删除会话和配置。
 
 ## 验证范围
 
-`cargo test -p terminal-guest --lib` 验证输入编码、Tab 与快照、目录追踪、边框和滚动。`cargo test -p editor-app extensions::tests` 验证动态停靠、中文输入与原生编辑提交。实际 ZIP 包 + ConPTY 测试为 `cargo run -p plugin-runtime --example smoke -- dist/plugins/terminal.zip`。
+`cargo test --manifest-path plugins/terminal/Cargo.toml --lib` 验证输入编码、Tab 与快照、目录追踪、边框和滚动。`cargo test -p editor-app extensions::tests` 验证动态停靠、中文输入与原生编辑提交。实际 ZIP 包 + ConPTY 测试为 `cargo run -p plugin-runtime --example smoke -- dist/plugins/terminal.zip`。
 
 Windows 已进行实际运行验证。图片协议、kitty 扩展键盘协议和 Shell 命令检测不在此版本内；没有逐一验证所有第三方 TUI。OSC 52 剪贴板访问不启用，复制粘贴由用户操作触发。
 
@@ -99,6 +128,6 @@ Windows 已进行实际运行验证。图片协议、kitty 扩展键盘协议和
 
 0.4.2 将用户提供的终端 SVG 用于面板标题和底部切换按钮；浅色主题显示黑色图形，深色主题显示白色图形。更新已安装的插件时，选择新生成的 `terminal.zip`。
 
-0.4.9 为终端加入匹配 Editor 的浅色、深色命名色与弱化色，并支持编辑器主题按 `plugin_colors` 键逐项覆盖。
+0.4.9 为终端加入匹配 Editor 的浅色、深色命名色与弱化色，并支持编辑器主题逐项覆盖。
 
 0.4.10 默认使用竖线光标，并限制本地选区只从有文字的行内开始，不再高亮空白网格。

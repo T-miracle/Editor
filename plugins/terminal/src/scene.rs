@@ -1,7 +1,7 @@
 //! Translate emulator cells into generic native drawing operations.
 use super::*;
 use crate::emulator::Color;
-use unicode_width::UnicodeWidthChar;
+
 /// Alacritty allocates history only when real rows leave the screen.
 pub(super) fn visible_history(tab: &Tab) -> usize {
     tab.term.history()
@@ -10,31 +10,17 @@ impl Terminal {
     /// The host receives only drawing primitives and generic editable widget descriptions.
     pub(super) fn scene(&self) -> Scene {
         let bg = self.color(257);
-        let fg = self.color(256);
+        let content_style = self.text_style("content", true);
+        let error_style = self.text_style("error", false);
+        let content_size = content_style.size_px.unwrap();
         let right = self.tab_left();
-        let tab_width = self.effective_tab_width();
         let mut scene = Scene {
             panel: "terminal".into(),
-            font: self.settings.font_family.clone(),
-            font_size: self.settings.font_size,
+            font: content_style.family.clone().unwrap(),
+            font_size: content_size,
+            chrome: Some(self.native_chrome()),
             ..Scene::default()
         };
-        // During a drag the resize cursor follows the pointer across the panel.
-        scene.column_resize_regions.push(if self.resizing_tab_bar {
-            Rect {
-                x: 0.,
-                y: 0.,
-                w: self.width,
-                h: self.height,
-            }
-        } else {
-            Rect {
-                x: right,
-                y: 0.,
-                w: TAB_RESIZE_HANDLE_WIDTH.min(tab_width),
-                h: self.height,
-            }
-        });
         fill_to_bottom(
             &mut scene,
             Rect {
@@ -44,115 +30,6 @@ impl Terminal {
                 h: self.height,
             },
             bg,
-        );
-        fill_to_bottom(
-            &mut scene,
-            Rect {
-                x: right,
-                y: 0.,
-                w: tab_width,
-                h: self.height,
-            },
-            self.env.muted,
-        );
-        for (i, tab) in self.tabs.iter().enumerate().skip(self.tab_scroll) {
-            let y = (i - self.tab_scroll) as f32 * 32.;
-            if y >= self.height {
-                break;
-            }
-            if i == self.active {
-                fill(
-                    &mut scene,
-                    Rect {
-                        x: right,
-                        y,
-                        w: tab_width,
-                        h: 32.,
-                    },
-                    bg,
-                );
-            } else {
-                fill(
-                    &mut scene,
-                    Rect {
-                        x: right,
-                        y,
-                        w: 1.,
-                        h: 32.,
-                    },
-                    self.env.border,
-                );
-            }
-            if self.rename != Some(tab.id) {
-                let label = format!("{}{}", tab.name, if tab.exited { " · 已退出" } else { "" });
-                // Reserve the close-button area and shorten only the painted label.
-                let label_cell_width = (self.cw * 14. / self.settings.font_size).max(1.);
-                let label_cells = ((tab_width - 38.) / label_cell_width).floor().max(0.) as usize;
-                text(
-                    &mut scene,
-                    right + 8.,
-                    y + 5.,
-                    tab_display_name(&label, label_cells),
-                    fg,
-                    14.,
-                    false,
-                );
-                // Hide the close target while the native input owns the whole tab.
-                fill(
-                    &mut scene,
-                    Rect {
-                        x: self.width - 30.,
-                        y,
-                        w: 30.,
-                        h: 31.,
-                    },
-                    if i == self.active { bg } else { self.env.muted },
-                );
-                text(
-                    &mut scene,
-                    self.width - 22.,
-                    y + 5.,
-                    "×".into(),
-                    fg,
-                    14.,
-                    false,
-                );
-            }
-            fill(
-                &mut scene,
-                Rect {
-                    x: right,
-                    y: y + 31.,
-                    w: tab_width,
-                    h: 1.,
-                },
-                self.env.border,
-            );
-            if self.rename == Some(tab.id) {
-                scene.widgets.push(Widget {
-                    id: format!("rename:{}", tab.id),
-                    // Native editing replaces the entire tab until focus leaves the input.
-                    rect: Rect {
-                        x: right,
-                        y,
-                        w: tab_width,
-                        h: 32.,
-                    },
-                    label: tab.name.clone(),
-                    edit: true,
-                });
-            }
-        }
-        let below = self.tabs.len().saturating_sub(self.tab_scroll) as f32 * 32.;
-        fill_to_bottom(
-            &mut scene,
-            Rect {
-                x: right,
-                y: below,
-                w: 1.,
-                h: (self.height - below).max(0.),
-            },
-            self.env.border,
         );
         if let Some(tab) = self.tabs.get(self.active) {
             let screen = tab.term.screen();
@@ -200,8 +77,9 @@ impl Terminal {
                             y,
                             cell.contents(),
                             foreground,
-                            self.settings.font_size,
-                            cell.bold(),
+                            content_size,
+                            cell.bold() || content_style.bold.unwrap_or(false),
+                            None,
                         );
                     }
                     if cell.underline() {
@@ -253,8 +131,9 @@ impl Terminal {
                             y,
                             cell.contents(),
                             self.cursor_text_color(),
-                            self.settings.font_size,
-                            cell.bold(),
+                            content_size,
+                            cell.bold() || content_style.bold.unwrap_or(false),
+                            None,
                         );
                     }
                 }
@@ -275,42 +154,16 @@ impl Terminal {
                 });
             }
         }
-        if self.menu {
-            let actions = self.menu_actions();
-            fill(
-                &mut scene,
-                Rect {
-                    x: 0.,
-                    y: 0.,
-                    w: 230.,
-                    h: actions.len() as f32 * 28. + 8.,
-                },
-                self.env.muted,
-            );
-            for (i, (_, label)) in actions.iter().skip(self.menu_scroll).enumerate() {
-                if i as f32 * 28. >= self.height {
-                    break;
-                }
-                text(
-                    &mut scene,
-                    8.,
-                    4. + i as f32 * 28.,
-                    label.clone(),
-                    fg,
-                    14.,
-                    false,
-                );
-            }
-        }
         if let Some(error) = &self.error {
             text(
                 &mut scene,
                 8.,
                 (self.height - 24.).max(0.),
                 error.chars().take(120).collect(),
-                self.color(1),
-                13.,
-                false,
+                self.ui_color("error.foreground", self.color(1)),
+                error_style.size_px.unwrap(),
+                error_style.bold.unwrap_or(false),
+                error_style.family.clone(),
             );
         }
         scene
@@ -333,28 +186,6 @@ impl Terminal {
             .unwrap_or_else(|| self.color(index))
     }
 }
-/// Fit a tab label by Unicode display cells, retaining the full name for editing.
-fn tab_display_name(label: &str, max_cells: usize) -> String {
-    let total: usize = label.chars().map(|c| c.width().unwrap_or(0)).sum();
-    if total <= max_cells {
-        return label.to_owned();
-    }
-    if max_cells == 0 {
-        return String::new();
-    }
-    let mut result = String::new();
-    let mut used = 0;
-    for ch in label.chars() {
-        let width = ch.width().unwrap_or(0);
-        if used + width >= max_cells {
-            break;
-        }
-        result.push(ch);
-        used += width;
-    }
-    result.push('…');
-    result
-}
 fn fill(scene: &mut Scene, rect: Rect, color: u32) {
     scene.paint.push(Paint::Fill {
         rect,
@@ -370,7 +201,16 @@ fn fill_to_bottom(scene: &mut Scene, rect: Rect, color: u32) {
         extend_to_bottom: true,
     });
 }
-fn text(scene: &mut Scene, x: f32, y: f32, text: String, color: u32, size: f32, bold: bool) {
+fn text(
+    scene: &mut Scene,
+    x: f32,
+    y: f32,
+    text: String,
+    color: u32,
+    size: f32,
+    bold: bool,
+    font: Option<String>,
+) {
     scene.paint.push(Paint::Text {
         x,
         y,
@@ -378,6 +218,7 @@ fn text(scene: &mut Scene, x: f32, y: f32, text: String, color: u32, size: f32, 
         color,
         size,
         bold,
+        font,
     });
 }
 

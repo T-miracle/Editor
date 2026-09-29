@@ -1,5 +1,8 @@
 /target/
+/plugins/terminal/target/
+/plugins/example/target/
 /dist/
+/plugins/sdk/
 /.idea/
 /.vscode/
 *.log

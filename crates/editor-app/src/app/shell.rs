@@ -282,6 +282,9 @@ impl Render for EditorApp {
                     if this.plugin_popup.take().is_some() {
                         cx.notify();
                     }
+                    if this.explorer_menu.take().is_some() {
+                        cx.notify();
+                    }
                 }),
             )
             .on_key_down(
@@ -379,6 +382,7 @@ impl Render for EditorApp {
                     .child(
                         StatusBar::new()
                             .left(self.render_panel_buttons(cx))
+                            .left(div().max_w(px(320.)).truncate().child(self.status.clone()))
                             // Keep plugin indicators immediately before the cursor position.
                             .when(self.plugin_count(PluginPopupKind::Loading, cx) > 0, |bar| {
                                 bar.right(
@@ -401,6 +405,8 @@ impl Render for EditorApp {
                     ),
             )
             .child(self.render_plugin_popup(window, cx))
+            .child(self.render_explorer_menu(window, cx))
+            .child(self.render_explorer_edit(cx))
             .when_some(self.definition_notice, |this, notice| {
                 let left = px((notice.position.x / px(1.) - 28.).max(4.));
                 let top = px((notice.position.y / px(1.) - 38.).max(4.));

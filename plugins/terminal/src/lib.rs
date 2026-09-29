@@ -1,4 +1,5 @@
 //! Terminal application: VT parsing, layout, profiles and interaction live in this guest.
+mod chrome;
 mod config;
 mod emulator;
 mod input;
@@ -12,7 +13,7 @@ use config::{Profile, Settings};
 use plugin_protocol::*;
 use serde::{Deserialize, Serialize};
 use std::{cell::RefCell, collections::BTreeMap};
-wit_bindgen::generate!({ path: "../../crates/plugin-protocol/wit", world: "plugin" });
+wit_bindgen::generate!({ path: "../sdk/wit", world: "plugin" });
 struct TerminalPlugin;
 thread_local! { static APP: RefCell<Option<Terminal>> = const { RefCell::new(None) }; }
 // Keep the terminal usable while allowing a wider session list for long names.
@@ -20,8 +21,6 @@ const DEFAULT_TAB_WIDTH: f32 = 180.;
 const MIN_TAB_WIDTH: f32 = 112.;
 const MAX_TAB_WIDTH: f32 = 480.;
 const MIN_CONTENT_WIDTH: f32 = 80.;
-// The resize target belongs to the tab bar, immediately inside its left edge.
-const TAB_RESIZE_HANDLE_WIDTH: f32 = 8.;
 
 /// Older snapshots did not store the width of the terminal's tab list.
 fn default_tab_width() -> f32 {
@@ -125,13 +124,11 @@ struct Terminal {
     cw: f32,
     ch: f32,
     menu: bool,
-    tab_scroll: usize,
-    menu_scroll: usize,
+    menu_position: (f32, f32),
     rename: Option<u64>,
+    ui_revision: u64,
     selecting: bool,
     error: Option<String>,
-    drag: Option<usize>,
-    resizing_tab_bar: bool,
 }
 impl Terminal {
     /// Validate and migrate saved data without acquiring any OS resources.
@@ -174,13 +171,11 @@ impl Terminal {
             cw: 8.4,
             ch: 21.,
             menu: false,
-            tab_scroll: 0,
-            menu_scroll: 0,
+            menu_position: (0., 0.),
             rename: None,
+            ui_revision: 0,
             selecting: false,
             error: None,
-            drag: None,
-            resizing_tab_bar: false,
         };
         if let Some(snapshot) = snapshot {
             if snapshot.schema != 1 {
@@ -309,9 +304,6 @@ impl Terminal {
         self.next_id += 1;
         self.restore_tab(saved);
         self.active = self.tabs.len() - 1;
-        self.tab_scroll = self
-            .active
-            .saturating_sub((self.height / 32.).floor().max(1.) as usize - 1);
         self.spawn(self.active);
         self.menu = false;
     }
@@ -348,11 +340,16 @@ impl Terminal {
     }
     fn close(&mut self, index: usize) {
         if index < self.tabs.len() {
+            let active_id = self.tabs.get(self.active).map(|tab| tab.id);
             let tab = self.tabs.remove(index);
             if let Some(handle) = tab.handle {
                 let _ = host(Request::Close { handle });
             }
-            self.active = self.active.min(self.tabs.len().saturating_sub(1));
+            self.active = self
+                .tabs
+                .iter()
+                .position(|tab| Some(tab.id) == active_id)
+                .unwrap_or(index.min(self.tabs.len().saturating_sub(1)));
         }
     }
     fn reply(&self) -> Reply {

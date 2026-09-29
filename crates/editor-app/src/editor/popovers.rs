@@ -2,9 +2,7 @@
 
 use crate::*;
 use gpui_base::input::{Enter, Escape, InputOverlayKind, MoveDown, MoveUp};
-use gpui_kit::{
-    AnyElement, BoxShadow, Hsla, StyleRefinement, StyledText, deferred, relative, rems, rgb,
-};
+use gpui_kit::{AnyElement, BoxShadow, Hsla, StyledText, deferred, relative, rgb};
 use lsp_types::{Documentation, HoverContents, MarkedString};
 
 /// Select the host renderer only while a popover needs styling unavailable upstream.
@@ -315,29 +313,8 @@ fn render_hover(
 }
 
 /// Match the editor font in markdown and fenced code without changing other UI text.
-fn markdown_view(
-    id: &'static str,
-    markdown: String,
-    cx: &App,
-) -> gpui_kit::component::text::TextView {
-    let font_size = typography::editor_font_size(cx);
-    let mut style = gpui_kit::component::text::TextViewStyle::default()
-        .paragraph_gap(rems(0.5))
-        .heading_font_size(|level, size| match level {
-            1..=3 => size,
-            4 => size * 0.9,
-            _ => size * 0.8,
-        })
-        .code_block(
-            StyleRefinement::default()
-                .bg(cx.theme().transparent)
-                .p_0()
-                .text_size(font_size),
-        );
-    style.heading_base_font_size = font_size;
-    gpui_kit::component::text::TextView::markdown(id, markdown)
-        .style(style)
-        .selectable(true)
+fn markdown_view(id: &'static str, markdown: String, cx: &App) -> gpui_base::TextView {
+    ui::controls::markdown_view(id, markdown, typography::editor_font_size(cx), cx)
 }
 
 /// Share the editor's border and contact shadow between both project popovers.

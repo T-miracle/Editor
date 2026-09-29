@@ -118,10 +118,87 @@ pub struct ThemeDefinition {
     pub mode: ThemeMode,
     pub colors: ThemeColors,
     #[serde(default)]
-    pub components: BTreeMap<ThemeComponent, ComponentStyles>,
-    /// Optional color tokens consumed by runtime plugins, keyed by plugin-owned names.
+    pub typography: ThemeTypography,
     #[serde(default)]
-    pub plugin_colors: BTreeMap<String, String>,
+    pub components: BTreeMap<ThemeComponent, ComponentStyles>,
+    /// Plugin-owned color trees, grouped by plugin ID and local role.
+    #[serde(default)]
+    pub plugins: BTreeMap<String, PluginTheme>,
+    /// Read older theme packages without keeping their flat layout in new files.
+    #[serde(default, rename = "plugin_colors", skip_serializing)]
+    pub legacy_plugin_colors: BTreeMap<String, String>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+#[serde(default, deny_unknown_fields)]
+pub struct ThemeTypography {
+    pub ui: PluginTextStyle,
+    pub mono: PluginTextStyle,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+#[serde(default, deny_unknown_fields)]
+pub struct PluginTextStyle {
+    pub family: Option<String>,
+    pub size_px: Option<f32>,
+    pub bold: Option<bool>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+pub struct PluginTheme {
+    #[serde(default)]
+    pub typography: BTreeMap<String, PluginTextStyle>,
+    #[serde(flatten)]
+    pub colors: BTreeMap<String, PluginThemeColor>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(untagged)]
+pub enum PluginThemeColor {
+    Color(String),
+    Group(BTreeMap<String, PluginThemeColor>),
+}
+
+impl ThemeDefinition {
+    /// Flatten the theme-file tree into the stable runtime plugin token API.
+    pub fn plugin_colors(&self) -> BTreeMap<String, String> {
+        let mut colors = self.legacy_plugin_colors.clone();
+        for (plugin, theme) in &self.plugins {
+            for (name, value) in &theme.colors {
+                flatten_plugin_color(&mut colors, format!("{plugin}.{name}"), value);
+            }
+        }
+        colors
+    }
+
+    pub fn plugin_text_styles(&self) -> BTreeMap<String, PluginTextStyle> {
+        self.plugins
+            .iter()
+            .flat_map(|(plugin, theme)| {
+                theme
+                    .typography
+                    .iter()
+                    .map(move |(role, style)| (format!("{plugin}.{role}"), style.clone()))
+            })
+            .collect()
+    }
+}
+
+fn flatten_plugin_color(
+    colors: &mut BTreeMap<String, String>,
+    path: String,
+    value: &PluginThemeColor,
+) {
+    match value {
+        PluginThemeColor::Color(color) => {
+            colors.insert(path, color.clone());
+        }
+        PluginThemeColor::Group(group) => {
+            for (name, value) in group {
+                flatten_plugin_color(colors, format!("{path}.{name}"), value);
+            }
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -140,6 +217,7 @@ pub enum ThemeComponent {
     ProjectBadge,
     ExplorerTree,
     ExplorerRow,
+    ExplorerMenu,
     EditorTabs,
     EditorTab,
     EditorTabClose,
@@ -223,6 +301,10 @@ pub enum ThemeFileError {
     EmptyThemeName(String),
     #[error("invalid color {1} at {0}; expected #RRGGBB")]
     InvalidColor(String, String),
+    #[error("invalid plugin color key at {0}")]
+    InvalidPluginColorKey(String),
+    #[error("invalid font style at {0}: {1}")]
+    InvalidFontStyle(String, String),
     #[error("invalid metric {1} at {0}; expected a finite value from 0 to 128 pixels")]
     InvalidMetric(String, f32),
     #[error("file icon JSON path is empty")]
@@ -440,17 +522,92 @@ fn validate_palette_colors(theme: &ThemeDefinition) -> Result<(), ThemeFileError
             }
         }
     }
-    // A theme may override plugin colors without giving the host plugin-specific rules.
-    colors.extend(
-        theme
-            .plugin_colors
-            .iter()
-            .map(|(key, value)| (format!("plugin_colors.{key}"), value.as_str())),
-    );
     for (path, value) in colors {
         if !is_hex_color(value) {
             return Err(ThemeFileError::InvalidColor(path, value.to_owned()));
         }
+    }
+    validate_text_style(&theme.typography.ui, "typography.ui")?;
+    validate_text_style(&theme.typography.mono, "typography.mono")?;
+    for (plugin, plugin_theme) in &theme.plugins {
+        if plugin.is_empty()
+            || !plugin.bytes().all(|byte| {
+                byte.is_ascii_lowercase() || byte.is_ascii_digit() || matches!(byte, b'.' | b'-')
+            })
+        {
+            return Err(ThemeFileError::InvalidPluginColorKey(format!(
+                "plugins.{plugin}"
+            )));
+        }
+        validate_plugin_color_keys(&plugin_theme.colors, &format!("plugins.{plugin}"))?;
+        for (role, style) in &plugin_theme.typography {
+            if !valid_plugin_role(role) {
+                return Err(ThemeFileError::InvalidFontStyle(
+                    format!("plugins.{plugin}.typography.{role}"),
+                    "invalid role name".into(),
+                ));
+            }
+            validate_text_style(style, &format!("plugins.{plugin}.typography.{role}"))?;
+        }
+    }
+    for (key, value) in &theme.legacy_plugin_colors {
+        if !is_hex_color(value) {
+            return Err(ThemeFileError::InvalidColor(
+                format!("plugin_colors.{key}"),
+                value.clone(),
+            ));
+        }
+    }
+    for (key, value) in theme.plugin_colors() {
+        if !is_hex_color(&value) {
+            return Err(ThemeFileError::InvalidColor(
+                format!("plugins.{key}"),
+                value,
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn validate_plugin_color_keys(
+    roles: &BTreeMap<String, PluginThemeColor>,
+    prefix: &str,
+) -> Result<(), ThemeFileError> {
+    for (name, value) in roles {
+        let path = format!("{prefix}.{name}");
+        if !valid_plugin_role(name) {
+            return Err(ThemeFileError::InvalidPluginColorKey(path));
+        }
+        if let PluginThemeColor::Group(group) = value {
+            validate_plugin_color_keys(group, &path)?;
+        }
+    }
+    Ok(())
+}
+
+fn valid_plugin_role(name: &str) -> bool {
+    !name.is_empty()
+        && name.bytes().all(|byte| {
+            byte.is_ascii_lowercase() || byte.is_ascii_digit() || matches!(byte, b'_' | b'-')
+        })
+}
+
+fn validate_text_style(style: &PluginTextStyle, path: &str) -> Result<(), ThemeFileError> {
+    if let Some(family) = &style.family
+        && (family.trim().is_empty() || family.len() > 128)
+    {
+        return Err(ThemeFileError::InvalidFontStyle(
+            format!("{path}.family"),
+            "family must contain 1 to 128 characters".into(),
+        ));
+    }
+    if let Some(size) = style.size_px
+        && (!size.is_finite() || !(8. ..=64.).contains(&size))
+    {
+        return Err(ThemeFileError::InvalidFontStyle(
+            format!("{path}.size_px"),
+            "size must be between 8 and 64 pixels".into(),
+        ));
     }
     Ok(())
 }
@@ -521,6 +678,7 @@ impl ThemeComponent {
             Self::ProjectBadge => "project-badge",
             Self::ExplorerTree => "explorer-tree",
             Self::ExplorerRow => "explorer-row",
+            Self::ExplorerMenu => "explorer-menu",
             Self::EditorTabs => "editor-tabs",
             Self::EditorTab => "editor-tab",
             Self::EditorTabClose => "editor-tab-close",
@@ -566,22 +724,111 @@ mod tests {
         assert_eq!(manifest.languages[0].tree_sitter_abi, 15);
     }
 
-    /// Theme files accept plugin-owned color tokens and reject malformed overrides.
+    /// Nested plugin colors flatten for the runtime and reject malformed overrides.
     #[test]
     fn validates_plugin_color_tokens() {
         let source = include_str!("../../editor-app/assets/themes/default.json");
         let mut file = ThemeFile::parse(source).unwrap();
-        file.themes[0]
-            .plugin_colors
-            .insert("me.terminal.ansi.yellow".into(), "#795100".into());
+        {
+            let PluginThemeColor::Group(ansi) = file.themes[0]
+                .plugins
+                .get_mut("me.terminal")
+                .unwrap()
+                .colors
+                .get_mut("ansi")
+                .unwrap()
+            else {
+                panic!("ANSI palette must be a group");
+            };
+            ansi.insert("yellow".into(), PluginThemeColor::Color("#795100".into()));
+        }
         file.validate().unwrap();
         file.themes[0]
-            .plugin_colors
-            .insert("me.terminal.ansi.yellow".into(), "yellow".into());
+            .legacy_plugin_colors
+            .insert("me.terminal.ansi.yellow".into(), "#123456".into());
+        assert_eq!(
+            file.themes[0].plugin_colors()["me.terminal.ansi.yellow"],
+            "#795100"
+        );
+        let PluginThemeColor::Group(ansi) = file.themes[0]
+            .plugins
+            .get_mut("me.terminal")
+            .unwrap()
+            .colors
+            .get_mut("ansi")
+            .unwrap()
+        else {
+            panic!("ANSI palette must be a group");
+        };
+        ansi.insert("yellow".into(), PluginThemeColor::Color("yellow".into()));
         assert!(matches!(
             file.validate(),
             Err(ThemeFileError::InvalidColor(path, _))
-                if path == "plugin_colors.me.terminal.ansi.yellow"
+                if path == "plugins.me.terminal.ansi.yellow"
+        ));
+    }
+
+    #[test]
+    fn legacy_flat_plugin_colors_remain_readable() {
+        let source = include_str!("../../editor-app/assets/themes/default.json");
+        let mut old_file: serde_json::Value = serde_json::from_str(source).unwrap();
+        old_file["themes"][0]
+            .as_object_mut()
+            .unwrap()
+            .remove("plugins");
+        old_file["themes"][0]["plugin_colors"] =
+            serde_json::json!({ "me.terminal.ansi.yellow": "#123456" });
+        let file = ThemeFile::parse(&old_file.to_string()).unwrap();
+        assert_eq!(
+            file.themes[0].plugin_colors()["me.terminal.ansi.yellow"],
+            "#123456"
+        );
+        assert!(
+            !serde_json::to_string(&file)
+                .unwrap()
+                .contains("plugin_colors")
+        );
+    }
+
+    #[test]
+    fn nested_plugin_keys_cannot_hide_flattened_paths() {
+        let source = include_str!("../../editor-app/assets/themes/default.json");
+        let mut file = ThemeFile::parse(source).unwrap();
+        file.themes[0]
+            .plugins
+            .get_mut("me.terminal")
+            .unwrap()
+            .colors
+            .insert("ansi.red".into(), PluginThemeColor::Color("#123456".into()));
+        assert!(matches!(
+            file.validate(),
+            Err(ThemeFileError::InvalidPluginColorKey(path))
+                if path == "plugins.me.terminal.ansi.red"
+        ));
+    }
+
+    #[test]
+    fn plugin_text_roles_flatten_and_validate() {
+        let source = include_str!("../../editor-app/assets/themes/default.json");
+        let mut file = ThemeFile::parse(source).unwrap();
+        assert_eq!(
+            file.themes[0].plugin_text_styles()["me.terminal.tab"]
+                .family
+                .as_deref(),
+            Some("Segoe UI")
+        );
+        file.themes[0]
+            .plugins
+            .get_mut("me.terminal")
+            .unwrap()
+            .typography
+            .get_mut("tab")
+            .unwrap()
+            .size_px = Some(0.);
+        assert!(matches!(
+            file.validate(),
+            Err(ThemeFileError::InvalidFontStyle(path, _))
+                if path == "plugins.me.terminal.typography.tab.size_px"
         ));
     }
 }

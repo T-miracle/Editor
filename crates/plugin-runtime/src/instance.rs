@@ -138,6 +138,23 @@ impl State {
 
 /// Untrusted geometry must not reach native layout/text code with NaNs or unbounded sizes.
 fn validate_scene(scene: &Scene) -> anyhow::Result<()> {
+    if let Some(chrome) = &scene.chrome {
+        anyhow::ensure!(
+            scene.ui.is_none() && scene.widgets.is_empty(),
+            "Canvas chrome cannot mix with Document or legacy widgets"
+        );
+        chrome.validate().map_err(anyhow::Error::msg)?;
+    }
+    if let Some(document) = &scene.ui {
+        anyhow::ensure!(
+            scene.paint.is_empty()
+                && scene.widgets.is_empty()
+                && scene.scroll.is_none()
+                && scene.column_resize_regions.is_empty(),
+            "A scene must choose either native UI or canvas"
+        );
+        return document.validate().map_err(anyhow::Error::msg);
+    }
     let coordinate = |v: f32| v.is_finite() && v.abs() <= 1_000_000.;
     let rect = |r: &Rect| {
         coordinate(r.x)
@@ -156,21 +173,39 @@ fn validate_scene(scene: &Scene) -> anyhow::Result<()> {
             match paint {
                 Paint::Fill { rect: r, .. } => rect(r),
                 Paint::Text {
-                    x, y, text, size, ..
+                    x,
+                    y,
+                    text,
+                    size,
+                    font,
+                    ..
                 } =>
                     coordinate(*x)
                         && coordinate(*y)
                         && (1. ..=128.).contains(size)
-                        && text.len() <= 65536,
+                        && text.len() <= 65536
+                        && font
+                            .as_ref()
+                            .is_none_or(|family| !family.trim().is_empty() && family.len() <= 256),
             },
             "Invalid paint operation"
         );
     }
     anyhow::ensure!(
-        scene
-            .widgets
-            .iter()
-            .all(|w| rect(&w.rect) && w.id.len() <= 256 && w.label.len() <= 65536),
+        scene.widgets.iter().all(|w| {
+            rect(&w.rect)
+                && w.id.len() <= 256
+                && w.label.len() <= 65536
+                && w.style
+                    .font
+                    .family
+                    .as_ref()
+                    .is_none_or(|family| !family.trim().is_empty() && family.len() <= 256)
+                && w.style
+                    .font
+                    .size_px
+                    .is_none_or(|size| (1. ..=128.).contains(&size))
+        }),
         "Invalid widget"
     );
     // Cursor hit areas come from untrusted guests and must stay bounded like widgets.
@@ -247,6 +282,24 @@ mod tests {
         scene.cursor.x = f32::NAN;
         assert!(validate_scene(&scene).is_err());
     }
+    /// A native tree needs no canvas font metrics, but cannot carry a second rendering model.
+    #[test]
+    fn native_scenes_validate_the_tree_and_reject_mixed_renderers() {
+        let mut scene = Scene {
+            ui: Some(ui::Document::new(ui::Node::button("run", "Run"))),
+            ..Default::default()
+        };
+        assert!(validate_scene(&scene).is_ok());
+        scene.paint.push(Paint::Fill {
+            rect: Rect::default(),
+            color: 0,
+            extend_to_bottom: false,
+        });
+        assert!(validate_scene(&scene).is_err());
+        scene.paint.clear();
+        scene.ui.as_mut().unwrap().version = 999;
+        assert!(validate_scene(&scene).is_err());
+    }
     /// Activation-time writes remain invisible on disk until the enclosing update commits.
     #[test]
     fn failed_initialization_cannot_modify_existing_settings() {
@@ -285,6 +338,7 @@ mod tests {
 
 /// One isolated plugin has its own Store, WASI table, resource handles and fuel budget.
 pub struct Instance {
+    protocol: u32,
     store: Store<State>,
     bindings: Plugin,
     pub scene: Option<std::sync::Arc<Scene>>,
@@ -340,6 +394,7 @@ impl Instance {
         store.set_fuel(100_000_000)?;
         let bindings = Plugin::instantiate(&mut store, &component, &linker)?;
         let mut instance = Self {
+            protocol: manifest.protocol,
             store,
             bindings,
             scene: None,
@@ -373,7 +428,16 @@ impl Instance {
             "Plugin reply quota exceeded"
         );
         let reply: Reply = serde_json::from_str(&result)?;
+        let mut panels = std::collections::BTreeSet::new();
         for scene in reply.scene.iter().chain(&reply.scenes) {
+            anyhow::ensure!(
+                scene.chrome.is_none() || self.protocol >= 3,
+                "Canvas chrome requires manifest protocol 3"
+            );
+            anyhow::ensure!(
+                scene.ui.is_none() || self.protocol >= 2,
+                "Native UI requires manifest protocol 2"
+            );
             anyhow::ensure!(
                 scene.paint.len() <= 200_000 && scene.widgets.len() <= 1024,
                 "Scene quota exceeded"
@@ -384,6 +448,13 @@ impl Instance {
                 "Undeclared panel: {}",
                 scene.panel
             );
+            anyhow::ensure!(
+                panels.insert(&scene.panel),
+                "Duplicate panel in plugin reply"
+            );
+        }
+        // Publish only after every surface validates, so one invalid tree cannot partly update UI.
+        for scene in reply.scene.iter().chain(&reply.scenes) {
             let scene = std::sync::Arc::new(scene.clone());
             self.scenes.insert(scene.panel.clone(), scene.clone());
             self.scene = Some(scene);

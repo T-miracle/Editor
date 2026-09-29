@@ -17,6 +17,38 @@
         "accent_hover": "#2f65ca",
         "accent_active": "#2554a8"
       },
+      "typography": {
+        "ui": { "family": "Segoe UI" },
+        "mono": { "family": "Cascadia Mono" }
+      },
+      "plugins": {
+        "me.terminal": {
+          "typography": {
+            "content": { "family": "Cascadia Mono", "size_px": 14 },
+            "tab": { "family": "Segoe UI", "size_px": 14 },
+            "menu": { "family": "Segoe UI", "size_px": 14 },
+            "error": { "family": "Segoe UI", "size_px": 13 }
+          },
+          "ansi": {
+            "black": "#1f2329",
+            "red": "#b42318",
+            "green": "#1a7f46",
+            "yellow": "#8a5a00",
+            "blue": "#175cd3",
+            "magenta": "#8250df",
+            "cyan": "#096d83",
+            "white": "#6c707e",
+            "bright_black": "#59616e",
+            "bright_red": "#c0322b",
+            "bright_green": "#167c42",
+            "bright_yellow": "#795100",
+            "bright_blue": "#1d64d8",
+            "bright_magenta": "#7a3ecc",
+            "bright_cyan": "#086e80",
+            "bright_white": "#1f2329"
+          }
+        }
+      },
       "components": {
         "app-shell": {
           "base": { "background": "#ffffff", "foreground": "#1f2329" }
@@ -33,6 +65,10 @@
         "explorer-row": {
           "hover": { "background": "#ebecf0" },
           "selected": { "background": "#d4e2ff", "border": "#3574f0" }
+        },
+        "explorer-menu": {
+          "base": { "background": "#f7f8fa", "foreground": "#1f2329", "border": "#d3d5db", "radius_px": 6, "font_size_px": 13, "padding_x_px": 6, "padding_y_px": 5 },
+          "hover": { "background": "#d4e2ff", "foreground": "#1f2329" }
         },
         "editor-tabs": {
           "base": { "background": "#f7f8fa", "border": "#d3d5db" },
@@ -90,6 +126,38 @@
         "accent_hover": "#4682fa",
         "accent_active": "#2f65ca"
       },
+      "typography": {
+        "ui": { "family": "Segoe UI" },
+        "mono": { "family": "Cascadia Mono" }
+      },
+      "plugins": {
+        "me.terminal": {
+          "typography": {
+            "content": { "family": "Cascadia Mono", "size_px": 14 },
+            "tab": { "family": "Segoe UI", "size_px": 14 },
+            "menu": { "family": "Segoe UI", "size_px": 14 },
+            "error": { "family": "Segoe UI", "size_px": 13 }
+          },
+          "ansi": {
+            "black": "#89919b",
+            "red": "#ff7673",
+            "green": "#82c991",
+            "yellow": "#d7ba7d",
+            "blue": "#7aa5f8",
+            "magenta": "#c9a7e8",
+            "cyan": "#71c6d7",
+            "white": "#dfe1e5",
+            "bright_black": "#a6a9b1",
+            "bright_red": "#ff8a87",
+            "bright_green": "#96d6a4",
+            "bright_yellow": "#e2c58d",
+            "bright_blue": "#92b7ff",
+            "bright_magenta": "#d8b7f0",
+            "bright_cyan": "#8fd3df",
+            "bright_white": "#f7f8fa"
+          }
+        }
+      },
       "components": {
         "app-shell": {
           "base": { "background": "#1e1f22", "foreground": "#dfe1e5" }
@@ -106,6 +174,10 @@
         "explorer-row": {
           "hover": { "background": "#393b40" },
           "selected": { "background": "#2e436e", "border": "#3574f0" }
+        },
+        "explorer-menu": {
+          "base": { "background": "#2b2d30", "foreground": "#dfe1e5", "border": "#43454a", "radius_px": 6, "font_size_px": 13, "padding_x_px": 6, "padding_y_px": 5 },
+          "hover": { "background": "#2e436e", "foreground": "#dfe1e5" }
         },
         "editor-tabs": {
           "base": { "background": "#2b2d30", "border": "#43454a" },

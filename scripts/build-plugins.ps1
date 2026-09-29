@@ -1,11 +1,33 @@
 # Build independent component packages; copy these beside the packaged editor executable.
-param([string]$Output = "$PSScriptRoot/../dist/plugins")
+param(
+    [string]$Output = "$PSScriptRoot/../dist/plugins",
+    [string]$SdkOutput = "$PSScriptRoot/../dist/sdk",
+    [string]$HostExe = ''
+)
 $ErrorActionPreference = 'Stop'
 $projectRoot = (Resolve-Path "$PSScriptRoot/..").Path
 Push-Location $projectRoot
 try {
-    cargo build -p terminal-guest -p example-guest --target wasm32-wasip2 --release
-    if ($LASTEXITCODE -ne 0) { throw 'WASM plugin build failed' }
+    if (-not $HostExe) {
+        cargo build -p editor-app --release
+        if ($LASTEXITCODE -ne 0) { throw 'Editor host build failed' }
+        $HostExe = Join-Path $projectRoot 'target/release/editor-app.exe'
+    }
+    $hostPath = (Resolve-Path -LiteralPath $HostExe).Path
+    & $hostPath --export-plugin-sdk (Join-Path $projectRoot 'plugins/sdk')
+    if ($LASTEXITCODE -ne 0) { throw 'Host SDK export failed' }
+    Remove-Item -LiteralPath (Join-Path $SdkOutput 'plugin-sdk.zip') -Force -ErrorAction SilentlyContinue
+    & $hostPath --export-plugin-sdk $SdkOutput
+    if ($LASTEXITCODE -ne 0) { throw 'Distribution SDK export failed' }
+
+    $previousTargetDir = $env:CARGO_TARGET_DIR
+    $env:CARGO_TARGET_DIR = Join-Path $projectRoot 'target'
+    try {
+        cargo build --manifest-path 'plugins/terminal/Cargo.toml' --target wasm32-wasip2 --release
+        if ($LASTEXITCODE -ne 0) { throw 'Terminal WASM build failed' }
+        cargo build --manifest-path 'plugins/example/Cargo.toml' --target wasm32-wasip2 --release
+        if ($LASTEXITCODE -ne 0) { throw 'Example WASM build failed' }
+    } finally { $env:CARGO_TARGET_DIR = $previousTargetDir }
     New-Item -ItemType Directory -Force $Output | Out-Null
     Add-Type -AssemblyName System.IO.Compression
     # Remove legacy package filenames, including the theme now built into the editor.

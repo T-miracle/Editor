@@ -1,0 +1,77 @@
+//! Single-line input appearance around gpui-base's shared editing state.
+
+use gpui_base::StyledExt as _;
+use gpui_base::input::{Input as BaseInput, InputState};
+use gpui_kit::component::ActiveTheme as _;
+use gpui_kit::{
+    App, Entity, InteractiveElement, IntoElement, ParentElement, RenderOnce, StyleRefinement,
+    Styled, Window, div, prelude::FluentBuilder as _, px,
+};
+
+#[derive(IntoElement)]
+pub(crate) struct Input {
+    state: Entity<InputState>,
+    style: StyleRefinement,
+    appearance: bool,
+    bordered: bool,
+    focus_bordered: bool,
+}
+
+impl Input {
+    pub(crate) fn new(state: &Entity<InputState>) -> Self {
+        Self {
+            state: state.clone(),
+            style: StyleRefinement::default(),
+            appearance: true,
+            bordered: true,
+            focus_bordered: true,
+        }
+    }
+
+    pub(crate) fn appearance(mut self, appearance: bool) -> Self {
+        self.appearance = appearance;
+        self
+    }
+
+    pub(crate) fn bordered(mut self, bordered: bool) -> Self {
+        self.bordered = bordered;
+        self
+    }
+
+    pub(crate) fn focus_bordered(mut self, focus_bordered: bool) -> Self {
+        self.focus_bordered = focus_bordered;
+        self
+    }
+}
+
+impl Styled for Input {
+    fn style(&mut self) -> &mut StyleRefinement {
+        &mut self.style
+    }
+}
+
+impl RenderOnce for Input {
+    fn render(self, _: &mut Window, cx: &mut App) -> impl IntoElement {
+        let palette = cx.theme();
+        div()
+            .w_full()
+            .min_h(px(28.))
+            .flex()
+            .items_center()
+            .text_color(palette.foreground)
+            .text_size(px(13.))
+            .when(self.appearance, |this| {
+                this.px_2()
+                    .rounded(palette.radius)
+                    .bg(palette.background)
+                    .when(self.bordered, |this| {
+                        this.border_1().border_color(palette.input)
+                    })
+            })
+            .when(self.focus_bordered && self.appearance, |this| {
+                this.in_focus(|style| style.border_color(palette.ring))
+            })
+            .child(BaseInput::new(&self.state))
+            .refine_style(&self.style)
+    }
+}

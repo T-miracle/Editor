@@ -23,6 +23,44 @@ fn main() -> anyhow::Result<()> {
     manager.install(&package, package.manifest.permissions.clone())?;
     let id = &package.manifest.id;
     assert_eq!(manager.live[id].process_count(), 1);
+    let chrome = manager.live[id]
+        .scene
+        .as_ref()
+        .unwrap()
+        .chrome
+        .as_ref()
+        .expect("terminal uses native chrome");
+    chrome.validate().unwrap();
+    let session = chrome.sidebar.as_ref().unwrap().items[0].id.clone();
+    manager.event(
+        id,
+        Event::Surface {
+            panel: "terminal".into(),
+            event: Box::new(Event::Ui(plugin_runtime::plugin_protocol::ui::UiEvent {
+                revision: chrome.revision,
+                node: "sessions".into(),
+                action: plugin_runtime::plugin_protocol::ui::Action::Rename {
+                    id: session,
+                    value: "Native UI smoke".into(),
+                },
+            })),
+        },
+    )?;
+    assert_eq!(
+        manager.live[id]
+            .scene
+            .as_ref()
+            .unwrap()
+            .chrome
+            .as_ref()
+            .unwrap()
+            .sidebar
+            .as_ref()
+            .unwrap()
+            .items[0]
+            .label,
+        "Native UI smoke"
+    );
     manager.event(
         id,
         Event::Text("Write-Output ('WASM_PLUGIN_'+'SMOKE')\r".into()),
@@ -117,7 +155,7 @@ fn main() -> anyhow::Result<()> {
     // A valid component can fail only at activation; the old package and its state must return.
     let mut files = example.files.clone();
     let mut manifest = example.manifest.clone();
-    manifest.version = "0.1.1".into();
+    manifest.version = "99.0.0".into();
     files.insert("manifest.json".into(), serde_json::to_vec(&manifest)?);
     files.insert("activation-policy.txt".into(), b"reject".to_vec());
     let mut archive = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
@@ -127,7 +165,10 @@ fn main() -> anyhow::Result<()> {
     }
     let failing = Package::from_bytes(&archive.finish()?.into_inner())?;
     assert!(manager.install(&failing, Default::default()).is_err());
-    assert_eq!(manager.installed["me.example"].manifest.version, "0.1.0");
+    assert_eq!(
+        manager.installed["me.example"].manifest.version,
+        example.manifest.version
+    );
     assert!(
         manager
             .live

@@ -1,5 +1,11 @@
 # 运行时插件平台
 
+## 原生界面协议
+
+终端插件 0.5.0 使用 `protocol = 3` 与 `Scene.chrome`：画布负责字符网格，主程序提供独立的侧边 Tab 栏和共享原生菜单。侧边栏支持滚动、重命名、关闭、排序和宽度调整；菜单及面板标题命令菜单使用资源管理器同款卡片/条目封装。条目以稳定 ID 回传操作，配色和字体实时取自主题。
+
+插件可声明 `protocol = 2`，使用 `plugin_protocol::ui::Document/Node` 返回行列布局和原生控件树，宿主通过 gpui-base 实现布局、输入、焦点、滚动和模态弹窗。协议、事件、主题角色与限制见 [插件原生界面协议](../crates/plugin-protocol/UI.md)。该文档及 Rust 接口随主程序的 `--export-plugin-sdk` 一起导出。protocol 1 的画布终端继续兼容；示例插件 0.2.0 演示新接口。
+
 编辑器提供通用安装接口。终端和示例插件通过 WebAssembly Component Model 执行；Rust 和 TOML 是由宿主管理生命周期的声明式资源包。亮色与深色基础主题内置于编辑器，首次启动默认使用亮色主题。终端核心使用插件目录内的 Alacritty 0.26.0 WASM 适配版，元数据解析使用上游 `vte`。语言插件包携带 Tree-sitter WASM grammar；其他主题插件仍可携带主题和图标资源，由宿主验证并注册。
 
 ## 构建与安装
@@ -7,11 +13,11 @@
 ```powershell
 # 只需在开发机器安装一次目标工具链。
 rustup target add wasm32-wasip2
-# 独立构建终端、示例及语言插件，不重新编译编辑器。
+# 先构建主程序并由它导出 SDK，再构建终端、示例及语言插件。
 ./scripts/build-plugins.ps1
-# 构建编辑器。
+# 只构建开发版编辑器。
 cargo build -p editor-app
-# 生成发行目录：editor-app.exe + plugins/*.zip。
+# 生成发行目录：editor-app.exe + sdk/ + plugins/*.zip。
 ./scripts/package-editor.ps1
 ```
 
@@ -31,20 +37,24 @@ Rust 和 TOML 插件安装后才提供对应文件的语法、图标及语言服
 
 | 位置 | 拥有的实现 |
 | --- | --- |
-| `crates/plugin-protocol` | 版本化 WIT 契约、权限名称、消息、通用界面描述及快照信封 |
+| `crates/plugin-protocol` | 主程序持有的版本化 WIT 契约、权限名称、消息、通用界面描述及快照信封 |
 | `crates/plugin-runtime` | Wasmtime 隔离、受控资源句柄、安装事务、快照存储和插件生命周期 |
 | `crates/editor-app/src/extensions` | 通用 GPUI 绘制、原生输入法、控件与滚动条、停靠注册、权限与管理界面 |
 | `plugins/terminal` | Shell 配置、项目运行、Tab 与命名、输入协议、选择、VT 解析、网格、历史、主题和状态迁移 |
 | `plugins/terminal/src/emulator.rs` | 对接插件内 Alacritty 核心的应用适配：选择复制、查询响应、颜色和快照 |
 | `plugins/example` | 不申请系统权限的计数器与笔记，用于验证宿主的通用性 |
 
+主程序把公开接口编入 `editor-app.exe`，打包后可执行 `editor-app.exe --export-plugin-sdk <目录>` 导出 SDK 文件。发行脚本先构建主程序，由已打包的可执行文件导出 `dist/editor/sdk/`，再编译插件。插件只读取导出的 WIT 和 Rust 消息类型，不引用 `crates/` 源码。独立插件项目将 `sdk/` 放在插件目录同级即可编译；安装包只包含编译后的 `.wasm`、清单和资源。运行时主程序实现 WIT 的 `host.request` 导入。
+
 主程序不识别终端命令、ANSI、光标模式、Shell 类型或终端 Tab。它绘制插件描述的矩形、文本及标准按钮/输入控件，并把原生事件连同面板 ID 发回插件。新增功能无需修改主程序中的枚举或终端专用槽位。
 
-主题通过通用环境传给插件：背景、文字、弱化文字、边框、强调色、选区、明暗模式，以及主题文件 `themes[].plugin_colors` 中的命名颜色。插件自行解释属于自己的键；宿主只验证颜色格式并在主题变化时发送新的环境。终端使用 `me.terminal.*` 命名空间，全部颜色键和优先级见[终端插件说明](../plugins/terminal/README.md)。
+主题通过通用 `Environment` 传给插件：背景、文字、弱化文字、边框、强调色、选区、明暗模式、UI/等宽字体，以及主题文件 `themes[].plugins` 中按插件 ID 分组的命名颜色和文字样式。插件用 `Environment::color(plugin_id, role)`、`Environment::font_style(plugin_id, role, monospace)` 读取本插件样式；宿主在主题变化时发送 `Event::Theme(Environment)`，插件应保存新环境并重新生成所有界面。主题包不需要直接调用插件。当前主题对同名颜色和字体属性的优先级高于插件私有配置。终端配置放在 `plugins["me.terminal"]`，全部角色和优先级见[终端插件说明](../plugins/terminal/README.md)。
+
+插件绘制的 `Paint::Text` 可逐项指定字体，`Scene` 提供默认字体；原生 `Widget` 的可选 `style` 包含字体、文字、背景以及悬停和按下背景。插件从当前环境解析这些值后随场景交给宿主，主题变化时重新发布场景。示例插件演示了 `me.example.body.foreground`、`me.example.control.*` 和 `me.example.typography.body`。旧插件未提供这些字段时继续使用宿主通用主题。
 
 ## 契约与权限
 
-WIT 世界为 `editor:plugin/plugin@0.1.0`，只有宿主 `request` 导入与插件 `dispatch` 导出。负载类型由 `plugin-protocol` 定义，清单 `protocol=1` 对应此版本。WASI 不继承宿主目录、环境变量、标准输入输出或网络权限。包内资源通过只读 `ReadAsset` 访问。
+WIT 世界为 `editor:plugin/plugin@0.1.0`，只有宿主 `request` 导入与插件 `dispatch` 导出。负载类型由 `plugin-protocol` 定义；清单 `protocol=1` 使用画布消息，`protocol=2` 在相同 WIT 传输上增加原生界面树与类型化 UI 事件。WASI 不继承宿主目录、环境变量、标准输入输出或网络权限。包内资源通过只读 `ReadAsset` 访问。
 
 | 能力 | 授权后允许 |
 | --- | --- |
@@ -79,7 +89,7 @@ WIT 世界为 `editor:plugin/plugin@0.1.0`，只有宿主 `request` 导入与插
 ```powershell
 # 核心行为与 GPUI 集成测试。
 cargo test -p plugin-runtime --lib
-cargo test -p terminal-guest --lib
+cargo test --manifest-path plugins/terminal/Cargo.toml --lib
 cargo test -p editor-app --bin editor-app
 # 必须先构建插件包，再测试实际组件与真实 Windows ConPTY。
 ./scripts/build-plugins.ps1

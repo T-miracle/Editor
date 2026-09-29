@@ -1,5 +1,6 @@
 //! Plugin-owned terminal palette, resolved from editor theme tokens and user settings.
 use super::Terminal;
+use plugin_protocol::FontStyle;
 
 /// ANSI names follow Alacritty/VTE indices 0..15, including the bright variants.
 const ANSI_NAMES: [&str; 16] = [
@@ -63,15 +64,31 @@ fn contrast(a: u32, b: u32) -> f32 {
 }
 
 impl Terminal {
-    /// Read only this plugin's color tokens from the editor's generic theme API.
-    fn theme_color(&self, name: &str) -> Option<u32> {
-        self.env
-            .theme_colors
-            .get(&format!("me.terminal.{name}"))
-            .copied()
+    /// Event::Theme replaces the environment; every painted text role resolves on demand.
+    pub(super) fn text_style(&self, role: &str, monospace: bool) -> FontStyle {
+        let style = self.env.font_style("me.terminal", role, monospace);
+        FontStyle {
+            family: Some(
+                style
+                    .family
+                    .unwrap_or_else(|| self.settings.font_family.clone()),
+            ),
+            size_px: Some(style.size_px.unwrap_or(self.settings.font_size)),
+            bold: style.bold,
+        }
     }
 
-    /// User settings win over theme tokens, then the plugin's light/dark defaults.
+    /// Read only this plugin's color tokens from the editor's generic theme API.
+    fn theme_color(&self, name: &str) -> Option<u32> {
+        self.env.color("me.terminal", name)
+    }
+
+    /// Let editor themes style plugin-owned chrome while preserving host colors as defaults.
+    pub(super) fn ui_color(&self, name: &str, fallback: u32) -> u32 {
+        self.theme_color(&format!("ui.{name}")).unwrap_or(fallback)
+    }
+
+    /// Active theme tokens win over user settings and plugin-owned defaults.
     pub(super) fn color(&self, index: usize) -> u32 {
         let ansi = if self.env.dark {
             &DARK_ANSI
@@ -79,15 +96,18 @@ impl Terminal {
             &LIGHT_ANSI
         };
         match index {
-            0..=15 => user_color(
-                self.settings
-                    .theme
-                    .ansi
-                    .as_ref()
-                    .map(|palette| palette[index].as_str()),
-            )
-            .or_else(|| self.theme_color(&format!("ansi.{}", ANSI_NAMES[index])))
-            .unwrap_or(ansi[index]),
+            0..=15 => self
+                .theme_color(&format!("ansi.{}", ANSI_NAMES[index]))
+                .or_else(|| {
+                    user_color(
+                        self.settings
+                            .theme
+                            .ansi
+                            .as_ref()
+                            .map(|palette| palette[index].as_str()),
+                    )
+                })
+                .unwrap_or(ansi[index]),
             16..=231 => {
                 let n = index - 16;
                 let c = |v| if v == 0 { 0 } else { 55 + 40 * v };
@@ -97,14 +117,20 @@ impl Terminal {
             232..=255 => self
                 .theme_color(&format!("indexed.{index}"))
                 .unwrap_or((8 + (index - 232) as u32 * 10) * 0x010101),
-            256 => user_color(self.settings.theme.foreground.as_deref())
-                .or_else(|| self.theme_color("foreground"))
+            256 => self
+                .theme_color("foreground")
+                .or_else(|| (self.env.foreground != 0).then_some(self.env.foreground))
+                .or_else(|| user_color(self.settings.theme.foreground.as_deref()))
                 .unwrap_or(self.env.foreground),
-            257 => user_color(self.settings.theme.background.as_deref())
-                .or_else(|| self.theme_color("background"))
+            257 => self
+                .theme_color("background")
+                .or_else(|| (self.env.background != 0).then_some(self.env.background))
+                .or_else(|| user_color(self.settings.theme.background.as_deref()))
                 .unwrap_or(self.env.background),
-            258 => user_color(self.settings.theme.cursor.as_deref())
-                .or_else(|| self.theme_color("cursor"))
+            258 => self
+                .theme_color("cursor")
+                .or_else(|| (self.env.accent != 0).then_some(self.env.accent))
+                .or_else(|| user_color(self.settings.theme.cursor.as_deref()))
                 .unwrap_or(if self.env.accent == 0 {
                     self.color(256)
                 } else {
@@ -134,8 +160,9 @@ impl Terminal {
 
     /// Selection may be customized independently from the editor's base selection.
     pub(super) fn selection_color(&self) -> u32 {
-        user_color(self.settings.theme.selection.as_deref())
-            .or_else(|| self.theme_color("selection"))
+        self.theme_color("selection")
+            .or_else(|| (self.env.selection != 0).then_some(self.env.selection))
+            .or_else(|| user_color(self.settings.theme.selection.as_deref()))
             .unwrap_or(self.env.selection)
     }
 

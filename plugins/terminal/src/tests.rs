@@ -74,10 +74,14 @@ fn restore_recreates_shells_but_never_replays_old_input() {
     assert_eq!(app.tabs[0].name, "powershell");
     assert_eq!(app.tabs[1].name, "powershell2");
     let id = app.tabs[1].id;
-    app.event(Event::Edit {
-        id: format!("rename:{id}"),
-        text: "构建任务".into(),
-    });
+    app.event(Event::Ui(ui::UiEvent {
+        revision: 0,
+        node: "sessions".into(),
+        action: ui::Action::Rename {
+            id: id.to_string(),
+            value: "构建任务".into(),
+        },
+    }));
     let handle = app.tabs[1].handle.unwrap();
     app.event(Event::ProcessOutput {
         handle,
@@ -106,14 +110,24 @@ fn restore_recreates_shells_but_never_replays_old_input() {
     }));
 }
 
-/// A selected right-side tab joins the grid; only inactive/filler edges are separated.
+/// Session controls belong to the native protocol; the guest paints only terminal content.
 #[test]
-fn selected_tab_has_no_left_separator() {
+fn terminal_delegates_tab_controls_to_native_chrome() {
     let app = app();
-    let right = app.width - 180.;
     let scene = app.scene();
-    assert!(!scene.paint.iter().any(|p|matches!(p,Paint::Fill{rect,color,..}if rect.x==right&&rect.y==0.&&rect.w==1.&&*color==app.env.border)));
-    assert!(scene.paint.iter().any(|p|matches!(p,Paint::Fill{rect,color,..}if rect.x==right&&rect.y==32.&&rect.w==1.&&*color==app.env.border)));
+    assert!(scene.widgets.is_empty());
+    assert!(scene.column_resize_regions.is_empty());
+    let chrome = scene.chrome.unwrap();
+    chrome.validate().unwrap();
+    let sidebar = chrome.sidebar.unwrap();
+    assert_eq!(sidebar.selected, Some(app.tabs[app.active].id.to_string()));
+    assert_eq!(sidebar.items[0].label, app.tabs[0].name);
+    assert!(
+        !scene
+            .paint
+            .iter()
+            .any(|p| matches!(p,Paint::Text{text,..} if text==&app.tabs[0].name))
+    );
 }
 
 /// Cwd metadata remains intact even when ConPTY splits an escape across reads.
@@ -221,7 +235,7 @@ fn sgr_text_uses_named_intensity_and_default_theme_colors() {
     }
 }
 
-/// Theme tokens cover every named color while user settings retain precedence.
+/// Theme tokens cover every named color and take precedence over private settings.
 #[test]
 fn editor_theme_can_override_every_terminal_palette_role() {
     let mut terminal = app();
@@ -290,8 +304,174 @@ fn editor_theme_can_override_every_terminal_palette_role() {
     assert_eq!(terminal.selection_color(), 0x334405);
     terminal.settings.theme.foreground = Some("#ABCDEF".into());
     terminal.settings.theme.ansi = Some(std::array::from_fn(|_| "#123456".into()));
-    assert_eq!(terminal.color(256), 0xabcdef);
-    assert_eq!(terminal.color(1), 0x123456);
+    assert_eq!(terminal.color(256), 0x334401);
+    assert_eq!(terminal.color(1), 0x112201);
+}
+
+#[test]
+fn live_theme_updates_terminal_text_styles() {
+    let mut terminal = app();
+    let handle = terminal.tabs[0].handle;
+    let mut environment = terminal.env.clone();
+    environment.ui_font = FontStyle {
+        family: Some("Theme UI".into()),
+        size_px: Some(15.),
+        bold: None,
+    };
+    environment.mono_font = FontStyle {
+        family: Some("Theme Mono".into()),
+        size_px: Some(17.),
+        bold: None,
+    };
+    environment.theme_text_styles.insert(
+        "me.terminal.tab".into(),
+        FontStyle {
+            family: Some("Theme Tab".into()),
+            size_px: Some(19.),
+            bold: Some(true),
+        },
+    );
+    terminal.event(Event::Theme(environment));
+    let scene = terminal.scene();
+    assert_eq!(scene.font, "Theme Mono");
+    assert_eq!(scene.font_size, 17.);
+    assert!(!scene.paint.iter().any(|paint| matches!(
+        paint,
+        Paint::Text { font: Some(family), size: 19., bold: true, .. } if family == "Theme Tab"
+    )));
+    terminal.rename = Some(terminal.tabs[0].id);
+    let sidebar = terminal.scene().chrome.unwrap().sidebar.unwrap();
+    assert_eq!(sidebar.rename, Some(terminal.tabs[0].id.to_string()));
+    assert_eq!(terminal.tabs[0].handle, handle);
+}
+
+/// Installed editor themes arrive through the same API and override only declared keys.
+#[test]
+fn partial_external_theme_keeps_plugin_ansi_fallbacks() {
+    let mut terminal = app();
+    let mut environment = terminal.env.clone();
+    environment.dark = true;
+    environment.background = 0x101820;
+    environment.foreground = 0xe0e8f0;
+    environment
+        .theme_colors
+        .insert("me.terminal.ansi.red".into(), 0xf08070);
+    terminal.event(Event::Theme(environment));
+
+    assert_eq!(terminal.color(1), 0xf08070);
+    assert_eq!(terminal.color(2), 0x82c991);
+    assert_eq!(terminal.color(256), 0xe0e8f0);
+    assert_eq!(terminal.color(257), 0x101820);
+
+    let mut next = terminal.env.clone();
+    next.theme_colors.clear();
+    terminal.event(Event::Theme(next));
+    assert_eq!(terminal.color(1), 0xff7673);
+}
+
+/// Native chrome colors stay in the host; canvas errors still use the guest theme API.
+#[test]
+fn external_theme_overrides_terminal_window_colors() {
+    let mut terminal = app();
+    let cwd = terminal.env.workspace.clone();
+    terminal.add(0, cwd);
+    terminal.menu = true;
+    terminal.error = Some("theme error".into());
+    let mut environment = terminal.env.clone();
+    environment.muted = 0xeeeeee;
+    let roles = [
+        "tab_bar.background",
+        "tab_bar.border",
+        "tab.border",
+        "tab.active.background",
+        "tab.active.foreground",
+        "tab.inactive.background",
+        "tab.inactive.foreground",
+        "tab.close.background",
+        "tab.close.foreground",
+        "menu.background",
+        "menu.foreground",
+        "error.foreground",
+    ];
+    for (index, role) in roles.iter().enumerate() {
+        environment
+            .theme_colors
+            .insert(format!("me.terminal.ui.{role}"), 0x123400 + index as u32);
+    }
+    terminal.event(Event::Theme(environment));
+    let scene = terminal.scene();
+    for (index, role) in roles.iter().enumerate() {
+        let expected = 0x123400 + index as u32;
+        assert_eq!(
+            scene.paint.iter().any(|paint| match paint {
+                Paint::Fill { color, .. } | Paint::Text { color, .. } => *color == expected,
+            }),
+            role == &"error.foreground",
+            "missing {role}"
+        );
+    }
+
+    let mut next = terminal.env.clone();
+    next.theme_colors.clear();
+    terminal.event(Event::Theme(next));
+    assert_eq!(
+        terminal.ui_color("tab_bar.background", terminal.env.muted),
+        0xeeeeee
+    );
+}
+
+#[test]
+fn native_sidebar_events_keep_session_identity_and_resize_pty() {
+    let mut terminal = app();
+    terminal.add(0, "C:/second".into());
+    let first = terminal.tabs[0].id.to_string();
+    let second = terminal.tabs[1].id.to_string();
+    let send = |terminal: &mut Terminal, action| {
+        terminal.event(Event::Ui(ui::UiEvent {
+            revision: 0,
+            node: "sessions".into(),
+            action,
+        }))
+    };
+    send(&mut terminal, ui::Action::Select(first.clone()));
+    assert_eq!(terminal.active, 0);
+    send(
+        &mut terminal,
+        ui::Action::Move {
+            from: first.clone(),
+            to: second.clone(),
+        },
+    );
+    assert_eq!(terminal.tabs[1].id.to_string(), first);
+    send(
+        &mut terminal,
+        ui::Action::Rename {
+            id: first.clone(),
+            value: "构建".into(),
+        },
+    );
+    assert_eq!(terminal.tabs[1].name, "构建");
+    let columns = terminal.tabs[1].term.screen().size().1;
+    send(&mut terminal, ui::Action::Resize(300.));
+    assert!(terminal.tabs[1].term.screen().size().1 < columns);
+    send(&mut terminal, ui::Action::Close(second));
+    assert_eq!(terminal.tabs[terminal.active].id.to_string(), first);
+    send(
+        &mut terminal,
+        ui::Action::Context {
+            id: first,
+            x: 12.,
+            y: 24.,
+        },
+    );
+    assert!(terminal.menu);
+    terminal.event(Event::Ui(ui::UiEvent {
+        revision: 0,
+        node: "terminal-menu".into(),
+        action: ui::Action::Dismiss,
+    }));
+    assert!(!terminal.menu);
+    terminal.scene().chrome.unwrap().validate().unwrap();
 }
 
 /// A live editor mode change recolors existing terminal cells without recreating the Shell.

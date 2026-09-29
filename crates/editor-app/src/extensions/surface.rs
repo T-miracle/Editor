@@ -1,14 +1,13 @@
 //! Generic scene painting, native IME, shared scrollbars and package management controls.
 use super::*;
-use gpui_base::{Disableable, Scrollbar, ScrollbarHandle, ScrollbarMode};
-use gpui_kit::component::IndexPath;
+use crate::ui::controls::ButtonCustomVariant;
+use crate::ui::controls::Checkbox;
+use crate::ui::controls::tab_strip;
+use crate::ui::controls::vertical_scrollbar;
+use gpui_base::{ScrollbarHandle, ScrollbarMode};
 use gpui_kit::component::WindowExt as _;
-use gpui_kit::component::checkbox::Checkbox;
 use gpui_kit::component::dialog::{DialogAction, DialogClose, DialogFooter};
 use gpui_kit::component::scroll::ScrollableElement;
-use gpui_kit::component::searchable_list::SearchableVec;
-use gpui_kit::component::select::{Select, SelectEvent, SelectState};
-use gpui_kit::component::tab::{Tab, TabBar};
 use gpui_kit::{
     ElementInputHandler, EntityInputHandler, FontWeight, TextRun, UTF16Selection, canvas, fill,
     font, rgb,
@@ -214,8 +213,9 @@ impl ExtensionPanel {
                     color,
                     size: font_size,
                     bold,
+                    font: text_font,
                 } => {
-                    let mut face = font(scene.font.clone());
+                    let mut face = font(text_font.as_ref().unwrap_or(&scene.font).clone());
                     if *bold {
                         face.weight = FontWeight::BOLD;
                     }
@@ -632,50 +632,6 @@ impl ExtensionPanel {
         };
         let selected_global =
             selected_entry.map(|entry| entry.global_enabled.unwrap_or(entry.enabled));
-        if self.manager_scope_for != selected_id || self.manager_scope_global != selected_global {
-            // The native select owns focus and its selected value for one detail target.
-            self.manager_scope = selected_global.map(|enabled| {
-                cx.new(|cx| {
-                    SelectState::new(
-                        SearchableVec::new(vec!["默认全局启动", "默认全局禁用"]),
-                        Some(IndexPath::new(usize::from(!enabled))),
-                        window,
-                        cx,
-                    )
-                })
-            });
-            self.manager_scope_subscription = self.manager_scope.as_ref().map(|scope| {
-                cx.subscribe(
-                    scope,
-                    |this, _, event: &SelectEvent<SearchableVec<&'static str>>, cx| {
-                        let SelectEvent::Confirm(Some(value)) = event else {
-                            return;
-                        };
-                        let Some(id) = this.manager_scope_for.clone() else {
-                            return;
-                        };
-                        // Selection applies immediately; it does not reuse the uninstall confirmation.
-                        let enable = match *value {
-                            "默认全局启动" => true,
-                            "默认全局禁用" => false,
-                            _ => return,
-                        };
-                        if this.manager_scope_global == Some(enable) {
-                            return;
-                        }
-                        this.manager_scope_global = None;
-                        this.queue_lifecycle(if enable {
-                            Work::Enable(id)
-                        } else {
-                            Work::Disable(id)
-                        });
-                        cx.notify();
-                    },
-                )
-            });
-            self.manager_scope_for = selected_id.clone();
-            self.manager_scope_global = selected_global;
-        }
         let mut list = v_flex().gap_1();
         for (id, name, version) in &choices {
             let row_id = id.clone();
@@ -727,27 +683,26 @@ impl ExtensionPanel {
                         div()
                             .id("plugin-manager-tab-strip")
                             .debug_selector(|| "plugin-manager-tab-strip".into())
-                            .child(
-                                TabBar::new("plugin-manager-tabs")
-                                    .underline()
-                                    .selected_index(usize::from(self.manager_market))
-                                    .child(Tab::new().label("已安装"))
-                                    .child(Tab::new().label("插件市场"))
-                                    .on_click({
-                                        let owner = cx.entity().downgrade();
-                                        move |index, _, cx| {
-                                            let _ = owner.update(cx, |this, cx| {
-                                                let market = *index == 1;
-                                                if market && !this.manager_market {
-                                                    this.load_market_packages();
-                                                }
-                                                this.manager_market = market;
-                                                this.manager_selected = None;
-                                                cx.notify();
-                                            });
-                                        }
-                                    }),
-                            ),
+                            .child(tab_strip(
+                                "plugin-manager-tabs",
+                                usize::from(self.manager_market),
+                                ["已安装", "插件市场"],
+                                {
+                                    let owner = cx.entity().downgrade();
+                                    move |index, _, cx| {
+                                        let _ = owner.update(cx, |this, cx| {
+                                            let market = index == 1;
+                                            if market && !this.manager_market {
+                                                this.load_market_packages();
+                                            }
+                                            this.manager_market = market;
+                                            this.manager_selected = None;
+                                            cx.notify();
+                                        });
+                                    }
+                                },
+                                cx,
+                            )),
                     ),
             )
             .child(div().flex_1().overflow_y_scrollbar().child(list))
@@ -848,14 +803,32 @@ impl ExtensionPanel {
                                             })),
                                     ),
                             )
-                            .when(selected_entry.is_some(), |row| {
-                                row.child(
-                                    Select::new(self.manager_scope.as_ref().unwrap())
-                                        .id("plugin-global-scope")
-                                        .disabled(busy)
-                                        .w(px(176.)),
-                                )
-                            })
+                            .when_some(
+                                selected_id.clone().zip(selected_global),
+                                |row, (id, enabled)| {
+                                    let owner = cx.entity().downgrade();
+                                    row.child(div().w(px(176.)).child(tab_strip(
+                                        "plugin-global-scope",
+                                        usize::from(!enabled),
+                                        ["全局启动", "全局禁用"],
+                                        move |index, _, cx| {
+                                            let enable = index == 0;
+                                            if busy || enable == enabled {
+                                                return;
+                                            }
+                                            let _ = owner.update(cx, |this, cx| {
+                                                this.queue_lifecycle(if enable {
+                                                    Work::Enable(id.clone())
+                                                } else {
+                                                    Work::Disable(id.clone())
+                                                });
+                                                cx.notify();
+                                            });
+                                        },
+                                        cx,
+                                    )))
+                                },
+                            )
                             .when(selected_entry.is_some() && !global_enabled, |row| {
                                 row.child(
                                     Checkbox::new("plugin-project-enabled")
@@ -903,13 +876,12 @@ impl ExtensionPanel {
                         .id("plugin-readme-region")
                         .debug_selector(|| "plugin-readme-region".into())
                         .p_5()
-                        .child(
-                            gpui_kit::component::text::TextView::markdown(
-                                "plugin-readme",
-                                readme.unwrap_or_else(|| "此插件没有提供 README.md。".into()),
-                            )
-                            .selectable(true),
-                        ),
+                        .child(ui::controls::markdown_view(
+                            "plugin-readme",
+                            readme.unwrap_or_else(|| "此插件没有提供 README.md。".into()),
+                            typography::font_size(cx),
+                            cx,
+                        )),
                 );
             }
             if let Some(error) = selected_entry.and_then(|entry| entry.error.as_ref()) {
@@ -982,7 +954,6 @@ impl Render for ExtensionPanel {
                     cx.notify();
                 }));
         }
-        self.sync_edit(window, cx);
         let environment = environment(&self.workspace, cx);
         // Plugin-only theme tokens trigger the same live update as editor base colors.
         if self.last_theme.as_ref() != Some(&environment) {
@@ -993,6 +964,45 @@ impl Render for ExtensionPanel {
                 }
             }
         }
+        if let Some(document) = self.current_scene().and_then(|scene| scene.ui.clone()) {
+            self.native_chrome = None;
+            self.editing = None;
+            if let Some(view) = &self.native_ui {
+                view.update(cx, |view, cx| {
+                    view.update_document(document, environment, window, cx)
+                });
+            } else {
+                let tx = self.worker.tx.clone();
+                let plugin = self.active.clone().unwrap();
+                let panel = self.surface_id.clone().unwrap();
+                self.native_ui = Some(cx.new(|cx| {
+                    crate::ui::plugin::PluginView::new(
+                        plugin.clone(),
+                        document,
+                        environment,
+                        move |event, _| {
+                            let _ = tx.send(Work::Event(
+                                plugin.clone(),
+                                PluginEvent::Surface {
+                                    panel: panel.clone(),
+                                    event: Box::new(PluginEvent::Ui(event)),
+                                },
+                            ));
+                        },
+                        window,
+                        cx,
+                    )
+                }));
+            }
+            return div()
+                .size_full()
+                .key_context("PluginSurface")
+                .child(self.native_ui.as_ref().unwrap().clone())
+                .children(self.command_popup(window, cx))
+                .into_any_element();
+        }
+        self.native_ui = None;
+        self.sync_edit(window, cx);
         let prepaint = cx.entity().downgrade();
         let paint = prepaint.clone();
         let scene = self.current_scene();
@@ -1005,7 +1015,10 @@ impl Render for ExtensionPanel {
             .overflow_hidden()
             .track_focus(&self.focus)
             .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
-                if this.editing.is_some() || !this.composition.is_empty() {
+                if this.editing.is_some()
+                    || !this.composition.is_empty()
+                    || !this.focus.is_focused(window)
+                {
                     return;
                 }
                 if this.shortcut(event, window, cx) {
@@ -1151,7 +1164,7 @@ impl Render for ExtensionPanel {
             );
         if let Some(info) = scene.as_ref().and_then(|s| s.scroll.as_ref()) {
             if self.scroll.visible(info) {
-                let bar = Scrollbar::vertical(&self.scroll).viewport_from_layout();
+                let bar = vertical_scrollbar(&self.scroll, cx).viewport_from_layout();
                 // While the guest's overlay is present, keep the native thumb fully visible.
                 let bar = if info.hide_after_ms.is_some() {
                     bar.mode(ScrollbarMode::Always)
@@ -1174,6 +1187,83 @@ impl Render for ExtensionPanel {
             for widget in &scene.widgets {
                 if !widget.edit {
                     let id = widget.id.clone();
+                    let mut button = Button::new(SharedString::from(format!("widget-{id}")))
+                        .on_click(cx.listener(move |this, _, _, _| this.command(id.clone())));
+                    let style = &widget.style;
+                    if style.font.family.is_some()
+                        || style.font.size_px.is_some()
+                        || style.font.bold.is_some()
+                    {
+                        let mut label = div()
+                            .min_w_0()
+                            .whitespace_nowrap()
+                            .text_ellipsis()
+                            .child(widget.label.clone());
+                        if let Some(family) = &style.font.family {
+                            label = label.font_family(family.clone());
+                        }
+                        if let Some(size) = style.font.size_px {
+                            label = label.text_size(px(size));
+                        }
+                        if let Some(bold) = style.font.bold {
+                            label = label.font_weight(if bold {
+                                FontWeight::BOLD
+                            } else {
+                                FontWeight::NORMAL
+                            });
+                        }
+                        button = button
+                            .accessibility_label(widget.label.clone())
+                            .child(label);
+                    } else {
+                        button = button.label(widget.label.clone());
+                    }
+                    if style.background.is_some()
+                        || style.foreground.is_some()
+                        || style.hover_background.is_some()
+                        || style.active_background.is_some()
+                    {
+                        button = button.custom(
+                            ButtonCustomVariant::new(cx)
+                                .color(
+                                    style
+                                        .background
+                                        .map(|value| rgb(value).into())
+                                        .unwrap_or(cx.theme().button),
+                                )
+                                .foreground(
+                                    style
+                                        .foreground
+                                        .map(|value| rgb(value).into())
+                                        .unwrap_or(cx.theme().button_foreground),
+                                )
+                                .hover(
+                                    style
+                                        .hover_background
+                                        .map(|value| rgb(value).into())
+                                        .unwrap_or(cx.theme().button_hover),
+                                )
+                                .active(
+                                    style
+                                        .active_background
+                                        .map(|value| rgb(value).into())
+                                        .unwrap_or(cx.theme().button_active),
+                                ),
+                        );
+                    }
+                    if let Some(family) = &style.font.family {
+                        button = button.font_family(family.clone());
+                    }
+                    if let Some(size) = style.font.size_px {
+                        button = button.text_size(px(size));
+                    }
+                    if let Some(bold) = style.font.bold {
+                        button = button.font_weight(if bold {
+                            FontWeight::BOLD
+                        } else {
+                            FontWeight::NORMAL
+                        });
+                    }
                     view = view.child(
                         div()
                             .absolute()
@@ -1181,13 +1271,7 @@ impl Render for ExtensionPanel {
                             .top(px(widget.rect.y))
                             .w(px(widget.rect.w))
                             .h(px(widget.rect.h))
-                            .child(
-                                Button::new(SharedString::from(format!("widget-{id}")))
-                                    .label(widget.label.clone())
-                                    .on_click(
-                                        cx.listener(move |this, _, _, _| this.command(id.clone())),
-                                    ),
-                            ),
+                            .child(button),
                     );
                 }
             }
@@ -1247,6 +1331,28 @@ impl Render for ExtensionPanel {
                 .as_ref()
                 .and_then(|s| s.widgets.iter().find(|w| w.id == edit.id))
             {
+                let style = &widget.style;
+                let mut input = Input::new(&edit.input)
+                    .appearance(false)
+                    .bordered(false)
+                    .focus_bordered(false)
+                    .shadow_none();
+                if let Some(family) = &style.font.family {
+                    input = input.font_family(family.clone());
+                }
+                if let Some(size) = style.font.size_px {
+                    input = input.text_size(px(size));
+                }
+                if let Some(bold) = style.font.bold {
+                    input = input.font_weight(if bold {
+                        FontWeight::BOLD
+                    } else {
+                        FontWeight::NORMAL
+                    });
+                }
+                if let Some(foreground) = style.foreground {
+                    input = input.text_color(rgb(foreground));
+                }
                 // Mount the input last so it owns the full tab, including the close and resize areas.
                 view = view.child(
                     div()
@@ -1256,6 +1362,7 @@ impl Render for ExtensionPanel {
                         .w(px(widget.rect.w))
                         .h(px(widget.rect.h))
                         .overflow_hidden()
+                        .when_some(style.background, |this, color| this.bg(rgb(color)))
                         // Editing clicks stay with GPUI Kit's input instead of reaching tab actions.
                         .on_mouse_down(
                             MouseButton::Left,
@@ -1276,52 +1383,41 @@ impl Render for ExtensionPanel {
                         .on_mouse_move(cx.listener(|_, _: &gpui_kit::MouseMoveEvent, _, cx| {
                             cx.stop_propagation()
                         }))
-                        .child(
-                            Input::new(&edit.input)
-                                .appearance(false)
-                                .bordered(false)
-                                .focus_bordered(false)
-                                .shadow_none(),
-                        ),
+                        .child(input),
                 );
             }
         }
-        if self.commands_open {
-            let mut menu = v_flex()
-                .absolute()
-                .top_0()
-                .right_0()
-                .w(px(260.))
-                .p_2()
-                .bg(cx.theme().popover);
-            for entry in &self.entries {
-                if entry.enabled && Some(&entry.manifest.id) == self.active.as_ref() {
-                    for command in &entry.manifest.commands {
-                        if command.menu {
-                            let plugin = entry.manifest.id.clone();
-                            let id = command.id.clone();
-                            menu = menu.child(
-                                Button::new(SharedString::from(format!("{plugin}-{id}")))
-                                    .label(command.title.clone())
-                                    .ghost()
-                                    .small()
-                                    .on_click(cx.listener(move |this, _, _, cx| {
-                                        this.send_to(
-                                            &plugin,
-                                            PluginEvent::Command {
-                                                id: id.clone(),
-                                                cwd: None,
-                                                text: None,
-                                            },
-                                        );
-                                        this.commands_open = false;
-                                        cx.notify();
-                                    })),
-                            );
-                        }
-                    }
-                }
+        if let Some(chrome) = scene.as_ref().and_then(|scene| scene.chrome.clone()) {
+            if self.native_chrome.is_none() {
+                let tx = self.worker.tx.clone();
+                let plugin = self.active.clone().unwrap();
+                let panel = self.surface_id.clone().unwrap();
+                let focus = self.focus.clone();
+                self.native_chrome = Some(cx.new(|_| {
+                    crate::ui::plugin::chrome::ChromeView::new(
+                        plugin.clone(),
+                        focus,
+                        move |event, _| {
+                            let _ = tx.send(Work::Event(
+                                plugin.clone(),
+                                PluginEvent::Surface {
+                                    panel: panel.clone(),
+                                    event: Box::new(PluginEvent::Ui(event)),
+                                },
+                            ));
+                        },
+                    )
+                }));
             }
+            let native = self.native_chrome.as_ref().unwrap();
+            native.update(cx, |view, cx| {
+                view.update(chrome, environment, self.bounds.origin, window, cx)
+            });
+            view = view.child(div().absolute().inset_0().child(native.clone()));
+        } else {
+            self.native_chrome = None;
+        }
+        if let Some(menu) = self.command_popup(window, cx) {
             view = view.child(menu);
         }
         view.into_any_element()

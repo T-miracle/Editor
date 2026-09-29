@@ -1,11 +1,15 @@
 //! Generic runtime-plugin dock and manager. Feature behavior arrives from installed packages.
 pub(crate) mod contributions;
+mod native_controls;
+#[cfg(test)]
+mod native_ui_tests;
 mod surface;
 #[cfg(test)]
 mod tests;
 mod worker;
+use crate::ui::controls::Input;
 use crate::*;
-use gpui_kit::component::input::{Input, InputState};
+use gpui_base::input::InputState;
 use gpui_kit::{AnyElement, ClipboardItem, KeyDownEvent, PathPromptOptions, SharedString};
 use plugin_runtime::{
     Installed, Package,
@@ -31,10 +35,6 @@ struct Editing {
     input: Entity<InputState>,
     _subscriptions: Vec<Subscription>,
 }
-/// The two global startup defaults shown by the plugin scope selector.
-type PluginScopeSelect = gpui_kit::component::select::SelectState<
-    gpui_kit::component::searchable_list::SearchableVec<&'static str>,
->;
 pub struct ExtensionPanel {
     parent: WeakEntity<EditorApp>,
     visible: Rc<Cell<bool>>,
@@ -54,11 +54,15 @@ pub struct ExtensionPanel {
     bounds: Bounds<Pixels>,
     composition: String,
     editing: Option<Editing>,
+    /// Protocol 2 UI owns keyed native input state independently from the legacy canvas.
+    native_ui: Option<Entity<crate::ui::plugin::PluginView>>,
+    native_chrome: Option<Entity<crate::ui::plugin::chrome::ChromeView>>,
     /// Prevent a just-committed native input from reopening before the guest reply arrives.
     committed_edit: Option<String>,
     scroll: surface::PluginScroll,
     manager_open: bool,
     commands_open: bool,
+    command_popup: Option<Entity<crate::ui::controls::menu::PopupMenu>>,
     pending: Option<Package>,
     /// Prevent repainting from opening the same installation dialog repeatedly.
     pending_dialog_open: bool,
@@ -68,11 +72,6 @@ pub struct ExtensionPanel {
     manager_market: bool,
     manager_selected: Option<String>,
     manager_packages: Vec<Package>,
-    /// Recreate the selector when a different plugin becomes the detail target.
-    manager_scope: Option<Entity<PluginScopeSelect>>,
-    manager_scope_for: Option<String>,
-    manager_scope_global: Option<bool>,
-    manager_scope_subscription: Option<Subscription>,
     confirm: Option<(String, bool)>,
     /// Keep an uninstall confirmation to one overlay per click.
     confirm_dialog_open: bool,
@@ -185,10 +184,13 @@ impl ExtensionPanel {
             bounds: Bounds::default(),
             composition: String::new(),
             editing: None,
+            native_ui: None,
+            native_chrome: None,
             committed_edit: None,
             scroll,
             manager_open: false,
             commands_open: false,
+            command_popup: None,
             pending: None,
             pending_dialog_open: false,
             manager_search: None,
@@ -196,10 +198,6 @@ impl ExtensionPanel {
             manager_market: false,
             manager_selected: None,
             manager_packages: vec![],
-            manager_scope: None,
-            manager_scope_for: None,
-            manager_scope_global: None,
-            manager_scope_subscription: None,
             confirm: None,
             confirm_dialog_open: false,
             status: None,
@@ -264,10 +262,13 @@ impl ExtensionPanel {
             bounds: Bounds::default(),
             composition: String::new(),
             editing: None,
+            native_ui: None,
+            native_chrome: None,
             committed_edit: None,
             scroll: surface::PluginScroll::new(worker.tx.clone()),
             manager_open: false,
             commands_open: false,
+            command_popup: None,
             pending: None,
             pending_dialog_open: false,
             manager_search: None,
@@ -275,10 +276,6 @@ impl ExtensionPanel {
             manager_market: false,
             manager_selected: None,
             manager_packages: vec![],
-            manager_scope: None,
-            manager_scope_for: None,
-            manager_scope_global: None,
-            manager_scope_subscription: None,
             confirm: None,
             confirm_dialog_open: false,
             status: None,
@@ -343,6 +340,10 @@ impl ExtensionPanel {
                     // The replacement guest starts at its default size; force one native measure.
                     self.instance_epoch = epoch;
                     self.last_size = (0., 0., 0., 0.);
+                    self.native_ui = None;
+                    self.native_chrome = None;
+                    self.command_popup = None;
+                    self.commands_open = false;
                     changed = true;
                 }
             }
@@ -663,6 +664,7 @@ fn environment(workspace: &Path, cx: &App) -> protocol::Environment {
         let byte = |channel: f32| (channel * 255.).round().clamp(0., 255.) as u32;
         byte(c.r) << 16 | byte(c.g) << 8 | byte(c.b)
     }
+    let typography = theme::typography(cx);
     protocol::Environment {
         workspace: workspace.display().to_string(),
         os: std::env::consts::OS.into(),
@@ -675,6 +677,29 @@ fn environment(workspace: &Path, cx: &App) -> protocol::Environment {
         selection: color(cx.theme().list_active),
         dark: cx.theme().is_dark(),
         theme_colors: theme::plugin_colors(cx),
+        ui_font: protocol::FontStyle {
+            family: Some(cx.theme().font_family.to_string()),
+            size_px: Some(cx.theme().font_size / gpui_kit::px(1.)),
+            bold: typography.ui.bold,
+        },
+        mono_font: protocol::FontStyle {
+            family: Some(cx.theme().mono_font_family.to_string()),
+            size_px: Some(cx.theme().mono_font_size / gpui_kit::px(1.)),
+            bold: typography.mono.bold,
+        },
+        theme_text_styles: theme::plugin_text_styles(cx)
+            .into_iter()
+            .map(|(key, style)| {
+                (
+                    key,
+                    protocol::FontStyle {
+                        family: style.family,
+                        size_px: style.size_px,
+                        bold: style.bold,
+                    },
+                )
+            })
+            .collect(),
     }
 }
 fn key_matches(shortcut: &str, event: &KeyDownEvent) -> bool {
