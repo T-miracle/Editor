@@ -92,6 +92,10 @@ struct EditorApp {
     editor_panel: Entity<EditorDockPanel>,
     /// Keeps keyboard selection in the project-owned completion popover.
     completion_selection: Rc<Cell<(u64, usize)>>,
+    /// Cancels app-level hover requests when the pointer moves to another symbol.
+    pointer_hover_generation: u64,
+    pointer_hover_symbol: Option<std::ops::Range<usize>>,
+    pointer_hover_pending: bool,
     /// Repaint the host when the upstream editor publishes a hover or completion.
     _editor_observer: Subscription,
     tree_state: Entity<TreeState>,
@@ -125,8 +129,6 @@ struct EditorApp {
     status: String,
     definition_notice: Option<DefinitionNotice>,
     definition_request_id: u64,
-    /// Invalidates delayed hover requests whenever the pointer moves again.
-    hover_request_id: u64,
     plugin_loads: Vec<PluginLoadEntry>,
     /// Rejects completion from a grammar task belonging to an older package version.
     plugin_loading_generation: u64,
@@ -282,6 +284,9 @@ impl EditorApp {
             editor,
             editor_panel,
             completion_selection: Rc::new(Cell::new((0, 0))),
+            pointer_hover_generation: 0,
+            pointer_hover_symbol: None,
+            pointer_hover_pending: false,
             _editor_observer: editor_observer,
             tree_state,
             dock_area,
@@ -306,7 +311,6 @@ impl EditorApp {
             status: t!("status.ready").to_string(),
             definition_notice: None,
             definition_request_id: 0,
-            hover_request_id: 0,
             plugin_loads: PluginLoadEntry::initial(),
             plugin_loading_generation: 0,
             pending_contribution_sync: false,

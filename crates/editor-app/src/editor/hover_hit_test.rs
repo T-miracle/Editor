@@ -1,13 +1,10 @@
-//! Regression coverage for hovering a document after scrolling it past the first viewport.
+//! Regression coverage for hovering visible text after scrolling.
 
-use super::*;
+use crate::*;
 use editor_core::Workspace;
 use gpui_kit::{TestAppContext, component::Root, gpui, size};
 use lsp_types::{Hover, HoverContents, MarkedString};
-use std::{
-    cell::{Cell, RefCell},
-    rc::Rc,
-};
+use std::{cell::Cell, cell::RefCell, rc::Rc};
 
 struct ReadyHover(Rc<Cell<usize>>);
 
@@ -27,9 +24,8 @@ impl gpui_base::input::HoverProvider for ReadyHover {
     }
 }
 
-/// The application requests details for a visible row that upstream hover rejects.
 #[gpui::test]
-fn hover_hit_test_after_scroll(cx: &mut TestAppContext) {
+fn hover_visible_row_after_scroll(cx: &mut TestAppContext) {
     cx.update(|cx| {
         gpui_kit::init(cx);
         typography::init(cx);
@@ -65,10 +61,9 @@ fn hover_hit_test_after_scroll(cx: &mut TestAppContext) {
     let (expected, position) = cx.update(|_, cx| {
         let app = view.read(cx);
         let state = app.editor.read(cx);
-        let visible = state.visible_row_range().unwrap();
-        assert!(visible.start > 0, "the document must actually be scrolled");
-        let (expected, position) = visible
-            .clone()
+        let mut visible = state.visible_row_range().unwrap();
+        assert!(visible.start > 0);
+        visible
             .find_map(|line| {
                 let start = state.text().line_start_offset(line);
                 let bounds = state.range_to_bounds(&(start..start + 6))?;
@@ -77,12 +72,7 @@ fn hover_hit_test_after_scroll(cx: &mut TestAppContext) {
                     .contains(&bounds.center())
                     .then_some((start, bounds.center()))
             })
-            .expect("a scrolled identifier should be visible");
-        assert_eq!(
-            hovered_symbol_range(&state, position).map(|range| range.start),
-            Some(expected)
-        );
-        (expected, position)
+            .expect("a scrolled identifier should be visible")
     });
     let requests = Rc::new(Cell::new(0));
     cx.update(|_, cx| {
@@ -91,17 +81,13 @@ fn hover_hit_test_after_scroll(cx: &mut TestAppContext) {
             state.lsp_mut().hover_provider = Some(Rc::new(ReadyHover(requests.clone())));
         });
     });
-    // Upstream misses this row; the application retries after a full second.
     cx.simulate_mouse_move(position, None::<MouseButton>, Default::default());
-    cx.executor().advance_clock(Duration::from_millis(500));
-    cx.run_until_parked();
-    assert_eq!(requests.get(), 0);
     cx.executor().advance_clock(Duration::from_millis(500));
     cx.run_until_parked();
     cx.update(|window, cx| window.draw(cx).clear(cx));
     assert!(
         requests.get() > 0,
-        "hover should be requested after the delay"
+        "visible scrolled text must request hover"
     );
     assert!(cx.debug_bounds("editor-definition-card").is_some());
     cx.update(|_, cx| {

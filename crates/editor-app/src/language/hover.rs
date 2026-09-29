@@ -129,6 +129,11 @@ impl HoverProvider for LanguageHoverProvider {
         }
 
         cx.spawn(async move |cx| {
+            // The editor's own 150 ms delay runs concurrently with this timer.
+            // Keep the card hidden for 500 ms even when the result is cached.
+            cx.background_executor()
+                .timer(Duration::from_millis(500))
+                .await;
             loop {
                 if let Some(result) = shared_result
                     .lock()

@@ -1,7 +1,9 @@
 //! Document lifecycle and editor-area presentation.
 
 mod documents;
-mod hover;
+#[cfg(test)]
+mod hover_hit_test;
+mod pointer_hover;
 mod popovers;
 mod view;
 

@@ -424,7 +424,6 @@ impl EditorApp {
             )
         };
         let app = cx.entity().downgrade();
-        let hover_app = app.clone();
         v_flex()
             // Expose the editor extent for layout regression checks when docks disappear.
             .debug_selector(|| "editor-panel-content".into())
@@ -435,12 +434,7 @@ impl EditorApp {
                 div()
                     .flex_1()
                     .min_h_0()
-                    // The upstream editor rejects scrolled mouse positions using moving text bounds.
-                    .on_mouse_move(move |event: &gpui_kit::MouseMoveEvent, window, cx| {
-                        let _ = hover_app.update(cx, |app, cx| {
-                            app.on_editor_mouse_move(event, window, cx);
-                        });
-                    })
+                    .on_mouse_move(cx.listener(Self::editor_pointer_move))
                     .on_mouse_up(MouseButton::Middle, move |event, window, cx| {
                         let position = event.position;
                         let app = app.clone();
