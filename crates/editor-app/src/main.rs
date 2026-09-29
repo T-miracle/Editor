@@ -589,8 +589,7 @@ fn resolve_startup_target() -> anyhow::Result<(Workspace, Option<PathBuf>)> {
 }
 
 fn main() -> anyhow::Result<()> {
-    if let Some(target) = sdk_export::requested_target()? {
-        sdk_export::export(&target)?;
+    if sdk_export::run_cli()? {
         return Ok(());
     }
     // Use Simplified Chinese by default while keeping locale changes centralized.

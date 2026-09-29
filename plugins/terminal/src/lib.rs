@@ -13,7 +13,7 @@ use config::{Profile, Settings};
 use plugin_protocol::*;
 use serde::{Deserialize, Serialize};
 use std::{cell::RefCell, collections::BTreeMap};
-wit_bindgen::generate!({ path: "../sdk/wit", world: "plugin" });
+use plugin_protocol::bindings::{Guest, editor, export};
 struct TerminalPlugin;
 thread_local! { static APP: RefCell<Option<Terminal>> = const { RefCell::new(None) }; }
 // Keep the terminal usable while allowing a wider session list for long names.

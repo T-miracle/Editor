@@ -270,6 +270,126 @@ mod tests {
         }
         assert!(safe_path(root.path(), "settings.json", false).is_ok());
     }
+
+    /// Host file requests must respect both consent and each plugin's own directory.
+    #[test]
+    fn file_requests_require_grants_and_cannot_reach_outside_plugin_roots() {
+        let root = tempfile::tempdir().unwrap();
+        let assets = root.path().join("assets");
+        let data = root.path().join("data");
+        let workspace = root.path().join("workspace");
+        for directory in [&assets, &data, &workspace] {
+            std::fs::create_dir(directory).unwrap();
+            std::fs::write(directory.join("allowed.txt"), "allowed").unwrap();
+        }
+        let outside = root.path().join("outside.txt");
+        std::fs::write(&outside, "private").unwrap();
+        let mut state = State {
+            wasi: WasiCtx::builder().build(),
+            table: ResourceTable::new(),
+            limits: StoreLimitsBuilder::new().build(),
+            permissions: BTreeSet::new(),
+            processes: Processes::default(),
+            workspace,
+            data,
+            assets,
+            active: true,
+            effects: vec![],
+            staged_writes: None,
+        };
+        let send = |state: &mut State, request: Request| {
+            state.request_checked(&serde_json::to_string(&request).unwrap())
+        };
+        assert!(
+            send(
+                &mut state,
+                Request::ReadAsset {
+                    path: "allowed.txt".into()
+                }
+            )
+            .is_ok()
+        );
+        assert!(
+            send(
+                &mut state,
+                Request::ReadData {
+                    path: "allowed.txt".into()
+                }
+            )
+            .unwrap_err()
+            .to_string()
+            .contains("Permission denied")
+        );
+        assert!(
+            send(
+                &mut state,
+                Request::ReadWorkspace {
+                    path: "allowed.txt".into()
+                }
+            )
+            .unwrap_err()
+            .to_string()
+            .contains("Permission denied")
+        );
+        assert!(
+            send(
+                &mut state,
+                Request::WriteData {
+                    path: "allowed.txt".into(),
+                    text: "forbidden".into(),
+                }
+            )
+            .unwrap_err()
+            .to_string()
+            .contains("Permission denied")
+        );
+        state.permissions = ["storage".into(), "workspace.read".into()].into();
+        assert!(
+            send(
+                &mut state,
+                Request::ReadData {
+                    path: "allowed.txt".into()
+                }
+            )
+            .is_ok()
+        );
+        assert!(
+            send(
+                &mut state,
+                Request::ReadWorkspace {
+                    path: "allowed.txt".into()
+                }
+            )
+            .is_ok()
+        );
+        for path in [
+            "../outside.txt".to_owned(),
+            "../data/allowed.txt".to_owned(),
+            "../workspace/allowed.txt".to_owned(),
+            outside.to_string_lossy().into_owned(),
+            "\\\\?\\C:\\outside.txt".to_owned(),
+            "allowed.txt:stream".to_owned(),
+        ] {
+            assert!(send(&mut state, Request::ReadAsset { path: path.clone() }).is_err());
+            assert!(send(&mut state, Request::ReadData { path: path.clone() }).is_err());
+            assert!(send(&mut state, Request::ReadWorkspace { path: path.clone() }).is_err());
+            assert!(
+                send(
+                    &mut state,
+                    Request::WriteData {
+                        path,
+                        text: "forbidden".into(),
+                    }
+                )
+                .is_err()
+            );
+        }
+        assert_eq!(std::fs::read_to_string(outside).unwrap(), "private");
+        assert_eq!(
+            std::fs::read_to_string(state.data.join("allowed.txt")).unwrap(),
+            "allowed"
+        );
+    }
     /// Bad plugin coordinates must be rejected before reaching the native renderer.
     #[test]
     fn rejects_invalid_scene_geometry() {

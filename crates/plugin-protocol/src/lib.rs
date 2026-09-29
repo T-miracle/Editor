@@ -5,6 +5,17 @@ use std::collections::BTreeSet;
 
 pub mod ui;
 
+/// Guest imports and exports use the WIT contract supplied by the building editor.
+#[cfg(feature = "guest")]
+pub mod bindings {
+    wit_bindgen::generate!({
+        path: "wit",
+        world: "plugin",
+        pub_export_macro: true,
+        default_bindings_module: "::plugin_protocol::bindings",
+    });
+}
+
 /// A package's identity, compatibility range and explicitly requested capabilities.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]

@@ -15,7 +15,7 @@
 
 需要插件清单 `"protocol": 2`。旧宿主会拒绝安装该插件，避免把新界面静默显示成空白；新版宿主继续支持 protocol 1 的画布插件。WIT 世界不变，原生界面通过 `Reply.scene` / `Reply.scenes` 的 `Scene.ui` 传递。
 
-SDK 由已打包的 `editor-app.exe --export-plugin-sdk <目录>` 导出。插件只依赖导出目录中的 Rust crate 和 WIT，不依赖主程序源码或 GPUI。主程序验证界面树后，在原生 UI 线程使用 gpui-base 的控件行为绘制。
+编译接口由已打包的编辑器通过 `--plugin-cargo <Cargo.toml> build --target wasm32-wasip2 --release` 自动准备到用户缓存。插件使用编辑器提供的 Rust 类型和 WIT 绑定，不需要项目内的 SDK 目录，也不依赖主程序源码或 GPUI。主程序验证界面树后，在原生 UI 线程使用 gpui-base 的控件行为绘制。
 
 ## 最小示例
 

@@ -4,7 +4,7 @@
 
 终端插件 0.5.0 使用 `protocol = 3` 与 `Scene.chrome`：画布负责字符网格，主程序提供独立的侧边 Tab 栏和共享原生菜单。侧边栏支持滚动、重命名、关闭、排序和宽度调整；菜单及面板标题命令菜单使用资源管理器同款卡片/条目封装。条目以稳定 ID 回传操作，配色和字体实时取自主题。
 
-插件可声明 `protocol = 2`，使用 `plugin_protocol::ui::Document/Node` 返回行列布局和原生控件树，宿主通过 gpui-base 实现布局、输入、焦点、滚动和模态弹窗。协议、事件、主题角色与限制见 [插件原生界面协议](../crates/plugin-protocol/UI.md)。该文档及 Rust 接口随主程序的 `--export-plugin-sdk` 一起导出。protocol 1 的画布终端继续兼容；示例插件 0.2.0 演示新接口。
+插件可声明 `protocol = 2`，使用 `plugin_protocol::ui::Document/Node` 返回行列布局和原生控件树，宿主通过 gpui-base 实现布局、输入、焦点、滚动和模态弹窗。协议、事件、主题角色与限制见 [插件原生界面协议](../crates/plugin-protocol/UI.md)。该文档及 Rust 接口由主程序内嵌，并自动提供给插件构建。protocol 1 的画布终端继续兼容；示例插件 0.2.0 演示新接口。
 
 编辑器提供通用安装接口。终端和示例插件通过 WebAssembly Component Model 执行；Rust 和 TOML 是由宿主管理生命周期的声明式资源包。亮色与深色基础主题内置于编辑器，首次启动默认使用亮色主题。终端核心使用插件目录内的 Alacritty 0.26.0 WASM 适配版，元数据解析使用上游 `vte`。语言插件包携带 Tree-sitter WASM grammar；其他主题插件仍可携带主题和图标资源，由宿主验证并注册。
 
@@ -13,11 +13,11 @@
 ```powershell
 # 只需在开发机器安装一次目标工具链。
 rustup target add wasm32-wasip2
-# 先构建主程序并由它导出 SDK，再构建终端、示例及语言插件。
+# 先构建主程序，由它管理编译接口，再构建终端、示例及语言插件。
 ./scripts/build-plugins.ps1
 # 只构建开发版编辑器。
 cargo build -p editor-app
-# 生成发行目录：editor-app.exe + sdk/ + plugins/*.zip。
+# 生成发行目录：editor-app.exe + plugins/*.zip。
 ./scripts/package-editor.ps1
 ```
 
@@ -44,7 +44,7 @@ Rust 和 TOML 插件安装后才提供对应文件的语法、图标及语言服
 | `plugins/terminal/src/emulator.rs` | 对接插件内 Alacritty 核心的应用适配：选择复制、查询响应、颜色和快照 |
 | `plugins/example` | 不申请系统权限的计数器与笔记，用于验证宿主的通用性 |
 
-主程序把公开接口编入 `editor-app.exe`，打包后可执行 `editor-app.exe --export-plugin-sdk <目录>` 导出 SDK 文件。发行脚本先构建主程序，由已打包的可执行文件导出 `dist/editor/sdk/`，再编译插件。插件只读取导出的 WIT 和 Rust 消息类型，不引用 `crates/` 源码。独立插件项目将 `sdk/` 放在插件目录同级即可编译；安装包只包含编译后的 `.wasm`、清单和资源。运行时主程序实现 WIT 的 `host.request` 导入。
+主程序把公开接口编入 `editor-app.exe`。独立插件项目声明带 `guest` feature 的 `plugin-protocol` 版本依赖，并通过 `editor-app.exe --plugin-cargo <插件/Cargo.toml> build --target wasm32-wasip2 --release` 编译。编辑器按接口内容摘要管理用户缓存，并为本次 Cargo 调用注入依赖路径；Rust 消息类型和 WIT 绑定都来自这份缓存。项目不需要 `plugins/sdk`，发行目录不再附带 `sdk/`，插件也不引用 `crates/` 源码。相同入口支持 `check` 和 `test`；开发机需要 Rust/Cargo，使用插件的用户不需要。安装包只包含编译后的 `.wasm`、清单和资源。运行时主程序实现 WIT 的 `host.request` 导入。显式 `--export-plugin-sdk` 仅供其他工具链或接口检查使用。
 
 主程序不识别终端命令、ANSI、光标模式、Shell 类型或终端 Tab。它绘制插件描述的矩形、文本及标准按钮/输入控件，并把原生事件连同面板 ID 发回插件。新增功能无需修改主程序中的枚举或终端专用槽位。
 
@@ -55,6 +55,8 @@ Rust 和 TOML 插件安装后才提供对应文件的语法、图标及语言服
 ## 契约与权限
 
 WIT 世界为 `editor:plugin/plugin@0.1.0`，只有宿主 `request` 导入与插件 `dispatch` 导出。负载类型由 `plugin-protocol` 定义；清单 `protocol=1` 使用画布消息，`protocol=2` 在相同 WIT 传输上增加原生界面树与类型化 UI 事件。WASI 不继承宿主目录、环境变量、标准输入输出或网络权限。包内资源通过只读 `ReadAsset` 访问。
+
+插件本身不能直接读取任意本机文件，包括编辑器的接口缓存。`ReadAsset` 仅访问该插件自己的安装资源；`ReadData/WriteData` 需要 `storage` 授权且限定在该插件的私有数据目录；访问工作区文件必须通过获授 `workspace.read` 的编辑器接口。所有这些文件接口拒绝绝对路径、目录穿越、Windows 设备路径和备用数据流，并检查解析符号链接后的实际位置，不能借此访问其他插件或目录之外的文件。限制针对已安装插件的运行时；开发者主动运行 Cargo 编译源码属于本机开发操作。
 
 | 能力 | 授权后允许 |
 | --- | --- |
@@ -89,7 +91,7 @@ WIT 世界为 `editor:plugin/plugin@0.1.0`，只有宿主 `request` 导入与插
 ```powershell
 # 核心行为与 GPUI 集成测试。
 cargo test -p plugin-runtime --lib
-cargo test --manifest-path plugins/terminal/Cargo.toml --lib
+./target/release/editor-app.exe --plugin-cargo plugins/terminal/Cargo.toml test --lib
 cargo test -p editor-app --bin editor-app
 # 必须先构建插件包，再测试实际组件与真实 Windows ConPTY。
 ./scripts/build-plugins.ps1

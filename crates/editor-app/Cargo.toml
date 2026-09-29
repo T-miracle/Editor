@@ -26,7 +26,8 @@ tracing = "0.1"
 url = "2.5"
 plugin-runtime = { path = "../plugin-runtime" }
 futures = "0.3"
+sha2 = "0.10"
+tempfile.workspace = true
 
 [dev-dependencies]
 gpui-kit = { workspace = true, features = ["test-support"] }
-tempfile.workspace = true

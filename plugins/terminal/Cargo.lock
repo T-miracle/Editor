@@ -234,6 +234,7 @@ version = "0.1.0"
 dependencies = [
  "serde",
  "serde_json",
+ "wit-bindgen",
 ]
 
 [[package]]
@@ -370,7 +371,6 @@ dependencies = [
  "serde_json",
  "unicode-width",
  "vte",
- "wit-bindgen",
 ]
 
 [[package]]

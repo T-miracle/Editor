@@ -2,7 +2,7 @@
 use plugin_protocol::*;
 mod views;
 use std::cell::RefCell;
-wit_bindgen::generate!({path:"../sdk/wit",world:"plugin"});
+use plugin_protocol::bindings::{Guest, editor, export};
 struct Example;
 #[derive(Default)]
 struct State {

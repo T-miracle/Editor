@@ -7,8 +7,8 @@ members = [
     "crates/plugin-protocol",
     "crates/plugin-runtime",
 ]
-# Guests build from the SDK exported by the packaged host, after the host is built.
-exclude = ["plugins/terminal", "plugins/example", "plugins/sdk", "plugins/terminal/vendor/alacritty_terminal"]
+# Guests build through the packaged host using its managed interface cache.
+exclude = ["plugins/terminal", "plugins/example", "plugins/terminal/vendor/alacritty_terminal"]
 resolver = "2"
 
 [workspace.package]
