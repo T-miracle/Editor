@@ -128,13 +128,19 @@ impl EditorApp {
                     self.begin_server_loading(&language, cx);
                     let server_language = language.clone();
                     cx.spawn_in(window, async move |this, cx| {
+                        let loading_server = server.clone();
                         let result = cx
                             .background_executor()
                             .scheduler_executor()
                             .spawn_dedicated(move |_| async move { server.prepare_until_ready() })
                             .await;
                         let _ = this.update_in(cx, |app, _, cx| {
-                            app.finish_server_loading(&server_language, result, cx);
+                            app.finish_server_loading(
+                                &server_language,
+                                &loading_server,
+                                result,
+                                cx,
+                            );
                         });
                     })
                     .detach();

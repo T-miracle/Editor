@@ -13,8 +13,11 @@ pub(crate) enum PluginLoadState {
 }
 
 /// Keeps the plugin identity even when its grammar cannot be registered.
+#[derive(Clone)]
 pub(crate) struct PluginLoadEntry {
     plugin: language_plugins::BundledPlugin,
+    /// Installed package roots include the digest, so replacement differs from a scope refresh.
+    package_root: PathBuf,
     state: PluginLoadState,
     grammar_loaded: bool,
     server_loading: bool,
@@ -24,12 +27,15 @@ impl PluginLoadEntry {
     pub(crate) fn initial() -> Vec<Self> {
         language_plugins::BundledPlugin::ALL
             .into_iter()
-            .filter(|plugin| extensions::contributions::plugin_root(plugin.manifest_id()).is_some())
-            .map(|plugin| Self {
-                plugin,
-                grammar_loaded: false,
-                server_loading: false,
-                state: PluginLoadState::Loading,
+            .filter_map(|plugin| {
+                let package_root = extensions::contributions::plugin_root(plugin.manifest_id())?;
+                Some(Self {
+                    plugin,
+                    package_root,
+                    grammar_loaded: false,
+                    server_loading: false,
+                    state: PluginLoadState::Loading,
+                })
             })
             .collect()
     }
@@ -60,11 +66,10 @@ impl EditorApp {
             .map(|entry| entry.plugin)
             .collect::<Vec<_>>()
         {
-            if self
-                .plugin_loads
-                .iter()
-                .any(|entry| entry.plugin == plugin && entry.state == PluginLoadState::Disabled)
-            {
+            if self.plugin_loads.iter().any(|entry| {
+                entry.plugin == plugin
+                    && (entry.grammar_loaded || entry.state == PluginLoadState::Disabled)
+            }) {
                 continue;
             }
             cx.spawn(async move |this, cx| {
@@ -97,13 +102,9 @@ impl EditorApp {
         cx: &mut Context<Self>,
     ) {
         self.plugin_loading_generation = self.plugin_loading_generation.wrapping_add(1);
-        let previous = self
-            .plugin_loads
-            .iter()
-            .map(|entry| entry.plugin)
-            .collect::<Vec<_>>();
-        self.plugin_loads = PluginLoadEntry::initial();
-        for plugin in previous {
+        let previous = std::mem::replace(&mut self.plugin_loads, PluginLoadEntry::initial());
+        for old in &previous {
+            let plugin = old.plugin;
             if !self.plugin_loads.iter().any(|entry| entry.plugin == plugin) {
                 language_plugins::mask_language(plugin.language_id());
                 self.language_servers.remove(plugin.language_id());
@@ -126,8 +127,16 @@ impl EditorApp {
                 }
             }
         }
-        for entry in &self.plugin_loads {
-            // A hot update masks the previous version until the new grammar passes validation.
+        for entry in &mut self.plugin_loads {
+            if let Some(old) = previous
+                .iter()
+                .find(|old| old.plugin == entry.plugin && old.package_root == entry.package_root)
+            {
+                // Startup publication and unrelated scope changes must not restart indexing.
+                *entry = old.clone();
+                continue;
+            }
+            // A replaced package must validate its new grammar and start a new server.
             language_plugins::mask_language(entry.plugin.language_id());
             self.language_servers.remove(entry.plugin.language_id());
         }
@@ -167,13 +176,14 @@ impl EditorApp {
         for (language, server) in newly_created_servers {
             self.begin_server_loading(&language, cx);
             cx.spawn_in(window, async move |this, cx| {
+                let loading_server = server.clone();
                 let result = cx
                     .background_executor()
                     .scheduler_executor()
                     .spawn_dedicated(move |_| async move { server.prepare_until_ready() })
                     .await;
                 let _ = this.update_in(cx, |app, _, cx| {
-                    app.finish_server_loading(&language, result, cx)
+                    app.finish_server_loading(&language, &loading_server, result, cx)
                 });
             })
             .detach();
@@ -230,13 +240,23 @@ impl EditorApp {
         }
     }
 
-    /// Publish server readiness only after grammar validation also finishes.
+    /// Publish readiness only for the active instance after grammar validation also finishes.
     pub(crate) fn finish_server_loading(
         &mut self,
         language_id: &str,
+        server: &Arc<language_navigation::LanguageServer>,
         result: anyhow::Result<()>,
         cx: &mut Context<Self>,
     ) {
+        // Scope changes can retire a server while its blocking startup is still in flight.
+        // Neither success nor failure from that task belongs to the replacement instance.
+        if !self
+            .language_servers
+            .get(language_id)
+            .is_some_and(|active| Arc::ptr_eq(active, server))
+        {
+            return;
+        }
         let Some(entry) = self
             .plugin_loads
             .iter_mut()
@@ -465,149 +485,4 @@ impl EditorApp {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use gpui_kit::{TestAppContext, component::Root, gpui, px, size};
-    use std::{cell::RefCell, collections::BTreeMap, rc::Rc};
-
-    /// A previously installed runtime plugin must appear in the startup indicator.
-    #[gpui::test]
-    fn installed_runtime_plugin_is_visible_while_starting(cx: &mut TestAppContext) {
-        cx.update(|cx| {
-            gpui_kit::init(cx);
-            typography::init(cx);
-            apply_theme(builtin_theme(false), cx);
-        });
-        let directory = tempfile::tempdir().unwrap();
-        let root = directory.path().join(".runtime-plugin-test");
-        std::fs::create_dir_all(&root).unwrap();
-        let manifest = serde_json::from_str::<plugin_runtime::plugin_protocol::Manifest>(
-            include_str!("../../../../plugins/terminal/manifest.json"),
-        )
-        .unwrap();
-        let installed = plugin_runtime::Installed {
-            manifest: manifest.clone(),
-            digest: "fixture".into(),
-            grants: manifest.permissions.clone(),
-            enabled: true,
-            project_enabled: Default::default(),
-            global_enabled: None,
-            error: None,
-        };
-        std::fs::write(
-            root.join("registry.json"),
-            serde_json::to_vec(&BTreeMap::from([(manifest.id, installed)])).unwrap(),
-        )
-        .unwrap();
-        let workspace = Workspace::open(directory.path()).unwrap();
-        let (_, cx) = cx.add_window_view(move |window, cx| {
-            Root::new(
-                cx.new(|cx| EditorApp::new(workspace, None, window, cx)),
-                window,
-                cx,
-            )
-        });
-        cx.simulate_resize(size(px(1000.), px(800.)));
-        cx.update(|window, cx| window.draw(cx).clear(cx));
-        assert!(
-            cx.debug_bounds("plugin-loading-indicator").is_some(),
-            "an enabled runtime plugin must show startup loading in the status bar"
-        );
-    }
-
-    /// No language reports loading until an installed package declares it.
-    #[test]
-    fn initial_state_requires_installed_plugins() {
-        let directory = tempfile::tempdir().unwrap();
-        extensions::contributions::refresh(directory.path()).unwrap();
-        assert!(PluginLoadEntry::initial().is_empty());
-    }
-
-    /// Installed package enablement is the source of truth for language availability.
-    #[test]
-    fn missing_plugin_does_not_start_its_language_server() {
-        let directory = tempfile::tempdir().unwrap();
-        extensions::contributions::refresh(directory.path()).unwrap();
-        assert!(PluginLoadEntry::initial().is_empty());
-    }
-
-    /// Both transient states expose clickable icons and anchored plugin lists.
-    #[gpui::test]
-    fn status_indicators_open_plugin_lists(cx: &mut TestAppContext) {
-        cx.update(|cx| {
-            gpui_kit::init(cx);
-            typography::init(cx);
-            apply_theme(builtin_theme(false), cx);
-            cx.set_reduce_motion(true);
-        });
-        let directory = tempfile::tempdir().unwrap();
-        let workspace = Workspace::open(directory.path()).unwrap();
-        let view_slot = Rc::new(RefCell::new(None));
-        let capture = view_slot.clone();
-        let (_, cx) = cx.add_window_view(move |window, cx| {
-            let view = cx.new(|cx| EditorApp::new(workspace, None, window, cx));
-            *capture.borrow_mut() = Some(view.clone());
-            Root::new(view, window, cx)
-        });
-        let view = view_slot.borrow_mut().take().unwrap();
-        cx.run_until_parked();
-        cx.simulate_resize(size(px(1000.), px(800.)));
-        cx.update(|window, cx| {
-            view.update(cx, |app, cx| {
-                // The status UI also renders failures from packages loaded after startup.
-                app.plugin_loads.push(PluginLoadEntry {
-                    plugin: language_plugins::BundledPlugin::Rust,
-                    state: PluginLoadState::Loading,
-                    grammar_loaded: false,
-                    server_loading: false,
-                });
-                app.set_plugin_state(
-                    language_plugins::BundledPlugin::Rust,
-                    PluginLoadState::Error("missing grammar".to_owned()),
-                    cx,
-                );
-            });
-            window.draw(cx).clear(cx);
-        });
-        let indicator = cx
-            .debug_bounds("plugin-error-indicator")
-            .expect("plugin failure should have a status indicator");
-        cx.simulate_click(indicator.center(), Default::default());
-        cx.update(|window, cx| window.draw(cx).clear(cx));
-        let error_popup = cx
-            .debug_bounds("plugin-status-popup")
-            .expect("clicking the error indicator should paint a popup");
-        assert!(error_popup.origin.y + error_popup.size.height < indicator.center().y);
-
-        cx.update(|window, cx| {
-            view.update(cx, |app, cx| {
-                app.set_plugin_state(
-                    language_plugins::BundledPlugin::Rust,
-                    PluginLoadState::Loading,
-                    cx,
-                );
-            });
-            window.draw(cx).clear(cx);
-        });
-        let loading = cx
-            .debug_bounds("plugin-loading-indicator")
-            .expect("loading plugin should have a spinning status indicator");
-        cx.simulate_click(loading.center(), Default::default());
-        cx.update(|window, cx| window.draw(cx).clear(cx));
-        let popup = cx
-            .debug_bounds("plugin-status-popup")
-            .expect("clicking the loading indicator should paint a popup");
-        // A painted popup must have content and sit just above the clicked point.
-        assert!(
-            popup.size.height > px(20.),
-            "popup has no visible content: {popup:?}"
-        );
-        let gap = loading.center().y - (popup.origin.y + popup.size.height);
-        assert!(
-            (px(4.)..=px(16.)).contains(&gap),
-            "popup is not just above the loading click: popup={popup:?}, indicator={loading:?}"
-        );
-        assert!(popup.origin.x <= loading.center().x);
-        assert!(loading.center().x <= popup.origin.x + popup.size.width);
-    }
-}
+mod tests;
