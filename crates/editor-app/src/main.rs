@@ -649,9 +649,9 @@ fn main() -> anyhow::Result<()> {
             // GPUI's default throttles animations in inactive windows to 30 FPS.
             // Leave frame scheduling uncapped; active frames follow the display refresh rate.
             window_options.inactive_frame_interval = None;
-            cx.open_window(window_options, move |window, cx| {
-                let view = cx.new(|cx| EditorApp::new(workspace, initial_file, window, cx));
-                cx.new(|cx| Root::new(view, window, cx).bg(cx.theme().background))
+            // Kit supplies the shared Root and its automatic overlay hosting.
+            gpui_kit::open_window(window_options, cx, move |window, cx| {
+                cx.new(|cx| EditorApp::new(workspace, initial_file, window, cx))
             })
             .expect("failed to open Me Editor window");
         });

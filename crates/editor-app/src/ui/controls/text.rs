@@ -19,11 +19,13 @@ pub(crate) fn markdown_view(
         .with_code_background(palette.background)
         .with_border(palette.border)
         .with_paragraph_gap(rems(0.5))
-        .with_heading_base_font_size(font_size)
-        .with_heading_font_size(|level, size| match level {
-            1..=3 => size,
-            4 => size * 0.9,
-            _ => size * 0.8,
+        // Base 0.7 accepts a heading style; preserve the existing size hierarchy.
+        .with_heading(move |level| {
+            StyleRefinement::default().text_size(match level {
+                1..=3 => font_size,
+                4 => font_size * 0.9,
+                _ => font_size * 0.8,
+            })
         })
         .with_code_block(
             StyleRefinement::default()

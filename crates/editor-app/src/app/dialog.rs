@@ -86,64 +86,59 @@ impl AppDialog {
 
 impl Render for AppDialog {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        // Native settings and plugin windows share the component Dialog overlay layer.
-        let dialog_layer = Root::render_dialog_layer(window, cx);
-        div()
-            .relative()
-            .size_full()
-            .child(
-                v_flex()
-                    .id("app-dialog-window")
-                    .debug_selector(|| "dialog-0".into())
-                    .size_full()
-                    .bg(cx.theme().tokens.background)
-                    .track_focus(&self.focus)
-                    .capture_key_down(cx.listener(Self::close_on_escape))
-                    .child(
-                        h_flex()
-                            .id("app-dialog-title-bar")
-                            .debug_selector(|| "app-dialog-title-bar".into())
-                            .h(px(PANEL_HEADER_HEIGHT))
-                            .w_full()
-                            .flex_shrink_0()
-                            .items_center()
-                            .bg(rgb(0xf7f8fa))
-                            .text_color(rgb(0x202124))
-                            .border_b_1()
-                            .border_color(cx.theme().border)
-                            .child(
-                                h_flex()
-                                    .id("app-dialog-drag-region")
-                                    .flex_1()
-                                    .h_full()
-                                    .items_center()
-                                    .px_3()
-                                    .font_semibold()
-                                    .window_control_area(WindowControlArea::Drag)
-                                    .on_mouse_down(MouseButton::Left, cx.listener(Self::start_drag))
-                                    .on_mouse_up(MouseButton::Left, cx.listener(Self::stop_drag))
-                                    .on_mouse_move(cx.listener(Self::move_window))
-                                    .child((self.title)(window, cx)),
-                            )
-                            .child(
-                                Button::new("app-dialog-close")
-                                    .icon(IconName::Close)
-                                    .small()
-                                    .ghost()
-                                    .on_click(|_, window, _| window.remove_window()),
-                            )
-                            .child(div().w(px(8.))),
-                    )
-                    .child(
-                        v_flex()
-                            .id("app-dialog-body")
-                            .flex_1()
-                            .min_h_0()
-                            .overflow_hidden()
-                            .child((self.content)(DialogContent::new(), window, cx)),
-                    ),
-            )
-            .children(dialog_layer)
+        // GPUI Kit 0.7 Root automatically hosts overlays above the dialog content.
+        div().relative().size_full().child(
+            v_flex()
+                .id("app-dialog-window")
+                .debug_selector(|| "dialog-0".into())
+                .size_full()
+                .bg(cx.theme().tokens.background)
+                .track_focus(&self.focus)
+                .capture_key_down(cx.listener(Self::close_on_escape))
+                .child(
+                    h_flex()
+                        .id("app-dialog-title-bar")
+                        .debug_selector(|| "app-dialog-title-bar".into())
+                        .h(px(PANEL_HEADER_HEIGHT))
+                        .w_full()
+                        .flex_shrink_0()
+                        .items_center()
+                        .bg(rgb(0xf7f8fa))
+                        .text_color(rgb(0x202124))
+                        .border_b_1()
+                        .border_color(cx.theme().border)
+                        .child(
+                            h_flex()
+                                .id("app-dialog-drag-region")
+                                .flex_1()
+                                .h_full()
+                                .items_center()
+                                .px_3()
+                                .font_semibold()
+                                .window_control_area(WindowControlArea::Drag)
+                                .on_mouse_down(MouseButton::Left, cx.listener(Self::start_drag))
+                                .on_mouse_up(MouseButton::Left, cx.listener(Self::stop_drag))
+                                .on_mouse_move(cx.listener(Self::move_window))
+                                .child((self.title)(window, cx)),
+                        )
+                        .child(
+                            Button::new("app-dialog-close")
+                                .icon(IconName::Close)
+                                .small()
+                                .ghost()
+                                .on_click(|_, window, _| window.remove_window()),
+                        )
+                        .child(div().w(px(8.))),
+                )
+                .child(
+                    v_flex()
+                        .id("app-dialog-body")
+                        .flex_1()
+                        .min_h_0()
+                        .overflow_hidden()
+                        .child((self.content)(DialogContent::new(), window, cx)),
+                ),
+        )
     }
 }
 
