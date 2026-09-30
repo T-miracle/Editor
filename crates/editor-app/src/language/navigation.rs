@@ -1,5 +1,8 @@
 //! Connects plugin languages to their declared language servers.
 
+mod diagnostics;
+mod transport;
+
 use super::toolchains::resolve_server_executable;
 use anyhow::{Context as _, anyhow, ensure};
 use gpui_base::input::{DefinitionProvider, Rope};
@@ -9,9 +12,9 @@ use plugin_schema::{LanguageContribution, LspReadiness};
 use serde_json::{Value, json};
 use std::{
     collections::HashMap,
-    io::{BufRead as _, BufReader, BufWriter, Read as _, Write as _},
+    io::{BufWriter, Write as _},
     path::{Path, PathBuf},
-    process::{Child, ChildStdin, ChildStdout, Command, Stdio},
+    process::{Child, ChildStdin, Command, Stdio},
     str::FromStr,
     sync::{Arc, Mutex},
     time::{Duration, Instant},
@@ -354,11 +357,15 @@ impl DefinitionProvider for LanguageDefinitionProvider {
 struct LanguageServerConnection {
     child: Child,
     input: BufWriter<ChildStdin>,
-    output: BufReader<ChildStdout>,
+    output: transport::Messages,
     root_uri: String,
     language_id: String,
     next_id: u64,
-    document_versions: HashMap<String, i32>,
+    diagnostics: diagnostics::DiagnosticsStore,
+    /// None disables didSave; the boolean controls inclusion of the saved text.
+    save_notifications: Option<bool>,
+    /// Prefer standard pull diagnostics when advertised, including for unsaved buffers.
+    pull_diagnostics: bool,
     readiness: Option<LspReadiness>,
     ready: Option<bool>,
     /// Keep host-injected options available for subsequent workspace/configuration requests.
@@ -379,7 +386,13 @@ impl LanguageServerConnection {
             .spawn()
             .with_context(|| format!("start language server {}", executable.display()))?;
         let input = BufWriter::new(child.stdin.take().context("open language server stdin")?);
-        let output = BufReader::new(child.stdout.take().context("open language server stdout")?);
+        let stdout = child.stdout.take().context("open language server stdout")?;
+        let output = transport::reader(stdout).map_err(|error| {
+            // A failed reader must not leave a process running without an owner.
+            let _ = child.kill();
+            let _ = child.wait();
+            error
+        })?;
         let mut connection = Self {
             child,
             input,
@@ -387,7 +400,9 @@ impl LanguageServerConnection {
             root_uri: root_uri.as_str().to_owned(),
             language_id: language.id.clone(),
             next_id: 1,
-            document_versions: HashMap::new(),
+            diagnostics: diagnostics::DiagnosticsStore::default(),
+            save_notifications: None,
+            pull_diagnostics: false,
             readiness: language.lsp_readiness.clone(),
             ready: None,
             configuration,
@@ -399,7 +414,7 @@ impl LanguageServerConnection {
         if let Some(readiness) = &language.lsp_readiness {
             experimental.insert(readiness.client_capability.clone(), Value::Bool(true));
         }
-        connection.request(
+        let initialized = connection.request(
             "initialize",
             json!({
                 "processId": std::process::id(),
@@ -409,8 +424,17 @@ impl LanguageServerConnection {
                 "workspaceFolders": [{ "uri": root_uri, "name": "workspace" }],
                 "initializationOptions": connection.configuration,
                 "capabilities": {
+                    "general": { "positionEncodings": ["utf-16"] },
                     "workspace": { "workspaceFolders": true },
                     "textDocument": {
+                        "diagnostic": { "dynamicRegistration": false, "relatedDocumentSupport": false },
+                        "synchronization": { "didSave": true },
+                        "publishDiagnostics": {
+                            "versionSupport": true,
+                            "relatedInformation": true,
+                            "tagSupport": { "valueSet": [1, 2] },
+                            "codeDescriptionSupport": true
+                        },
                         "definition": { "linkSupport": true },
                         "completion": {
                             "completionItem": { "snippetSupport": false }
@@ -422,6 +446,26 @@ impl LanguageServerConnection {
                 "clientInfo": { "name": "Me Editor", "version": env!("CARGO_PKG_VERSION") }
             }),
         )?;
+        // Only send optional save notifications when the server requests them.
+        connection.pull_diagnostics = initialized["capabilities"]["diagnosticProvider"].is_object()
+            || initialized["capabilities"]["diagnosticProvider"] == Value::Bool(true);
+        connection.save_notifications = match &initialized["capabilities"]["textDocumentSync"]["save"]
+        {
+            Value::Bool(true) => Some(false),
+            Value::Object(options) => Some(
+                options
+                    .get("includeText")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false),
+            ),
+            _ => None,
+        };
+        ensure!(
+            initialized["capabilities"]["positionEncoding"]
+                .as_str()
+                .is_none_or(|encoding| encoding == "utf-16"),
+            "language server selected an unsupported position encoding"
+        );
         connection.notify("initialized", json!({ "capabilities": {} }))?;
         Ok(connection)
     }
@@ -500,25 +544,19 @@ impl LanguageServerConnection {
             .context("decode language hover response")
     }
 
-    /// Keeps a single monotonically increasing version for every opened document.
+    /// Publish changed snapshots once; identical hover and diagnostic requests share a version.
     fn sync_document(&mut self, uri: Uri, source: String) -> anyhow::Result<String> {
+        // Attribute already queued, unversioned pushes to the old snapshot before replacing it.
+        self.drain_messages()?;
         let uri_text = uri.as_str().to_owned();
-        let previous_version = self.document_versions.get(&uri_text).copied().unwrap_or(0);
-        if previous_version == 0 {
-            self.notify(
-                "textDocument/didOpen",
-                json!({
-                    "textDocument": {
-                        "uri": uri_text,
-                        "languageId": self.language_id,
-                        "version": 1,
-                        "text": source
-                    }
-                }),
-            )?;
-            self.document_versions.insert(uri_text.clone(), 1);
+        let Some(version) = self.diagnostics.next_version(&uri_text, &source) else {
+            return Ok(uri_text);
+        };
+        if version == 1 {
+            self.notify("textDocument/didOpen", json!({
+                "textDocument": { "uri": uri_text, "languageId": self.language_id, "version": version, "text": source }
+            }))?;
         } else {
-            let version = previous_version + 1;
             self.notify(
                 "textDocument/didChange",
                 json!({
@@ -526,68 +564,39 @@ impl LanguageServerConnection {
                     "contentChanges": [{ "text": source }]
                 }),
             )?;
-            self.document_versions.insert(uri_text.clone(), version);
         }
-
+        self.diagnostics
+            .synchronized(uri_text.clone(), source, version);
         Ok(uri_text)
     }
 
-    /// Sends one JSON-RPC request and reads messages until its matching response arrives.
+    /// Wait for the matching response while preserving every diagnostic push.
     fn request(&mut self, method: &str, params: Value) -> anyhow::Result<Value> {
         let id = self.next_id;
         self.next_id += 1;
         self.write_message(
             json!({ "jsonrpc": "2.0", "id": id, "method": method, "params": params }),
         )?;
-
+        let deadline = Instant::now() + Duration::from_secs(30);
         loop {
-            let message = self.read_message()?;
-            if let Some(readiness) = &self.readiness
-                && message.get("method").and_then(Value::as_str)
-                    == Some(readiness.notification.as_str())
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            ensure!(
+                !remaining.is_zero(),
+                "language server {method} request timed out"
+            );
+            let message = self
+                .output
+                .recv_timeout(remaining)
+                .context("wait for language server response")??;
+            self.handle_server_message(&message)?;
+            // Client and server IDs are independent; only a response satisfies this request.
+            if message.get("method").is_none()
+                && message.get("id").and_then(Value::as_u64) == Some(id)
             {
-                self.ready = message
-                    .get("params")
-                    .and_then(|params| params.get(&readiness.ready_field))
-                    .and_then(Value::as_bool);
-            }
-            if message.get("id").and_then(Value::as_u64) == Some(id) {
                 if let Some(error) = message.get("error") {
                     anyhow::bail!("language server {method} request failed: {error}");
                 }
                 return Ok(message.get("result").cloned().unwrap_or(Value::Null));
-            }
-
-            // Servers can issue workspace requests while initialization or indexing runs.
-            if let (Some(server_id), Some(server_method)) = (
-                message.get("id").cloned(),
-                message.get("method").and_then(Value::as_str),
-            ) {
-                let result = match server_method {
-                    "workspace/workspaceFolders" => json!([
-                        { "uri": self.workspace_root_uri()?, "name": "workspace" }
-                    ]),
-                    "workspace/configuration" => message
-                        .get("params")
-                        .and_then(|params| params.get("items"))
-                        .and_then(Value::as_array)
-                        .map(|items| {
-                            Value::Array(
-                                items
-                                    .iter()
-                                    .map(|item| {
-                                        super::sdk::configuration_section(
-                                            &self.configuration,
-                                            item.get("section").and_then(Value::as_str),
-                                        )
-                                    })
-                                    .collect(),
-                            )
-                        })
-                        .unwrap_or_else(|| json!([])),
-                    _ => Value::Null,
-                };
-                self.write_message(json!({ "jsonrpc": "2.0", "id": server_id, "result": result }))?;
             }
         }
     }
@@ -606,44 +615,6 @@ impl LanguageServerConnection {
             .write_all(&payload)
             .context("write LSP message body")?;
         self.input.flush().context("flush LSP message")
-    }
-
-    /// Reads one bounded UTF-8 JSON-RPC payload from the server.
-    fn read_message(&mut self) -> anyhow::Result<Value> {
-        let mut content_length = None;
-        loop {
-            let mut header = String::new();
-            ensure!(
-                self.output
-                    .read_line(&mut header)
-                    .context("read LSP header")?
-                    > 0,
-                "language server closed its output"
-            );
-            if header == "\r\n" || header == "\n" {
-                break;
-            }
-            if let Some((name, value)) = header.split_once(':')
-                && name.eq_ignore_ascii_case("content-length")
-            {
-                content_length = Some(value.trim().parse::<usize>().context("parse LSP length")?);
-            }
-        }
-        let length = content_length.context("language server response omitted Content-Length")?;
-        ensure!(
-            length <= 32 * 1024 * 1024,
-            "language server response exceeded 32 MiB"
-        );
-        let mut payload = vec![0; length];
-        self.output
-            .read_exact(&mut payload)
-            .context("read LSP message body")?;
-        serde_json::from_slice(&payload).context("parse language server JSON-RPC response")
-    }
-
-    /// Returns the project root URI used during initialization for server-initiated requests.
-    fn workspace_root_uri(&self) -> anyhow::Result<String> {
-        Ok(self.root_uri.clone())
     }
 }
 
@@ -689,9 +660,20 @@ fn decode_definitions(value: Value) -> anyhow::Result<Vec<LocationLink>> {
 }
 
 /// Creates an LSP file URI from a canonical or workspace file path.
-pub(super) fn file_uri(path: &Path) -> Option<Uri> {
+pub(crate) fn file_uri(path: &Path) -> Option<Uri> {
     let uri = url::Url::from_file_path(path).ok()?;
-    Uri::from_str(uri.as_str()).ok()
+    let text = uri.to_string();
+    // Keep workspace roots and document URIs identical to rust-analyzer's
+    // Windows VFS convention; mismatched drive casing can make buffers read-only.
+    #[cfg(windows)]
+    let text = {
+        let mut text = text;
+        if text.starts_with("file:///") && text.as_bytes().get(9) == Some(&b':') {
+            text[8..9].make_ascii_lowercase();
+        }
+        text
+    };
+    Uri::from_str(&text).ok()
 }
 
 /// Converts a UTF-8 byte offset into the UTF-16 line and column required by LSP.

@@ -20,6 +20,33 @@ editor.go_to_definition:
 editor.no_definition:
   en: "No definition"
   zh-CN: "暂无定义"
+diagnostics.missing:
+  en: "Syntax error: expected `%{token}`"
+  zh-CN: "语法错误：缺少 `%{token}`"
+diagnostics.unexpected:
+  en: "Syntax error: unexpected or incomplete syntax"
+  zh-CN: "语法错误：此处包含无法识别或不完整的语法"
+diagnostics.count:
+  en: "Problems: %{count}"
+  zh-CN: "问题：%{count}"
+diagnostics.navigate:
+  en: "Next problem (F8); previous problem (Shift+F8)"
+  zh-CN: "跳转到下一处问题（F8），上一处（Shift+F8）"
+diagnostics.error:
+  en: "Error"
+  zh-CN: "错误"
+diagnostics.warning:
+  en: "Warning"
+  zh-CN: "警告"
+diagnostics.info:
+  en: "Information"
+  zh-CN: "信息"
+diagnostics.hint:
+  en: "Hint"
+  zh-CN: "提示"
+diagnostics.location:
+  en: "Line %{line}, column %{column}"
+  zh-CN: "第 %{line} 行，第 %{column} 列"
 editor.code_actions:
   en: "Show Code Actions"
   zh-CN: "显示代码操作"

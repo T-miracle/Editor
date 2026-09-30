@@ -319,6 +319,12 @@ impl Render for EditorApp {
             .on_action(cx.listener(Self::on_toggle_theme_action))
             .on_action(cx.listener(Self::on_navigate_to_definition))
             .on_action(cx.listener(Self::on_show_definition_details))
+            .on_action(cx.listener(|app, _: &NextSyntaxError, window, cx| {
+                app.navigate_syntax_error(false, window, cx);
+            }))
+            .on_action(cx.listener(|app, _: &PreviousSyntaxError, window, cx| {
+                app.navigate_syntax_error(true, window, cx);
+            }))
             .size_full()
             .bg(shell_style.background.unwrap_or(cx.theme().background))
             .text_color(shell_style.foreground.unwrap_or(cx.theme().foreground))
@@ -396,6 +402,14 @@ impl Render for EditorApp {
                         StatusBar::new()
                             .left(self.render_panel_buttons(cx))
                             .left(div().max_w(px(320.)).truncate().child(self.status.clone()))
+                            // Keep error counts separate from temporary save/loading messages.
+                            .when(
+                                self.editor
+                                    .read(cx)
+                                    .diagnostics()
+                                    .is_some_and(|set| !set.is_empty()),
+                                |bar| bar.right(self.render_syntax_error_indicator(cx)),
+                            )
                             // Keep plugin indicators immediately before the cursor position.
                             .when(self.plugin_count(PluginPopupKind::Loading, cx) > 0, |bar| {
                                 bar.right(

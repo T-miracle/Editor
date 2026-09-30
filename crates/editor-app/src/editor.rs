@@ -2,6 +2,7 @@
 
 #[cfg(test)]
 mod definition_tests;
+pub(crate) mod diagnostics;
 mod documents;
 pub(crate) mod file_watch;
 #[cfg(test)]

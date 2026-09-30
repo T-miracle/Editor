@@ -114,6 +114,7 @@ impl EditorApp {
                 editor.update(cx, |editor, cx| {
                     editor.set_highlighter(language_for_path(&path), cx)
                 });
+                self.refresh_syntax_diagnostics(editor.entity_id(), cx);
             }
             self.sync_watched_documents();
             self.persist_session();
@@ -330,6 +331,7 @@ impl EditorApp {
                                             .to_string();
                                 }
                             }
+                            this.refresh_syntax_diagnostics(changed_editor.entity_id(), cx);
                             cx.notify();
                         }
                     });
@@ -350,11 +352,13 @@ impl EditorApp {
                     overwrite_confirmed: false,
                     definition_highlight,
                     definition_highlight_generation: 0,
+                    diagnostics: Default::default(),
                     _subscription: subscription,
                     _observer: observer,
                 });
                 self.sync_watched_documents();
                 self.activate_tab(self.tabs.len() - 1, window, cx);
+                self.refresh_syntax_diagnostics(self.editor.entity_id(), cx);
                 let editor = self.tabs.last().unwrap().editor.downgrade();
                 // Start highlighting only after the loaded text has painted once.
                 window.on_next_frame(move |_, cx| {
@@ -663,6 +667,8 @@ impl EditorApp {
                 tab.disk_state = DiskState::Synced;
                 tab.overwrite_confirmed = false;
                 self.status = t!("status.saved", path = tab.session.path().display()).to_string();
+                let path = tab.session.path().to_path_buf();
+                self.notify_language_document_saved(&path, value, cx);
             }
             Err(error) => {
                 self.status = t!("status.save_failed", error = error.to_string()).to_string()

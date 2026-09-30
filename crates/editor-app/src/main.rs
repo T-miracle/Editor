@@ -84,7 +84,9 @@ actions!(
         RefreshWorkspace,
         ToggleTheme,
         NavigateToDefinition,
-        ShowDefinitionDetails
+        ShowDefinitionDetails,
+        NextSyntaxError,
+        PreviousSyntaxError
     ]
 );
 
@@ -185,6 +187,8 @@ struct OpenTab {
     /// A separate decoration layer keeps a definition jump visible for two seconds.
     definition_highlight: TextDecorationCollection,
     definition_highlight_generation: u64,
+    /// Diagnostics retain only derived parser state; EditorState owns the editable text.
+    diagnostics: editor::diagnostics::DocumentDiagnostics,
     _subscription: Subscription,
     _observer: Subscription,
 }
@@ -693,6 +697,13 @@ fn main() -> anyhow::Result<()> {
                 KeyBinding::new(
                     "ctrl-i",
                     ShowDefinitionDetails,
+                    Some("EditorShell && !PluginSurface"),
+                ),
+                // Error navigation follows the active document and wraps at either end.
+                KeyBinding::new("f8", NextSyntaxError, Some("EditorShell && !PluginSurface")),
+                KeyBinding::new(
+                    "shift-f8",
+                    PreviousSyntaxError,
                     Some("EditorShell && !PluginSurface"),
                 ),
             ]);
