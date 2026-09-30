@@ -964,7 +964,8 @@ impl EditorApp {
                 if panel.read(cx).visible.get() && self.dock_area.read(cx).panel(panel_id).is_none()
                 {
                     self.dock_area.update(cx, |area, cx| {
-                        area.add_panel_view(
+                        crate::local_dock::add_panel_view(
+                            area,
                             dock::panel_handle(panel.clone()),
                             placement,
                             Some(px(dock_size)),
@@ -998,7 +999,8 @@ impl EditorApp {
             });
             if initially_visible {
                 self.dock_area.update(cx, |area, cx| {
-                    area.add_panel_view(
+                    crate::local_dock::add_panel_view(
+                        area,
                         dock::panel_handle(panel.clone()),
                         placement,
                         Some(px(dock_size)),

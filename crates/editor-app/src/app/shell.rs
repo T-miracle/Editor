@@ -98,6 +98,15 @@ pub(crate) enum EditorDockPanelKind {
     Editor,
 }
 
+/// Keep the title bar and bottom toggle on the same theme-specific Explorer artwork.
+fn explorer_panel_icon(cx: &App) -> Icon {
+    Icon::default().data(if cx.theme().is_dark() {
+        include_bytes!("../../assets/status-icons/explorer_dark.svg").as_slice()
+    } else {
+        include_bytes!("../../assets/status-icons/explorer_light.svg").as_slice()
+    })
+}
+
 pub(crate) struct EditorDockPanel {
     parent: WeakEntity<EditorApp>,
     kind: EditorDockPanelKind,
@@ -156,31 +165,39 @@ impl dock::BasePanel for EditorDockPanel {
 impl DockPanel for EditorDockPanel {
     fn title(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         match self.kind {
-            EditorDockPanelKind::Explorer => div()
+            // Match plugin panel titles: shared dock styling, an icon-label row and a hide control.
+            EditorDockPanelKind::Explorer => h_flex()
                 .w_full()
-                .h(px(PANEL_HEADER_HEIGHT))
-                .flex()
                 .items_center()
-                .px(px(component_styles(cx, ThemeComponent::DockTitleBar)
-                    .base
-                    .padding_x_px
-                    .unwrap_or(8.)))
-                .text_size(px(component_styles(cx, ThemeComponent::DockTitleBar)
-                    .base
-                    .font_size_px
-                    .unwrap_or(14.)))
+                .justify_between()
                 .font_normal()
-                .bg(component_styles(cx, ThemeComponent::DockTitleBar)
-                    .base
-                    .background
-                    .unwrap_or(cx.theme().tab_bar))
-                .text_color(
-                    component_styles(cx, ThemeComponent::DockTitleBar)
-                        .base
-                        .foreground
-                        .unwrap_or(cx.theme().foreground),
+                .child(
+                    h_flex()
+                        .flex_1()
+                        .min_w(px(0.))
+                        .items_center()
+                        .gap_2()
+                        .child(explorer_panel_icon(cx).small())
+                        .child(div().truncate().child(t!("panel.explorer").to_string())),
                 )
-                .child(t!("panel.explorer").to_string())
+                .child(
+                    Button::new("explorer-hide")
+                        .icon(Icon::new(IconName::WindowMinimize))
+                        .tooltip(t!("panel.minimize_explorer").to_string())
+                        .accessibility_label(t!("panel.minimize_explorer").to_string())
+                        .small()
+                        .compact()
+                        .ghost()
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            cx.stop_propagation();
+                            let _ = this.parent.update(cx, |app, cx| {
+                                // Use the existing visibility path to persist hiding and update the bottom toggle.
+                                if app.explorer_visible {
+                                    app.toggle_explorer(cx);
+                                }
+                            });
+                        })),
+                )
                 .into_any_element(),
             EditorDockPanelKind::Editor => div()
                 .child(t!("panel.editor").to_string())
@@ -215,12 +232,7 @@ impl EditorApp {
             .gap_1()
             .child(
                 Button::new("explorer-panel-toggle")
-                    // Match the supplied Explorer artwork to the active theme palette.
-                    .icon(Icon::default().data(if cx.theme().is_dark() {
-                        include_bytes!("../../assets/status-icons/explorer_dark.svg").as_slice()
-                    } else {
-                        include_bytes!("../../assets/status-icons/explorer_light.svg").as_slice()
-                    }))
+                    .icon(explorer_panel_icon(cx))
                     .small()
                     .compact()
                     .ghost()
@@ -348,6 +360,7 @@ impl Render for EditorApp {
                     .child(
                         div()
                             .id("title-bar-drag-region")
+                            .debug_selector(|| "title-bar-drag-region".into())
                             .flex_1()
                             .h_full()
                             .window_control_area(WindowControlArea::Drag)

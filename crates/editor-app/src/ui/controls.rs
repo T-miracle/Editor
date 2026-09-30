@@ -3,6 +3,7 @@
 mod button;
 mod checkbox;
 mod dialog;
+pub(crate) mod dock;
 mod icon;
 mod input;
 pub(crate) mod menu;

@@ -51,7 +51,6 @@ use std::{
 #[cfg(target_os = "windows")]
 use app::WindowsTimerResolution;
 use app::dialog as app_dialog;
-use app::dock as local_dock;
 use app::plugins::{PluginLoadEntry, PluginPopupKind};
 use app::session as session_state;
 use app::{EditorDockPanel, EditorDockPanelKind};
@@ -68,6 +67,7 @@ use session_state::SessionState;
 #[cfg(test)]
 use theme::builtin_theme;
 use theme::{apply_theme, component_styles};
+use ui::controls::dock as local_dock;
 use ui::controls::{Button, Icon, StatusBar, Tooltip};
 use ui::{assets, icons, theme, typography};
 

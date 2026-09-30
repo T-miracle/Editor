@@ -2,6 +2,9 @@ _version: 2
 panel.explorer:
   en: "Explorer"
   zh-CN: "资源管理器"
+panel.minimize_explorer:
+  en: "Minimize Explorer"
+  zh-CN: "最小化资源管理器"
 panel.editor:
   en: "Editor"
   zh-CN: "编辑器"
