@@ -4,6 +4,47 @@ use super::*;
 use gpui_kit::{TestAppContext, component::Root, gpui, px, size};
 use std::{cell::RefCell, collections::BTreeMap, rc::Rc};
 
+#[gpui::test]
+fn status_popup_blocks_title_bar_until_dismissed(cx: &mut TestAppContext) {
+    cx.update(|cx| {
+        gpui_kit::init(cx);
+        typography::init(cx);
+        apply_theme(builtin_theme(false), cx);
+    });
+    let directory = tempfile::tempdir().unwrap();
+    let workspace = Workspace::open(directory.path()).unwrap();
+    let slot = Rc::new(RefCell::new(None));
+    let capture = slot.clone();
+    let (_, window_cx) = cx.add_window_view(move |window, cx| {
+        let app = cx.new(|cx| EditorApp::new(workspace, None, window, cx));
+        *capture.borrow_mut() = Some(app.clone());
+        Root::new(app, window, cx)
+    });
+    let app = slot.borrow_mut().take().unwrap();
+    window_cx.simulate_resize(size(px(800.), px(600.)));
+    window_cx.update(|window, cx| {
+        app.update(cx, |app, cx| {
+            app.plugin_popup = Some((PluginPopupKind::Error, point(px(90.), px(500.))));
+            cx.notify();
+        });
+        window.draw(cx).clear(cx);
+    });
+    assert!(window_cx.debug_bounds("plugin-popup-blocker").is_some());
+
+    // Dismissing the popup must consume the press before the title bar handles it.
+    let title = window_cx.debug_bounds("title-bar-drag-region").unwrap();
+    window_cx.simulate_mouse_down(title.center(), MouseButton::Left, Default::default());
+    window_cx.run_until_parked();
+    assert!(window_cx.update(|_, cx| app.read(cx).plugin_popup.is_none()));
+    assert!(!window_cx.update(|_, cx| app.read(cx).titlebar_should_move));
+    // Once dismissed, the underlying panel should accept a new press normally.
+    window_cx.simulate_mouse_up(title.center(), MouseButton::Left, Default::default());
+    window_cx.update(|window, cx| window.draw(cx).clear(cx));
+    window_cx.simulate_mouse_down(title.center(), MouseButton::Left, Default::default());
+    window_cx.run_until_parked();
+    assert!(window_cx.update(|_, cx| app.read(cx).titlebar_should_move));
+}
+
 /// A previously installed runtime plugin must appear in the startup indicator.
 #[gpui::test]
 fn installed_runtime_plugin_is_visible_while_starting(cx: &mut TestAppContext) {
@@ -337,6 +378,10 @@ fn status_indicators_open_plugin_lists(cx: &mut TestAppContext) {
     let loading = cx
         .debug_bounds("plugin-loading-indicator")
         .expect("loading plugin should have a spinning status indicator");
+    // The first outside click only dismisses the previous popup; it cannot activate the indicator.
+    cx.simulate_click(loading.center(), Default::default());
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+    assert!(cx.update(|_, cx| view.read(cx).plugin_popup.is_none()));
     cx.simulate_click(loading.center(), Default::default());
     cx.update(|window, cx| window.draw(cx).clear(cx));
     let popup = cx

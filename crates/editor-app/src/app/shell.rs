@@ -417,6 +417,7 @@ impl Render for EditorApp {
                             }),
                     ),
             )
+            .child(self.render_plugin_popup_blocker(cx))
             .child(self.render_plugin_popup(window, cx))
             .child(self.render_explorer_menu(window, cx))
             .child(self.render_explorer_edit(cx))
