@@ -146,6 +146,24 @@ status.ready:
 status.workspace_refreshed:
   en: "Workspace refreshed · %{count} files"
   zh-CN: "工作区已刷新 · 共 %{count} 个文件"
+status.refreshing_workspace:
+  en: "Checking workspace and open files..."
+  zh-CN: "正在核对工作区及已打开文件……"
+status.disk_updated:
+  en: "File changed on disk; editor reloaded"
+  zh-CN: "磁盘文件已变化，编辑器已重新加载"
+status.disk_conflict:
+  en: "File changed on disk; unsaved edits were preserved"
+  zh-CN: "磁盘文件已变化，未保存的编辑内容已保留"
+status.disk_deleted:
+  en: "File was deleted on disk; its tab was preserved"
+  zh-CN: "磁盘文件已删除，标签页已保留"
+status.confirm_disk_overwrite:
+  en: "File changed on disk. Save again to overwrite the disk version"
+  zh-CN: "磁盘文件已变化；再次保存将覆盖磁盘版本"
+status.confirm_disk_restore:
+  en: "File was deleted on disk. Save again to recreate it"
+  zh-CN: "磁盘文件已删除；再次保存将在原路径重建文件"
 status.modified:
   en: "Modified · revision %{revision}"
   zh-CN: "已修改 · 修订版本 %{revision}"

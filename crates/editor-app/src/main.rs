@@ -11,7 +11,9 @@ mod ui;
 // Compile translations from the app's locale files and retain English as fallback.
 rust_i18n::i18n!("locales", fallback = "en");
 
+use editor::file_watch::{FileWatch, Reconciliation};
 use editor_core::{DocumentSession, Workspace, WorkspaceSnapshot};
+use futures::StreamExt;
 use gpui_base::dock::{DockArea, DockEvent, DockLayout, PanelEvent};
 use gpui_base::input::RopeExt as _;
 use gpui_base::input::{
@@ -39,13 +41,14 @@ use gpui_kit::{
 use platform_windows::{LocalHistory, NativeFileStore};
 use plugin_schema::ThemeComponent;
 use rust_i18n::t;
+use sha2::{Digest, Sha256};
 use std::{
     cell::Cell,
     collections::HashMap,
     path::{Path, PathBuf},
     rc::Rc,
     sync::Arc,
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 #[cfg(target_os = "windows")]
@@ -87,6 +90,8 @@ actions!(
 
 struct EditorApp {
     workspace: Workspace,
+    /// Native events and fallback scans send immutable disk snapshots to the UI thread.
+    file_watch: FileWatch,
     workspace_snapshot: Option<WorkspaceSnapshot>,
     language_servers: HashMap<String, Arc<language_navigation::LanguageServer>>,
     file_store: NativeFileStore,
@@ -149,6 +154,7 @@ struct EditorApp {
     _tree_subscription: Subscription,
     _dock_subscription: Subscription,
     _bounds_subscription: Option<Subscription>,
+    _activation_subscription: Option<Subscription>,
 }
 
 /// Anchors a short definition lookup message above the clicked window position.
@@ -161,11 +167,26 @@ struct DefinitionNotice {
 struct OpenTab {
     session: DocumentSession,
     editor: Entity<EditorState>,
+    /// Hash of the last disk text, avoiding a second full copy of every open document.
+    disk_digest: [u8; 32],
+    /// Ignore worker reads that began before the latest successful local save.
+    last_saved_at: Instant,
+    disk_state: DiskState,
+    suppress_change: bool,
+    overwrite_confirmed: bool,
     /// A separate decoration layer keeps a definition jump visible for two seconds.
     definition_highlight: TextDecorationCollection,
     definition_highlight_generation: u64,
     _subscription: Subscription,
     _observer: Subscription,
+}
+
+/// Open tabs remain present when their backing file changes or disappears.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum DiskState {
+    Synced,
+    Conflict,
+    Deleted,
 }
 
 impl EditorApp {
@@ -175,6 +196,7 @@ impl EditorApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
+        let (file_watch, mut watch_updates) = FileWatch::start(workspace.clone());
         let closing = cx.entity().downgrade();
         window.on_window_should_close(cx, move |_, cx| {
             let _ = closing.update(cx, |app, cx| app.shutdown_plugins(cx));
@@ -291,6 +313,7 @@ impl EditorApp {
         });
         let mut this = Self {
             workspace,
+            file_watch,
             workspace_snapshot: None,
             language_servers: HashMap::new(),
             file_store: NativeFileStore,
@@ -337,6 +360,7 @@ impl EditorApp {
             _tree_subscription: tree_subscription,
             _dock_subscription: dock_subscription,
             _bounds_subscription: None,
+            _activation_subscription: None,
         };
         this.refresh_files(cx);
 
@@ -369,6 +393,22 @@ impl EditorApp {
         let focus = this.editor.focus_handle(cx);
         window.defer(cx, move |window, cx| focus.focus(window, cx));
         this.start_plugin_loading(cx);
+        // The window observer repairs missed events after sleep or another app had focus.
+        this._activation_subscription =
+            Some(cx.observe_window_activation(window, |this, window, _cx| {
+                if window.is_window_active() {
+                    this.file_watch.reconcile();
+                }
+            }));
+        // Apply all worker results on the GPUI thread; editor entities never cross threads.
+        cx.spawn_in(window, async move |app, cx| {
+            while let Some(update) = watch_updates.next().await {
+                let _ = app.update_in(cx, |app, window, cx| {
+                    app.apply_reconciliation(update, window, cx);
+                });
+            }
+        })
+        .detach();
         this
     }
 
@@ -572,7 +612,9 @@ impl EditorApp {
     }
 
     fn on_refresh_action(&mut self, _: &RefreshWorkspace, _: &mut Window, cx: &mut Context<Self>) {
-        self.refresh_files(cx);
+        self.file_watch.reconcile();
+        self.status = t!("status.refreshing_workspace").to_string();
+        cx.notify();
     }
 
     fn on_toggle_theme_action(

@@ -30,6 +30,7 @@ sha2 = "0.10"
 tempfile.workspace = true
 # Discover nested plugin manifests without traversing ignored build output.
 ignore.workspace = true
+notify.workspace = true
 
 [dev-dependencies]
 gpui-kit = { workspace = true, features = ["test-support"] }

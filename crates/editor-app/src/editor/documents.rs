@@ -56,6 +56,143 @@ impl EditorApp {
         cx.notify();
     }
 
+    /// Apply a completed background scan without replacing unsaved editor text.
+    pub(crate) fn apply_reconciliation(
+        &mut self,
+        update: Reconciliation,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let renamed_from: Vec<_> = update.renames.iter().map(|(old, _)| old.clone()).collect();
+        let mut renamed = false;
+        let mut renamed_editors = Vec::new();
+        for (old, new) in &update.renames {
+            // A paired directory rename transfers descendants; ambiguous targets stay put.
+            for index in 0..self.tabs.len() {
+                let Some(relative) = self.tabs[index].session.path().strip_prefix(old).ok() else {
+                    continue;
+                };
+                let target = if relative.as_os_str().is_empty() {
+                    new.clone()
+                } else {
+                    new.join(relative)
+                };
+                if !target.is_file()
+                    || self
+                        .tabs
+                        .iter()
+                        .enumerate()
+                        .any(|(other, tab)| other != index && tab.session.path() == target)
+                {
+                    continue;
+                }
+                let previous = self.tabs[index].session.path().to_path_buf();
+                self.tabs[index].session.rename(target.clone());
+                renamed_editors.push((self.tabs[index].editor.clone(), target.clone()));
+                if self.active_path.as_ref() == Some(&previous) {
+                    self.active_path = Some(target);
+                }
+                renamed = true;
+            }
+        }
+        if renamed {
+            for (editor, path) in renamed_editors {
+                // A moved document's language providers must send the new file URI.
+                detach_language_server(&editor, cx);
+                if let Some(contribution) = language_plugins::language_for_path(&path)
+                    .filter(|contribution| self.language_plugin_enabled(&contribution.id))
+                    && let Some(server) = self.language_servers.get(&contribution.id)
+                {
+                    attach_language_server(
+                        &editor,
+                        &path,
+                        server.clone(),
+                        cx.entity().downgrade(),
+                        cx,
+                    );
+                }
+                editor.update(cx, |editor, cx| {
+                    editor.set_highlighter(language_for_path(&path), cx)
+                });
+            }
+            self.sync_watched_documents();
+            self.persist_session();
+        }
+        if let Some(snapshot) = update.snapshot {
+            self.update_workspace_tree(snapshot, cx);
+        }
+        for (path, disk_contents, read_at) in update.documents {
+            if renamed_from.iter().any(|old| path.starts_with(old)) {
+                continue;
+            }
+            let Some(index) = self.tabs.iter().position(|tab| tab.session.path() == path) else {
+                continue;
+            };
+            let tab = &mut self.tabs[index];
+            if read_at < tab.last_saved_at {
+                continue;
+            }
+            let new_state = match disk_contents {
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => DiskState::Deleted,
+                Err(error) => {
+                    tracing::warn!(%error, path = %path.display(), "open document could not be checked");
+                    continue;
+                }
+                Ok(contents)
+                    if Sha256::digest(contents.as_bytes()).as_slice() == tab.disk_digest =>
+                {
+                    DiskState::Synced
+                }
+                Ok(_contents) if tab.session.is_dirty() => DiskState::Conflict,
+                Ok(contents) => {
+                    // Programmatic reload must not mark the clean tab as a user edit.
+                    let digest = Sha256::digest(contents.as_bytes()).into();
+                    tab.suppress_change = true;
+                    tab.editor
+                        .update(cx, |editor, cx| editor.set_value(contents, window, cx));
+                    tab.suppress_change = false;
+                    tab.disk_digest = digest;
+                    DiskState::Synced
+                }
+            };
+            if new_state != tab.disk_state {
+                tab.overwrite_confirmed = false;
+                tab.disk_state = new_state;
+                if self.active_path.as_ref() == Some(&path) {
+                    self.status = match new_state {
+                        DiskState::Synced => t!("status.disk_updated").to_string(),
+                        DiskState::Conflict => t!("status.disk_conflict").to_string(),
+                        DiskState::Deleted => t!("status.disk_deleted").to_string(),
+                    };
+                }
+                cx.notify();
+            }
+        }
+        if !update.native {
+            tracing::warn!(
+                "native file watcher unavailable; adaptive background scanning is active"
+            );
+        }
+        if self.status == t!("status.refreshing_workspace").to_string() {
+            let count = self
+                .workspace_snapshot
+                .as_ref()
+                .map_or(0, |snapshot| snapshot.files.len());
+            self.status = t!("status.workspace_refreshed", count = count).to_string();
+            cx.notify();
+        }
+    }
+
+    /// A parent directory is watched for each document outside the workspace.
+    fn sync_watched_documents(&self) {
+        self.file_watch.set_documents(
+            self.tabs
+                .iter()
+                .map(|tab| tab.session.path().to_path_buf())
+                .collect(),
+        );
+    }
+
     pub(crate) fn persist_session(&mut self) {
         self.session_state.open_tabs = self
             .tabs
@@ -128,6 +265,7 @@ impl EditorApp {
                     });
                 let document_path = opened.session.path().to_path_buf();
                 let contents = opened.contents;
+                let disk_digest = Sha256::digest(contents.as_bytes()).into();
                 let editor = cx.new(|cx| {
                     EditorState::new(window, cx)
                         // Keep the first render free of parser work while loading the file.
@@ -176,15 +314,21 @@ impl EditorApp {
                 }
                 let subscription =
                     cx.subscribe(&editor, |this, changed_editor, event: &InputEvent, cx| {
-                        if matches!(event, InputEvent::Change)
-                            && this.editor.entity_id() == changed_editor.entity_id()
-                        {
-                            if let Some(index) = this.active_tab_index() {
+                        if matches!(event, InputEvent::Change) {
+                            // Each tab keeps its own revision, including background edits.
+                            if let Some(index) = this.tabs.iter().position(|tab| {
+                                tab.editor.entity_id() == changed_editor.entity_id()
+                            }) {
                                 let tab = &mut this.tabs[index];
+                                if tab.suppress_change {
+                                    return;
+                                }
                                 tab.session.note_edit();
-                                this.status =
-                                    t!("status.modified", revision = tab.session.revision())
-                                        .to_string();
+                                if this.editor.entity_id() == changed_editor.entity_id() {
+                                    this.status =
+                                        t!("status.modified", revision = tab.session.revision())
+                                            .to_string();
+                                }
                             }
                             cx.notify();
                         }
@@ -199,11 +343,17 @@ impl EditorApp {
                 self.tabs.push(OpenTab {
                     session: opened.session,
                     editor,
+                    disk_digest,
+                    last_saved_at: Instant::now(),
+                    disk_state: DiskState::Synced,
+                    suppress_change: false,
+                    overwrite_confirmed: false,
                     definition_highlight,
                     definition_highlight_generation: 0,
                     _subscription: subscription,
                     _observer: observer,
                 });
+                self.sync_watched_documents();
                 self.activate_tab(self.tabs.len() - 1, window, cx);
                 let editor = self.tabs.last().unwrap().editor.downgrade();
                 // Start highlighting only after the loaded text has painted once.
@@ -394,6 +544,7 @@ impl EditorApp {
 
         let was_active = self.active_path.as_ref() == Some(&path);
         self.tabs.remove(index);
+        self.sync_watched_documents();
         if !was_active {
             self.persist_session();
             cx.notify();
@@ -453,8 +604,49 @@ impl EditorApp {
             cx.notify();
             return;
         };
-        if !self.tabs[index].session.is_dirty() {
+        if !self.tabs[index].session.is_dirty() && self.tabs[index].disk_state != DiskState::Deleted
+        {
             self.status = t!("status.no_changes_to_save").to_string();
+            cx.notify();
+            return;
+        }
+
+        if self.tabs[index].disk_state == DiskState::Synced {
+            // A save can precede its native event; compare the disk before overwriting it.
+            let path = self.tabs[index].session.path();
+            match std::fs::read(path) {
+                Ok(bytes) if Sha256::digest(&bytes).as_slice() != self.tabs[index].disk_digest => {
+                    self.tabs[index].disk_state = DiskState::Conflict;
+                    self.tabs[index].overwrite_confirmed = true;
+                    self.status = t!("status.confirm_disk_overwrite").to_string();
+                    cx.notify();
+                    return;
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                    self.tabs[index].disk_state = DiskState::Deleted;
+                    self.tabs[index].overwrite_confirmed = true;
+                    self.status = t!("status.confirm_disk_restore").to_string();
+                    cx.notify();
+                    return;
+                }
+                Err(error) => {
+                    self.status = t!("status.save_failed", error = error.to_string()).to_string();
+                    cx.notify();
+                    return;
+                }
+                Ok(_) => {}
+            }
+        }
+
+        if self.tabs[index].disk_state != DiskState::Synced && !self.tabs[index].overwrite_confirmed
+        {
+            // Saving again is an explicit overwrite confirmation for a disk conflict or deletion.
+            self.tabs[index].overwrite_confirmed = true;
+            self.status = match self.tabs[index].disk_state {
+                DiskState::Conflict => t!("status.confirm_disk_overwrite").to_string(),
+                DiskState::Deleted => t!("status.confirm_disk_restore").to_string(),
+                DiskState::Synced => unreachable!(),
+            };
             cx.notify();
             return;
         }
@@ -466,6 +658,10 @@ impl EditorApp {
         let tab = &mut self.tabs[index];
         match tab.session.save(&self.file_store, &value) {
             Ok(()) => {
+                tab.disk_digest = Sha256::digest(value.as_bytes()).into();
+                tab.last_saved_at = Instant::now();
+                tab.disk_state = DiskState::Synced;
+                tab.overwrite_confirmed = false;
                 self.status = t!("status.saved", path = tab.session.path().display()).to_string();
             }
             Err(error) => {

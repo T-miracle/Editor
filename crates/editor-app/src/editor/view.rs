@@ -202,6 +202,7 @@ impl EditorApp {
             let is_active = self.active_path.as_ref() == Some(&path);
             let is_external = !path.starts_with(self.workspace.root());
             let is_dirty = tab.session.is_dirty();
+            let disk_state = tab.disk_state;
             let name = tab
                 .session
                 .file_name()
@@ -309,7 +310,16 @@ impl EditorApp {
                         .truncate()
                         .text_sm()
                         .when(is_external, |style| style.italic())
-                        .child(format!("{}{}", name, if is_dirty { " ●" } else { "" })),
+                        .child(format!(
+                            "{}{}{}",
+                            name,
+                            if is_dirty { " ●" } else { "" },
+                            match disk_state {
+                                DiskState::Synced => "",
+                                DiskState::Conflict => " ⚠",
+                                DiskState::Deleted => " ×",
+                            }
+                        )),
                 )
                 .child(
                     div()

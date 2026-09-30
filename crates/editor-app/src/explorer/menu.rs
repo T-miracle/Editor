@@ -215,7 +215,7 @@ impl EditorApp {
             }
             Command::Refresh => {
                 // Manual refresh also checks every open tab against its disk contents.
-                self.refresh_files(cx);
+                self.file_watch.reconcile();
                 self.status = t!("status.refreshing_workspace").to_string();
             }
             Command::New | Command::SpecialCopy => unreachable!(),

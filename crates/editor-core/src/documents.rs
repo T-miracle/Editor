@@ -59,6 +59,11 @@ impl DocumentSession {
         &self.path
     }
 
+    /// Preserve the editor revision when a paired filesystem rename moves this file.
+    pub fn rename(&mut self, path: PathBuf) {
+        self.path = path;
+    }
+
     pub fn file_name(&self) -> Result<&str, DocumentError> {
         self.path
             .file_name()

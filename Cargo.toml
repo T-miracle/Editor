@@ -23,6 +23,8 @@ dirs = "6.0"
 # Keep the facade and directly used Base APIs on the same stable release.
 gpui-kit = { version = "0.7.0", features = ["tree-sitter-languages"] }
 ignore = "0.4"
+# Native ReadDirectoryChangesW, FSEvents, and inotify backends watch the workspace.
+notify = "8.2"
 # Sorting the explorer by Chinese pronunciation needs a real reading, not a
 # codepoint approximation. `plain` gives toneless ASCII syllables; the tone
 # spellings would sort "chang" and "cháng" apart for no benefit.
