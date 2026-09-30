@@ -1,13 +1,14 @@
 //! The terminal guest owns Alacritty's VT parser, cells, modes and scrollback.
 use alacritty_terminal::Term;
 use alacritty_terminal::event::{Event, EventListener, WindowSize};
-use alacritty_terminal::grid::{Dimensions, Grid, Scroll};
+use alacritty_terminal::grid::{Dimensions, Grid, GridCell, Scroll};
 use alacritty_terminal::index::{Column, Line, Point};
 use alacritty_terminal::term::cell::{Cell, Flags};
 use alacritty_terminal::term::{Config, TermMode};
 use alacritty_terminal::vte::ansi::{
     Color as CoreColor, CursorShape, CursorStyle, NamedColor, Processor, Rgb,
 };
+use serde::{Deserialize, Serialize};
 use std::cell::{RefCell, RefMut};
 use std::collections::VecDeque;
 use std::rc::Rc;
@@ -270,6 +271,24 @@ struct Selection {
     clicks: u8,
 }
 
+/// Presentation metadata supplements ANSI text without persisting a running shell's modes.
+#[derive(Serialize, Deserialize)]
+pub(super) struct DisplayState {
+    rows: u16,
+    columns: u16,
+    cursor: (u16, u16),
+    wrap_pending: bool,
+    scrollback: usize,
+    /// History-relative row numbers distinguish soft wraps from real line breaks.
+    wrapped_lines: Vec<i32>,
+}
+impl DisplayState {
+    /// Bound user-controlled dimensions before allocating an emulator on restore.
+    pub(super) fn size(&self) -> (u16, u16) {
+        (self.rows.clamp(1, 500), self.columns.clamp(2, 1000))
+    }
+}
+
 /// Single terminal session: upstream parser and grid plus editor-facing presentation state.
 pub(super) struct Emulator {
     term: Term<Listener>,
@@ -333,6 +352,39 @@ impl Emulator {
         }
         self.selection = None;
     }
+    /// Replay display data locally and restore its caret without inserting a separator or newline.
+    pub fn restore(&mut self, output: &str, display: Option<&DisplayState>) {
+        if let Some(display) = display {
+            self.process(output.as_bytes());
+            let grid = self.term.primary_grid_mut();
+            let rows = grid.screen_lines();
+            let columns = grid.columns();
+            grid.cursor.point = Point::new(
+                Line(i32::from(display.cursor.0).min(rows as i32 - 1)),
+                Column(usize::from(display.cursor.1).min(columns - 1)),
+            );
+            grid.cursor.input_needs_wrap = display.wrap_pending;
+            // ANSI replay uses hard breaks for exact rows; restore their original reflow flags.
+            for &line in &display.wrapped_lines {
+                if line >= -(grid.history_size() as i32) && line < rows as i32 {
+                    grid[Point::new(Line(line), Column(columns - 1))]
+                        .flags
+                        .insert(Flags::WRAPLINE);
+                }
+            }
+            self.set_scrollback(display.scrollback.min(self.history()));
+        } else {
+            // Legacy snapshots added a writer newline and a generated restoration separator.
+            // Remove only that exact legacy row, leaving user output and internal breaks intact.
+            let marker = "\x1b[0m\x1b[0m--- restored session; new shell ---\x1b[0m\r\n";
+            let output = output
+                .replace(&format!("\x1b[0m\r\n{marker}"), "")
+                .replace(marker, "");
+            self.process(output.strip_suffix("\r\n").unwrap_or(&output).as_bytes());
+        }
+        // A snapshot is never allowed to issue terminal query responses to the new process.
+        self.replies.borrow_mut().bytes.clear();
+    }
     /// Resize the emulator grid without introducing a line of shell input.
     pub fn resize(&mut self, rows: u16, cols: u16) {
         self.term.resize(Size {
@@ -366,6 +418,14 @@ impl Emulator {
     /// Remove old lines without erasing the visible terminal screen.
     pub fn clear_history(&mut self) {
         self.term.primary_grid_mut().clear_history();
+        self.selection = None;
+    }
+    /// Erase current and primary buffers while retaining the live process and its input modes.
+    pub fn clear_buffer(&mut self) {
+        self.term.grid_mut().reset::<CoreColor>();
+        if self.screen().alternate_screen() {
+            self.term.primary_grid_mut().reset::<CoreColor>();
+        }
         self.selection = None;
     }
     /// Begin character, word or line selection.
@@ -453,18 +513,44 @@ impl Emulator {
         }
         Some(text)
     }
-    /// Save only styled primary-screen output, compatible with the existing ANSI snapshot schema.
-    pub fn snapshot(&self, budget: usize) -> String {
+    /// Capture the primary viewport even when a TUI temporarily owns the alternate screen.
+    fn display_state(&self, wrapped_lines: Vec<i32>) -> DisplayState {
         let grid = self.term.primary_grid();
         let rows = grid.screen_lines();
-        let last = (0..rows)
-            .rev()
-            .find(|row| snapshot_line_end(grid, *row as i32) > 0)
-            .unwrap_or(0);
+        let columns = grid.columns();
+        DisplayState {
+            rows: rows as u16,
+            columns: columns as u16,
+            cursor: (
+                grid.cursor.point.line.0.max(0) as u16,
+                grid.cursor.point.column.0 as u16,
+            ),
+            wrap_pending: grid.cursor.input_needs_wrap,
+            scrollback: grid.display_offset(),
+            wrapped_lines,
+        }
+    }
+    /// Tests can inspect the ANSI payload without unpacking its presentation metadata.
+    #[cfg(test)]
+    pub fn snapshot(&self, budget: usize) -> String {
+        self.snapshot_with_display(budget).0
+    }
+    /// Save only styled primary-screen output, compatible with the existing ANSI snapshot schema.
+    pub fn snapshot_with_display(&self, budget: usize) -> (String, DisplayState) {
+        let grid = self.term.primary_grid();
+        let rows = grid.screen_lines();
+        if grid.history_size() == 0
+            && grid.cursor.point == Point::new(Line(0), Column(0))
+            && (0..rows).all(|row| snapshot_line_end(grid, row as i32) == 0)
+        {
+            return (String::new(), self.display_state(Vec::new()));
+        }
         let mut lines = VecDeque::new();
         let mut bytes = 0;
+        let mut wrapped_lines = Vec::new();
         // Traverse newest lines first and stop as soon as the storage budget is full.
-        for line in (-(grid.history_size() as i32)..=last as i32).rev() {
+        // Existing blank screen rows keep history in the same viewport; no extra row is appended.
+        for line in (-(grid.history_size() as i32)..rows as i32).rev() {
             let mut value = String::from("\x1b[0m");
             let row = &grid[Line(line)];
             let end = snapshot_line_end(grid, line);
@@ -498,7 +584,10 @@ impl Emulator {
                     value.extend(extra.iter());
                 }
             }
-            value.push_str("\x1b[0m\r\n");
+            value.push_str("\x1b[0m");
+            if line < rows as i32 - 1 {
+                value.push_str("\r\n");
+            }
             if value.len() > budget {
                 continue;
             }
@@ -507,8 +596,18 @@ impl Emulator {
             }
             bytes += value.len();
             lines.push_front(value);
+            // Capture flags only for retained lines so metadata obeys the same storage/fuel cap.
+            if row[Column(grid.columns() - 1)]
+                .flags
+                .contains(Flags::WRAPLINE)
+            {
+                wrapped_lines.push(line);
+            }
         }
-        lines.into_iter().collect()
+        (
+            lines.into_iter().collect(),
+            self.display_state(wrapped_lines),
+        )
     }
     /// Resolve dynamic OSC palette values retained by Alacritty.
     pub fn color_override(&self, index: usize) -> Option<u32> {
@@ -529,12 +628,12 @@ impl Emulator {
     }
 }
 
-/// Find visible content only among cells Alacritty marks as occupied in this row.
+/// Preserve styled trailing spaces as well as printed characters in occupied cells.
 fn snapshot_line_end(grid: &Grid<Cell>, line: i32) -> usize {
     let row = &grid[Line(line)];
     (0..row.occupied_len().min(grid.columns()))
         .rev()
-        .find(|&col| CellView(&row[Column(col)]).has_contents())
+        .find(|&col| !row[Column(col)].is_empty())
         .map(|col| col + 1)
         .unwrap_or(0)
 }

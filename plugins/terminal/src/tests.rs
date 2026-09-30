@@ -72,7 +72,7 @@ fn restore_recreates_shells_but_never_replays_old_input() {
     let mut app = app();
     app.add(0, "C:/second".into());
     assert_eq!(app.tabs[0].name, "powershell");
-    assert_eq!(app.tabs[1].name, "powershell2");
+    assert_eq!(app.tabs[1].name, "powershell");
     let id = app.tabs[1].id;
     app.event(Event::Ui(ui::UiEvent {
         revision: 0,
@@ -112,14 +112,14 @@ fn restore_recreates_shells_but_never_replays_old_input() {
 
 /// Session controls belong to the native protocol; the guest paints only terminal content.
 #[test]
-fn terminal_delegates_tab_controls_to_native_chrome() {
+fn terminal_delegates_tab_controls_to_canvas_controls() {
     let app = app();
     let scene = app.scene();
     assert!(scene.widgets.is_empty());
     assert!(scene.column_resize_regions.is_empty());
-    let chrome = scene.chrome.unwrap();
-    chrome.validate().unwrap();
-    let sidebar = chrome.sidebar.unwrap();
+    let controls = scene.controls.unwrap();
+    controls.validate().unwrap();
+    let sidebar = controls.sidebar.unwrap();
     assert_eq!(sidebar.selected, Some(app.tabs[app.active].id.to_string()));
     assert_eq!(sidebar.items[0].label, app.tabs[0].name);
     assert!(
@@ -340,7 +340,7 @@ fn live_theme_updates_terminal_text_styles() {
         Paint::Text { font: Some(family), size: 19., bold: true, .. } if family == "Theme Tab"
     )));
     terminal.rename = Some(terminal.tabs[0].id);
-    let sidebar = terminal.scene().chrome.unwrap().sidebar.unwrap();
+    let sidebar = terminal.scene().controls.unwrap().sidebar.unwrap();
     assert_eq!(sidebar.rename, Some(terminal.tabs[0].id.to_string()));
     assert_eq!(terminal.tabs[0].handle, handle);
 }
@@ -369,13 +369,13 @@ fn partial_external_theme_keeps_plugin_ansi_fallbacks() {
     assert_eq!(terminal.color(1), 0xff7673);
 }
 
-/// Native chrome colors stay in the host; canvas errors still use the guest theme API.
+/// Native control colors stay in the host; canvas errors still use the guest theme API.
 #[test]
 fn external_theme_overrides_terminal_window_colors() {
     let mut terminal = app();
     let cwd = terminal.env.workspace.clone();
     terminal.add(0, cwd);
-    terminal.menu = true;
+    terminal.menu = Some(TerminalMenu::Commands);
     terminal.error = Some("theme error".into());
     let mut environment = terminal.env.clone();
     environment.muted = 0xeeeeee;
@@ -464,14 +464,14 @@ fn native_sidebar_events_keep_session_identity_and_resize_pty() {
             y: 24.,
         },
     );
-    assert!(terminal.menu);
+    assert!(terminal.menu.is_some());
     terminal.event(Event::Ui(ui::UiEvent {
         revision: 0,
         node: "terminal-menu".into(),
         action: ui::Action::Dismiss,
     }));
-    assert!(!terminal.menu);
-    terminal.scene().chrome.unwrap().validate().unwrap();
+    assert!(terminal.menu.is_none());
+    terminal.scene().controls.unwrap().validate().unwrap();
 }
 
 /// A live editor mode change recolors existing terminal cells without recreating the Shell.
@@ -651,6 +651,7 @@ fn selection_copy_and_mouse_reporting() {
         id: "copy".into(),
         cwd: None,
         text: None,
+        arguments: None,
     });
     assert!(CALLS.with(|calls| {
         calls
@@ -739,6 +740,7 @@ fn resizing_and_history_limits() {
         id: "clear".into(),
         cwd: None,
         text: None,
+        arguments: None,
     });
     assert_eq!(terminal.tabs[0].term.history(), 0);
     assert_eq!(terminal.tabs[0].term.screen().contents(), before);
@@ -767,6 +769,27 @@ fn dragging_within_one_cell_extent_sends_only_one_pty_resize() {
     assert_eq!(count, 1, "one grid size needs one PTY resize notification");
 }
 
+/// Window resizing must not overwrite the user's current sidebar width.
+#[test]
+fn window_resize_preserves_selected_tab_width() {
+    let mut terminal = app();
+    // A user-adjusted width must survive the same window resize sequence as the default.
+    terminal.tab_width = 260.;
+    let chosen_width = terminal.tab_width;
+    for width in [1000., 240., 160., 100., 800.] {
+        terminal.event(Event::Resize {
+            width,
+            height: 420.,
+            cell_width: 8.,
+            cell_height: 20.,
+        });
+        let tabs = terminal.canvas_controls().sidebar.unwrap();
+        assert_eq!(tabs.width, chosen_width, "window width {width}");
+        assert_eq!(tabs.min_width, MIN_TAB_WIDTH);
+        assert_eq!(tabs.max_width, MAX_TAB_WIDTH);
+    }
+}
+
 /// Grid reflow alone must not duplicate a prompt while a typed command is pending.
 #[test]
 fn rapid_reflow_keeps_one_unsubmitted_prompt() {
@@ -787,4 +810,454 @@ fn rapid_reflow_keeps_one_unsubmitted_prompt() {
     }
     let saved: Saved = serde_json::from_str(&terminal.snapshot().data).unwrap();
     assert_eq!(saved.tabs[0].output.matches("PS C:").count(), 1);
+}
+
+/// Repeated restore keeps a one-line prompt and its caret without accumulating generated rows.
+#[test]
+fn restoring_prompt_does_not_append_text_or_move_caret() {
+    let mut terminal = app();
+    output(&mut terminal, b"PS C:\\project> ");
+    let contents = terminal.tabs[0].term.screen().contents();
+    let cursor = terminal.tabs[0].term.screen().cursor_position();
+    for _ in 0..3 {
+        let snapshot = terminal.snapshot();
+        let saved: Saved = serde_json::from_str(&snapshot.data).unwrap();
+        assert!(!saved.tabs[0].output.ends_with("\r\n"));
+        assert!(!saved.tabs[0].output.contains("restored session; new shell"));
+        terminal = Terminal::prepare(terminal.env.clone(), Some(snapshot)).unwrap();
+        assert_eq!(terminal.tabs[0].term.screen().contents(), contents);
+        assert_eq!(terminal.tabs[0].term.screen().cursor_position(), cursor);
+        assert_eq!(terminal.tabs[0].term.history(), 0);
+        assert!(terminal.scene().scroll.is_none());
+    }
+}
+
+/// Snapshot restoration preserves dimensions, blank rows, colors, scroll position and soft wraps.
+#[test]
+fn restoring_grid_preserves_history_styles_and_reflow() {
+    let mut terminal = app();
+    terminal.event(Event::Resize {
+        width: 340.,
+        height: 120.,
+        cell_width: 8.,
+        cell_height: 20.,
+    });
+    output(&mut terminal, b"first line\r\nsecond line\r\n");
+    output(
+        &mut terminal,
+        "\x1b[31m长行中文 e\u{301} abcdefghijklmnopqrstuvwxyz\x1b[0m\r\n".as_bytes(),
+    );
+    output(
+        &mut terminal,
+        b"\x1b[44mtrailing  \x1b[0m\r\n\r\nPS> \x1b[2;3H",
+    );
+    terminal.tabs[0].term.set_scrollback(2);
+    let restored = Terminal::prepare(terminal.env.clone(), Some(terminal.snapshot())).unwrap();
+    let before = terminal.tabs[0].term.screen();
+    let after = restored.tabs[0].term.screen();
+    assert_eq!(before.size(), after.size());
+    assert_eq!(before.cursor_position(), after.cursor_position());
+    assert_eq!(before.scrollback(), after.scrollback());
+    let history = terminal.tabs[0].term.history();
+    assert!(history > 0);
+    assert_eq!(restored.tabs[0].term.history(), history);
+    for line in -(history as i32)..before.size().0 as i32 {
+        assert_eq!(before.row_wrapped(line), after.row_wrapped(line));
+        for col in 0..before.size().1 {
+            let before = before.cell_line(line, col).unwrap();
+            let after = after.cell_line(line, col).unwrap();
+            assert_eq!(
+                before.contents(),
+                after.contents(),
+                "line {line}, col {col}"
+            );
+            assert_eq!(before.fgcolor(), after.fgcolor());
+            assert_eq!(before.bgcolor(), after.bgcolor());
+            assert_eq!(before.is_wide_continuation(), after.is_wide_continuation());
+        }
+    }
+    let mut restored = restored;
+    for tab in [&mut terminal.tabs[0], &mut restored.tabs[0]] {
+        tab.term.resize(5, 30);
+    }
+    assert_eq!(
+        terminal.tabs[0].term.snapshot(1_000_000),
+        restored.tabs[0].term.snapshot(1_000_000)
+    );
+}
+
+/// The old package's generated separator and writer newline are migrated out of schema 1 data.
+#[test]
+fn legacy_restoration_removes_generated_separator() {
+    let terminal = app();
+    let mut saved: Saved = serde_json::from_str(&terminal.snapshot().data).unwrap();
+    saved.tabs[0].display = None;
+    saved.tabs[0].output = "\x1b[0m\x1b[0mPS> \x1b[0m\r\n\x1b[0m\r\n\x1b[0m\x1b[0m--- restored session; new shell ---\x1b[0m\r\n".into();
+    let restored = Terminal::prepare(
+        terminal.env.clone(),
+        Some(Snapshot {
+            schema: 1,
+            data: serde_json::to_string(&saved).unwrap(),
+        }),
+    )
+    .unwrap();
+    assert_eq!(restored.tabs[0].term.screen().contents().trim_end(), "PS>");
+    assert_eq!(restored.tabs[0].term.screen().cursor_position(), (0, 4));
+    assert!(
+        !restored
+            .snapshot()
+            .data
+            .contains("restored session; new shell")
+    );
+}
+
+/// Clipboard keys never send Ctrl+C/Ctrl+V bytes to the shell or copy an empty selection.
+#[test]
+fn control_copy_paste_and_shift_aliases_use_clipboard() {
+    let mut terminal = app();
+    output(&mut terminal, b"hello world");
+    CALLS.with(|calls| calls.borrow_mut().clear());
+    terminal.event(Event::Key {
+        key: "c".into(),
+        ctrl: true,
+        alt: false,
+        shift: false,
+    });
+    assert!(CALLS.with(|calls| calls.borrow().is_empty()));
+    terminal.tabs[0].term.select(0, 0, 2);
+    for shift in [false, true] {
+        terminal.event(Event::Key {
+            key: "c".into(),
+            ctrl: true,
+            alt: false,
+            shift,
+        });
+        terminal.event(Event::Key {
+            key: "v".into(),
+            ctrl: true,
+            alt: false,
+            shift,
+        });
+    }
+    CALLS.with(|calls| {
+        let calls = calls.borrow();
+        assert_eq!(
+            calls
+                .iter()
+                .filter(|r| matches!(r, Request::ClipboardWrite(text) if text == "hello"))
+                .count(),
+            2
+        );
+        assert_eq!(
+            calls
+                .iter()
+                .filter(|r| matches!(r, Request::ClipboardRead))
+                .count(),
+            2
+        );
+    });
+    assert!(writes().is_empty());
+    terminal.command("interrupt", None, None);
+    assert_eq!(
+        writes(),
+        vec![3],
+        "the explicit interrupt action still reaches the process"
+    );
+}
+
+/// A context menu stays local to the output, preserves selection and rejects disabled actions.
+#[test]
+fn output_context_menu_copies_only_selected_text_and_pastes() {
+    let mut terminal = app();
+    output(&mut terminal, b"hello world");
+    CALLS.with(|calls| calls.borrow_mut().clear());
+    terminal.event(Event::Pointer {
+        kind: "down".into(),
+        x: 60.,
+        y: 40.,
+        button: 2,
+        clicks: 1,
+        shift: false,
+    });
+    let menu = terminal.canvas_controls().menu.unwrap();
+    assert_eq!((menu.x, menu.y), (60., 40.));
+    assert_eq!(
+        menu.items
+            .iter()
+            .map(|item| item.label.as_str())
+            .collect::<Vec<_>>(),
+        ["复制", "粘贴", "清空缓冲区"]
+    );
+    assert!(menu.items[0].disabled);
+    terminal.event(Event::Ui(ui::UiEvent {
+        revision: 0,
+        node: menu.id.clone(),
+        action: ui::Action::Select("copy".into()),
+    }));
+    assert!(terminal.menu.is_some());
+    assert!(CALLS.with(|calls| calls.borrow().is_empty()));
+    terminal.event(Event::Ui(ui::UiEvent {
+        revision: 0,
+        node: menu.id.clone(),
+        action: ui::Action::Dismiss,
+    }));
+    terminal.tabs[0].term.select(0, 0, 2);
+    terminal.event(Event::Pointer {
+        kind: "down".into(),
+        x: 60.,
+        y: 40.,
+        button: 2,
+        clicks: 1,
+        shift: false,
+    });
+    assert_eq!(terminal.selected_text().as_deref(), Some("hello"));
+    assert!(!terminal.canvas_controls().menu.unwrap().items[0].disabled);
+    terminal.canvas_controls().validate().unwrap();
+    terminal.event(Event::Ui(ui::UiEvent {
+        revision: 0,
+        node: menu.id.clone(),
+        action: ui::Action::Select("copy".into()),
+    }));
+    assert!(terminal.menu.is_none());
+    assert!(CALLS.with(|calls| {
+        calls
+            .borrow()
+            .iter()
+            .any(|r| matches!(r, Request::ClipboardWrite(text) if text == "hello"))
+    }));
+    terminal.event(Event::Pointer {
+        kind: "down".into(),
+        x: 60.,
+        y: 40.,
+        button: 2,
+        clicks: 1,
+        shift: false,
+    });
+    terminal.event(Event::Ui(ui::UiEvent {
+        revision: 0,
+        node: menu.id,
+        action: ui::Action::Select("paste".into()),
+    }));
+    assert!(CALLS.with(|calls| {
+        calls
+            .borrow()
+            .iter()
+            .any(|r| matches!(r, Request::ClipboardRead))
+    }));
+    assert!(writes().is_empty());
+}
+
+/// Clearing the buffer erases visible and old lines without affecting other tabs or the shell.
+#[test]
+fn output_context_menu_clears_entire_active_buffer() {
+    let mut terminal = app();
+    output(&mut terminal, b"other session");
+    terminal.add(0, "C:/second".into());
+    let bytes = (0..40).map(|i| format!("line {i}\r\n")).collect::<String>();
+    output(&mut terminal, bytes.as_bytes());
+    output(&mut terminal, b"\x1b[?2004h\x1b[?1049halt output");
+    let handle = terminal.tabs[1].handle;
+    terminal.tabs[1].term.select(0, 0, 2);
+    CALLS.with(|calls| calls.borrow_mut().clear());
+    terminal.event(Event::Pointer {
+        kind: "down".into(),
+        x: 60.,
+        y: 40.,
+        button: 2,
+        clicks: 1,
+        shift: false,
+    });
+    terminal.event(Event::Ui(ui::UiEvent {
+        revision: 0,
+        node: "terminal-output-menu".into(),
+        action: ui::Action::Select("clear-buffer".into()),
+    }));
+    assert_eq!(terminal.tabs[1].handle, handle);
+    assert!(terminal.tabs[1].term.screen().contents().trim().is_empty());
+    assert_eq!(terminal.tabs[1].term.screen().cursor_position(), (0, 0));
+    assert!(terminal.tabs[1].term.screen().bracketed_paste());
+    assert!(terminal.tabs[1].term.selected_range().is_none());
+    assert!(terminal.tabs[1].term.snapshot(1_000_000).is_empty());
+    output(&mut terminal, b"\x1b[?1049l");
+    assert_eq!(terminal.tabs[1].term.history(), 0);
+    assert!(terminal.tabs[1].term.screen().contents().trim().is_empty());
+    assert!(
+        terminal.tabs[0]
+            .term
+            .screen()
+            .contents()
+            .contains("other session")
+    );
+    assert!(terminal.scene().scroll.is_none());
+    assert!(CALLS.with(|calls| calls.borrow().is_empty()));
+}
+
+/// Exercise the host wire payload instead of calling a private creation helper directly.
+fn invoke(terminal: &mut Terminal, id: &str, arguments: serde_json::Value) {
+    let event = Event::Command {
+        id: id.into(),
+        cwd: None,
+        text: None,
+        arguments: Some(arguments),
+    };
+    terminal.event(serde_json::from_str(&serde_json::to_string(&event).unwrap()).unwrap());
+}
+
+/// Duplicate labels remain independent sessions, including after closing and restoring old data.
+#[test]
+fn default_names_never_increment_and_legacy_names_are_preserved() {
+    let mut terminal = app();
+    terminal.add(0, "C:/second".into());
+    terminal.add(0, "C:/third".into());
+    assert!(terminal.tabs.iter().all(|tab| tab.name == "powershell"));
+    assert_eq!(
+        terminal
+            .tabs
+            .iter()
+            .map(|tab| tab.id)
+            .collect::<std::collections::BTreeSet<_>>()
+            .len(),
+        3
+    );
+    terminal.close(1);
+    let mut saved: Saved = serde_json::from_str(&terminal.snapshot().data).unwrap();
+    saved.tabs[0].name = "powershell42".into();
+    saved.counts.insert("powershell".into(), 42);
+    let mut restored = Terminal::prepare(
+        terminal.env.clone(),
+        Some(Snapshot {
+            schema: 1,
+            data: serde_json::to_string(&saved).unwrap(),
+        }),
+    )
+    .unwrap();
+    restored.activate();
+    restored.add(0, "C:/new".into());
+    assert_eq!(restored.tabs[0].name, "powershell42");
+    assert_eq!(restored.tabs.last().unwrap().name, "powershell");
+    restored.canvas_controls().validate().unwrap();
+}
+
+/// Host-provided names and profiles survive persistence while an empty name uses the tool.
+#[test]
+fn host_can_create_named_terminal_in_a_selected_directory() {
+    let mut terminal = app();
+    invoke(
+        &mut terminal,
+        "terminal.new",
+        serde_json::json!({
+            "name": "  构建输出  ", "cwd": "C:/build", "profile": 1,
+        }),
+    );
+    let tab = &terminal.tabs[terminal.active];
+    assert_eq!(tab.name, "构建输出");
+    assert_eq!(tab.cwd, "C:/build");
+    assert_eq!(tab.profile.program, "cmd.exe");
+    assert!(
+        CALLS.with(|calls| calls.borrow().iter().any(|call| matches!(call,
+            Request::Spawn { program, cwd, .. } if program == "cmd.exe" && cwd == "C:/build"
+        )))
+    );
+    let restored = Terminal::prepare(terminal.env.clone(), Some(terminal.snapshot())).unwrap();
+    assert_eq!(restored.tabs[restored.active].name, "构建输出");
+    invoke(
+        &mut terminal,
+        "terminal.new",
+        serde_json::json!({ "name": "\n\t\u{0000}" }),
+    );
+    assert_eq!(terminal.tabs[terminal.active].name, "powershell");
+    invoke(
+        &mut terminal,
+        "terminal.new",
+        serde_json::json!({ "name": "终".repeat(100) }),
+    );
+    assert_eq!(terminal.tabs[terminal.active].name.chars().count(), 80);
+}
+
+/// Save callbacks must retain each concurrent task's command, label, working directory and profile.
+#[test]
+fn host_run_parameters_survive_asynchronous_save_callbacks() {
+    let mut terminal = app();
+    CALLS.with(|calls| calls.borrow_mut().clear());
+    for (name, cwd, command, profile) in [
+        ("运行 A", "C:/a", "echo alpha", 0),
+        ("运行 B", "C:/b", "echo beta", 1),
+    ] {
+        invoke(
+            &mut terminal,
+            "terminal.run",
+            serde_json::json!({
+                "name": name, "cwd": cwd, "command": command, "profile": profile,
+            }),
+        );
+    }
+    assert_eq!(terminal.tabs.len(), 1);
+    assert!(writes().is_empty());
+    assert_eq!(terminal.pending_runs.len(), 2);
+    assert_eq!(
+        CALLS.with(|calls| calls
+            .borrow()
+            .iter()
+            .filter(|call| matches!(call, Request::Editor { command } if command == "save"))
+            .count()),
+        2
+    );
+    invoke(&mut terminal, "save.result", serde_json::Value::Null);
+    assert_eq!(terminal.tabs[terminal.active].name, "运行 A");
+    assert_eq!(terminal.tabs[terminal.active].cwd, "C:/a");
+    assert_eq!(writes(), b"echo alpha\r");
+    CALLS.with(|calls| calls.borrow_mut().clear());
+    invoke(&mut terminal, "save.result", serde_json::Value::Null);
+    assert_eq!(terminal.tabs[terminal.active].name, "运行 B");
+    assert_eq!(terminal.tabs[terminal.active].cwd, "C:/b");
+    assert_eq!(terminal.tabs[terminal.active].profile.program, "cmd.exe");
+    assert_eq!(writes(), b"echo beta\r");
+    assert!(terminal.pending_runs.is_empty());
+}
+
+/// Rejected task creation must never send a host's command to the existing interactive tab.
+#[test]
+fn invalid_or_disabled_host_requests_do_not_run_in_an_existing_session() {
+    let mut terminal = app();
+    let handle = terminal.tabs[0].handle;
+    CALLS.with(|calls| calls.borrow_mut().clear());
+    invoke(
+        &mut terminal,
+        "terminal.new",
+        serde_json::json!({ "name": 42 }),
+    );
+    assert!(terminal.error.is_some());
+    assert_eq!(terminal.tabs.len(), 1);
+    assert!(CALLS.with(|calls| calls.borrow().is_empty()));
+    for arguments in [
+        serde_json::json!({ "name": "运行", "command": "echo unsafe" }),
+        serde_json::json!({ "name": "无效 Shell", "profile": 99, "command": "echo unsafe" }),
+    ] {
+        terminal.settings.enabled = arguments.get("profile").is_some();
+        invoke(&mut terminal, "terminal.run", arguments);
+        invoke(&mut terminal, "save.result", serde_json::Value::Null);
+        assert_eq!(terminal.tabs.len(), 1);
+        assert_eq!(terminal.tabs[0].handle, handle);
+        assert!(writes().is_empty());
+    }
+    terminal.settings.enabled = true;
+    invoke(
+        &mut terminal,
+        "terminal.new",
+        serde_json::json!({ "name": "已修正" }),
+    );
+    assert!(terminal.error.is_none());
+    assert_eq!(terminal.tabs[terminal.active].name, "已修正");
+}
+
+/// Older hosts omit structured arguments; their toolbar and keyboard creation still work.
+#[test]
+fn old_host_command_without_arguments_remains_compatible() {
+    let mut terminal = app();
+    let event: Event =
+        serde_json::from_str(r#"{"Command":{"id":"terminal.new","cwd":null,"text":null}}"#)
+            .unwrap();
+    terminal.event(event);
+    assert_eq!(terminal.tabs.len(), 2);
+    assert_eq!(terminal.tabs[1].name, "powershell");
 }

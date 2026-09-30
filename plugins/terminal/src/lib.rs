@@ -1,6 +1,7 @@
 //! Terminal application: VT parsing, layout, profiles and interaction live in this guest.
-mod chrome;
+mod commands;
 mod config;
+mod controls;
 mod emulator;
 mod input;
 mod interaction;
@@ -10,17 +11,22 @@ mod shell;
 mod tests;
 mod theme;
 use config::{Profile, Settings};
+use plugin_protocol::bindings::{Guest, export};
+// Native tests use a deterministic host shim instead of calling WASM component imports.
+#[cfg(not(test))]
+use plugin_protocol::bindings::editor;
 use plugin_protocol::*;
 use serde::{Deserialize, Serialize};
-use std::{cell::RefCell, collections::BTreeMap};
-use plugin_protocol::bindings::{Guest, editor, export};
+use std::{
+    cell::RefCell,
+    collections::{BTreeMap, VecDeque},
+};
 struct TerminalPlugin;
 thread_local! { static APP: RefCell<Option<Terminal>> = const { RefCell::new(None) }; }
 // Keep the terminal usable while allowing a wider session list for long names.
 const DEFAULT_TAB_WIDTH: f32 = 180.;
 const MIN_TAB_WIDTH: f32 = 112.;
 const MAX_TAB_WIDTH: f32 = 480.;
-const MIN_CONTENT_WIDTH: f32 = 80.;
 
 /// Older snapshots did not store the width of the terminal's tab list.
 fn default_tab_width() -> f32 {
@@ -98,6 +104,8 @@ struct Saved {
     tabs: Vec<SavedTab>,
     active: usize,
     next_id: u64,
+    /// Keep an empty legacy field so an older package can still restore a rollback snapshot.
+    #[serde(default)]
     counts: BTreeMap<String, usize>,
     settings: Settings,
     #[serde(default = "default_tab_width")]
@@ -110,6 +118,24 @@ struct SavedTab {
     profile: Profile,
     cwd: String,
     output: String,
+    /// Older packages saved only ANSI text; new snapshots also retain the grid and caret.
+    #[serde(default)]
+    display: Option<emulator::DisplayState>,
+}
+/// Keep the command menu separate from the output area's smaller context menu.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum TerminalMenu {
+    Commands,
+    Output,
+}
+impl TerminalMenu {
+    /// Distinct menu identities prevent a delayed click from reaching another popup.
+    fn id(self) -> &'static str {
+        match self {
+            Self::Commands => "terminal-menu",
+            Self::Output => "terminal-output-menu",
+        }
+    }
 }
 struct Terminal {
     env: Environment,
@@ -117,13 +143,14 @@ struct Terminal {
     tabs: Vec<Tab>,
     active: usize,
     next_id: u64,
-    counts: BTreeMap<String, usize>,
+    /// Preserve each host invocation while awaiting the editor's asynchronous save response.
+    pending_runs: VecDeque<commands::OpenOptions>,
     width: f32,
     height: f32,
     tab_width: f32,
     cw: f32,
     ch: f32,
-    menu: bool,
+    menu: Option<TerminalMenu>,
     menu_position: (f32, f32),
     rename: Option<u64>,
     ui_revision: u64,
@@ -164,13 +191,13 @@ impl Terminal {
             tabs: vec![],
             active: 0,
             next_id: 1,
-            counts: BTreeMap::new(),
+            pending_runs: VecDeque::new(),
             width: 800.,
             height: 240.,
             tab_width: DEFAULT_TAB_WIDTH,
             cw: 8.4,
             ch: 21.,
-            menu: false,
+            menu: None,
             menu_position: (0., 0.),
             rename: None,
             ui_revision: 0,
@@ -191,7 +218,6 @@ impl Terminal {
                 return Err("Snapshot has too many sessions".into());
             }
             app.next_id = saved.next_id;
-            app.counts = saved.counts;
             // Snapshot data is user-controlled; reject non-finite layout values.
             if saved.tab_width.is_finite() {
                 app.tab_width = saved.tab_width.clamp(MIN_TAB_WIDTH, MAX_TAB_WIDTH);
@@ -226,17 +252,13 @@ impl Terminal {
     /// Restore historical bytes to the emulator, never to a shell input pipe.
     fn restore_tab(&mut self, saved: SavedTab) {
         let extent = self.extent();
-        let mut term = emulator::Emulator::new(
-            extent.rows as u16,
-            extent.columns as u16,
-            self.settings.history,
-        );
-        term.process(saved.output.as_bytes());
-        // Reinstalling a package must not append another identical history separator.
-        if !saved.output.is_empty() && !saved.output.contains("--- restored session; new shell ---")
-        {
-            term.process(b"\r\n\x1b[0m--- restored session; new shell ---\r\n");
-        }
+        let (rows, columns) = saved
+            .display
+            .as_ref()
+            .map(|display| display.size())
+            .unwrap_or((extent.rows as u16, extent.columns as u16));
+        let mut term = emulator::Emulator::new(rows, columns, self.settings.history);
+        term.restore(&saved.output, saved.display.as_ref());
         // Never replay query responses when restoring a snapshot.
         term.replies_mut().bytes.clear();
         self.tabs.push(Tab {
@@ -257,28 +279,31 @@ impl Terminal {
             rows: ((self.height - 16.) / self.ch).floor().clamp(1., 500.) as usize,
         }
     }
-    /// Limit the divider to the available panel while preserving terminal space.
+    /// Window resizing only changes the canvas; keep the user's divider width unchanged.
     fn effective_tab_width(&self) -> f32 {
-        self.tab_width
-            .clamp(MIN_TAB_WIDTH.min(self.width.max(0.)), MAX_TAB_WIDTH)
-            .min((self.width - MIN_CONTENT_WIDTH).max(0.))
+        self.tab_width.clamp(MIN_TAB_WIDTH, MAX_TAB_WIDTH)
     }
     /// Share one divider coordinate across painting, hit testing and PTY sizing.
     fn tab_left(&self) -> f32 {
         (self.width - self.effective_tab_width()).max(0.)
     }
-    /// Count each shell independently; process OSC titles cannot replace user names.
+    /// Interactive creation uses the shell tool name without a growing numeric suffix.
     fn add(&mut self, profile: usize, cwd: String) {
+        self.add_named(profile, cwd, None);
+    }
+    /// Use an explicit invocation name when supplied, preserving independent stable tab IDs.
+    fn add_named(&mut self, profile: usize, cwd: String, name: Option<String>) -> Option<usize> {
         if !self.settings.enabled {
             self.error = Some("终端配置 enabled=false，不能创建新会话".into());
-            return;
+            return None;
         }
         if self.tabs.len() >= 32 {
             self.error = Some("最多可开启 32 个终端".into());
-            return;
+            return None;
         }
         let Some(profile) = self.settings.profiles.get(profile).cloned() else {
-            return;
+            self.error = Some("终端 Shell 配置不存在".into());
+            return None;
         };
         let tool = profile
             .program
@@ -287,36 +312,43 @@ impl Terminal {
             .unwrap_or("shell")
             .trim_end_matches(".exe")
             .to_lowercase();
-        let count = self.counts.entry(tool.clone()).or_default();
-        *count += 1;
-        let name = if *count == 1 {
-            tool
-        } else {
-            format!("{tool}{count}")
-        };
+        // Empty names fall back to the tool; labels never contain controls or exceed 80 characters.
+        let name = name
+            .map(|value| {
+                value
+                    .chars()
+                    .filter(|ch| !ch.is_control())
+                    .collect::<String>()
+            })
+            .map(|value| value.trim().chars().take(80).collect::<String>())
+            .filter(|value| !value.is_empty())
+            .unwrap_or(tool);
         let saved = SavedTab {
             id: self.next_id,
             name,
             profile,
             cwd,
             output: String::new(),
+            display: None,
         };
         self.next_id += 1;
         self.restore_tab(saved);
         self.active = self.tabs.len() - 1;
         self.spawn(self.active);
-        self.menu = false;
+        self.menu = None;
+        Some(self.active)
     }
     /// The host returns a resource handle owned only by this plugin instance.
     fn spawn(&mut self, index: usize) {
-        let extent = self.extent();
         let tab = &mut self.tabs[index];
+        // A restored PTY starts at the saved grid size until the host reports its actual layout.
+        let (rows, columns) = tab.term.screen().size();
         match host(Request::Spawn {
             program: tab.profile.program.clone(),
             args: shell::arguments(&tab.profile),
             cwd: tab.cwd.clone(),
-            columns: extent.columns as u16,
-            rows: extent.rows as u16,
+            columns,
+            rows,
         }) {
             Ok(value) => {
                 tab.handle = value.as_u64();
@@ -365,12 +397,16 @@ impl Terminal {
         let tabs = self
             .tabs
             .iter()
-            .map(|t| SavedTab {
-                id: t.id,
-                name: t.name.clone(),
-                profile: t.profile.clone(),
-                cwd: t.cwd.clone(),
-                output: scene::history(t, budget),
+            .map(|t| {
+                let (output, display) = scene::history(t, budget);
+                SavedTab {
+                    id: t.id,
+                    name: t.name.clone(),
+                    profile: t.profile.clone(),
+                    cwd: t.cwd.clone(),
+                    output,
+                    display: Some(display),
+                }
             })
             .collect();
         Snapshot {
@@ -379,7 +415,7 @@ impl Terminal {
                 tabs,
                 active: self.active,
                 next_id: self.next_id,
-                counts: self.counts.clone(),
+                counts: BTreeMap::new(),
                 settings: self.settings.clone(),
                 tab_width: self.tab_width,
             })

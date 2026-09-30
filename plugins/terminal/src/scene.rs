@@ -18,7 +18,7 @@ impl Terminal {
             panel: "terminal".into(),
             font: content_style.family.clone().unwrap(),
             font_size: content_size,
-            chrome: Some(self.native_chrome()),
+            controls: Some(self.canvas_controls()),
             ..Scene::default()
         };
         fill_to_bottom(
@@ -223,6 +223,6 @@ fn text(
 }
 
 /// Save presentation without shell input or private metadata.
-pub(super) fn history(tab: &Tab, budget: usize) -> String {
-    tab.term.snapshot(budget)
+pub(super) fn history(tab: &Tab, budget: usize) -> (String, emulator::DisplayState) {
+    tab.term.snapshot_with_display(budget)
 }
