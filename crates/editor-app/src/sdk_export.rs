@@ -7,8 +7,8 @@ use std::process::Command;
 
 const SDK_FILES: &[(&str, &[u8])] = &[
     (
-        "src/ui/chrome.rs",
-        include_bytes!("../../plugin-protocol/src/ui/chrome.rs"),
+        "src/ui/controls.rs",
+        include_bytes!("../../plugin-protocol/src/ui/controls.rs"),
     ),
     (
         "Cargo.toml",

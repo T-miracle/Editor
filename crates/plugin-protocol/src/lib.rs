@@ -233,9 +233,9 @@ pub struct Scene {
     /// Protocol 2 native view tree. Omit to use the legacy canvas surface.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ui: Option<ui::Document>,
-    /// Protocol 3: native sidebar and popup controls surrounding a canvas surface.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub chrome: Option<ui::CanvasChrome>,
+    /// Protocol 4 canvas controls; accept `chrome` from existing protocol 3 plugins.
+    #[serde(default, alias = "chrome", skip_serializing_if = "Option::is_none")]
+    pub controls: Option<ui::CanvasControls>,
     /// Declared panel receiving this scene; multiple panels can publish independently.
     #[serde(default)]
     pub panel: String,
@@ -288,6 +288,9 @@ pub enum Event {
         id: String,
         cwd: Option<String>,
         text: Option<String>,
+        /// Plugin-owned structured parameters; omitted by older hosts and parameterless actions.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        arguments: Option<serde_json::Value>,
     },
     Key {
         key: String,
@@ -391,6 +394,25 @@ impl Request {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn scene_accepts_legacy_chrome_but_emits_controls() {
+        // Existing WASM packages may still send `chrome`; newly built plugins emit `controls`.
+        let scene = Scene {
+            controls: Some(ui::CanvasControls::default()),
+            ..Scene::default()
+        };
+        let mut value = serde_json::to_value(&scene).unwrap();
+        assert!(value.get("controls").is_some());
+        assert!(value.get("chrome").is_none());
+        let legacy = value.as_object_mut().unwrap().remove("controls").unwrap();
+        value
+            .as_object_mut()
+            .unwrap()
+            .insert("chrome".into(), legacy);
+        let restored: Scene = serde_json::from_value(value).unwrap();
+        assert!(restored.controls.is_some());
+    }
 
     #[test]
     fn theme_roles_override_only_declared_font_properties() {

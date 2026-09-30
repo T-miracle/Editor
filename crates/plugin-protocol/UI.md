@@ -1,8 +1,8 @@
 # 插件原生界面协议 v1
 
-## 画布与原生菜单、侧边 Tab 栏组合（清单 protocol 3）
+## 画布与原生菜单、侧边 Tab 栏组合（清单 protocol 4）
 
-画布插件使用 `Scene.chrome: Option<ui::CanvasChrome>`。字符网格留在 `Scene.paint`，侧边栏和菜单交给宿主原生模块；不与 `Scene.ui` 或旧 `widgets` 混用。`CanvasChrome.revision` 随 `UiEvent` 返回。
+画布插件使用 `Scene.controls: Option<ui::CanvasControls>`。字符网格留在 `Scene.paint`，侧边栏和菜单交给宿主原生模块；不与 `Scene.ui` 或旧 `widgets` 混用。`CanvasControls.revision` 随 `UiEvent` 返回。宿主仍接受旧插件发出的 `chrome` 字段，新插件统一发出 `controls`。
 
 - `SideTabs`：稳定条目 ID、完整名称、选中项、可关闭/禁用状态、宽度范围、可选重命名目标。右侧停靠，滚动、省略显示、双击编辑、Enter/失焦提交、Escape 取消、关闭、中键关闭、拖动排序及宽度拖动由宿主管理。
 - `PopupMenu`：面板内锚点和菜单项；支持禁用、分隔线、鼠标悬停、方向键、Home/End、Enter、Escape、外部点击关闭及原生滚动。卡片和条目样式与资源管理器右键菜单共用。
@@ -11,7 +11,7 @@
 - 配色使用 `plugins[ID].ui.tab_bar`、`ui.tab.active/inactive/close/rename`、`ui.menu`，字体使用 `typography.tab/menu`。未覆盖项继承当前系统/安装主题，并复用 `components.explorer_menu` 的菜单样式。
 - 每组最多 512 项，单项标签最多 4 KiB、总标签最多 64 KiB，条目 ID 唯一且不含控制字符。侧边栏宽度为有限的 0–1200 数值，并满足最小/当前/最大宽度顺序。
 
-完整接入示例见 `plugins/terminal/src/chrome.rs`；旧的清单 protocol 1/2 继续可用，旧宿主拒绝 protocol 3 插件。
+完整接入示例见 `plugins/terminal/src/controls.rs`；旧的清单 protocol 1/2/3 继续可用，其中 protocol 3 插件的 `chrome` 字段由新宿主兼容读取。新插件应声明 protocol 4，使旧宿主明确拒绝不认识 `controls` 的安装包。
 
 需要插件清单 `"protocol": 2`。旧宿主会拒绝安装该插件，避免把新界面静默显示成空白；新版宿主继续支持 protocol 1 的画布插件。WIT 世界不变，原生界面通过 `Reply.scene` / `Reply.scenes` 的 `Scene.ui` 传递。
 

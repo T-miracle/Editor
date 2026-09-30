@@ -1,9 +1,9 @@
-//! Native controls composed around a canvas. Requires manifest protocol 3.
+//! Native controls composed around a canvas; new packages use manifest protocol 4.
 use super::*;
 
 /// The canvas keeps its full panel coordinates; the sidebar occupies its right edge.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
-pub struct CanvasChrome {
+pub struct CanvasControls {
     pub revision: u64,
     pub sidebar: Option<SideTabs>,
     pub menu: Option<PopupMenu>,
@@ -51,7 +51,7 @@ pub struct MenuItem {
     pub separator_before: bool,
 }
 
-impl CanvasChrome {
+impl CanvasControls {
     /// Validate the complete native workload before creating entities or replacing a scene.
     pub fn validate(&self) -> Result<(), String> {
         fn identity(id: &str) -> bool {
@@ -68,7 +68,7 @@ impl CanvasChrome {
                     || label.len() > 4096
                     || bytes > 65536
                 {
-                    return Err("Invalid native chrome items or quota exceeded".into());
+                    return Err("Invalid canvas controls items or quota exceeded".into());
                 }
             }
             Ok(())

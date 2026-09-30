@@ -461,6 +461,44 @@ impl Manager {
         }
         Ok(())
     }
+    /// Invoke a declared command independently of panel visibility, retaining permission checks.
+    /// Parameters belong to the plugin; validation failures do not enter or retire its instance.
+    pub fn invoke_command(
+        &mut self,
+        plugin: &str,
+        command: &str,
+        arguments: serde_json::Value,
+    ) -> anyhow::Result<()> {
+        anyhow::ensure!(
+            self.live.contains_key(plugin),
+            "Plugin is not running: {plugin}"
+        );
+        let entry = self
+            .installed
+            .get(plugin)
+            .ok_or_else(|| anyhow::anyhow!("Plugin is not installed: {plugin}"))?;
+        anyhow::ensure!(
+            entry
+                .manifest
+                .commands
+                .iter()
+                .any(|item| item.id == command),
+            "Command is not declared by {plugin}: {command}"
+        );
+        anyhow::ensure!(
+            serde_json::to_vec(&arguments)?.len() <= 65536,
+            "Plugin command arguments exceed 64 KiB"
+        );
+        self.event(
+            plugin,
+            Event::Command {
+                id: command.into(),
+                cwd: None,
+                text: None,
+                arguments: (!arguments.is_null()).then_some(arguments),
+            },
+        )
+    }
     pub fn event(&mut self, id: &str, event: Event) -> anyhow::Result<()> {
         let instance = self
             .live

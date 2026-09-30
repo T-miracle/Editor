@@ -2,6 +2,96 @@
 use super::*;
 use gpui_kit::{TestAppContext, gpui};
 
+/// A host command targets its plugin and reveals a hidden panel without depending on current focus.
+#[gpui::test]
+fn host_command_reveals_hidden_terminal_and_preserves_arguments(cx: &mut TestAppContext) {
+    cx.update(|cx| {
+        gpui_kit::init(cx);
+        typography::init(cx);
+        apply_theme(builtin_theme(false), cx);
+    });
+    let directory = tempfile::tempdir().unwrap();
+    let workspace = Workspace::open(directory.path()).unwrap();
+    let slot = Rc::new(RefCell::new(None));
+    let capture = slot.clone();
+    let (_, cx) = cx.add_window_view(move |window, cx| {
+        let app = cx.new(|cx| EditorApp::new(workspace, None, window, cx));
+        *capture.borrow_mut() = Some(app.clone());
+        Root::new(app, window, cx)
+    });
+    let app = slot.borrow_mut().take().unwrap();
+    let arguments = serde_json::json!({ "name": "运行项目", "cwd": "C:/project" });
+    cx.update(|window, cx| {
+        let owner = app.read(cx).extensions.clone();
+        owner.update(cx, |owner, cx| {
+            let manifest: protocol::Manifest =
+                serde_json::from_str(include_str!("../../../../plugins/terminal/manifest.json"))
+                    .unwrap();
+            let mut state = owner.worker.state.lock().unwrap();
+            state.entries = vec![Installed {
+                grants: manifest.permissions.clone(),
+                manifest,
+                digest: "fixture".into(),
+                enabled: true,
+                project_enabled: Default::default(),
+                global_enabled: None,
+                error: None,
+            }];
+            state.scenes.insert(
+                "me.terminal/terminal".into(),
+                Arc::new(Scene {
+                    panel: "terminal".into(),
+                    ..Default::default()
+                }),
+            );
+            drop(state);
+            owner.poll(cx);
+        });
+        app.update(cx, |app, cx| {
+            app.sync_plugin_panels(window, cx);
+            let panel = app.plugin_panels["me.terminal/terminal"].clone();
+            assert!(!panel.read(cx).visible.get());
+            app.invoke_plugin_command("me.terminal", "terminal.new", arguments.clone(), window, cx)
+                .unwrap();
+            assert!(panel.read(cx).visible.get());
+            assert!(panel.read(cx).focus.is_focused(window));
+        });
+        assert!(owner.read(cx).worker.recorded.lock().unwrap().try_iter().any(|work| matches!(work,
+            Work::Invoke { plugin, command, arguments: received }
+                if plugin == "me.terminal" && command == "terminal.new" && received == arguments
+        )));
+        owner.update(cx, |owner, _| {
+            let mut state = owner.worker.state.lock().unwrap();
+            state.entries[0].enabled = false;
+        });
+        assert!(
+            owner
+                .read(cx)
+                .invoke_command("me.terminal", "terminal.new", arguments.clone())
+                .is_err()
+        );
+        owner.update(cx, |owner, _| {
+            owner.worker.state.lock().unwrap().entries[0].enabled = true
+        });
+        assert!(
+            owner
+                .read(cx)
+                .invoke_command("me.terminal", "undeclared", arguments.clone())
+                .is_err()
+        );
+        assert!(
+            owner
+                .read(cx)
+                .worker
+                .recorded
+                .lock()
+                .unwrap()
+                .try_iter()
+                .all(|work| !matches!(work, Work::Invoke { .. }))
+        );
+    });
+}
+
 #[gpui::test]
 fn native_panel_clicks_are_scoped_to_the_declared_surface(cx: &mut TestAppContext) {
     cx.update(|cx| {
@@ -70,7 +160,7 @@ fn native_panel_clicks_are_scoped_to_the_declared_surface(cx: &mut TestAppContex
 
 /// A canvas and its native sidebar share a panel, while pointer clicks stay out of the canvas.
 #[gpui::test]
-fn chrome_canvas_sidebar_routes_ui_without_canvas_pointer_events(cx: &mut TestAppContext) {
+fn canvas_controls_sidebar_routes_ui_without_canvas_pointer_events(cx: &mut TestAppContext) {
     cx.update(|cx| {
         gpui_kit::init(cx);
         typography::init(cx);
@@ -94,7 +184,7 @@ fn chrome_canvas_sidebar_routes_ui_without_canvas_pointer_events(cx: &mut TestAp
         panel: "terminal".into(),
         font: "Cascadia Mono".into(),
         font_size: 14.,
-        chrome: Some(protocol::ui::CanvasChrome {
+        controls: Some(protocol::ui::CanvasControls {
             revision: 19,
             sidebar: Some(protocol::ui::SideTabs {
                 id: "sessions".into(),

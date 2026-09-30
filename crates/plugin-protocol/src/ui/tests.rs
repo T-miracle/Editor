@@ -2,8 +2,8 @@
 use super::*;
 
 #[test]
-fn canvas_chrome_rejects_ambiguous_items_and_unbounded_geometry() {
-    let mut chrome = CanvasChrome {
+fn canvas_controls_rejects_ambiguous_items_and_unbounded_geometry() {
+    let mut controls = CanvasControls {
         sidebar: Some(SideTabs {
             id: "tabs".into(),
             items: vec![SideTab {
@@ -21,16 +21,16 @@ fn canvas_chrome_rejects_ambiguous_items_and_unbounded_geometry() {
         }),
         ..Default::default()
     };
-    assert!(chrome.validate().is_ok());
-    chrome.sidebar.as_mut().unwrap().width = f32::NAN;
-    assert!(chrome.validate().is_err());
-    chrome.sidebar.as_mut().unwrap().width = 180.;
-    chrome.sidebar.as_mut().unwrap().selected = Some("removed".into());
-    assert!(chrome.validate().is_err());
-    chrome.sidebar.as_mut().unwrap().selected = None;
-    let duplicate = chrome.sidebar.as_ref().unwrap().items[0].clone();
-    chrome.sidebar.as_mut().unwrap().items.push(duplicate);
-    assert!(chrome.validate().is_err());
+    assert!(controls.validate().is_ok());
+    controls.sidebar.as_mut().unwrap().width = f32::NAN;
+    assert!(controls.validate().is_err());
+    controls.sidebar.as_mut().unwrap().width = 180.;
+    controls.sidebar.as_mut().unwrap().selected = Some("removed".into());
+    assert!(controls.validate().is_err());
+    controls.sidebar.as_mut().unwrap().selected = None;
+    let duplicate = controls.sidebar.as_ref().unwrap().items[0].clone();
+    controls.sidebar.as_mut().unwrap().items.push(duplicate);
+    assert!(controls.validate().is_err());
 }
 
 #[test]

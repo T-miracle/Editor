@@ -6,6 +6,8 @@
 
 `host.request` 是主程序在运行时提供的导入。插件通过它请求 PTY、工作区、私有存储、剪贴板和编辑器操作；主程序逐次检查插件权限。WIT 和 Rust 类型只在编译插件时使用，安装后的 `.wasm` 不读取 SDK 文件。
 
+宿主主动调用插件使用 `Event::Command`。可选 `arguments` 是插件自行定义的 JSON 参数；旧宿主省略该字段仍可反序列化，旧插件也可忽略新字段。原有 `cwd`、`text` 字段继续用于编辑器操作回调。该扩展保持现有 JSON/WIT 接口及清单协议版本，宿主不引入终端等功能的专属类型。`plugin_runtime::Manager::invoke_command(plugin_id, command_id, arguments)` 检查已运行插件、声明命令及 64 KiB 参数上限，随后沿原有串行事件和权限检查执行；编辑器 UI 通过 `EditorApp::invoke_plugin_command` 异步排队并显示插件面板。
+
 插件在 `Cargo.toml` 声明 `plugin-protocol = { version = "=0.1.0", features = ["guest"] }`，通过 `plugin_protocol::bindings::{Guest, editor, export}` 使用宿主调用和组件导出，无需自行生成 WIT 绑定。独立编译时直接调用已打包的编辑器：
 
 ```powershell

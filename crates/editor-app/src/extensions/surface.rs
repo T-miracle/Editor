@@ -965,7 +965,7 @@ impl Render for ExtensionPanel {
             }
         }
         if let Some(document) = self.current_scene().and_then(|scene| scene.ui.clone()) {
-            self.native_chrome = None;
+            self.canvas_controls = None;
             self.editing = None;
             if let Some(view) = &self.native_ui {
                 view.update(cx, |view, cx| {
@@ -1387,14 +1387,14 @@ impl Render for ExtensionPanel {
                 );
             }
         }
-        if let Some(chrome) = scene.as_ref().and_then(|scene| scene.chrome.clone()) {
-            if self.native_chrome.is_none() {
+        if let Some(controls) = scene.as_ref().and_then(|scene| scene.controls.clone()) {
+            if self.canvas_controls.is_none() {
                 let tx = self.worker.tx.clone();
                 let plugin = self.active.clone().unwrap();
                 let panel = self.surface_id.clone().unwrap();
                 let focus = self.focus.clone();
-                self.native_chrome = Some(cx.new(|_| {
-                    crate::ui::plugin::chrome::ChromeView::new(
+                self.canvas_controls = Some(cx.new(|_| {
+                    crate::ui::plugin::controls::CanvasControlsView::new(
                         plugin.clone(),
                         focus,
                         move |event, _| {
@@ -1409,13 +1409,13 @@ impl Render for ExtensionPanel {
                     )
                 }));
             }
-            let native = self.native_chrome.as_ref().unwrap();
+            let native = self.canvas_controls.as_ref().unwrap();
             native.update(cx, |view, cx| {
-                view.update(chrome, environment, self.bounds.origin, window, cx)
+                view.update(controls, environment, self.bounds.origin, window, cx)
             });
             view = view.child(div().absolute().inset_0().child(native.clone()));
         } else {
-            self.native_chrome = None;
+            self.canvas_controls = None;
         }
         if let Some(menu) = self.command_popup(window, cx) {
             view = view.child(menu);

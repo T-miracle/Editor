@@ -1,5 +1,5 @@
 //! Native plugin view lifecycle. GPUI entities stay here; guests receive typed events only.
-pub(crate) mod chrome;
+pub(crate) mod controls;
 mod render;
 #[cfg(test)]
 mod tests;

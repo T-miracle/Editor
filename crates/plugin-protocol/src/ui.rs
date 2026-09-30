@@ -1,10 +1,10 @@
 //! Portable native UI: plugins own state, while the host owns layout, input and theme.
-//! Requires manifest `protocol = 2`. No GPUI objects or callbacks cross this interface.
+//! Documents require protocol 2; new canvas controls use protocol 4. No GPUI objects cross this interface.
 
 use serde::{Deserialize, Serialize};
 
-mod chrome;
-pub use chrome::*;
+mod controls;
+pub use controls::*;
 
 #[cfg(test)]
 mod tests;
