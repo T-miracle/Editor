@@ -138,12 +138,12 @@ impl State {
 
 /// Untrusted geometry must not reach native layout/text code with NaNs or unbounded sizes.
 fn validate_scene(scene: &Scene) -> anyhow::Result<()> {
-    if let Some(chrome) = &scene.chrome {
+    if let Some(controls) = &scene.controls {
         anyhow::ensure!(
             scene.ui.is_none() && scene.widgets.is_empty(),
-            "Canvas chrome cannot mix with Document or legacy widgets"
+            "Canvas controls cannot mix with Document or legacy widgets"
         );
-        chrome.validate().map_err(anyhow::Error::msg)?;
+        controls.validate().map_err(anyhow::Error::msg)?;
     }
     if let Some(document) = &scene.ui {
         anyhow::ensure!(
@@ -550,9 +550,10 @@ impl Instance {
         let reply: Reply = serde_json::from_str(&result)?;
         let mut panels = std::collections::BTreeSet::new();
         for scene in reply.scene.iter().chain(&reply.scenes) {
+            // Protocol 3 scenes may deserialize their legacy `chrome` field into `controls`.
             anyhow::ensure!(
-                scene.chrome.is_none() || self.protocol >= 3,
-                "Canvas chrome requires manifest protocol 3"
+                scene.controls.is_none() || self.protocol >= 3,
+                "Canvas controls require manifest protocol 3 or newer"
             );
             anyhow::ensure!(
                 scene.ui.is_none() || self.protocol >= 2,

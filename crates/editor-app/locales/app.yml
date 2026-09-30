@@ -2,6 +2,9 @@ _version: 2
 panel.explorer:
   en: "Explorer"
   zh-CN: "资源管理器"
+panel.minimize_explorer:
+  en: "Minimize Explorer"
+  zh-CN: "最小化资源管理器"
 panel.editor:
   en: "Editor"
   zh-CN: "编辑器"
@@ -17,6 +20,33 @@ editor.go_to_definition:
 editor.no_definition:
   en: "No definition"
   zh-CN: "暂无定义"
+diagnostics.missing:
+  en: "Syntax error: expected `%{token}`"
+  zh-CN: "语法错误：缺少 `%{token}`"
+diagnostics.unexpected:
+  en: "Syntax error: unexpected or incomplete syntax"
+  zh-CN: "语法错误：此处包含无法识别或不完整的语法"
+diagnostics.count:
+  en: "Problems: %{count}"
+  zh-CN: "问题：%{count}"
+diagnostics.navigate:
+  en: "Next problem (F8); previous problem (Shift+F8)"
+  zh-CN: "跳转到下一处问题（F8），上一处（Shift+F8）"
+diagnostics.error:
+  en: "Error"
+  zh-CN: "错误"
+diagnostics.warning:
+  en: "Warning"
+  zh-CN: "警告"
+diagnostics.info:
+  en: "Information"
+  zh-CN: "信息"
+diagnostics.hint:
+  en: "Hint"
+  zh-CN: "提示"
+diagnostics.location:
+  en: "Line %{line}, column %{column}"
+  zh-CN: "第 %{line} 行，第 %{column} 列"
 editor.code_actions:
   en: "Show Code Actions"
   zh-CN: "显示代码操作"
@@ -35,6 +65,18 @@ editor.select_all:
 explorer.copy:
   en: "Copy"
   zh-CN: "复制"
+explorer.special_copy:
+  en: "Special Copy"
+  zh-CN: "特殊复制"
+explorer.copy_file_name:
+  en: "Copy File Name"
+  zh-CN: "复制文件名"
+explorer.copy_absolute_path:
+  en: "Copy Absolute Disk Path"
+  zh-CN: "复制磁盘绝对路径"
+explorer.copy_project_root:
+  en: "Copy Project Relative Path"
+  zh-CN: "复制项目根路径"
 explorer.paste:
   en: "Paste"
   zh-CN: "粘贴"
@@ -56,6 +98,27 @@ explorer.new_file:
 explorer.rename:
   en: "Rename"
   zh-CN: "重命名"
+explorer.delete:
+  en: "Delete"
+  zh-CN: "删除"
+explorer.delete_file_preview:
+  en: "Permanently delete this file?"
+  zh-CN: "确定永久删除此文件吗？"
+explorer.delete_directory_preview:
+  en: "Permanently delete this directory and all its contents?"
+  zh-CN: "确定永久删除此目录及其中全部内容吗？"
+explorer.close_before_delete:
+  en: "Close open files in this path before deleting"
+  zh-CN: "删除前请关闭该路径下已打开的文件"
+explorer.delete_failed:
+  en: "Delete failed: %{error}"
+  zh-CN: "删除失败：%{error}"
+explorer.delete_outside_workspace:
+  en: "Cannot delete the workspace root or a path outside it"
+  zh-CN: "无法删除工作区根目录或其外部路径"
+explorer.delete_symlink:
+  en: "Cannot delete a symbolic link from the explorer"
+  zh-CN: "无法从资源管理器删除符号链接"
 explorer.refresh:
   en: "Refresh"
   zh-CN: "刷新"
@@ -68,6 +131,9 @@ explorer.cancel:
 explorer.copied:
   en: "File copied to clipboard"
   zh-CN: "文件已复制到剪贴板"
+explorer.text_copied:
+  en: "Text copied to clipboard"
+  zh-CN: "文本已复制到剪贴板"
 explorer.close_before_rename:
   en: "Close open files in this path before renaming"
   zh-CN: "重命名前请关闭该路径下已打开的文件"
@@ -107,6 +173,24 @@ status.ready:
 status.workspace_refreshed:
   en: "Workspace refreshed · %{count} files"
   zh-CN: "工作区已刷新 · 共 %{count} 个文件"
+status.refreshing_workspace:
+  en: "Checking workspace and open files..."
+  zh-CN: "正在核对工作区及已打开文件……"
+status.disk_updated:
+  en: "File changed on disk; editor reloaded"
+  zh-CN: "磁盘文件已变化，编辑器已重新加载"
+status.disk_conflict:
+  en: "File changed on disk; unsaved edits were preserved"
+  zh-CN: "磁盘文件已变化，未保存的编辑内容已保留"
+status.disk_deleted:
+  en: "File was deleted on disk; its tab was preserved"
+  zh-CN: "磁盘文件已删除，标签页已保留"
+status.confirm_disk_overwrite:
+  en: "File changed on disk. Save again to overwrite the disk version"
+  zh-CN: "磁盘文件已变化；再次保存将覆盖磁盘版本"
+status.confirm_disk_restore:
+  en: "File was deleted on disk. Save again to recreate it"
+  zh-CN: "磁盘文件已删除；再次保存将在原路径重建文件"
 status.modified:
   en: "Modified · revision %{revision}"
   zh-CN: "已修改 · 修订版本 %{revision}"

@@ -23,6 +23,14 @@ pub(crate) struct ExplorerEdit {
     error: Option<String>,
 }
 
+/// Holds the reviewed target and modal focus until a delete is confirmed or cancelled.
+pub(crate) struct ExplorerDelete {
+    path: PathBuf,
+    directory: bool,
+    focus: FocusHandle,
+    error: Option<String>,
+}
+
 impl EditorApp {
     /// The context row is the destination for folders and its parent for files.
     pub(crate) fn start_explorer_edit(
@@ -126,6 +134,156 @@ impl EditorApp {
         }
     }
 
+    pub(crate) fn start_explorer_delete(
+        &mut self,
+        path: PathBuf,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self
+            .tabs
+            .iter()
+            .any(|tab| tab.session.path().starts_with(&path))
+        {
+            self.status = t!("explorer.close_before_delete").to_string();
+            cx.notify();
+            return;
+        }
+        let focus = cx.focus_handle();
+        focus.focus(window, cx);
+        self.explorer_delete = Some(ExplorerDelete {
+            directory: path.is_dir(),
+            path,
+            focus,
+            error: None,
+        });
+        cx.notify();
+    }
+
+    pub(crate) fn finish_explorer_delete(&mut self, cx: &mut Context<Self>) {
+        let Some(delete) = &self.explorer_delete else {
+            return;
+        };
+        let path = delete.path.clone();
+        // A tab may have opened while the confirmation was visible; preserve its editor buffer.
+        if self
+            .tabs
+            .iter()
+            .any(|tab| tab.session.path().starts_with(&path))
+        {
+            self.status = t!("explorer.close_before_delete").to_string();
+            self.explorer_delete = None;
+            cx.notify();
+            return;
+        }
+        match files::delete(self.workspace.root(), &path) {
+            Ok(()) => {
+                self.explorer_delete = None;
+                self.refresh_files(cx);
+            }
+            Err(error) => {
+                let message = t!("explorer.delete_failed", error = error).to_string();
+                self.status = message.clone();
+                if let Some(delete) = &mut self.explorer_delete {
+                    delete.error = Some(message);
+                }
+                cx.notify();
+            }
+        }
+    }
+
+    pub(crate) fn render_explorer_delete(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let Some(delete) = &self.explorer_delete else {
+            return div().into_any_element();
+        };
+        let preview = if delete.directory {
+            t!("explorer.delete_directory_preview")
+        } else {
+            t!("explorer.delete_file_preview")
+        };
+        div()
+            .id("explorer-delete-preview")
+            .debug_selector(|| "explorer-delete-preview".into())
+            .absolute()
+            .inset_0()
+            // Keep hover and selection events behind the confirmation mask.
+            .occlude()
+            .flex()
+            .items_center()
+            .justify_center()
+            .bg(gpui_kit::rgba(0x00000066))
+            .track_focus(&delete.focus)
+            .capture_key_down(cx.listener(|this, event: &gpui_kit::KeyDownEvent, _, cx| {
+                match event.keystroke.key.as_str() {
+                    "enter" => {
+                        cx.stop_propagation();
+                        this.finish_explorer_delete(cx);
+                    }
+                    "escape" => {
+                        cx.stop_propagation();
+                        this.explorer_delete = None;
+                        cx.notify();
+                    }
+                    _ => {}
+                }
+            }))
+            .on_any_mouse_down(|_, _, cx| cx.stop_propagation())
+            .on_mouse_up(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+            .on_mouse_up(MouseButton::Right, |_, _, cx| cx.stop_propagation())
+            .on_scroll_wheel(|_, _, cx| cx.stop_propagation())
+            .child(
+                v_flex()
+                    .w(px(390.))
+                    .gap_3()
+                    .p_4()
+                    .rounded_md()
+                    .bg(cx.theme().popover)
+                    .border_1()
+                    .border_color(cx.theme().border)
+                    .child(preview.to_string())
+                    // Show the full target path before the irreversible filesystem operation.
+                    .child(
+                        div()
+                            .text_color(cx.theme().muted_foreground)
+                            .child(delete.path.display().to_string()),
+                    )
+                    .when_some(delete.error.clone(), |this, error| {
+                        this.child(div().text_color(cx.theme().danger_foreground).child(error))
+                    })
+                    .child(
+                        h_flex()
+                            .gap_2()
+                            .child(
+                                div()
+                                    .id("explorer-delete-confirm")
+                                    .debug_selector(|| "explorer-delete-confirm".into())
+                                    .child(
+                                        Button::new("explorer-delete-confirm-button")
+                                            .label(t!("explorer.delete").to_string())
+                                            .danger()
+                                            .on_click(cx.listener(|this, _, _, cx| {
+                                                this.finish_explorer_delete(cx)
+                                            })),
+                                    ),
+                            )
+                            .child(
+                                div()
+                                    .id("explorer-delete-cancel")
+                                    .debug_selector(|| "explorer-delete-cancel".into())
+                                    .child(
+                                        Button::new("explorer-delete-cancel-button")
+                                            .label(t!("explorer.cancel").to_string())
+                                            .on_click(cx.listener(|this, _, _, cx| {
+                                                this.explorer_delete = None;
+                                                cx.notify();
+                                            })),
+                                    ),
+                            ),
+                    ),
+            )
+            .into_any_element()
+    }
+
     pub(crate) fn render_explorer_edit(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let Some(edit) = &self.explorer_edit else {
             return div().into_any_element();
@@ -138,14 +296,16 @@ impl EditorApp {
         div()
             .absolute()
             .inset_0()
+            // The modal backdrop must own hit testing over the editor popovers.
+            .occlude()
             .flex()
             .items_center()
             .justify_center()
             .bg(gpui_kit::rgba(0x00000066))
-            .on_mouse_down(
-                MouseButton::Left,
-                cx.listener(|_, _, _, cx| cx.stop_propagation()),
-            )
+            .on_any_mouse_down(|_, _, cx| cx.stop_propagation())
+            .on_mouse_up(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+            .on_mouse_up(MouseButton::Right, |_, _, cx| cx.stop_propagation())
+            .on_scroll_wheel(|_, _, cx| cx.stop_propagation())
             .child(
                 v_flex()
                     .w(px(340.))
@@ -181,12 +341,16 @@ impl EditorApp {
                                     ),
                             )
                             .child(
-                                Button::new("explorer-edit-cancel")
-                                    .label(t!("explorer.cancel").to_string())
-                                    .on_click(cx.listener(|this, _, _, cx| {
-                                        this.explorer_edit = None;
-                                        cx.notify();
-                                    })),
+                                div()
+                                    .debug_selector(|| "explorer-edit-cancel".into())
+                                    .child(
+                                        Button::new("explorer-edit-cancel")
+                                            .label(t!("explorer.cancel").to_string())
+                                            .on_click(cx.listener(|this, _, _, cx| {
+                                                this.explorer_edit = None;
+                                                cx.notify();
+                                            })),
+                                    ),
                             ),
                     ),
             )

@@ -23,21 +23,21 @@ fn main() -> anyhow::Result<()> {
     manager.install(&package, package.manifest.permissions.clone())?;
     let id = &package.manifest.id;
     assert_eq!(manager.live[id].process_count(), 1);
-    let chrome = manager.live[id]
+    let controls = manager.live[id]
         .scene
         .as_ref()
         .unwrap()
-        .chrome
+        .controls
         .as_ref()
-        .expect("terminal uses native chrome");
-    chrome.validate().unwrap();
-    let session = chrome.sidebar.as_ref().unwrap().items[0].id.clone();
+        .expect("terminal uses canvas controls");
+    controls.validate().unwrap();
+    let session = controls.sidebar.as_ref().unwrap().items[0].id.clone();
     manager.event(
         id,
         Event::Surface {
             panel: "terminal".into(),
             event: Box::new(Event::Ui(plugin_runtime::plugin_protocol::ui::UiEvent {
-                revision: chrome.revision,
+                revision: controls.revision,
                 node: "sessions".into(),
                 action: plugin_runtime::plugin_protocol::ui::Action::Rename {
                     id: session,
@@ -51,7 +51,7 @@ fn main() -> anyhow::Result<()> {
             .scene
             .as_ref()
             .unwrap()
-            .chrome
+            .controls
             .as_ref()
             .unwrap()
             .sidebar
@@ -122,12 +122,147 @@ fn main() -> anyhow::Result<()> {
     );
     let snapshot = manager.live.get_mut(id).unwrap().snapshot()?;
     assert!(snapshot.data.contains("WASM_PLUGIN_SMOKE"));
+    assert!(!snapshot.data.contains("restored session; new shell"));
+    // Fresh-shell startup output must not erase the restored session after cutover.
+    let deadline = Instant::now() + Duration::from_secs(2);
+    while Instant::now() < deadline {
+        manager.poll();
+        std::thread::sleep(Duration::from_millis(30));
+    }
+    let snapshot = manager.live.get_mut(id).unwrap().snapshot()?;
+    assert!(snapshot.data.contains("WASM_PLUGIN_SMOKE"));
+    assert!(!snapshot.data.contains("restored session; new shell"));
     manager.disable(id)?;
     assert!(!manager.live.contains_key(id));
+    // Host calls cannot silently enable a stopped plugin.
+    assert!(
+        manager
+            .invoke_command(
+                id,
+                "terminal.new",
+                serde_json::json!({ "name": "拒绝创建" })
+            )
+            .is_err()
+    );
     manager.enable(id)?;
     drop(manager);
     let mut manager = Manager::open(temp.path().to_owned(), environment)?;
     assert!(manager.live.contains_key(id));
+    // The real component receives host parameters while ordinary terminal labels stay unnumbered.
+    let pids = manager.live[id].process_ids();
+    assert!(
+        manager
+            .invoke_command(id, "undeclared", serde_json::Value::Null)
+            .is_err()
+    );
+    assert!(
+        manager
+            .invoke_command(
+                id,
+                "terminal.new",
+                serde_json::json!({ "name": "x".repeat(65536) })
+            )
+            .is_err()
+    );
+    assert_eq!(manager.live[id].process_ids(), pids);
+    manager.invoke_command(
+        id,
+        "terminal.new",
+        serde_json::json!({ "name": "宿主新建" }),
+    )?;
+    assert_eq!(
+        manager.live[id]
+            .scene
+            .as_ref()
+            .unwrap()
+            .controls
+            .as_ref()
+            .unwrap()
+            .sidebar
+            .as_ref()
+            .unwrap()
+            .items
+            .last()
+            .unwrap()
+            .label,
+        "宿主新建"
+    );
+    manager.invoke_command(
+        id,
+        "terminal.run",
+        serde_json::json!({
+            "name": "宿主运行", "command": "Write-Output ('HOST_TASK_'+'SMOKE')",
+        }),
+    )?;
+    assert!(
+        manager
+            .live
+            .get_mut(id)
+            .unwrap()
+            .effects()
+            .iter()
+            .any(|effect| matches!(effect,
+                plugin_runtime::plugin_protocol::Request::Editor { command } if command == "save"
+            ))
+    );
+    // The editor normally supplies this callback after saving its current file.
+    manager.event(
+        id,
+        Event::Command {
+            id: "save.result".into(),
+            cwd: None,
+            text: None,
+            arguments: None,
+        },
+    )?;
+    let deadline = Instant::now() + Duration::from_secs(15);
+    let mut found = false;
+    while Instant::now() < deadline {
+        manager.poll();
+        let text: String = manager.live[id]
+            .scene
+            .as_ref()
+            .unwrap()
+            .paint
+            .iter()
+            .filter_map(|paint| {
+                if let Paint::Text { text, .. } = paint {
+                    Some(text.as_str())
+                } else {
+                    None
+                }
+            })
+            .collect();
+        if text.contains("HOST_TASK_SMOKE") {
+            found = true;
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(30));
+    }
+    anyhow::ensure!(
+        found,
+        "named host task did not produce output: {:?}",
+        manager.live[id].error
+    );
+    assert_eq!(
+        manager.live[id]
+            .scene
+            .as_ref()
+            .unwrap()
+            .controls
+            .as_ref()
+            .unwrap()
+            .sidebar
+            .as_ref()
+            .unwrap()
+            .items
+            .last()
+            .unwrap()
+            .label,
+        "宿主运行"
+    );
+    let snapshot = manager.live.get_mut(id).unwrap().snapshot()?;
+    assert!(snapshot.data.contains("宿主运行"));
     manager.uninstall(id, true)?;
     assert!(!manager.data_directory(id).exists());
     // An unrelated, permissionless package declares and renders two different native surfaces.
@@ -141,6 +276,7 @@ fn main() -> anyhow::Result<()> {
             id: "increment".into(),
             cwd: None,
             text: None,
+            arguments: None,
         },
     )?;
     assert!(

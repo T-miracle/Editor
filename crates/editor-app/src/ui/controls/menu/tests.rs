@@ -3,7 +3,7 @@ use super::*;
 use gpui_kit::{AppContext as _, TestAppContext, component::Root, gpui};
 use std::cell::RefCell;
 #[gpui::test]
-fn chrome_menu_keyboard_navigation_and_escape(cx: &mut TestAppContext) {
+fn popup_menu_keyboard_navigation_and_escape(cx: &mut TestAppContext) {
     cx.update(|cx| {
         gpui_kit::init(cx);
         crate::ui::typography::init(cx);
@@ -42,7 +42,7 @@ fn chrome_menu_keyboard_navigation_and_escape(cx: &mut TestAppContext) {
     assert_eq!(events.borrow().len(), 1);
 }
 #[gpui::test]
-fn chrome_menu_pointer_selects_command_without_dismissal(cx: &mut TestAppContext) {
+fn popup_menu_pointer_selects_command_without_dismissal(cx: &mut TestAppContext) {
     cx.update(|cx| {
         gpui_kit::init(cx);
         crate::ui::typography::init(cx);

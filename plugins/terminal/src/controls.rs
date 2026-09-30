@@ -1,15 +1,19 @@
 //! Terminal data and actions for the host's native sidebar and explorer-style popup.
 use super::*;
-use plugin_protocol::ui::{Action, CanvasChrome, MenuItem, PopupMenu, SideTab, SideTabs, UiEvent};
+use plugin_protocol::ui::{
+    Action, CanvasControls, MenuItem, PopupMenu, SideTab, SideTabs, UiEvent,
+};
 impl Terminal {
-    pub(super) fn native_chrome(&self) -> CanvasChrome {
+    /// Describe the sidebar and menu that the host renders around the terminal canvas.
+    pub(super) fn canvas_controls(&self) -> CanvasControls {
         let width = self.effective_tab_width();
-        CanvasChrome {
+        CanvasControls {
             revision: self.ui_revision,
             sidebar: Some(SideTabs {
                 id: "sessions".into(),
                 width,
-                min_width: MIN_TAB_WIDTH.min(width),
+                // Only divider dragging changes these limits; window resizing never does.
+                min_width: MIN_TAB_WIDTH,
                 max_width: MAX_TAB_WIDTH,
                 items: self
                     .tabs
@@ -25,36 +29,55 @@ impl Terminal {
                 selected: self.tabs.get(self.active).map(|t| t.id.to_string()),
                 rename: self.rename.map(|id| id.to_string()),
             }),
-            menu: self.menu.then(|| PopupMenu {
-                id: "terminal-menu".into(),
+            menu: self.menu.map(|kind| PopupMenu {
+                id: kind.id().into(),
                 x: self.menu_position.0,
                 y: self.menu_position.1,
-                items: self
-                    .menu_actions()
-                    .into_iter()
-                    .enumerate()
-                    .map(|(index, (id, label))| MenuItem {
-                        id,
-                        label,
-                        disabled: false,
-                        separator_before: index == self.settings.profiles.len(),
-                    })
-                    .collect(),
+                items: self.menu_items(kind),
             }),
         }
     }
+    /// Recompute availability from the current selection, including after new process output.
+    fn menu_items(&self, kind: TerminalMenu) -> Vec<MenuItem> {
+        let actions = match kind {
+            TerminalMenu::Commands => self.menu_actions(),
+            TerminalMenu::Output => self.output_menu_actions(),
+        };
+        let can_copy = self.selected_text().is_some();
+        actions
+            .into_iter()
+            .enumerate()
+            .map(|(index, (id, label))| MenuItem {
+                disabled: id == "copy" && !can_copy,
+                id,
+                label,
+                separator_before: match kind {
+                    TerminalMenu::Commands => index == self.settings.profiles.len(),
+                    TerminalMenu::Output => index == 2,
+                },
+            })
+            .collect()
+    }
     /// Resolve identities against current sessions so stale events cannot address a different tab.
     pub(super) fn ui_event(&mut self, event: UiEvent) {
-        if event.node == "terminal-menu" {
-            if !self.menu {
+        if matches!(
+            event.node.as_str(),
+            "terminal-menu" | "terminal-output-menu"
+        ) {
+            let Some(kind) = self.menu.filter(|kind| event.node == kind.id()) else {
                 return;
-            }
+            };
             match event.action {
-                Action::Select(id) if self.menu_actions().iter().any(|(key, _)| key == &id) => {
-                    self.menu = false;
+                Action::Select(id)
+                    if self
+                        .menu_items(kind)
+                        .iter()
+                        .any(|item| item.id == id && !item.disabled) =>
+                {
+                    self.menu = None;
                     self.command(&id, None, None);
                 }
-                Action::Dismiss => self.menu = false,
+                Action::Dismiss => self.menu = None,
                 _ => {}
             }
             return;
@@ -72,7 +95,7 @@ impl Terminal {
             Action::Context { id, x, y } if x.is_finite() && y.is_finite() => {
                 if let Some(index) = index(&id) {
                     self.active = index;
-                    self.menu = true;
+                    self.menu = Some(TerminalMenu::Commands);
                     self.menu_position =
                         ((self.tab_left() + x).clamp(0., 10000.), y.clamp(0., 10000.));
                 }

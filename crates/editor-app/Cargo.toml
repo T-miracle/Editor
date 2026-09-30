@@ -10,7 +10,7 @@ anyhow.workspace = true
 editor-core = { path = "../editor-core" }
 dirs.workspace = true
 gpui-kit.workspace = true
-gpui-base = "0.6.6"
+gpui-base = "0.7.0"
 glob = "0.3"
 lsp-types = "0.97.0"
 platform-windows = { path = "../platform-windows" }
@@ -28,6 +28,9 @@ plugin-runtime = { path = "../plugin-runtime" }
 futures = "0.3"
 sha2 = "0.10"
 tempfile.workspace = true
+# Discover nested plugin manifests without traversing ignored build output.
+ignore.workspace = true
+notify.workspace = true
 
 [dev-dependencies]
 gpui-kit = { workspace = true, features = ["test-support"] }

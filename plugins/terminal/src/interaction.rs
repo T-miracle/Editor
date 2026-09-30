@@ -42,21 +42,25 @@ impl Terminal {
                     tab.handle = None;
                 }
             }
-            Event::Command { id, cwd, text } => self.command(&id, cwd, text),
+            Event::Command {
+                id,
+                cwd,
+                text,
+                arguments,
+            } => self.invoke_command(&id, cwd, text, arguments),
             Event::Key {
                 key,
                 ctrl,
                 alt,
                 shift,
             } => {
-                if ctrl && shift {
+                // Clipboard shortcuts belong to the terminal UI, including their existing aliases.
+                if ctrl && !alt && matches!(key.as_str(), "c" | "v") {
+                    self.command(if key == "c" { "copy" } else { "paste" }, None, None);
+                } else if ctrl && shift && !alt && matches!(key.as_str(), "t" | "w") {
                     match key.as_str() {
                         "t" => self.command("new", None, None),
                         "w" => self.close(self.active),
-                        "c" => self.command("copy", None, None),
-                        "v" => {
-                            let _ = host(Request::ClipboardRead);
-                        }
                         _ => {}
                     }
                 } else if let Some(tab) = self.tabs.get(self.active) {
@@ -88,7 +92,7 @@ impl Terminal {
                 shift,
             } => self.pointer(&kind, x, y, button, clicks, shift),
             Event::Wheel { delta, shift, x, y } => {
-                if x >= self.tab_left() || self.menu {
+                if x >= self.tab_left() || self.menu.is_some() {
                     return;
                 }
                 if !shift
@@ -174,7 +178,11 @@ impl Terminal {
                 cwd.unwrap_or(self.env.workspace.clone()),
             ),
             "menu" => {
-                self.menu = !self.menu;
+                self.menu = if self.menu == Some(TerminalMenu::Commands) {
+                    None
+                } else {
+                    Some(TerminalMenu::Commands)
+                };
                 self.menu_position = (0., 0.);
             }
             "close" => self.close(self.active),
@@ -194,12 +202,15 @@ impl Terminal {
                     tab.term.clear_history();
                 }
             }
+            "clear-buffer" => {
+                if let Some(tab) = self.tabs.get_mut(self.active) {
+                    tab.term.clear_buffer();
+                }
+                self.selecting = false;
+            }
             "copy" => {
-                if let Some(text) = self
-                    .tabs
-                    .get(self.active)
-                    .and_then(|t| t.term.selection_text())
-                {
+                // Never replace the clipboard when there is no nonempty selected text.
+                if let Some(text) = self.selected_text() {
                     let _ = host(Request::ClipboardWrite(text));
                 }
             }
@@ -233,12 +244,12 @@ impl Terminal {
                     self.spawn(self.active);
                 }
             }
-            "run" => {
-                let _ = host(Request::Editor {
-                    command: "save".into(),
-                });
+            "run" => self.invoke_command(id, cwd, text, None),
+            "save.result" => {
+                if let Some(options) = self.pending_runs.pop_front() {
+                    self.run_project(options);
+                }
             }
-            "save.result" => self.run_project(),
             "settings" => {
                 let source = serde_json::to_string_pretty(&self.settings).unwrap();
                 if host(Request::ReadData {
@@ -280,41 +291,53 @@ impl Terminal {
         }
     }
     /// Project detection reads only authorized workspace files and never auto-runs at launch.
-    fn run_project(&mut self) {
-        let command = self.settings.run_command.clone().or_else(|| {
-            if host(Request::ReadWorkspace {
-                path: "Cargo.toml".into(),
-            })
-            .is_ok()
-            {
-                Some("cargo run".into())
-            } else if let Ok(value) = host(Request::ReadWorkspace {
-                path: "package.json".into(),
-            }) {
-                let package: serde_json::Value =
-                    serde_json::from_str(value.as_str().unwrap_or("")).ok()?;
-                let scripts = package.get("scripts")?;
-                if scripts.get("dev").is_some() {
-                    Some("npm run dev".into())
-                } else if scripts.get("start").is_some() {
-                    Some("npm start".into())
+    fn run_project(&mut self, options: commands::OpenOptions) {
+        let command = options
+            .command
+            .or_else(|| self.settings.run_command.clone())
+            .or_else(|| {
+                if host(Request::ReadWorkspace {
+                    path: "Cargo.toml".into(),
+                })
+                .is_ok()
+                {
+                    Some("cargo run".into())
+                } else if let Ok(value) = host(Request::ReadWorkspace {
+                    path: "package.json".into(),
+                }) {
+                    let package: serde_json::Value =
+                        serde_json::from_str(value.as_str().unwrap_or("")).ok()?;
+                    let scripts = package.get("scripts")?;
+                    if scripts.get("dev").is_some() {
+                        Some("npm run dev".into())
+                    } else if scripts.get("start").is_some() {
+                        Some("npm start".into())
+                    } else {
+                        None
+                    }
                 } else {
                     None
                 }
-            } else {
-                None
-            }
-        });
+            });
         if let Some(command) = command {
-            self.add(self.settings.default_profile, self.env.workspace.clone());
-            self.send(format!("{command}\r").into_bytes());
+            // A rejected creation must not execute the task in a previously active terminal.
+            if self
+                .add_named(
+                    options.profile.unwrap_or(self.settings.default_profile),
+                    options.cwd.unwrap_or(self.env.workspace.clone()),
+                    options.name,
+                )
+                .is_some()
+            {
+                self.send(format!("{}\r", command.trim_end_matches(['\r', '\n'])).into_bytes());
+            }
         } else {
             self.error = Some("请在插件设置中指定 run_command".into());
         }
     }
     /// Hit testing, tab ordering and selection are terminal behavior.
     fn pointer(&mut self, kind: &str, x: f32, y: f32, button: u8, clicks: u8, shift: bool) {
-        if x >= self.tab_left() || self.menu {
+        if x >= self.tab_left() || self.menu.is_some() || !x.is_finite() || !y.is_finite() {
             return;
         }
         let Some(tab) = self.tabs.get_mut(self.active) else {
@@ -362,7 +385,10 @@ impl Terminal {
             return;
         }
         if button == 2 && kind == "down" {
-            self.command("copy", None, None);
+            // Opening a context menu preserves the current selection for an explicit copy action.
+            self.selecting = false;
+            self.menu = Some(TerminalMenu::Output);
+            self.menu_position = (x.clamp(0., 10000.), y.clamp(0., 10000.));
             return;
         }
         if kind == "down" && button == 0 {
@@ -383,6 +409,23 @@ impl Terminal {
         } else if kind == "up" {
             self.selecting = false;
         }
+    }
+    /// Shared availability check for keyboard copy and both native menus.
+    pub(super) fn selected_text(&self) -> Option<String> {
+        self.tabs
+            .get(self.active)
+            .and_then(|tab| tab.term.selection_text())
+            .filter(|text| !text.is_empty())
+    }
+    /// The output context menu deliberately contains only the requested three commands.
+    pub(super) fn output_menu_actions(&self) -> Vec<(String, String)> {
+        [
+            ("copy", "复制"),
+            ("paste", "粘贴"),
+            ("clear-buffer", "清空缓冲区"),
+        ]
+        .map(|(id, label)| (id.into(), label.into()))
+        .into()
     }
     pub(super) fn menu_actions(&self) -> Vec<(String, String)> {
         let mut items: Vec<_> = self

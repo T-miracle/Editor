@@ -2,7 +2,7 @@
 
 ## 原生界面协议
 
-终端插件 0.5.0 使用 `protocol = 3` 与 `Scene.chrome`：画布负责字符网格，主程序提供独立的侧边 Tab 栏和共享原生菜单。侧边栏支持滚动、重命名、关闭、排序和宽度调整；菜单及面板标题命令菜单使用资源管理器同款卡片/条目封装。条目以稳定 ID 回传操作，配色和字体实时取自主题。
+终端插件 0.5.1 使用 `protocol = 4` 与 `Scene.controls`：画布负责字符网格，主程序提供独立的侧边 Tab 栏和共享原生菜单。侧边栏支持滚动、重命名、关闭、排序和宽度调整；菜单及面板标题命令菜单使用资源管理器同款卡片/条目封装。条目以稳定 ID 回传操作，配色和字体实时取自主题。宿主兼容旧 protocol 3 插件的 `chrome` 字段；旧宿主拒绝 protocol 4 新包。
 
 插件可声明 `protocol = 2`，使用 `plugin_protocol::ui::Document/Node` 返回行列布局和原生控件树，宿主通过 gpui-base 实现布局、输入、焦点、滚动和模态弹窗。协议、事件、主题角色与限制见 [插件原生界面协议](../crates/plugin-protocol/UI.md)。该文档及 Rust 接口由主程序内嵌，并自动提供给插件构建。protocol 1 的画布终端继续兼容；示例插件 0.2.0 演示新接口。
 
@@ -73,6 +73,10 @@ WIT 世界为 `editor:plugin/plugin@0.1.0`，只有宿主 `request` 导入与插
 调用设有指令燃料、内存、进程数量、文件大小、快照大小和绘制数量上限。原生绘制前校验坐标及控件规模。Windows 子进程归入 Job Object，停用或更新会关闭进程树。PTY 读写使用有限队列，后台计算不占用 GPUI 界面线程。
 
 ## 更新和状态恢复
+
+宿主功能可调用 `EditorApp::invoke_plugin_command(plugin_id, command_id, arguments, window, cx)`，后台 worker 通过 `Manager::invoke_command` 进入插件串行事件循环。参数是插件自行定义的 JSON，主程序验证运行状态、清单中的命令及参数容量，不依赖终端实现。`Event::Command.arguments` 为可选字段，旧宿主和旧插件仍可使用无参数命令。调用不会自动安装、启用插件或扩大权限。
+
+终端 0.5.3 接收 `terminal.new`、`terminal.run` 的 `name`、`cwd`、`profile` 参数；运行命令还可携带 `command`，保存文件后创建独立会话并执行。普通新建统一使用工具名，传入名称时使用指定名称。详见[终端接口说明](../plugins/terminal/README.md#宿主主动调用)。
 
 1. 读取并验证本机包，取得用户授权；版本目录按包摘要保存。
 2. 向旧版请求快照。宿主只认识 `schema + data`，不解释内部字段。

@@ -16,6 +16,12 @@ pub(super) enum Work {
     SetProjectEnabled(String, bool),
     Uninstall(String, bool),
     Event(String, Event),
+    /// Host-originated commands target a plugin directly, even while its panel is hidden.
+    Invoke {
+        plugin: String,
+        command: String,
+        arguments: serde_json::Value,
+    },
     Shutdown(Option<futures::channel::oneshot::Sender<()>>),
 }
 impl Work {
@@ -181,6 +187,11 @@ impl Worker {
                     }
                     Some(Work::Uninstall(id, delete)) => manager.uninstall(&id, delete),
                     Some(Work::Event(id, event)) => manager.event(&id, event),
+                    Some(Work::Invoke {
+                        plugin,
+                        command,
+                        arguments,
+                    }) => manager.invoke_command(&plugin, &command, arguments),
                     None => Ok(()),
                 };
                 manager.poll();

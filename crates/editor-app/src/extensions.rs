@@ -1,4 +1,5 @@
 //! Generic runtime-plugin dock and manager. Feature behavior arrives from installed packages.
+mod commands;
 pub(crate) mod contributions;
 mod native_controls;
 #[cfg(test)]
@@ -56,7 +57,7 @@ pub struct ExtensionPanel {
     editing: Option<Editing>,
     /// Protocol 2 UI owns keyed native input state independently from the legacy canvas.
     native_ui: Option<Entity<crate::ui::plugin::PluginView>>,
-    native_chrome: Option<Entity<crate::ui::plugin::chrome::ChromeView>>,
+    canvas_controls: Option<Entity<crate::ui::plugin::controls::CanvasControlsView>>,
     /// Prevent a just-committed native input from reopening before the guest reply arrives.
     committed_edit: Option<String>,
     scroll: surface::PluginScroll,
@@ -185,7 +186,7 @@ impl ExtensionPanel {
             composition: String::new(),
             editing: None,
             native_ui: None,
-            native_chrome: None,
+            canvas_controls: None,
             committed_edit: None,
             scroll,
             manager_open: false,
@@ -263,7 +264,7 @@ impl ExtensionPanel {
             composition: String::new(),
             editing: None,
             native_ui: None,
-            native_chrome: None,
+            canvas_controls: None,
             committed_edit: None,
             scroll: surface::PluginScroll::new(worker.tx.clone()),
             manager_open: false,
@@ -341,7 +342,7 @@ impl ExtensionPanel {
                     self.instance_epoch = epoch;
                     self.last_size = (0., 0., 0., 0.);
                     self.native_ui = None;
-                    self.native_chrome = None;
+                    self.canvas_controls = None;
                     self.command_popup = None;
                     self.commands_open = false;
                     changed = true;
@@ -448,6 +449,7 @@ impl ExtensionPanel {
                                     id: format!("{command}.result"),
                                     cwd,
                                     text,
+                                    arguments: None,
                                 },
                             ));
                             if let Some(relative) = command.strip_prefix("open_data:") {
@@ -516,6 +518,7 @@ impl ExtensionPanel {
             id,
             cwd: None,
             text: None,
+            arguments: None,
         });
     }
     pub fn focus(&self, window: &mut Window, cx: &mut App) {
@@ -551,31 +554,19 @@ impl ExtensionPanel {
                 {
                     let id = entry.manifest.id.clone();
                     let command = command.id.clone();
-                    if self.surface_id.is_some() {
-                        self.visible.set(true);
-                    }
-                    self.send_to(
-                        &id,
-                        PluginEvent::Command {
-                            id: command,
-                            cwd: None,
-                            text: None,
-                        },
-                    );
                     let parent = self.parent.clone();
                     window.defer(cx, move |window, cx| {
                         let _ = parent.update(cx, |app, cx| {
-                            if let Some(panel) = app
-                                .plugin_panels
-                                .iter()
-                                .find(|(key, _)| key.starts_with(&format!("{id}/")))
-                                .map(|(_, panel)| panel.clone())
-                            {
-                                panel.update(cx, |panel, cx| {
-                                    panel.visible.set(true);
-                                    panel.focus(window, cx);
-                                });
-                                app.dock_area.update(cx, |_, cx| cx.notify());
+                            // Manifest shortcuts use the same checked API as future project actions.
+                            if let Err(error) = app.invoke_plugin_command(
+                                &id,
+                                &command,
+                                serde_json::Value::Null,
+                                window,
+                                cx,
+                            ) {
+                                app.status = error;
+                                cx.notify();
                             }
                         });
                     });
@@ -964,7 +955,8 @@ impl EditorApp {
                 if panel.read(cx).visible.get() && self.dock_area.read(cx).panel(panel_id).is_none()
                 {
                     self.dock_area.update(cx, |area, cx| {
-                        area.add_panel_view(
+                        crate::local_dock::add_panel_view(
+                            area,
                             dock::panel_handle(panel.clone()),
                             placement,
                             Some(px(dock_size)),
@@ -998,7 +990,8 @@ impl EditorApp {
             });
             if initially_visible {
                 self.dock_area.update(cx, |area, cx| {
-                    area.add_panel_view(
+                    crate::local_dock::add_panel_view(
+                        area,
                         dock::panel_handle(panel.clone()),
                         placement,
                         Some(px(dock_size)),

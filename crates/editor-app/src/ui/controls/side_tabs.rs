@@ -13,7 +13,7 @@ use gpui_kit::{
     StatefulInteractiveElement, Styled, Subscription, Window, canvas, div, px,
 };
 use plugin_runtime::plugin_protocol::ui::{Action, SideTabs};
-use std::rc::Rc;
+use std::{cell::Cell, rc::Rc};
 
 #[derive(Clone)]
 pub(crate) struct SideTabsStyle {
@@ -42,8 +42,10 @@ pub(crate) struct SideTabBar {
     requested_rename: Option<String>,
     drag: Option<String>,
     resizing: Option<(Pixels, f32)>,
+    preview_width: Rc<Cell<Option<f32>>>,
     suppress_click: bool,
     sink: Rc<dyn Fn(Action, &mut Window, &mut App)>,
+    preview: Rc<dyn Fn(&mut App)>,
 }
 impl SideTabBar {
     pub fn new(
@@ -51,6 +53,8 @@ impl SideTabBar {
         style: SideTabsStyle,
         focus: FocusHandle,
         sink: impl Fn(Action, &mut Window, &mut App) + 'static,
+        preview_width: Rc<Cell<Option<f32>>>,
+        preview: impl Fn(&mut App) + 'static,
         cx: &mut Context<Self>,
     ) -> Self {
         let _ = cx;
@@ -64,8 +68,10 @@ impl SideTabBar {
             requested_rename: None,
             drag: None,
             resizing: None,
+            preview_width,
             suppress_click: false,
             sink: Rc::new(sink),
+            preview: Rc::new(preview),
         }
     }
     pub fn update(
@@ -162,7 +168,7 @@ impl SideTabBar {
     fn pointer_move(
         &mut self,
         event: &MouseMoveEvent,
-        window: &mut Window,
+        _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         if self.drag.is_some() {
@@ -170,21 +176,37 @@ impl SideTabBar {
         }
         if let Some((start, width)) = self.resizing {
             if event.pressed_button != Some(MouseButton::Left) {
+                // A lost release cancels the preview instead of leaving the divider displaced.
                 self.resizing = None;
+                self.model.width = width;
+                self.preview_width.set(None);
+                (self.preview)(cx);
+                cx.notify();
                 return;
             }
             let width = (width + (start - event.position.x) / px(1.))
                 .clamp(self.model.min_width, self.model.max_width);
             if width != self.model.width {
+                // Preview the divider locally; avoid a WASM round trip and PTY resize per pixel.
                 self.model.width = width;
-                (self.sink)(Action::Resize(width), window, cx);
+                self.preview_width.set(Some(width));
+                (self.preview)(cx);
                 cx.notify();
             }
             cx.stop_propagation();
         }
     }
     fn pointer_up(&mut self, event: &MouseUpEvent, window: &mut Window, cx: &mut Context<Self>) {
-        if self.resizing.take().is_some() {
+        if event.button == MouseButton::Left
+            && let Some((_, start_width)) = self.resizing.take()
+        {
+            // Commit exactly once; retain the preview until the guest returns its new layout.
+            if self.model.width != start_width {
+                self.emit(Action::Resize(self.model.width), window, cx);
+            } else {
+                self.preview_width.set(None);
+                (self.preview)(cx);
+            }
             cx.stop_propagation();
             return;
         }

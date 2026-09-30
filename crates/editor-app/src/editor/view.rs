@@ -1,6 +1,7 @@
 //! Renders the explorer, document tabs, and editor.
 
 use crate::*;
+use gpui_kit::component::WindowExt as _;
 
 #[derive(Clone)]
 /// Carries a tab's identity while it is dragged in the tab strip.
@@ -202,6 +203,7 @@ impl EditorApp {
             let is_active = self.active_path.as_ref() == Some(&path);
             let is_external = !path.starts_with(self.workspace.root());
             let is_dirty = tab.session.is_dirty();
+            let disk_state = tab.disk_state;
             let name = tab
                 .session
                 .file_name()
@@ -309,7 +311,16 @@ impl EditorApp {
                         .truncate()
                         .text_sm()
                         .when(is_external, |style| style.italic())
-                        .child(format!("{}{}", name, if is_dirty { " ●" } else { "" })),
+                        .child(format!(
+                            "{}{}{}",
+                            name,
+                            if is_dirty { " ●" } else { "" },
+                            match disk_state {
+                                DiskState::Synced => "",
+                                DiskState::Conflict => " ⚠",
+                                DiskState::Deleted => " ×",
+                            }
+                        )),
                 )
                 .child(
                     div()
@@ -450,6 +461,12 @@ impl EditorApp {
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
         let style = component_styles(cx, ThemeComponent::Editor).base;
+        // Modal surfaces own the window until dismissed; ordinary floating
+        // panels can remain below the raised definition details layer.
+        let hover_enabled = self.explorer_edit.is_none()
+            && self.explorer_delete.is_none()
+            && !window.has_active_dialog(cx)
+            && !window.has_active_sheet(cx);
         // The menu callback runs inside an editor update, so snapshot its state now.
         let (enabled, editable, has_definition, has_code_actions) = {
             let editor = self.editor.read(cx);
@@ -507,8 +524,10 @@ impl EditorApp {
                     .child(
                         super::popovers::render(
                             &self.editor,
-                            &self.completion_selection,
+                            &self.completion_popup,
+                            &self.definition_popup_focus,
                             style,
+                            hover_enabled,
                             window,
                             cx,
                         )

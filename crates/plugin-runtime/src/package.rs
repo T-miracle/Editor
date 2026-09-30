@@ -74,7 +74,7 @@ impl Package {
         );
         semver::Version::parse(&manifest.version)?;
         anyhow::ensure!(
-            matches!(manifest.protocol, 1..=3),
+            matches!(manifest.protocol, 1..=4),
             "Unsupported plugin protocol"
         );
         anyhow::ensure!(
@@ -283,6 +283,28 @@ pub(crate) fn atomic_write(path: &Path, bytes: &[u8]) -> anyhow::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// New hosts accept legacy protocol 3 packages and reject versions they do not understand.
+    #[test]
+    fn package_accepts_protocol_four_and_preserves_version_boundary() {
+        for (protocol, supported) in [(3, true), (4, true), (5, false)] {
+            let manifest = serde_json::json!({
+                "id": "me.test", "name": "Test", "version": "0.1.0",
+                "protocol": protocol, "component": "test.wasm",
+                "permissions": [], "storage_limit": 1024
+            });
+            let mut zip = zip::ZipWriter::new(Cursor::new(Vec::new()));
+            zip.start_file("manifest.json", zip::write::SimpleFileOptions::default())
+                .unwrap();
+            zip.write_all(&serde_json::to_vec(&manifest).unwrap())
+                .unwrap();
+            zip.start_file("test.wasm", zip::write::SimpleFileOptions::default())
+                .unwrap();
+            zip.write_all(b"\0asm\x0d\0\x01\0").unwrap();
+            let bytes = zip.finish().unwrap().into_inner();
+            assert_eq!(Package::from_bytes(&bytes).is_ok(), supported);
+        }
+    }
 
     /// The host must reject an empty archive instead of installing an inert registry entry.
     #[test]

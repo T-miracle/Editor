@@ -5,6 +5,9 @@
       "id": "builtin-light",
       "name": "Default Light",
       "mode": "light",
+      "window": {
+        "background_appearance": "opaque"
+      },
       "colors": {
         "background": "#ffffff",
         "surface": "#f7f8fa",
@@ -18,16 +21,40 @@
         "accent_active": "#2554a8"
       },
       "typography": {
-        "ui": { "family": "Segoe UI" },
-        "mono": { "family": "Cascadia Mono" }
+        "ui": {
+          "family": "Segoe UI",
+          "size_px": null,
+          "bold": null
+        },
+        "mono": {
+          "family": "Cascadia Mono",
+          "size_px": null,
+          "bold": null
+        }
       },
       "plugins": {
         "me.terminal": {
           "typography": {
-            "content": { "family": "Cascadia Mono", "size_px": 14 },
-            "tab": { "family": "Segoe UI", "size_px": 14 },
-            "menu": { "family": "Segoe UI", "size_px": 14 },
-            "error": { "family": "Segoe UI", "size_px": 13 }
+            "content": {
+              "family": "Cascadia Mono",
+              "size_px": 14,
+              "bold": null
+            },
+            "tab": {
+              "family": "Segoe UI",
+              "size_px": 14,
+              "bold": null
+            },
+            "menu": {
+              "family": "Segoe UI",
+              "size_px": 14,
+              "bold": null
+            },
+            "error": {
+              "family": "Segoe UI",
+              "size_px": 13,
+              "bold": null
+            }
           },
           "ansi": {
             "black": "#1f2329",
@@ -51,62 +78,650 @@
       },
       "components": {
         "app-shell": {
-          "base": { "background": "#ffffff", "foreground": "#1f2329" }
+          "base": {
+            "background": "#ffffff",
+            "foreground": "#1f2329",
+            "border": null,
+            "radius_px": null,
+            "font_size_px": null,
+            "padding_x_px": null,
+            "padding_y_px": null
+          },
+          "hover": {
+            "background": null,
+            "foreground": null,
+            "border": null,
+            "radius_px": null,
+            "font_size_px": null,
+            "padding_x_px": null,
+            "padding_y_px": null
+          },
+          "selected": {
+            "background": null,
+            "foreground": null,
+            "border": null,
+            "radius_px": null,
+            "font_size_px": null,
+            "padding_x_px": null,
+            "padding_y_px": null
+          },
+          "active": {
+            "background": null,
+            "foreground": null,
+            "border": null,
+            "radius_px": null,
+            "font_size_px": null,
+            "padding_x_px": null,
+            "padding_y_px": null
+          }
         },
         "window-title-bar": {
-          "base": { "background": "#f7f8fa", "foreground": "#1f2329", "border": "#d3d5db" }
+          "base": {
+            "background": "#f7f8fa",
+            "foreground": "#1f2329",
+            "border": "#d3d5db",
+            "radius_px": null,
+            "font_size_px": null,
+            "padding_x_px": null,
+            "padding_y_px": null
+          },
+          "hover": {
+            "background": null,
+            "foreground": null,
+            "border": null,
+            "radius_px": null,
+            "font_size_px": null,
+            "padding_x_px": null,
+            "padding_y_px": null
+          },
+          "selected": {
+            "background": null,
+            "foreground": null,
+            "border": null,
+            "radius_px": null,
+            "font_size_px": null,
+            "padding_x_px": null,
+            "padding_y_px": null
+          },
+          "active": {
+            "background": null,
+            "foreground": null,
+            "border": null,
+            "radius_px": null,
+            "font_size_px": null,
+            "padding_x_px": null,
+            "padding_y_px": null
+          }
         },
         "project-badge": {
-          "base": { "background": "#3574f0", "foreground": "#ffffff" }
+          "base": {
+            "background": "#3574f0",
+            "foreground": "#ffffff",
+            "border": null,
+            "radius_px": null,
+            "font_size_px": null,
+            "padding_x_px": null,
+            "padding_y_px": null
+          },
+          "hover": {
+            "background": null,
+            "foreground": null,
+            "border": null,
+            "radius_px": null,
+            "font_size_px": null,
+            "padding_x_px": null,
+            "padding_y_px": null
+          },
+          "selected": {
+            "background": null,
+            "foreground": null,
+            "border": null,
+            "radius_px": null,
+            "font_size_px": null,
+            "padding_x_px": null,
+            "padding_y_px": null
+          },
+          "active": {
+            "background": null,
+            "foreground": null,
+            "border": null,
+            "radius_px": null,
+            "font_size_px": null,
+            "padding_x_px": null,
+            "padding_y_px": null
+          }
         },
         "explorer-tree": {
-          "base": { "background": "#ffffff", "foreground": "#1f2329" }
+          "base": {
+            "background": "#ffffff",
+            "foreground": "#1f2329",
+            "border": null,
+            "radius_px": null,
+            "font_size_px": null,
+            "padding_x_px": null,
+            "padding_y_px": null
+          },
+          "hover": {
+            "background": null,
+            "foreground": null,
+            "border": null,
+            "radius_px": null,
+            "font_size_px": null,
+            "padding_x_px": null,
+            "padding_y_px": null
+          },
+          "selected": {
+            "background": null,
+            "foreground": null,
+            "border": null,
+            "radius_px": null,
+            "font_size_px": null,
+            "padding_x_px": null,
+            "padding_y_px": null
+          },
+          "active": {
+            "background": null,
+            "foreground": null,
+            "border": null,
+            "radius_px": null,
+            "font_size_px": null,
+            "padding_x_px": null,
+            "padding_y_px": null
+          }
         },
         "explorer-row": {
-          "hover": { "background": "#ebecf0" },
-          "selected": { "background": "#d4e2ff", "border": "#3574f0" }
+          "hover": {
+            "background": "#ebecf0",
+            "foreground": null,
+            "border": null,
+            "radius_px": null,
+            "font_size_px": null,
+            "padding_x_px": null,
+            "padding_y_px": null
+          },
+          "selected": {
+            "background": "#d4e2ff",
+            "border": "#3574f0",
+            "foreground": null,
+            "radius_px": null,
+            "font_size_px": null,
+            "padding_x_px": null,
+            "padding_y_px": null
+          },
+          "base": {
+            "background": null,
+            "foreground": null,
+            "border": null,
+            "radius_px": null,
+            "font_size_px": null,
+            "padding_x_px": null,
+            "padding_y_px": null
+          },
+          "active": {
+            "background": null,
+            "foreground": null,
+            "border": null,
+            "radius_px": null,
+            "font_size_px": null,
+            "padding_x_px": null,
+            "padding_y_px": null
+          }
         },
         "explorer-menu": {
-          "base": { "background": "#f7f8fa", "foreground": "#1f2329", "border": "#d3d5db", "radius_px": 6, "font_size_px": 13, "padding_x_px": 6, "padding_y_px": 5 },
-          "hover": { "background": "#d4e2ff", "foreground": "#1f2329" }
+          "base": {
+            "background": "#f7f8fa",
+            "foreground": "#1f2329",
+            "border": "#d3d5db",
+            "radius_px": 6,
+            "font_size_px": 13,
+            "padding_x_px": 6,
+            "padding_y_px": 5
+          },
+          "hover": {
+            "background": "#d4e2ff",
+            "foreground": "#1f2329",
+            "border": null,
+            "radius_px": null,
+            "font_size_px": null,
+            "padding_x_px": null,
+            "padding_y_px": null
+          },
+          "selected": {
+            "background": null,
+            "foreground": null,
+            "border": null,
+            "radius_px": null,
+            "font_size_px": null,
+            "padding_x_px": null,
+            "padding_y_px": null
+          },
+          "active": {
+            "background": null,
+            "foreground": null,
+            "border": null,
+            "radius_px": null,
+            "font_size_px": null,
+            "padding_x_px": null,
+            "padding_y_px": null
+          }
         },
         "editor-tabs": {
-          "base": { "background": "#f7f8fa", "border": "#d3d5db" },
-          "active": { "background": "#3574f0" }
+          "base": {
+            "background": "#f7f8fa",
+            "border": "#d3d5db",
+            "foreground": null,
+            "radius_px": null,
+            "font_size_px": null,
+            "padding_x_px": null,
+            "padding_y_px": null
+          },
+          "active": {
+            "background": "#3574f0",
+            "foreground": null,
+            "border": null,
+            "radius_px": null,
+            "font_size_px": null,
+            "padding_x_px": null,
+            "padding_y_px": null
+          },
+          "hover": {
+            "background": null,
+            "foreground": null,
+            "border": null,
+            "radius_px": null,
+            "font_size_px": null,
+            "padding_x_px": null,
+            "padding_y_px": null
+          },
+          "selected": {
+            "background": null,
+            "foreground": null,
+            "border": null,
+            "radius_px": null,
+            "font_size_px": null,
+            "padding_x_px": null,
+            "padding_y_px": null
+          }
         },
         "editor-tab": {
-          "base": { "background": "#f7f8fa", "foreground": "#6c707e", "border": "#d3d5db" },
-          "selected": { "background": "#ffffff", "foreground": "#3574f0", "border": "#3574f0" }
+          "base": {
+            "background": "#f7f8fa",
+            "foreground": "#6c707e",
+            "border": "#d3d5db",
+            "radius_px": null,
+            "font_size_px": null,
+            "padding_x_px": null,
+            "padding_y_px": null
+          },
+          "selected": {
+            "background": "#ffffff",
+            "foreground": "#3574f0",
+            "border": "#3574f0",
+            "radius_px": null,
+            "font_size_px": null,
+            "padding_x_px": null,
+            "padding_y_px": null
+          },
+          "hover": {
+            "background": null,
+            "foreground": null,
+            "border": null,
+            "radius_px": null,
+            "font_size_px": null,
+            "padding_x_px": null,
+            "padding_y_px": null
+          },
+          "active": {
+            "background": null,
+            "foreground": null,
+            "border": null,
+            "radius_px": null,
+            "font_size_px": null,
+            "padding_x_px": null,
+            "padding_y_px": null
+          }
         },
         "editor-tab-close": {
-          "hover": { "background": "#ebecf0" }
+          "hover": {
+            "background": "#ebecf0",
+            "foreground": null,
+            "border": null,
+            "radius_px": null,
+            "font_size_px": null,
+            "padding_x_px": null,
+            "padding_y_px": null
+          },
+          "base": {
+            "background": null,
+            "foreground": null,
+            "border": null,
+            "radius_px": null,
+            "font_size_px": null,
+            "padding_x_px": null,
+            "padding_y_px": null
+          },
+          "selected": {
+            "background": null,
+            "foreground": null,
+            "border": null,
+            "radius_px": null,
+            "font_size_px": null,
+            "padding_x_px": null,
+            "padding_y_px": null
+          },
+          "active": {
+            "background": null,
+            "foreground": null,
+            "border": null,
+            "radius_px": null,
+            "font_size_px": null,
+            "padding_x_px": null,
+            "padding_y_px": null
+          }
         },
         "editor-tab-drag-preview": {
-          "base": { "background": "#3574f0", "foreground": "#ffffff" }
+          "base": {
+            "background": "#3574f0",
+            "foreground": "#ffffff",
+            "border": null,
+            "radius_px": null,
+            "font_size_px": null,
+            "padding_x_px": null,
+            "padding_y_px": null
+          },
+          "hover": {
+            "background": null,
+            "foreground": null,
+            "border": null,
+            "radius_px": null,
+            "font_size_px": null,
+            "padding_x_px": null,
+            "padding_y_px": null
+          },
+          "selected": {
+            "background": null,
+            "foreground": null,
+            "border": null,
+            "radius_px": null,
+            "font_size_px": null,
+            "padding_x_px": null,
+            "padding_y_px": null
+          },
+          "active": {
+            "background": null,
+            "foreground": null,
+            "border": null,
+            "radius_px": null,
+            "font_size_px": null,
+            "padding_x_px": null,
+            "padding_y_px": null
+          }
         },
         "editor": {
-          "base": { "background": "#ffffff", "foreground": "#1f2329" }
+          "base": {
+            "background": "#ffffff",
+            "foreground": "#1f2329",
+            "border": null,
+            "radius_px": null,
+            "font_size_px": null,
+            "padding_x_px": null,
+            "padding_y_px": null
+          },
+          "hover": {
+            "background": null,
+            "foreground": null,
+            "border": null,
+            "radius_px": null,
+            "font_size_px": null,
+            "padding_x_px": null,
+            "padding_y_px": null
+          },
+          "selected": {
+            "background": null,
+            "foreground": null,
+            "border": null,
+            "radius_px": null,
+            "font_size_px": null,
+            "padding_x_px": null,
+            "padding_y_px": null
+          },
+          "active": {
+            "background": null,
+            "foreground": null,
+            "border": null,
+            "radius_px": null,
+            "font_size_px": null,
+            "padding_x_px": null,
+            "padding_y_px": null
+          }
         },
         "scrollbar": {
-          "base": { "background": "#9bd3ff" },
-          "hover": { "background": "#87c8ff" },
-          "active": { "background": "#75bcf5" }
+          "base": {
+            "background": "#9bd3ff",
+            "foreground": null,
+            "border": null,
+            "radius_px": null,
+            "font_size_px": null,
+            "padding_x_px": null,
+            "padding_y_px": null
+          },
+          "hover": {
+            "background": "#87c8ff",
+            "foreground": null,
+            "border": null,
+            "radius_px": null,
+            "font_size_px": null,
+            "padding_x_px": null,
+            "padding_y_px": null
+          },
+          "active": {
+            "background": "#75bcf5",
+            "foreground": null,
+            "border": null,
+            "radius_px": null,
+            "font_size_px": null,
+            "padding_x_px": null,
+            "padding_y_px": null
+          },
+          "selected": {
+            "background": null,
+            "foreground": null,
+            "border": null,
+            "radius_px": null,
+            "font_size_px": null,
+            "padding_x_px": null,
+            "padding_y_px": null
+          }
         },
         "panel-toggle": {
-          "selected": { "background": "#d4e2ff", "foreground": "#1f2329" }
+          "selected": {
+            "background": "#d4e2ff",
+            "foreground": "#1f2329",
+            "border": null,
+            "radius_px": null,
+            "font_size_px": null,
+            "padding_x_px": null,
+            "padding_y_px": null
+          },
+          "base": {
+            "background": null,
+            "foreground": null,
+            "border": null,
+            "radius_px": null,
+            "font_size_px": null,
+            "padding_x_px": null,
+            "padding_y_px": null
+          },
+          "hover": {
+            "background": null,
+            "foreground": null,
+            "border": null,
+            "radius_px": null,
+            "font_size_px": null,
+            "padding_x_px": null,
+            "padding_y_px": null
+          },
+          "active": {
+            "background": null,
+            "foreground": null,
+            "border": null,
+            "radius_px": null,
+            "font_size_px": null,
+            "padding_x_px": null,
+            "padding_y_px": null
+          }
         },
         "dock-title-bar": {
-          "base": { "background": "#f7f8fa", "foreground": "#1f2329", "border": "#d3d5db" }
+          "base": {
+            "background": "#f7f8fa",
+            "foreground": "#1f2329",
+            "border": "#d3d5db",
+            "radius_px": null,
+            "font_size_px": null,
+            "padding_x_px": null,
+            "padding_y_px": null
+          },
+          "hover": {
+            "background": null,
+            "foreground": null,
+            "border": null,
+            "radius_px": null,
+            "font_size_px": null,
+            "padding_x_px": null,
+            "padding_y_px": null
+          },
+          "selected": {
+            "background": null,
+            "foreground": null,
+            "border": null,
+            "radius_px": null,
+            "font_size_px": null,
+            "padding_x_px": null,
+            "padding_y_px": null
+          },
+          "active": {
+            "background": null,
+            "foreground": null,
+            "border": null,
+            "radius_px": null,
+            "font_size_px": null,
+            "padding_x_px": null,
+            "padding_y_px": null
+          }
         },
         "dock-tab": {
-          "base": { "background": "#f7f8fa", "foreground": "#6c707e", "border": "#d3d5db" },
-          "selected": { "background": "#ffffff", "foreground": "#1f2329" }
+          "base": {
+            "background": "#f7f8fa",
+            "foreground": "#6c707e",
+            "border": "#d3d5db",
+            "radius_px": null,
+            "font_size_px": null,
+            "padding_x_px": null,
+            "padding_y_px": null
+          },
+          "selected": {
+            "background": "#ffffff",
+            "foreground": "#1f2329",
+            "border": null,
+            "radius_px": null,
+            "font_size_px": null,
+            "padding_x_px": null,
+            "padding_y_px": null
+          },
+          "hover": {
+            "background": null,
+            "foreground": null,
+            "border": null,
+            "radius_px": null,
+            "font_size_px": null,
+            "padding_x_px": null,
+            "padding_y_px": null
+          },
+          "active": {
+            "background": null,
+            "foreground": null,
+            "border": null,
+            "radius_px": null,
+            "font_size_px": null,
+            "padding_x_px": null,
+            "padding_y_px": null
+          }
         },
         "dock-drag-preview": {
-          "base": { "background": "#f7f8fa", "border": "#d3d5db" }
+          "base": {
+            "background": "#f7f8fa",
+            "border": "#d3d5db",
+            "foreground": null,
+            "radius_px": null,
+            "font_size_px": null,
+            "padding_x_px": null,
+            "padding_y_px": null
+          },
+          "hover": {
+            "background": null,
+            "foreground": null,
+            "border": null,
+            "radius_px": null,
+            "font_size_px": null,
+            "padding_x_px": null,
+            "padding_y_px": null
+          },
+          "selected": {
+            "background": null,
+            "foreground": null,
+            "border": null,
+            "radius_px": null,
+            "font_size_px": null,
+            "padding_x_px": null,
+            "padding_y_px": null
+          },
+          "active": {
+            "background": null,
+            "foreground": null,
+            "border": null,
+            "radius_px": null,
+            "font_size_px": null,
+            "padding_x_px": null,
+            "padding_y_px": null
+          }
         },
         "status-bar": {
-          "base": { "background": "#f7f8fa", "foreground": "#6c707e", "border": "#d3d5db" }
+          "base": {
+            "background": "#f7f8fa",
+            "foreground": "#6c707e",
+            "border": "#d3d5db",
+            "radius_px": null,
+            "font_size_px": null,
+            "padding_x_px": null,
+            "padding_y_px": null
+          },
+          "hover": {
+            "background": null,
+            "foreground": null,
+            "border": null,
+            "radius_px": null,
+            "font_size_px": null,
+            "padding_x_px": null,
+            "padding_y_px": null
+          },
+          "selected": {
+            "background": null,
+            "foreground": null,
+            "border": null,
+            "radius_px": null,
+            "font_size_px": null,
+            "padding_x_px": null,
+            "padding_y_px": null
+          },
+          "active": {
+            "background": null,
+            "foreground": null,
+            "border": null,
+            "radius_px": null,
+            "font_size_px": null,
+            "padding_x_px": null,
+            "padding_y_px": null
+          }
         }
       }
     },
@@ -114,6 +729,9 @@
       "id": "jetbrains-dark",
       "name": "JetBrains 2023 Dark",
       "mode": "dark",
+      "window": {
+        "background_appearance": "opaque"
+      },
       "colors": {
         "background": "#1e1f22",
         "surface": "#2b2d30",
@@ -127,16 +745,40 @@
         "accent_active": "#2f65ca"
       },
       "typography": {
-        "ui": { "family": "Segoe UI" },
-        "mono": { "family": "Cascadia Mono" }
+        "ui": {
+          "family": "Segoe UI",
+          "size_px": null,
+          "bold": null
+        },
+        "mono": {
+          "family": "Cascadia Mono",
+          "size_px": null,
+          "bold": null
+        }
       },
       "plugins": {
         "me.terminal": {
           "typography": {
-            "content": { "family": "Cascadia Mono", "size_px": 14 },
-            "tab": { "family": "Segoe UI", "size_px": 14 },
-            "menu": { "family": "Segoe UI", "size_px": 14 },
-            "error": { "family": "Segoe UI", "size_px": 13 }
+            "content": {
+              "family": "Cascadia Mono",
+              "size_px": 14,
+              "bold": null
+            },
+            "tab": {
+              "family": "Segoe UI",
+              "size_px": 14,
+              "bold": null
+            },
+            "menu": {
+              "family": "Segoe UI",
+              "size_px": 14,
+              "bold": null
+            },
+            "error": {
+              "family": "Segoe UI",
+              "size_px": 13,
+              "bold": null
+            }
           },
           "ansi": {
             "black": "#89919b",
@@ -160,62 +802,650 @@
       },
       "components": {
         "app-shell": {
-          "base": { "background": "#1e1f22", "foreground": "#dfe1e5" }
+          "base": {
+            "background": "#1e1f22",
+            "foreground": "#dfe1e5",
+            "border": null,
+            "radius_px": null,
+            "font_size_px": null,
+            "padding_x_px": null,
+            "padding_y_px": null
+          },
+          "hover": {
+            "background": null,
+            "foreground": null,
+            "border": null,
+            "radius_px": null,
+            "font_size_px": null,
+            "padding_x_px": null,
+            "padding_y_px": null
+          },
+          "selected": {
+            "background": null,
+            "foreground": null,
+            "border": null,
+            "radius_px": null,
+            "font_size_px": null,
+            "padding_x_px": null,
+            "padding_y_px": null
+          },
+          "active": {
+            "background": null,
+            "foreground": null,
+            "border": null,
+            "radius_px": null,
+            "font_size_px": null,
+            "padding_x_px": null,
+            "padding_y_px": null
+          }
         },
         "window-title-bar": {
-          "base": { "background": "#2b2d30", "foreground": "#dfe1e5", "border": "#43454a" }
+          "base": {
+            "background": "#2b2d30",
+            "foreground": "#dfe1e5",
+            "border": "#43454a",
+            "radius_px": null,
+            "font_size_px": null,
+            "padding_x_px": null,
+            "padding_y_px": null
+          },
+          "hover": {
+            "background": null,
+            "foreground": null,
+            "border": null,
+            "radius_px": null,
+            "font_size_px": null,
+            "padding_x_px": null,
+            "padding_y_px": null
+          },
+          "selected": {
+            "background": null,
+            "foreground": null,
+            "border": null,
+            "radius_px": null,
+            "font_size_px": null,
+            "padding_x_px": null,
+            "padding_y_px": null
+          },
+          "active": {
+            "background": null,
+            "foreground": null,
+            "border": null,
+            "radius_px": null,
+            "font_size_px": null,
+            "padding_x_px": null,
+            "padding_y_px": null
+          }
         },
         "project-badge": {
-          "base": { "background": "#3574f0", "foreground": "#ffffff" }
+          "base": {
+            "background": "#3574f0",
+            "foreground": "#ffffff",
+            "border": null,
+            "radius_px": null,
+            "font_size_px": null,
+            "padding_x_px": null,
+            "padding_y_px": null
+          },
+          "hover": {
+            "background": null,
+            "foreground": null,
+            "border": null,
+            "radius_px": null,
+            "font_size_px": null,
+            "padding_x_px": null,
+            "padding_y_px": null
+          },
+          "selected": {
+            "background": null,
+            "foreground": null,
+            "border": null,
+            "radius_px": null,
+            "font_size_px": null,
+            "padding_x_px": null,
+            "padding_y_px": null
+          },
+          "active": {
+            "background": null,
+            "foreground": null,
+            "border": null,
+            "radius_px": null,
+            "font_size_px": null,
+            "padding_x_px": null,
+            "padding_y_px": null
+          }
         },
         "explorer-tree": {
-          "base": { "background": "#1e1f22", "foreground": "#dfe1e5" }
+          "base": {
+            "background": "#1e1f22",
+            "foreground": "#dfe1e5",
+            "border": null,
+            "radius_px": null,
+            "font_size_px": null,
+            "padding_x_px": null,
+            "padding_y_px": null
+          },
+          "hover": {
+            "background": null,
+            "foreground": null,
+            "border": null,
+            "radius_px": null,
+            "font_size_px": null,
+            "padding_x_px": null,
+            "padding_y_px": null
+          },
+          "selected": {
+            "background": null,
+            "foreground": null,
+            "border": null,
+            "radius_px": null,
+            "font_size_px": null,
+            "padding_x_px": null,
+            "padding_y_px": null
+          },
+          "active": {
+            "background": null,
+            "foreground": null,
+            "border": null,
+            "radius_px": null,
+            "font_size_px": null,
+            "padding_x_px": null,
+            "padding_y_px": null
+          }
         },
         "explorer-row": {
-          "hover": { "background": "#393b40" },
-          "selected": { "background": "#2e436e", "border": "#3574f0" }
+          "hover": {
+            "background": "#393b40",
+            "foreground": null,
+            "border": null,
+            "radius_px": null,
+            "font_size_px": null,
+            "padding_x_px": null,
+            "padding_y_px": null
+          },
+          "selected": {
+            "background": "#2e436e",
+            "border": "#3574f0",
+            "foreground": null,
+            "radius_px": null,
+            "font_size_px": null,
+            "padding_x_px": null,
+            "padding_y_px": null
+          },
+          "base": {
+            "background": null,
+            "foreground": null,
+            "border": null,
+            "radius_px": null,
+            "font_size_px": null,
+            "padding_x_px": null,
+            "padding_y_px": null
+          },
+          "active": {
+            "background": null,
+            "foreground": null,
+            "border": null,
+            "radius_px": null,
+            "font_size_px": null,
+            "padding_x_px": null,
+            "padding_y_px": null
+          }
         },
         "explorer-menu": {
-          "base": { "background": "#2b2d30", "foreground": "#dfe1e5", "border": "#43454a", "radius_px": 6, "font_size_px": 13, "padding_x_px": 6, "padding_y_px": 5 },
-          "hover": { "background": "#2e436e", "foreground": "#dfe1e5" }
+          "base": {
+            "background": "#2b2d30",
+            "foreground": "#dfe1e5",
+            "border": "#43454a",
+            "radius_px": 6,
+            "font_size_px": 13,
+            "padding_x_px": 6,
+            "padding_y_px": 5
+          },
+          "hover": {
+            "background": "#2e436e",
+            "foreground": "#dfe1e5",
+            "border": null,
+            "radius_px": null,
+            "font_size_px": null,
+            "padding_x_px": null,
+            "padding_y_px": null
+          },
+          "selected": {
+            "background": null,
+            "foreground": null,
+            "border": null,
+            "radius_px": null,
+            "font_size_px": null,
+            "padding_x_px": null,
+            "padding_y_px": null
+          },
+          "active": {
+            "background": null,
+            "foreground": null,
+            "border": null,
+            "radius_px": null,
+            "font_size_px": null,
+            "padding_x_px": null,
+            "padding_y_px": null
+          }
         },
         "editor-tabs": {
-          "base": { "background": "#2b2d30", "border": "#43454a" },
-          "active": { "background": "#3574f0" }
+          "base": {
+            "background": "#2b2d30",
+            "border": "#43454a",
+            "foreground": null,
+            "radius_px": null,
+            "font_size_px": null,
+            "padding_x_px": null,
+            "padding_y_px": null
+          },
+          "active": {
+            "background": "#3574f0",
+            "foreground": null,
+            "border": null,
+            "radius_px": null,
+            "font_size_px": null,
+            "padding_x_px": null,
+            "padding_y_px": null
+          },
+          "hover": {
+            "background": null,
+            "foreground": null,
+            "border": null,
+            "radius_px": null,
+            "font_size_px": null,
+            "padding_x_px": null,
+            "padding_y_px": null
+          },
+          "selected": {
+            "background": null,
+            "foreground": null,
+            "border": null,
+            "radius_px": null,
+            "font_size_px": null,
+            "padding_x_px": null,
+            "padding_y_px": null
+          }
         },
         "editor-tab": {
-          "base": { "background": "#2b2d30", "foreground": "#9da0a8", "border": "#43454a" },
-          "selected": { "background": "#1e1f22", "foreground": "#3574f0", "border": "#3574f0" }
+          "base": {
+            "background": "#2b2d30",
+            "foreground": "#9da0a8",
+            "border": "#43454a",
+            "radius_px": null,
+            "font_size_px": null,
+            "padding_x_px": null,
+            "padding_y_px": null
+          },
+          "selected": {
+            "background": "#1e1f22",
+            "foreground": "#3574f0",
+            "border": "#3574f0",
+            "radius_px": null,
+            "font_size_px": null,
+            "padding_x_px": null,
+            "padding_y_px": null
+          },
+          "hover": {
+            "background": null,
+            "foreground": null,
+            "border": null,
+            "radius_px": null,
+            "font_size_px": null,
+            "padding_x_px": null,
+            "padding_y_px": null
+          },
+          "active": {
+            "background": null,
+            "foreground": null,
+            "border": null,
+            "radius_px": null,
+            "font_size_px": null,
+            "padding_x_px": null,
+            "padding_y_px": null
+          }
         },
         "editor-tab-close": {
-          "hover": { "background": "#393b40" }
+          "hover": {
+            "background": "#393b40",
+            "foreground": null,
+            "border": null,
+            "radius_px": null,
+            "font_size_px": null,
+            "padding_x_px": null,
+            "padding_y_px": null
+          },
+          "base": {
+            "background": null,
+            "foreground": null,
+            "border": null,
+            "radius_px": null,
+            "font_size_px": null,
+            "padding_x_px": null,
+            "padding_y_px": null
+          },
+          "selected": {
+            "background": null,
+            "foreground": null,
+            "border": null,
+            "radius_px": null,
+            "font_size_px": null,
+            "padding_x_px": null,
+            "padding_y_px": null
+          },
+          "active": {
+            "background": null,
+            "foreground": null,
+            "border": null,
+            "radius_px": null,
+            "font_size_px": null,
+            "padding_x_px": null,
+            "padding_y_px": null
+          }
         },
         "editor-tab-drag-preview": {
-          "base": { "background": "#3574f0", "foreground": "#ffffff" }
+          "base": {
+            "background": "#3574f0",
+            "foreground": "#ffffff",
+            "border": null,
+            "radius_px": null,
+            "font_size_px": null,
+            "padding_x_px": null,
+            "padding_y_px": null
+          },
+          "hover": {
+            "background": null,
+            "foreground": null,
+            "border": null,
+            "radius_px": null,
+            "font_size_px": null,
+            "padding_x_px": null,
+            "padding_y_px": null
+          },
+          "selected": {
+            "background": null,
+            "foreground": null,
+            "border": null,
+            "radius_px": null,
+            "font_size_px": null,
+            "padding_x_px": null,
+            "padding_y_px": null
+          },
+          "active": {
+            "background": null,
+            "foreground": null,
+            "border": null,
+            "radius_px": null,
+            "font_size_px": null,
+            "padding_x_px": null,
+            "padding_y_px": null
+          }
         },
         "editor": {
-          "base": { "background": "#1e1f22", "foreground": "#dfe1e5" }
+          "base": {
+            "background": "#1e1f22",
+            "foreground": "#dfe1e5",
+            "border": null,
+            "radius_px": null,
+            "font_size_px": null,
+            "padding_x_px": null,
+            "padding_y_px": null
+          },
+          "hover": {
+            "background": null,
+            "foreground": null,
+            "border": null,
+            "radius_px": null,
+            "font_size_px": null,
+            "padding_x_px": null,
+            "padding_y_px": null
+          },
+          "selected": {
+            "background": null,
+            "foreground": null,
+            "border": null,
+            "radius_px": null,
+            "font_size_px": null,
+            "padding_x_px": null,
+            "padding_y_px": null
+          },
+          "active": {
+            "background": null,
+            "foreground": null,
+            "border": null,
+            "radius_px": null,
+            "font_size_px": null,
+            "padding_x_px": null,
+            "padding_y_px": null
+          }
         },
         "scrollbar": {
-          "base": { "background": "#9bd3ff" },
-          "hover": { "background": "#87c8ff" },
-          "active": { "background": "#75bcf5" }
+          "base": {
+            "background": "#9bd3ff",
+            "foreground": null,
+            "border": null,
+            "radius_px": null,
+            "font_size_px": null,
+            "padding_x_px": null,
+            "padding_y_px": null
+          },
+          "hover": {
+            "background": "#87c8ff",
+            "foreground": null,
+            "border": null,
+            "radius_px": null,
+            "font_size_px": null,
+            "padding_x_px": null,
+            "padding_y_px": null
+          },
+          "active": {
+            "background": "#75bcf5",
+            "foreground": null,
+            "border": null,
+            "radius_px": null,
+            "font_size_px": null,
+            "padding_x_px": null,
+            "padding_y_px": null
+          },
+          "selected": {
+            "background": null,
+            "foreground": null,
+            "border": null,
+            "radius_px": null,
+            "font_size_px": null,
+            "padding_x_px": null,
+            "padding_y_px": null
+          }
         },
         "panel-toggle": {
-          "selected": { "background": "#2e436e", "foreground": "#dfe1e5" }
+          "selected": {
+            "background": "#2e436e",
+            "foreground": "#dfe1e5",
+            "border": null,
+            "radius_px": null,
+            "font_size_px": null,
+            "padding_x_px": null,
+            "padding_y_px": null
+          },
+          "base": {
+            "background": null,
+            "foreground": null,
+            "border": null,
+            "radius_px": null,
+            "font_size_px": null,
+            "padding_x_px": null,
+            "padding_y_px": null
+          },
+          "hover": {
+            "background": null,
+            "foreground": null,
+            "border": null,
+            "radius_px": null,
+            "font_size_px": null,
+            "padding_x_px": null,
+            "padding_y_px": null
+          },
+          "active": {
+            "background": null,
+            "foreground": null,
+            "border": null,
+            "radius_px": null,
+            "font_size_px": null,
+            "padding_x_px": null,
+            "padding_y_px": null
+          }
         },
         "dock-title-bar": {
-          "base": { "background": "#2b2d30", "foreground": "#dfe1e5", "border": "#43454a" }
+          "base": {
+            "background": "#2b2d30",
+            "foreground": "#dfe1e5",
+            "border": "#43454a",
+            "radius_px": null,
+            "font_size_px": null,
+            "padding_x_px": null,
+            "padding_y_px": null
+          },
+          "hover": {
+            "background": null,
+            "foreground": null,
+            "border": null,
+            "radius_px": null,
+            "font_size_px": null,
+            "padding_x_px": null,
+            "padding_y_px": null
+          },
+          "selected": {
+            "background": null,
+            "foreground": null,
+            "border": null,
+            "radius_px": null,
+            "font_size_px": null,
+            "padding_x_px": null,
+            "padding_y_px": null
+          },
+          "active": {
+            "background": null,
+            "foreground": null,
+            "border": null,
+            "radius_px": null,
+            "font_size_px": null,
+            "padding_x_px": null,
+            "padding_y_px": null
+          }
         },
         "dock-tab": {
-          "base": { "background": "#2b2d30", "foreground": "#9da0a8", "border": "#43454a" },
-          "selected": { "background": "#1e1f22", "foreground": "#dfe1e5" }
+          "base": {
+            "background": "#2b2d30",
+            "foreground": "#9da0a8",
+            "border": "#43454a",
+            "radius_px": null,
+            "font_size_px": null,
+            "padding_x_px": null,
+            "padding_y_px": null
+          },
+          "selected": {
+            "background": "#1e1f22",
+            "foreground": "#dfe1e5",
+            "border": null,
+            "radius_px": null,
+            "font_size_px": null,
+            "padding_x_px": null,
+            "padding_y_px": null
+          },
+          "hover": {
+            "background": null,
+            "foreground": null,
+            "border": null,
+            "radius_px": null,
+            "font_size_px": null,
+            "padding_x_px": null,
+            "padding_y_px": null
+          },
+          "active": {
+            "background": null,
+            "foreground": null,
+            "border": null,
+            "radius_px": null,
+            "font_size_px": null,
+            "padding_x_px": null,
+            "padding_y_px": null
+          }
         },
         "dock-drag-preview": {
-          "base": { "background": "#2b2d30", "border": "#43454a" }
+          "base": {
+            "background": "#2b2d30",
+            "border": "#43454a",
+            "foreground": null,
+            "radius_px": null,
+            "font_size_px": null,
+            "padding_x_px": null,
+            "padding_y_px": null
+          },
+          "hover": {
+            "background": null,
+            "foreground": null,
+            "border": null,
+            "radius_px": null,
+            "font_size_px": null,
+            "padding_x_px": null,
+            "padding_y_px": null
+          },
+          "selected": {
+            "background": null,
+            "foreground": null,
+            "border": null,
+            "radius_px": null,
+            "font_size_px": null,
+            "padding_x_px": null,
+            "padding_y_px": null
+          },
+          "active": {
+            "background": null,
+            "foreground": null,
+            "border": null,
+            "radius_px": null,
+            "font_size_px": null,
+            "padding_x_px": null,
+            "padding_y_px": null
+          }
         },
         "status-bar": {
-          "base": { "background": "#2b2d30", "foreground": "#9da0a8", "border": "#43454a" }
+          "base": {
+            "background": "#2b2d30",
+            "foreground": "#9da0a8",
+            "border": "#43454a",
+            "radius_px": null,
+            "font_size_px": null,
+            "padding_x_px": null,
+            "padding_y_px": null
+          },
+          "hover": {
+            "background": null,
+            "foreground": null,
+            "border": null,
+            "radius_px": null,
+            "font_size_px": null,
+            "padding_x_px": null,
+            "padding_y_px": null
+          },
+          "selected": {
+            "background": null,
+            "foreground": null,
+            "border": null,
+            "radius_px": null,
+            "font_size_px": null,
+            "padding_x_px": null,
+            "padding_y_px": null
+          },
+          "active": {
+            "background": null,
+            "foreground": null,
+            "border": null,
+            "radius_px": null,
+            "font_size_px": null,
+            "padding_x_px": null,
+            "padding_y_px": null
+          }
         }
       }
     }

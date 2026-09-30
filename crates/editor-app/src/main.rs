@@ -11,7 +11,9 @@ mod ui;
 // Compile translations from the app's locale files and retain English as fallback.
 rust_i18n::i18n!("locales", fallback = "en");
 
-use editor_core::{DocumentSession, Workspace};
+use editor::file_watch::{FileWatch, Reconciliation};
+use editor_core::{DocumentSession, Workspace, WorkspaceSnapshot};
+use futures::StreamExt;
 use gpui_base::dock::{DockArea, DockEvent, DockLayout, PanelEvent};
 use gpui_base::input::RopeExt as _;
 use gpui_base::input::{
@@ -39,26 +41,26 @@ use gpui_kit::{
 use platform_windows::{LocalHistory, NativeFileStore};
 use plugin_schema::ThemeComponent;
 use rust_i18n::t;
+use sha2::{Digest, Sha256};
 use std::{
     cell::Cell,
     collections::HashMap,
     path::{Path, PathBuf},
     rc::Rc,
     sync::Arc,
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 #[cfg(target_os = "windows")]
 use app::WindowsTimerResolution;
 use app::dialog as app_dialog;
-use app::dock as local_dock;
 use app::plugins::{PluginLoadEntry, PluginPopupKind};
 use app::session as session_state;
 use app::{EditorDockPanel, EditorDockPanelKind};
 use assets::AppAssets;
 use explorer::menu::ExplorerMenu;
 use explorer::tree as explorer_tree;
-use explorer::{ExplorerEdit, ExplorerEditKind};
+use explorer::{ExplorerDelete, ExplorerEdit, ExplorerEditKind};
 use explorer_tree::{find_tree_item, restore_expanded, tree_items};
 use icons::file_icon;
 use language::navigation as language_navigation;
@@ -68,6 +70,7 @@ use session_state::SessionState;
 #[cfg(test)]
 use theme::builtin_theme;
 use theme::{apply_theme, component_styles};
+use ui::controls::dock as local_dock;
 use ui::controls::{Button, Icon, StatusBar, Tooltip};
 use ui::{assets, icons, theme, typography};
 
@@ -81,24 +84,37 @@ actions!(
         RefreshWorkspace,
         ToggleTheme,
         NavigateToDefinition,
-        ShowDefinitionDetails
+        ShowDefinitionDetails,
+        NextSyntaxError,
+        PreviousSyntaxError
     ]
 );
 
 struct EditorApp {
     workspace: Workspace,
+    /// Native events and fallback scans send immutable disk snapshots to the UI thread.
+    file_watch: FileWatch,
+    workspace_snapshot: Option<WorkspaceSnapshot>,
     language_servers: HashMap<String, Arc<language_navigation::LanguageServer>>,
     file_store: NativeFileStore,
     history: Option<LocalHistory>,
     editor: Entity<EditorState>,
     /// The dock entity must repaint when editor-owned popover state changes.
     editor_panel: Entity<EditorDockPanel>,
-    /// Keeps keyboard selection in the project-owned completion popover.
-    completion_selection: Rc<Cell<(u64, usize)>>,
+    /// Keeps keyboard selection and scrolling in the project-owned completion popover.
+    completion_popup: Rc<editor::CompletionPopupState>,
+    /// Text selection may take focus without dismissing the displayed details.
+    definition_popup_focus: editor::DefinitionPopupFocus,
     /// Cancels app-level hover requests when the pointer moves to another symbol.
     pointer_hover_generation: u64,
+    /// Keep cached details and Escape suppression within one document revision.
+    pointer_hover_context: Option<(Option<PathBuf>, Option<u64>)>,
     pointer_hover_symbol: Option<std::ops::Range<usize>>,
     pointer_hover_pending: bool,
+    /// Reuse the current symbol's details when native mouse handling clears its card.
+    pointer_hover_cached: Option<lsp_types::Hover>,
+    /// Escape keeps the current symbol dismissed until the pointer leaves it.
+    pointer_hover_suppressed: Option<std::ops::Range<usize>>,
     /// Repaint the host when the upstream editor publishes a hover or completion.
     _editor_observer: Subscription,
     tree_state: Entity<TreeState>,
@@ -129,6 +145,8 @@ struct EditorApp {
     hovered_tree_entry: Option<String>,
     /// Temporary name field for create and rename commands in the explorer.
     explorer_edit: Option<ExplorerEdit>,
+    /// A path is removed only after the delete preview is explicitly confirmed.
+    explorer_delete: Option<ExplorerDelete>,
     explorer_menu: Option<ExplorerMenu>,
     tabs: Vec<OpenTab>,
     active_path: Option<PathBuf>,
@@ -146,6 +164,7 @@ struct EditorApp {
     _tree_subscription: Subscription,
     _dock_subscription: Subscription,
     _bounds_subscription: Option<Subscription>,
+    _activation_subscription: Option<Subscription>,
 }
 
 /// Anchors a short definition lookup message above the clicked window position.
@@ -158,11 +177,28 @@ struct DefinitionNotice {
 struct OpenTab {
     session: DocumentSession,
     editor: Entity<EditorState>,
+    /// Hash of the last disk text, avoiding a second full copy of every open document.
+    disk_digest: [u8; 32],
+    /// Ignore worker reads that began before the latest successful local save.
+    last_saved_at: Instant,
+    disk_state: DiskState,
+    suppress_change: bool,
+    overwrite_confirmed: bool,
     /// A separate decoration layer keeps a definition jump visible for two seconds.
     definition_highlight: TextDecorationCollection,
     definition_highlight_generation: u64,
+    /// Diagnostics retain only derived parser state; EditorState owns the editable text.
+    diagnostics: editor::diagnostics::DocumentDiagnostics,
     _subscription: Subscription,
     _observer: Subscription,
+}
+
+/// Open tabs remain present when their backing file changes or disappears.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum DiskState {
+    Synced,
+    Conflict,
+    Deleted,
 }
 
 impl EditorApp {
@@ -172,6 +208,7 @@ impl EditorApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
+        let (file_watch, mut watch_updates) = FileWatch::start(workspace.clone());
         let closing = cx.entity().downgrade();
         window.on_window_should_close(cx, move |_, cx| {
             let _ = closing.update(cx, |app, cx| app.shutdown_plugins(cx));
@@ -197,6 +234,10 @@ impl EditorApp {
                 TreeEvent::Collapsed(id) => Some((id.to_string(), false)),
             };
             if let Some((id, is_expanded)) = id {
+                // The project root has a default expansion state independent of child folders.
+                if Path::new(&id) == this.workspace.root() {
+                    this.session_state.explorer_root_expanded = is_expanded;
+                }
                 this.session_state
                     .expanded_directories
                     .retain(|path| path != &id);
@@ -284,15 +325,21 @@ impl EditorApp {
         });
         let mut this = Self {
             workspace,
+            file_watch,
+            workspace_snapshot: None,
             language_servers: HashMap::new(),
             file_store: NativeFileStore,
             history: LocalHistory::for_current_user().ok(),
             editor,
             editor_panel,
-            completion_selection: Rc::new(Cell::new((0, 0))),
+            completion_popup: Rc::new(editor::CompletionPopupState::default()),
+            definition_popup_focus: editor::DefinitionPopupFocus::new(window, cx),
             pointer_hover_generation: 0,
+            pointer_hover_context: None,
             pointer_hover_symbol: None,
             pointer_hover_pending: false,
+            pointer_hover_cached: None,
+            pointer_hover_suppressed: None,
             _editor_observer: editor_observer,
             tree_state,
             dock_area,
@@ -313,6 +360,7 @@ impl EditorApp {
             settings_section: app::SettingsSection::AppearanceAndBehavior,
             hovered_tree_entry: None,
             explorer_edit: None,
+            explorer_delete: None,
             explorer_menu: None,
             tabs: Vec::new(),
             active_path: None,
@@ -328,6 +376,7 @@ impl EditorApp {
             _tree_subscription: tree_subscription,
             _dock_subscription: dock_subscription,
             _bounds_subscription: None,
+            _activation_subscription: None,
         };
         this.refresh_files(cx);
 
@@ -360,6 +409,22 @@ impl EditorApp {
         let focus = this.editor.focus_handle(cx);
         window.defer(cx, move |window, cx| focus.focus(window, cx));
         this.start_plugin_loading(cx);
+        // The window observer repairs missed events after sleep or another app had focus.
+        this._activation_subscription =
+            Some(cx.observe_window_activation(window, |this, window, _cx| {
+                if window.is_window_active() {
+                    this.file_watch.reconcile();
+                }
+            }));
+        // Apply all worker results on the GPUI thread; editor entities never cross threads.
+        cx.spawn_in(window, async move |app, cx| {
+            while let Some(update) = watch_updates.next().await {
+                let _ = app.update_in(cx, |app, window, cx| {
+                    app.apply_reconciliation(update, window, cx);
+                });
+            }
+        })
+        .detach();
         this
     }
 
@@ -563,7 +628,9 @@ impl EditorApp {
     }
 
     fn on_refresh_action(&mut self, _: &RefreshWorkspace, _: &mut Window, cx: &mut Context<Self>) {
-        self.refresh_files(cx);
+        self.file_watch.reconcile();
+        self.status = t!("status.refreshing_workspace").to_string();
+        cx.notify();
     }
 
     fn on_toggle_theme_action(
@@ -632,6 +699,13 @@ fn main() -> anyhow::Result<()> {
                     ShowDefinitionDetails,
                     Some("EditorShell && !PluginSurface"),
                 ),
+                // Error navigation follows the active document and wraps at either end.
+                KeyBinding::new("f8", NextSyntaxError, Some("EditorShell && !PluginSurface")),
+                KeyBinding::new(
+                    "shift-f8",
+                    PreviousSyntaxError,
+                    Some("EditorShell && !PluginSurface"),
+                ),
             ]);
 
             let bounds = Bounds::centered(
@@ -645,13 +719,15 @@ fn main() -> anyhow::Result<()> {
             let workspace = workspace.clone();
             let initial_file = initial_file.clone();
             let mut window_options = TitleBar::window_options();
+            // Native materials are chosen by the active theme before first draw.
+            window_options.window_background = theme::window_background(cx);
             window_options.window_bounds = Some(WindowBounds::Windowed(bounds));
             // GPUI's default throttles animations in inactive windows to 30 FPS.
             // Leave frame scheduling uncapped; active frames follow the display refresh rate.
             window_options.inactive_frame_interval = None;
-            cx.open_window(window_options, move |window, cx| {
-                let view = cx.new(|cx| EditorApp::new(workspace, initial_file, window, cx));
-                cx.new(|cx| Root::new(view, window, cx).bg(cx.theme().background))
+            // Kit supplies the shared Root and its automatic overlay hosting.
+            gpui_kit::open_window(window_options, cx, move |window, cx| {
+                cx.new(|cx| EditorApp::new(workspace, initial_file, window, cx))
             })
             .expect("failed to open Me Editor window");
         });

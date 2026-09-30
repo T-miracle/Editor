@@ -98,6 +98,15 @@ pub(crate) enum EditorDockPanelKind {
     Editor,
 }
 
+/// Keep the title bar and bottom toggle on the same theme-specific Explorer artwork.
+fn explorer_panel_icon(cx: &App) -> Icon {
+    Icon::default().data(if cx.theme().is_dark() {
+        include_bytes!("../../assets/status-icons/explorer_dark.svg").as_slice()
+    } else {
+        include_bytes!("../../assets/status-icons/explorer_light.svg").as_slice()
+    })
+}
+
 pub(crate) struct EditorDockPanel {
     parent: WeakEntity<EditorApp>,
     kind: EditorDockPanelKind,
@@ -156,31 +165,39 @@ impl dock::BasePanel for EditorDockPanel {
 impl DockPanel for EditorDockPanel {
     fn title(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         match self.kind {
-            EditorDockPanelKind::Explorer => div()
+            // Match plugin panel titles: shared dock styling, an icon-label row and a hide control.
+            EditorDockPanelKind::Explorer => h_flex()
                 .w_full()
-                .h(px(PANEL_HEADER_HEIGHT))
-                .flex()
                 .items_center()
-                .px(px(component_styles(cx, ThemeComponent::DockTitleBar)
-                    .base
-                    .padding_x_px
-                    .unwrap_or(8.)))
-                .text_size(px(component_styles(cx, ThemeComponent::DockTitleBar)
-                    .base
-                    .font_size_px
-                    .unwrap_or(14.)))
+                .justify_between()
                 .font_normal()
-                .bg(component_styles(cx, ThemeComponent::DockTitleBar)
-                    .base
-                    .background
-                    .unwrap_or(cx.theme().tab_bar))
-                .text_color(
-                    component_styles(cx, ThemeComponent::DockTitleBar)
-                        .base
-                        .foreground
-                        .unwrap_or(cx.theme().foreground),
+                .child(
+                    h_flex()
+                        .flex_1()
+                        .min_w(px(0.))
+                        .items_center()
+                        .gap_2()
+                        .child(explorer_panel_icon(cx).small())
+                        .child(div().truncate().child(t!("panel.explorer").to_string())),
                 )
-                .child(t!("panel.explorer").to_string())
+                .child(
+                    Button::new("explorer-hide")
+                        .icon(Icon::new(IconName::WindowMinimize))
+                        .tooltip(t!("panel.minimize_explorer").to_string())
+                        .accessibility_label(t!("panel.minimize_explorer").to_string())
+                        .small()
+                        .compact()
+                        .ghost()
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            cx.stop_propagation();
+                            let _ = this.parent.update(cx, |app, cx| {
+                                // Use the existing visibility path to persist hiding and update the bottom toggle.
+                                if app.explorer_visible {
+                                    app.toggle_explorer(cx);
+                                }
+                            });
+                        })),
+                )
                 .into_any_element(),
             EditorDockPanelKind::Editor => div()
                 .child(t!("panel.editor").to_string())
@@ -215,12 +232,7 @@ impl EditorApp {
             .gap_1()
             .child(
                 Button::new("explorer-panel-toggle")
-                    // Match the supplied Explorer artwork to the active theme palette.
-                    .icon(Icon::default().data(if cx.theme().is_dark() {
-                        include_bytes!("../../assets/status-icons/explorer_dark.svg").as_slice()
-                    } else {
-                        include_bytes!("../../assets/status-icons/explorer_light.svg").as_slice()
-                    }))
+                    .icon(explorer_panel_icon(cx))
                     .small()
                     .compact()
                     .ghost()
@@ -307,6 +319,12 @@ impl Render for EditorApp {
             .on_action(cx.listener(Self::on_toggle_theme_action))
             .on_action(cx.listener(Self::on_navigate_to_definition))
             .on_action(cx.listener(Self::on_show_definition_details))
+            .on_action(cx.listener(|app, _: &NextSyntaxError, window, cx| {
+                app.navigate_syntax_error(false, window, cx);
+            }))
+            .on_action(cx.listener(|app, _: &PreviousSyntaxError, window, cx| {
+                app.navigate_syntax_error(true, window, cx);
+            }))
             .size_full()
             .bg(shell_style.background.unwrap_or(cx.theme().background))
             .text_color(shell_style.foreground.unwrap_or(cx.theme().foreground))
@@ -348,6 +366,7 @@ impl Render for EditorApp {
                     .child(
                         div()
                             .id("title-bar-drag-region")
+                            .debug_selector(|| "title-bar-drag-region".into())
                             .flex_1()
                             .h_full()
                             .window_control_area(WindowControlArea::Drag)
@@ -383,6 +402,14 @@ impl Render for EditorApp {
                         StatusBar::new()
                             .left(self.render_panel_buttons(cx))
                             .left(div().max_w(px(320.)).truncate().child(self.status.clone()))
+                            // Keep error counts separate from temporary save/loading messages.
+                            .when(
+                                self.editor
+                                    .read(cx)
+                                    .diagnostics()
+                                    .is_some_and(|set| !set.is_empty()),
+                                |bar| bar.right(self.render_syntax_error_indicator(cx)),
+                            )
                             // Keep plugin indicators immediately before the cursor position.
                             .when(self.plugin_count(PluginPopupKind::Loading, cx) > 0, |bar| {
                                 bar.right(
@@ -404,9 +431,11 @@ impl Render for EditorApp {
                             }),
                     ),
             )
+            .child(self.render_plugin_popup_blocker(cx))
             .child(self.render_plugin_popup(window, cx))
             .child(self.render_explorer_menu(window, cx))
             .child(self.render_explorer_edit(cx))
+            .child(self.render_explorer_delete(cx))
             .when_some(self.definition_notice, |this, notice| {
                 let left = px((notice.position.x / px(1.) - 28.).max(4.));
                 let top = px((notice.position.y / px(1.) - 38.).max(4.));

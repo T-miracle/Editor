@@ -191,6 +191,8 @@ impl EditorApp {
         // A hot package update may replace a grammar or theme without changing its ID.
         apply_theme(&theme::active_theme(self.dark_theme), cx);
         self.start_plugin_loading(cx);
+        // A disabled or replaced package must clear its errors as well as its grammar.
+        self.reset_syntax_diagnostics(cx);
         cx.notify();
     }
 
@@ -322,6 +324,8 @@ impl EditorApp {
                     .update(cx, |editor, cx| editor.set_highlighter(language, cx));
             }
         }
+        // The first diagnostic request may have run before the grammar was ready.
+        self.reset_syntax_diagnostics(cx);
     }
 
     pub(crate) fn plugin_count(&self, kind: PluginPopupKind, cx: &App) -> usize {
@@ -399,6 +403,28 @@ impl EditorApp {
             .child(format!("{label} {count}"))
     }
 
+    /// Keep clicks outside a plugin popup from reaching the dock or title bar beneath it.
+    pub(crate) fn render_plugin_popup_blocker(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        if self.plugin_popup.is_none() {
+            return div().into_any_element();
+        }
+        div()
+            .id("plugin-popup-blocker")
+            .debug_selector(|| "plugin-popup-blocker".into())
+            .absolute()
+            .inset_0()
+            .occlude()
+            .on_mouse_up(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+            .on_mouse_up(MouseButton::Right, |_, _, cx| cx.stop_propagation())
+            .on_scroll_wheel(|_, _, cx| cx.stop_propagation())
+            .on_any_mouse_down(cx.listener(|this, _, _, cx| {
+                this.plugin_popup = None;
+                cx.stop_propagation();
+                cx.notify();
+            }))
+            .into_any_element()
+    }
+
     /// Show the selected plugin list at the click location, with failure reasons.
     pub(crate) fn render_plugin_popup(
         &self,
@@ -454,7 +480,7 @@ impl EditorApp {
                     .bg(cx.theme().popover)
                     .text_color(cx.theme().foreground)
                     .shadow_md()
-                    .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                    .on_any_mouse_down(|_, _, cx| cx.stop_propagation())
                     .child(div().font_semibold().child(title.to_string()))
                     .children(self.plugin_loads.iter().filter_map(|entry| {
                         let detail = match (&entry.state, kind) {

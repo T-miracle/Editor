@@ -47,7 +47,7 @@ fn style(cx: &App) -> SideTabsStyle {
 }
 
 #[gpui::test]
-fn chrome_sidebar_select_reorder_and_capture_resize(cx: &mut TestAppContext) {
+fn side_tabs_select_reorder_and_capture_resize(cx: &mut TestAppContext) {
     init(cx);
     let events = Rc::new(RefCell::new(vec![]));
     let sink = events.clone();
@@ -58,6 +58,8 @@ fn chrome_sidebar_select_reorder_and_capture_resize(cx: &mut TestAppContext) {
                 style(cx),
                 cx.focus_handle(),
                 move |action, _, _| sink.borrow_mut().push(action),
+                Rc::new(Cell::new(None)),
+                |_| {},
                 cx,
             )
         });
@@ -81,13 +83,34 @@ fn chrome_sidebar_select_reorder_and_capture_resize(cx: &mut TestAppContext) {
     cx.simulate_mouse_down(edge, MouseButton::Left, Default::default());
     let outside = edge - point(px(40.), px(0.));
     cx.simulate_mouse_move(outside, MouseButton::Left, Default::default());
+    cx.simulate_mouse_move(
+        outside - point(px(10.), px(0.)),
+        MouseButton::Left,
+        Default::default(),
+    );
+    // A drag previews native geometry; the plugin receives one committed width on release.
+    assert_eq!(
+        events
+            .borrow()
+            .iter()
+            .filter(|event| matches!(event, Action::Resize(_)))
+            .count(),
+        0
+    );
     cx.simulate_mouse_up(outside, MouseButton::Left, Default::default());
     cx.run_until_parked();
-    assert!(events.borrow().contains(&Action::Resize(220.)));
+    assert_eq!(
+        events
+            .borrow()
+            .iter()
+            .filter(|event| matches!(event, Action::Resize(_)))
+            .count(),
+        1
+    );
 }
 
 #[gpui::test]
-fn chrome_sidebar_preserves_native_rename_during_guest_updates(cx: &mut TestAppContext) {
+fn side_tabs_preserves_native_rename_during_guest_updates(cx: &mut TestAppContext) {
     init(cx);
     let events = Rc::new(RefCell::new(vec![]));
     let sink = events.clone();
@@ -100,6 +123,8 @@ fn chrome_sidebar_preserves_native_rename_during_guest_updates(cx: &mut TestAppC
                 style(cx),
                 cx.focus_handle(),
                 move |action, _, _| sink.borrow_mut().push(action),
+                Rc::new(Cell::new(None)),
+                |_| {},
                 cx,
             )
         });

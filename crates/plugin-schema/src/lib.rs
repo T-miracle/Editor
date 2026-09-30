@@ -2,6 +2,9 @@ use serde::{Deserialize, Serialize};
 use std::{collections::BTreeMap, path::PathBuf};
 use thiserror::Error;
 
+mod theme_effects;
+pub use theme_effects::{ThemeWindow, ThemeWindowBackground};
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct PluginManifest {
     pub plugin: PluginMetadata,
@@ -117,6 +120,9 @@ pub struct ThemeDefinition {
     pub name: String,
     pub mode: ThemeMode,
     pub colors: ThemeColors,
+    /// Native backdrop options; omitted settings preserve older opaque themes.
+    #[serde(default)]
+    pub window: ThemeWindow,
     #[serde(default)]
     pub typography: ThemeTypography,
     #[serde(default)]
@@ -299,7 +305,7 @@ pub enum ThemeFileError {
     DuplicateThemeId(String),
     #[error("theme name cannot be empty for {0}")]
     EmptyThemeName(String),
-    #[error("invalid color {1} at {0}; expected #RRGGBB")]
+    #[error("invalid color {1} at {0}; expected #RRGGBB (host styles also allow #RRGGBBAA)")]
     InvalidColor(String, String),
     #[error("invalid plugin color key at {0}")]
     InvalidPluginColorKey(String),
@@ -523,7 +529,7 @@ fn validate_palette_colors(theme: &ThemeDefinition) -> Result<(), ThemeFileError
         }
     }
     for (path, value) in colors {
-        if !is_hex_color(value) {
+        if !theme_effects::is_theme_color(value) {
             return Err(ThemeFileError::InvalidColor(path, value.to_owned()));
         }
     }

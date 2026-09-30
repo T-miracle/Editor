@@ -130,10 +130,8 @@ impl HoverProvider for LanguageHoverProvider {
 
         cx.spawn(async move |cx| {
             // The editor's own 150 ms delay runs concurrently with this timer.
-            // Keep the card hidden for 500 ms even when the result is cached.
-            cx.background_executor()
-                .timer(Duration::from_millis(500))
-                .await;
+            // Keep the card hidden for one second even when the result is cached.
+            cx.background_executor().timer(Duration::from_secs(1)).await;
             loop {
                 if let Some(result) = shared_result
                     .lock()
@@ -180,22 +178,24 @@ fn fetch_hover(
     Ok(details)
 }
 
-/// Resolve an insertion boundary to a character inside its identifier.
+/// Resolve a UTF-8 byte boundary to a character inside its identifier.
 fn symbol_at(text: &Rope, offset: usize) -> Option<(usize, usize)> {
     let len = text.len_chars();
-    let mut index = offset.min(len);
-    if index == len || !is_identifier(text.char(index)) {
+    // GPUI and Rope::char use bytes, while the scan and cached range use character indices.
+    let mut index = text.byte_to_char_idx(offset.min(text.len()));
+    let char_at = |index| text.char(text.char_to_byte_idx(index));
+    if index == len || !is_identifier(char_at(index)) {
         index = index.checked_sub(1)?;
-        if !is_identifier(text.char(index)) {
+        if !is_identifier(char_at(index)) {
             return None;
         }
     }
     let mut start = index;
-    while start > 0 && is_identifier(text.char(start - 1)) {
+    while start > 0 && is_identifier(char_at(start - 1)) {
         start -= 1;
     }
     let mut end = index + 1;
-    while end < len && is_identifier(text.char(end)) {
+    while end < len && is_identifier(char_at(end)) {
         end += 1;
     }
     Some((start, end))
@@ -204,6 +204,23 @@ fn symbol_at(text: &Rope, offset: usize) -> Option<(usize, usize)> {
 /// Keep the hover hit region aligned with Rust identifier characters.
 fn is_identifier(character: char) -> bool {
     character.is_alphanumeric() || character == '_'
+}
+
+#[cfg(test)]
+mod symbol_tests {
+    use super::*;
+
+    /// Hover offsets are UTF-8 bytes even when earlier text contains multibyte characters.
+    #[test]
+    fn finds_symbol_after_multibyte_text() {
+        let source = "中文 alpha";
+        let text = Rope::from_str(source);
+        let start = source.find("alpha").unwrap();
+        assert_eq!(symbol_at(&text, 0), Some((0, 2)));
+        assert_eq!(symbol_at(&text, start), Some((3, 8)));
+        assert_eq!(symbol_at(&text, start + 2), Some((3, 8)));
+        assert_eq!(symbol_at(&text, source.len()), Some((3, 8)));
+    }
 }
 
 /// Read a bounded local excerpt from the definition target, including dependencies.

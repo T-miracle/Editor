@@ -83,7 +83,7 @@ impl Terminal {
         self.env.color("me.terminal", name)
     }
 
-    /// Let editor themes style plugin-owned chrome while preserving host colors as defaults.
+    /// Let editor themes style plugin-owned controls while preserving host colors as defaults.
     pub(super) fn ui_color(&self, name: &str, fallback: u32) -> u32 {
         self.theme_color(&format!("ui.{name}")).unwrap_or(fallback)
     }

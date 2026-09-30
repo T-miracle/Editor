@@ -22,6 +22,13 @@ pub struct WorkspaceFile {
     pub relative_path: PathBuf,
 }
 
+/// One ignore-aware traversal supplies both explorer files and empty directories.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct WorkspaceSnapshot {
+    pub files: Vec<WorkspaceFile>,
+    pub directories: Vec<PathBuf>,
+}
+
 #[derive(Debug, Clone)]
 pub struct Workspace {
     root: PathBuf,
@@ -47,18 +54,16 @@ impl Workspace {
     }
 
     pub fn files(&self) -> Vec<WorkspaceFile> {
-        self.scan(false)
+        self.snapshot().files
     }
 
-    /// Directories are scanned separately so empty folders remain visible in the explorer.
+    /// Empty folders stay visible even when no files are present.
     pub fn directories(&self) -> Vec<PathBuf> {
-        self.scan(true)
-            .into_iter()
-            .map(|entry| entry.absolute_path)
-            .collect()
+        self.snapshot().directories
     }
 
-    fn scan(&self, directories: bool) -> Vec<WorkspaceFile> {
+    /// Build an explorer snapshot in a single filesystem walk.
+    pub fn snapshot(&self) -> WorkspaceSnapshot {
         let mut walker = WalkBuilder::new(&self.root);
         walker
             .hidden(false)
@@ -70,30 +75,28 @@ impl Workspace {
             .add_custom_ignore_filename(".gitignore")
             .filter_entry(|entry| entry.file_name() != ".git" && entry.file_name() != "target");
 
-        let mut files = walker
-            .build()
-            .filter_map(Result::ok)
-            .filter(|entry| {
-                entry.file_type().is_some_and(|kind| {
-                    if directories {
-                        kind.is_dir()
-                    } else {
-                        kind.is_file()
-                    }
-                })
-            })
-            .filter_map(|entry| {
-                let absolute_path = entry.into_path();
-                let relative_path = absolute_path.strip_prefix(&self.root).ok()?.to_path_buf();
-                Some(WorkspaceFile {
+        let mut snapshot = WorkspaceSnapshot::default();
+        for entry in walker.build().filter_map(Result::ok) {
+            let Some(kind) = entry.file_type() else {
+                continue;
+            };
+            let absolute_path = entry.into_path();
+            if kind.is_dir() {
+                snapshot.directories.push(absolute_path);
+            } else if kind.is_file()
+                && let Ok(relative_path) = absolute_path.strip_prefix(&self.root)
+            {
+                snapshot.files.push(WorkspaceFile {
+                    relative_path: relative_path.to_path_buf(),
                     absolute_path,
-                    relative_path,
-                })
-            })
-            .collect::<Vec<_>>();
-
-        files.sort_by(|left, right| left.relative_path.cmp(&right.relative_path));
-        files
+                });
+            }
+        }
+        snapshot
+            .files
+            .sort_by(|a, b| a.relative_path.cmp(&b.relative_path));
+        snapshot.directories.sort();
+        snapshot
     }
 }
 

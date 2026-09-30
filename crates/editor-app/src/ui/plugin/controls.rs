@@ -1,4 +1,4 @@
-//! Adapt portable canvas chrome to reusable native controls; no plugin identity is special-cased.
+//! Adapt portable canvas controls to reusable native widgets; no plugin identity is special-cased.
 use crate::ui::controls::{
     menu::{MenuStyle, PopupMenu},
     side_tabs::{SideTabBar, SideTabsStyle},
@@ -7,21 +7,22 @@ use gpui_kit::component::ActiveTheme as _;
 use gpui_kit::*;
 use plugin_runtime::plugin_protocol::{
     Environment,
-    ui::{CanvasChrome, UiEvent},
+    ui::{CanvasControls, UiEvent},
 };
 use std::{cell::Cell, rc::Rc};
 
-pub(crate) struct ChromeView {
+pub(crate) struct CanvasControlsView {
     plugin: String,
-    model: CanvasChrome,
+    model: CanvasControls,
     environment: Environment,
     sidebar: Option<Entity<SideTabBar>>,
     menu: Option<Entity<PopupMenu>>,
     focus: FocusHandle,
     revision: Rc<Cell<u64>>,
+    sidebar_width: Rc<Cell<Option<f32>>>,
     sink: Rc<dyn Fn(UiEvent, &mut App)>,
 }
-impl ChromeView {
+impl CanvasControlsView {
     pub fn new(
         plugin: String,
         focus: FocusHandle,
@@ -31,11 +32,12 @@ impl ChromeView {
             plugin,
             focus,
             sink: Rc::new(sink),
-            model: CanvasChrome::default(),
+            model: CanvasControls::default(),
             environment: Environment::default(),
             sidebar: None,
             menu: None,
             revision: Rc::new(Cell::new(0)),
+            sidebar_width: Rc::new(Cell::new(None)),
         }
     }
     fn color(&self, key: &str, fallback: Hsla) -> Hsla {
@@ -92,7 +94,7 @@ impl ChromeView {
     }
     pub fn update(
         &mut self,
-        model: CanvasChrome,
+        model: CanvasControls,
         environment: Environment,
         origin: Point<Pixels>,
         window: &mut Window,
@@ -101,10 +103,25 @@ impl ChromeView {
         if self.model == model && self.environment == environment {
             return;
         }
+        // Terminal output advances revisions without changing native controls; keep them stable.
+        let controls_changed = self.model.sidebar != model.sidebar
+            || self.model.menu != model.menu
+            || self.environment != environment;
+        if !controls_changed {
+            self.revision.set(model.revision);
+            self.model = model;
+            return;
+        }
         let menu_changed =
             self.model.menu.as_ref().map(|m| &m.id) != model.menu.as_ref().map(|m| &m.id);
         let sidebar_changed =
             self.model.sidebar.as_ref().map(|m| &m.id) != model.sidebar.as_ref().map(|m| &m.id);
+        let width_changed = self.model.sidebar.as_ref().map(|tabs| tabs.width)
+            != model.sidebar.as_ref().map(|tabs| tabs.width);
+        if sidebar_changed || width_changed {
+            // An updated guest width acknowledges a pending local divider preview.
+            self.sidebar_width.set(None);
+        }
         self.environment = environment;
         self.revision.set(model.revision);
         if sidebar_changed {
@@ -117,6 +134,8 @@ impl ChromeView {
                 let revision = self.revision.clone();
                 let node = tabs.id.clone();
                 let focus = self.focus.clone();
+                let preview_width = self.sidebar_width.clone();
+                let owner = cx.entity().downgrade();
                 self.sidebar = Some(cx.new(|cx| {
                     SideTabBar::new(
                         tabs.clone(),
@@ -132,14 +151,21 @@ impl ChromeView {
                                 cx,
                             )
                         },
+                        preview_width,
+                        move |cx| {
+                            let _ = owner.update(cx, |_, cx| cx.notify());
+                        },
                         cx,
                     )
                 }));
             }
-            self.sidebar
-                .as_ref()
-                .unwrap()
-                .update(cx, |view, cx| view.update(tabs.clone(), style, window, cx));
+            let mut displayed_tabs = tabs.clone();
+            if let Some(width) = self.sidebar_width.get() {
+                displayed_tabs.width = width;
+            }
+            self.sidebar.as_ref().unwrap().update(cx, |view, cx| {
+                view.update(displayed_tabs, style, window, cx)
+            });
         }
         if menu_changed {
             if model.menu.is_none() {
@@ -186,7 +212,7 @@ impl ChromeView {
         cx.notify();
     }
 }
-impl Render for ChromeView {
+impl Render for CanvasControlsView {
     fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
         let mut view = div().size_full().relative();
         if let (Some(tabs), Some(sidebar)) = (&self.model.sidebar, &self.sidebar) {
@@ -195,7 +221,7 @@ impl Render for ChromeView {
                     .absolute()
                     .right_0()
                     .top_0()
-                    .w(px(tabs.width))
+                    .w(px(self.sidebar_width.get().unwrap_or(tabs.width)))
                     .h_full()
                     .child(sidebar.clone()),
             );
@@ -209,16 +235,138 @@ impl Render for ChromeView {
 
 #[cfg(test)]
 mod tests {
-    use super::ChromeView;
-    use gpui_kit::{TestAppContext, gpui, rgb};
-    use plugin_runtime::plugin_protocol::FontStyle;
+    use super::CanvasControlsView;
+    use gpui_kit::{AppContext as _, TestAppContext, component::Root, gpui, point, px, rgb, size};
+    use plugin_runtime::plugin_protocol::{
+        Environment, FontStyle,
+        ui::{CanvasControls, SideTabs},
+    };
+    use std::{cell::RefCell, rc::Rc};
+
+    /// Output revisions must not roll back a native divider preview during a guest round trip.
     #[gpui::test]
-    fn chrome_theme_roles_follow_installed_theme_without_guest_paint(cx: &mut TestAppContext) {
+    fn revision_only_update_preserves_sidebar_preview(cx: &mut TestAppContext) {
         cx.update(|cx| {
             gpui_kit::init(cx);
             crate::ui::typography::init(cx);
             crate::ui::theme::apply_theme(crate::ui::theme::builtin_theme(false), cx);
-            let mut view = ChromeView::new("plugin".into(), cx.focus_handle(), |_, _| {});
+        });
+        let slot = Rc::new(RefCell::new(None));
+        let capture = slot.clone();
+        let (_, cx) = cx.add_window_view(move |window, cx| {
+            let view =
+                cx.new(|cx| CanvasControlsView::new("plugin".into(), cx.focus_handle(), |_, _| {}));
+            *capture.borrow_mut() = Some(view.clone());
+            Root::new(view, window, cx)
+        });
+        let view = slot.borrow_mut().take().unwrap();
+        let tabs = SideTabs {
+            id: "tabs".into(),
+            items: Vec::new(),
+            selected: None,
+            rename: None,
+            width: 180.,
+            min_width: 80.,
+            max_width: 480.,
+        };
+        let model = CanvasControls {
+            revision: 1,
+            sidebar: Some(tabs),
+            menu: None,
+        };
+        cx.simulate_resize(size(px(600.), px(400.)));
+        cx.update(|window, cx| {
+            view.update(cx, |view, cx| {
+                view.update(
+                    model.clone(),
+                    Environment::default(),
+                    point(px(0.), px(0.)),
+                    window,
+                    cx,
+                )
+            });
+            let sidebar = view.read(cx).sidebar.as_ref().unwrap().clone();
+            sidebar.update(cx, |bar, _| bar.model.width = 220.);
+            view.read(cx).sidebar_width.set(Some(220.));
+            let mut updated = model;
+            updated.revision = 2;
+            view.update(cx, |view, cx| {
+                view.update(
+                    updated,
+                    Environment::default(),
+                    point(px(0.), px(0.)),
+                    window,
+                    cx,
+                )
+            });
+            assert_eq!(sidebar.read(cx).model.width, 220.);
+        });
+        cx.update(|window, cx| window.draw(cx).clear(cx));
+        assert_eq!(
+            cx.debug_bounds("native-side-tabs").unwrap().size.width,
+            px(220.)
+        );
+    }
+
+    /// The host anchors a plugin sidebar to the right edge without scaling its width.
+    #[gpui::test]
+    fn sidebar_width_stays_fixed_when_window_resizes(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            gpui_kit::init(cx);
+            crate::ui::typography::init(cx);
+            crate::ui::theme::apply_theme(crate::ui::theme::builtin_theme(false), cx);
+        });
+        let slot = Rc::new(RefCell::new(None));
+        let capture = slot.clone();
+        let (_, cx) = cx.add_window_view(move |window, cx| {
+            let view =
+                cx.new(|cx| CanvasControlsView::new("plugin".into(), cx.focus_handle(), |_, _| {}));
+            *capture.borrow_mut() = Some(view.clone());
+            Root::new(view, window, cx)
+        });
+        let view = slot.borrow_mut().take().unwrap();
+        let controls = CanvasControls {
+            revision: 1,
+            sidebar: Some(SideTabs {
+                id: "tabs".into(),
+                items: Vec::new(),
+                selected: None,
+                rename: None,
+                width: 180.,
+                min_width: 112.,
+                max_width: 480.,
+            }),
+            menu: None,
+        };
+        cx.update(|window, cx| {
+            view.update(cx, |view, cx| {
+                view.update(
+                    controls,
+                    Environment::default(),
+                    point(px(0.), px(0.)),
+                    window,
+                    cx,
+                )
+            });
+        });
+        for width in [900., 320., 160., 800.] {
+            cx.simulate_resize(size(px(width), px(400.)));
+            cx.update(|window, cx| window.draw(cx).clear(cx));
+            let sidebar = cx.debug_bounds("native-side-tabs").unwrap();
+            assert_eq!(sidebar.size.width, px(180.));
+            assert!((sidebar.right() - px(width)).abs() < px(1.));
+        }
+    }
+
+    #[gpui::test]
+    fn canvas_controls_theme_roles_follow_installed_theme_without_guest_paint(
+        cx: &mut TestAppContext,
+    ) {
+        cx.update(|cx| {
+            gpui_kit::init(cx);
+            crate::ui::typography::init(cx);
+            crate::ui::theme::apply_theme(crate::ui::theme::builtin_theme(false), cx);
+            let mut view = CanvasControlsView::new("plugin".into(), cx.focus_handle(), |_, _| {});
             view.environment
                 .theme_colors
                 .insert("plugin.ui.menu.background".into(), 0x123456);

@@ -102,7 +102,7 @@ pub fn paste(text: &str, bracketed: bool) -> Vec<u8> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    /// Terminal shortcuts must reach the shell, including Ctrl+C and application arrows.
+    /// Encode raw control bytes and application arrows; the UI intercepts clipboard keys first.
     #[test]
     fn control_and_navigation() {
         assert_eq!(key("c", true, false, false, false), Some(vec![3]));
