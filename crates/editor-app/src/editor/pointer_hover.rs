@@ -1,44 +1,112 @@
-//! Resolve editor hover in the app viewport while upstream scroll hit testing uses stale bounds.
+//! Resolve editor hover through one app-owned pointer path for every viewport position.
 
 use crate::*;
 use gpui_kit::MouseMoveEvent;
 use std::ops::Range;
 
 impl EditorApp {
-    /// Keep hover on visible scrolled text without replacing the base editor state.
+    /// Keep hover on visible text while canceling the base editor's competing waiter.
     pub(super) fn editor_pointer_move(
         &mut self,
         event: &MouseMoveEvent,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let (scrolled, symbol, already_shown) = {
-            let state = self.editor.read(cx);
-            (
-                state.scroll_offset().y != px(0.),
-                symbol_at_point(state, event.position),
-                state.hover_popover().is_some(),
-            )
-        };
-        if !scrolled || event.modifiers.alt {
+        // A drag from the selectable details card must not dismiss it when
+        // mouse movement propagates through the editor panel.
+        if event.pressed_button.is_some() {
+            return;
+        }
+        let context = (
+            self.active_path.clone(),
+            self.active_tab_index()
+                .map(|index| self.tabs[index].session.revision()),
+        );
+        if self.pointer_hover_context.as_ref() != Some(&context) {
+            // A tab switch or edit invalidates both the cached card and the
+            // Escape suppression range, even when the byte range is identical.
+            self.pointer_hover_generation = self.pointer_hover_generation.wrapping_add(1);
+            self.pointer_hover_context = Some(context.clone());
+            self.pointer_hover_symbol = None;
+            self.pointer_hover_pending = false;
+            self.pointer_hover_cached = None;
+            self.pointer_hover_suppressed = None;
+        }
+        // Syntax markers include punctuation, which the identifier hover path skips.
+        let diagnostic = diagnostic_at_point(self.editor.read(cx), event.position);
+        let symbol = diagnostic
+            .as_ref()
+            .map(|entry| {
+                // Escape suppression covers the entire diagnostic, even when
+                // its presentation is anchored to one visible character.
+                let text = self.editor.read(cx).text();
+                text.position_to_offset(&entry.diagnostic.range.start)
+                    ..text.position_to_offset(&entry.diagnostic.range.end)
+            })
+            .or_else(|| symbol_at_point(self.editor.read(cx), event.position));
+        if event.modifiers.secondary() {
+            // Ctrl-hover belongs to the editor's definition navigation path.
+            // Invalidate our pending detail request without clearing its underline.
             self.pointer_hover_generation = self.pointer_hover_generation.wrapping_add(1);
             self.pointer_hover_symbol = None;
             self.pointer_hover_pending = false;
+            self.pointer_hover_cached = None;
             return;
         }
-        if symbol == self.pointer_hover_symbol && (self.pointer_hover_pending || already_shown) {
+        // The base editor receives this event before the panel and may start a
+        // hover task using stale scroll geometry. Cancel it before it can publish.
+        self.editor
+            .update(cx, |editor, cx| editor.clear_hover_state(cx));
+        self.editor
+            .update(cx, |editor, cx| editor.clear_diagnostic_popover(cx));
+        if let Some(suppressed) = &self.pointer_hover_suppressed {
+            if symbol.as_ref().is_some_and(|symbol| {
+                suppressed.start <= symbol.start && symbol.end <= suppressed.end
+            }) {
+                return;
+            }
+            self.pointer_hover_suppressed = None;
+        }
+        if event.modifiers.alt {
+            self.pointer_hover_generation = self.pointer_hover_generation.wrapping_add(1);
+            self.pointer_hover_symbol = None;
+            self.pointer_hover_pending = false;
+            self.pointer_hover_cached = None;
             return;
+        }
+        if let Some(diagnostic) = diagnostic {
+            // Cancel a pending type hover so it cannot cover the syntax explanation.
+            self.pointer_hover_generation = self.pointer_hover_generation.wrapping_add(1);
+            self.pointer_hover_symbol = symbol;
+            self.pointer_hover_pending = false;
+            self.pointer_hover_cached = None;
+            self.editor
+                .update(cx, |editor, cx| editor.present_diagnostic(diagnostic, cx));
+            return;
+        }
+        if symbol == self.pointer_hover_symbol {
+            if let (Some(symbol), Some(hover)) = (&symbol, &self.pointer_hover_cached) {
+                // Restore the app-owned result in the same event after native
+                // cancellation, without restarting its one-second LSP wait.
+                let symbol = symbol.clone();
+                let hover = hover.clone();
+                self.editor.update(cx, |editor, cx| {
+                    editor.present_hover(symbol, hover, cx);
+                });
+                return;
+            }
+            if self.pointer_hover_pending {
+                return;
+            }
         }
         self.pointer_hover_generation = self.pointer_hover_generation.wrapping_add(1);
         self.pointer_hover_symbol = symbol.clone();
         self.pointer_hover_pending = false;
+        self.pointer_hover_cached = None;
         let Some(symbol) = symbol else {
             return;
         };
-        let source_path = self.active_path.clone();
-        let source_revision = self
-            .active_tab_index()
-            .map(|index| self.tabs[index].session.revision());
+        let (source_path, source_revision) = context;
         let task = self.editor.update(cx, |editor, cx| {
             let provider = editor.lsp().hover_provider.clone()?;
             Some(provider.hover(editor.text(), symbol.start, window, cx))
@@ -58,15 +126,17 @@ impl EditorApp {
                         .active_tab_index()
                         .map(|index| app.tabs[index].session.revision())
                         != source_revision
-                    || app.editor.read(cx).scroll_offset().y == px(0.)
                 {
                     return;
                 }
                 app.pointer_hover_pending = false;
                 match result {
-                    Ok(Some(hover)) => app.editor.update(cx, |editor, cx| {
-                        editor.present_hover(symbol, hover, cx);
-                    }),
+                    Ok(Some(hover)) => {
+                        app.pointer_hover_cached = Some(hover.clone());
+                        app.editor.update(cx, |editor, cx| {
+                            editor.present_hover(symbol, hover, cx);
+                        });
+                    }
                     Ok(None) => {}
                     Err(error) => tracing::warn!(%error, "pointer hover request failed"),
                 }
@@ -74,6 +144,74 @@ impl EditorApp {
         })
         .detach();
     }
+
+    /// Close details and invalidate any cached result that could reopen them.
+    pub(super) fn dismiss_pointer_hover(&mut self, cx: &mut Context<Self>) {
+        self.pointer_hover_suppressed = self
+            .pointer_hover_symbol
+            .clone()
+            .or_else(|| {
+                self.editor
+                    .read(cx)
+                    .diagnostic_popover()
+                    .map(|entry| entry.range.clone())
+            })
+            .or_else(|| {
+                self.editor
+                    .read(cx)
+                    .hover_popover()
+                    .map(|hover| hover.symbol_range.clone())
+            });
+        self.pointer_hover_generation = self.pointer_hover_generation.wrapping_add(1);
+        self.pointer_hover_symbol = None;
+        self.pointer_hover_pending = false;
+        self.pointer_hover_cached = None;
+        self.editor
+            .update(cx, |editor, cx| editor.clear_hover_state(cx));
+        self.editor
+            .update(cx, |editor, cx| editor.clear_diagnostic_popover(cx));
+    }
+}
+
+/// Hit-test visible glyphs so errors still work after scrolling, wrapping, or folding.
+fn diagnostic_at_point(
+    editor: &EditorState,
+    position: Point<Pixels>,
+) -> Option<gpui_base::input::DiagnosticEntry> {
+    if !editor.input_bounds().contains(&position) {
+        return None;
+    }
+    let visible = editor.visible_row_range()?;
+    let text = editor.text();
+    for entry in editor.diagnostics()?.iter() {
+        let rows = (entry.diagnostic.range.start.line as usize).max(visible.start)
+            ..(entry.diagnostic.range.end.line as usize + 1).min(visible.end);
+        for row in rows {
+            let start = text.line_start_offset(row).max(entry.range.start);
+            let end = text.line_end_offset(row).min(entry.range.end);
+            if start >= end {
+                continue;
+            }
+            let mut offset = start;
+            for character in text.slice(start..end).chars() {
+                let next = offset + character.len_utf8();
+                if character != '\n'
+                    && character != '\r'
+                    && editor
+                        .range_to_bounds(&(offset..next))
+                        .is_some_and(|bounds| bounds.contains(&position))
+                {
+                    // Keep the original source location in `diagnostic`, but anchor
+                    // the card at the hovered glyph when its first line is offscreen.
+                    let mut presentation = entry.clone();
+                    presentation.range = offset..next;
+                    return Some(presentation);
+                }
+                offset = next;
+            }
+        }
+    }
+    None
 }
 
 /// Find a visible identifier through public layout geometry, without moving the caret.
@@ -88,16 +226,14 @@ fn symbol_at_point(editor: &EditorState, position: Point<Pixels>) -> Option<Rang
         }
         let line_start = text.line_start_offset(row);
         let mut word_start = None;
-        for (column, character) in text
-            .slice_line(row)
-            .chars()
-            .chain(std::iter::once(' '))
-            .enumerate()
-        {
+        let mut byte_column = 0;
+        for character in text.slice_line(row).chars().chain(std::iter::once(' ')) {
             if character.is_alphanumeric() || character == '_' {
-                word_start.get_or_insert(column);
+                word_start.get_or_insert(byte_column);
             } else if let Some(start) = word_start.take() {
-                let range = line_start + start..line_start + column;
+                // Input ranges use UTF-8 bytes, including when earlier text
+                // on the same row contains multibyte characters.
+                let range = line_start + start..line_start + byte_column;
                 if editor
                     .range_to_bounds(&range)
                     .is_some_and(|bounds| bounds.contains(&position))
@@ -105,6 +241,7 @@ fn symbol_at_point(editor: &EditorState, position: Point<Pixels>) -> Option<Rang
                     return Some(range);
                 }
             }
+            byte_column += character.len_utf8();
         }
     }
     None

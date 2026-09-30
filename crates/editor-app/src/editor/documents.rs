@@ -500,7 +500,7 @@ impl EditorApp {
         self.active_path = Some(path.clone());
         self.editor = tab.editor.clone();
         // A completion index belongs to one document and must not cross tabs.
-        self.completion_selection.set((0, 0));
+        self.completion_popup.reset();
         // Every activation path, including tabs and definition jumps, updates the explorer.
         if path.starts_with(self.workspace.root()) {
             self.select_file_in_tree(&path, cx);
@@ -754,10 +754,26 @@ pub(crate) fn attach_language_server(
         };
         editor.lsp_mut().show_document = Some(Rc::new(
             move |params: &lsp_types::ShowDocumentParams, window: &mut Window, cx: &mut App| {
-                app.update(cx, |app, cx| {
-                    app.open_definition_uri(&params.uri, params.selection, window, cx)
-                })
-                .unwrap_or(false)
+                // Only accept local files the host can open; other URIs retain native handling.
+                let Ok(url) = url::Url::parse(params.uri.as_str()) else {
+                    return false;
+                };
+                let Ok(path) = url.to_file_path() else {
+                    return false;
+                };
+                if !path.is_file() || app.upgrade().is_none() {
+                    return false;
+                }
+                let app = app.clone();
+                let params = params.clone();
+                // Ctrl-click and native definition actions call this while the source editor
+                // is being updated. Release that entity before opening or moving its caret.
+                window.defer(cx, move |window, cx| {
+                    let _ = app.update(cx, |app, cx| {
+                        app.open_definition_uri(&params.uri, params.selection, window, cx);
+                    });
+                });
+                true
             },
         ));
         editor.lsp_mut().definition_provider = Some(Rc::new(provider));
@@ -807,9 +823,11 @@ fn language_for_path(path: &Path) -> String {
 /// Centers the painted caret using upstream viewport APIs; scrolling is clamped by the editor.
 fn center_editor_cursor(editor: &mut EditorState, cx: &mut Context<EditorState>) -> Option<bool> {
     let (cursor, line_height) = editor.cursor_layout()?;
-    let bounds = editor.text_bounds()?;
+    let bounds = editor.input_bounds();
     let offset = editor.scroll_offset();
-    let delta = bounds.center().y - (cursor.top() + line_height / 2.);
+    // The caret layout omits vertical scrolling, while text_bounds moves with the
+    // content. Compare the painted caret against the fixed viewport in screen coordinates.
+    let delta = bounds.center().y - (cursor.top() + offset.y + line_height / 2.);
     if delta.abs() < px(1.) {
         return Some(true);
     }

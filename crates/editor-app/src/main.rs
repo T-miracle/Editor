@@ -99,12 +99,20 @@ struct EditorApp {
     editor: Entity<EditorState>,
     /// The dock entity must repaint when editor-owned popover state changes.
     editor_panel: Entity<EditorDockPanel>,
-    /// Keeps keyboard selection in the project-owned completion popover.
-    completion_selection: Rc<Cell<(u64, usize)>>,
+    /// Keeps keyboard selection and scrolling in the project-owned completion popover.
+    completion_popup: Rc<editor::CompletionPopupState>,
+    /// Text selection may take focus without dismissing the displayed details.
+    definition_popup_focus: editor::DefinitionPopupFocus,
     /// Cancels app-level hover requests when the pointer moves to another symbol.
     pointer_hover_generation: u64,
+    /// Keep cached details and Escape suppression within one document revision.
+    pointer_hover_context: Option<(Option<PathBuf>, Option<u64>)>,
     pointer_hover_symbol: Option<std::ops::Range<usize>>,
     pointer_hover_pending: bool,
+    /// Reuse the current symbol's details when native mouse handling clears its card.
+    pointer_hover_cached: Option<lsp_types::Hover>,
+    /// Escape keeps the current symbol dismissed until the pointer leaves it.
+    pointer_hover_suppressed: Option<std::ops::Range<usize>>,
     /// Repaint the host when the upstream editor publishes a hover or completion.
     _editor_observer: Subscription,
     tree_state: Entity<TreeState>,
@@ -320,10 +328,14 @@ impl EditorApp {
             history: LocalHistory::for_current_user().ok(),
             editor,
             editor_panel,
-            completion_selection: Rc::new(Cell::new((0, 0))),
+            completion_popup: Rc::new(editor::CompletionPopupState::default()),
+            definition_popup_focus: editor::DefinitionPopupFocus::new(window, cx),
             pointer_hover_generation: 0,
+            pointer_hover_context: None,
             pointer_hover_symbol: None,
             pointer_hover_pending: false,
+            pointer_hover_cached: None,
+            pointer_hover_suppressed: None,
             _editor_observer: editor_observer,
             tree_state,
             dock_area,

@@ -2,6 +2,8 @@
 
 mod button;
 mod checkbox;
+mod definition_popup;
+mod diagnostic_popup;
 mod dialog;
 pub(crate) mod dock;
 mod icon;
@@ -17,6 +19,8 @@ mod tooltip;
 
 pub(crate) use button::{Button, ButtonCustomVariant};
 pub(crate) use checkbox::Checkbox;
+pub(crate) use definition_popup::definition_popup;
+pub(crate) use diagnostic_popup::diagnostic_popup;
 pub(crate) use dialog::DialogContent;
 pub(crate) use icon::Icon;
 pub(crate) use input::Input;

@@ -4,6 +4,7 @@ use gpui_base::{TextView, TextViewStyle};
 use gpui_kit::component::ActiveTheme as _;
 use gpui_kit::{App, Pixels, StyleRefinement, Styled, rems};
 
+/// Render selectable Markdown with a highlight that keeps its glyphs readable.
 pub(crate) fn markdown_view(
     id: &'static str,
     markdown: String,
@@ -15,7 +16,9 @@ pub(crate) fn markdown_view(
         .with_foreground(palette.foreground)
         .with_muted_foreground(palette.muted_foreground)
         .with_link(palette.primary)
-        .with_selection(palette.selection)
+        // Base draws selected ranges over the glyphs. Cap the overlay opacity
+        // so an opaque theme selection color cannot hide the selected text.
+        .with_selection(palette.selection.alpha(palette.selection.a.min(0.25)))
         .with_code_background(palette.background)
         .with_border(palette.border)
         .with_paragraph_gap(rems(0.5))
