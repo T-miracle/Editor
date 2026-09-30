@@ -1,15 +1,22 @@
 //! Loads theme definitions and applies their colors to GPUI.
 
-use std::{collections::BTreeMap, sync::LazyLock, time::Duration};
+use std::{
+    collections::BTreeMap,
+    sync::{Arc, LazyLock},
+    time::Duration,
+};
+
+mod window;
+pub use window::window_background;
 
 use gpui_kit::{
     App, Global, Hsla,
     component::{Theme, ThemeMode},
-    px, rgb,
+    px, rgb, rgba,
 };
 use plugin_schema::{
     ComponentStyles, PluginTextStyle, StyleProperties, ThemeComponent, ThemeDefinition, ThemeFile,
-    ThemeMode as FileThemeMode, ThemeTypography,
+    ThemeMode as FileThemeMode, ThemeTypography, ThemeWindow,
 };
 
 // Both palettes ship with the editor so first launch does not depend on plugin installation.
@@ -43,6 +50,7 @@ struct RuntimeStyles {
     plugin_colors: BTreeMap<String, u32>,
     plugin_text_styles: BTreeMap<String, PluginTextStyle>,
     typography: ThemeTypography,
+    window: ThemeWindow,
 }
 
 impl Global for RuntimeStyles {}
@@ -96,6 +104,12 @@ pub fn apply_theme(theme: &ThemeDefinition, cx: &mut App) {
     let accent = color(&palette.accent);
     let accent_hover = color(&palette.accent_hover);
     let accent_active = color(&palette.accent_active);
+    let editor_background = theme
+        .components
+        .get(&ThemeComponent::Editor)
+        .and_then(|styles| styles.base.background.as_deref())
+        .map(color)
+        .unwrap_or(background);
     let explorer_row = theme.components.get(&ThemeComponent::ExplorerRow);
     let row_hover = explorer_row
         .and_then(|styles| styles.hover.as_ref())
@@ -128,13 +142,14 @@ pub fn apply_theme(theme: &ThemeDefinition, cx: &mut App) {
         .and_then(|styles| styles.background.as_deref())
         .map(color)
         .unwrap_or(accent);
-    // Theme files use opaque RGB values; apply transparency to scrollbar thumbs here.
+    // Multiply the theme's optional alpha by the scrollbar's interaction opacity.
     let scrollbar_thumb = scrollbar_thumb.opacity(0.55);
     let scrollbar_thumb_hover = scrollbar_thumb_hover.opacity(0.7);
     let scrollbar_thumb_active = scrollbar_thumb_active.opacity(0.8);
 
-    {
-        let theme = Theme::global_mut(cx);
+    // Update legacy colors, renderable tokens and the Base projection together;
+    // otherwise Root would retain the component library's opaque background.
+    Theme::update(cx, |theme| {
         theme.background = background;
         theme.foreground = foreground;
         theme.border = border;
@@ -191,7 +206,13 @@ pub fn apply_theme(theme: &ThemeDefinition, cx: &mut App) {
         if let Some(family) = &theme_typography.mono.family {
             theme.mono_font_family = family.clone().into();
         }
-    }
+        if editor_background.a < 1. {
+            // Editor gutters and ghost-text erasure must not restore an opaque fill.
+            let highlight = Arc::make_mut(&mut theme.highlight_theme);
+            highlight.style.editor_background = Some(editor_background);
+            highlight.style.editor_gutter_background = Some(editor_background);
+        }
+    });
     apply_font_sizes(cx, theme_typography);
     Theme::sync_base(cx);
 
@@ -252,14 +273,19 @@ pub fn apply_theme(theme: &ThemeDefinition, cx: &mut App) {
         runtime.plugin_colors = plugin_colors;
         runtime.plugin_text_styles = plugin_text_styles;
         runtime.typography = typography;
+        runtime.window = theme.window;
     } else {
         cx.set_global(RuntimeStyles {
             components,
             plugin_colors,
             plugin_text_styles,
             typography,
+            window: theme.window,
         });
     }
+    window::register(cx);
+    // Re-render existing Roots so theme switches also restore an opaque window.
+    cx.refresh_windows();
 }
 
 fn resolve_component_styles(styles: &ComponentStyles) -> ResolvedComponentStyles {
@@ -292,9 +318,15 @@ fn resolve_style(style: &StyleProperties) -> ResolvedStyle {
 }
 
 fn color(value: &str) -> Hsla {
-    let value = u32::from_str_radix(value.trim_start_matches('#'), 16)
-        .expect("theme colors are validated before application");
-    rgb(value).into()
+    let hex = value.trim_start_matches('#');
+    let value =
+        u32::from_str_radix(hex, 16).expect("theme colors are validated before application");
+    // RGBA uses a trailing alpha byte; six-digit themes retain full opacity.
+    if hex.len() == 8 {
+        rgba(value).into()
+    } else {
+        rgb(value).into()
+    }
 }
 
 /// Publishes the shared typography size to GPUI Kit's global theme.
@@ -332,6 +364,85 @@ pub fn active_theme(dark: bool) -> ThemeDefinition {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use gpui_kit::{Rgba, TestAppContext, gpui};
+
+    /// RGB keeps old themes opaque; RGBA preserves transparent and partial fills.
+    #[test]
+    fn theme_color_alpha_is_not_discarded() {
+        for (source, alpha) in [
+            ("#123456", 1.),
+            ("#12345680", 128. / 255.),
+            ("#12345600", 0.),
+        ] {
+            let rgba = Rgba::from(color(source));
+            assert!((rgba.r - 0x12 as f32 / 255.).abs() < 0.00001);
+            assert!((rgba.a - alpha).abs() < 0.00001);
+        }
+    }
+
+    /// Theme updates must keep alpha in both GPUI colors and the Root's semantic tokens.
+    #[gpui::test]
+    fn translucent_theme_reaches_component_and_base_colors(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            gpui_kit::init(cx);
+            crate::typography::init(cx);
+            let mut theme = builtin_theme(false).clone();
+            theme.colors.background = "#ffffff80".into();
+            theme
+                .components
+                .get_mut(&ThemeComponent::Editor)
+                .unwrap()
+                .base
+                .background = Some("#ffffff40".into());
+            theme
+                .components
+                .get_mut(&ThemeComponent::ExplorerMenu)
+                .unwrap()
+                .base
+                .background = Some("#f7f8fa80".into());
+            apply_theme(&theme, cx);
+            let expected = 128. / 255.;
+            assert!((Theme::global(cx).background.a - expected).abs() < 0.00001);
+            assert!((Theme::global(cx).tokens.background.color.a - expected).abs() < 0.00001);
+            assert!(
+                (gpui_base::Theme::global(cx).tokens.colors.background.a - expected).abs()
+                    < 0.00001
+            );
+            assert!(
+                (component_styles(cx, ThemeComponent::ExplorerMenu)
+                    .base
+                    .background
+                    .unwrap()
+                    .a
+                    - expected)
+                    .abs()
+                    < 0.00001
+            );
+            assert!(
+                (Theme::global(cx)
+                    .highlight_theme
+                    .style
+                    .editor_background
+                    .unwrap()
+                    .a
+                    - 64. / 255.)
+                    .abs()
+                    < 0.00001
+            );
+            // Returning to an old RGB theme must remove the previous alpha settings.
+            apply_theme(builtin_theme(false), cx);
+            assert_eq!(Theme::global(cx).tokens.background.color.a, 1.);
+            assert_eq!(
+                Theme::global(cx)
+                    .highlight_theme
+                    .style
+                    .editor_background
+                    .unwrap()
+                    .a,
+                1.
+            );
+        });
+    }
 
     /// The embedded palettes remain available even when no theme plugin is installed.
     #[test]

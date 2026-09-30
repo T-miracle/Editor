@@ -645,6 +645,8 @@ fn main() -> anyhow::Result<()> {
             let workspace = workspace.clone();
             let initial_file = initial_file.clone();
             let mut window_options = TitleBar::window_options();
+            // Native materials are chosen by the active theme before first draw.
+            window_options.window_background = theme::window_background(cx);
             window_options.window_bounds = Some(WindowBounds::Windowed(bounds));
             // GPUI's default throttles animations in inactive windows to 30 FPS.
             // Leave frame scheduling uncapped; active frames follow the display refresh rate.

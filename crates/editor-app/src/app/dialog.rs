@@ -10,7 +10,7 @@ use gpui_kit::{
         button::{Button, ButtonVariants as _},
         h_flex, v_flex,
     },
-    div, px, rgb, size,
+    div, px, size,
 };
 use std::rc::Rc;
 
@@ -86,6 +86,9 @@ impl AppDialog {
 
 impl Render for AppDialog {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        // Native dialog chrome shares the title-bar slot, including its color alpha.
+        let title_style =
+            crate::theme::component_styles(cx, plugin_schema::ThemeComponent::WindowTitleBar).base;
         // GPUI Kit 0.7 Root automatically hosts overlays above the dialog content.
         div().relative().size_full().child(
             v_flex()
@@ -103,10 +106,10 @@ impl Render for AppDialog {
                         .w_full()
                         .flex_shrink_0()
                         .items_center()
-                        .bg(rgb(0xf7f8fa))
-                        .text_color(rgb(0x202124))
+                        .bg(title_style.background.unwrap_or(cx.theme().title_bar))
+                        .text_color(title_style.foreground.unwrap_or(cx.theme().foreground))
                         .border_b_1()
-                        .border_color(cx.theme().border)
+                        .border_color(title_style.border.unwrap_or(cx.theme().border))
                         .child(
                             h_flex()
                                 .id("app-dialog-drag-region")
@@ -269,6 +272,8 @@ fn open_dialog_with_builders(
         cx,
     );
     let mut options = TitleBar::window_options();
+    // Settings and native confirmation dialogs share the active theme's backdrop.
+    options.window_background = crate::theme::window_background(cx);
     // The platform keeps this window above its parent and disables parent input.
     options.kind = WindowKind::Dialog;
     options.window_bounds = Some(WindowBounds::Windowed(bounds));
@@ -278,7 +283,8 @@ fn open_dialog_with_builders(
         .open_window(options, move |window, cx| {
             window.set_window_title(native_title.as_ref());
             window.focus(&dialog_focus, cx);
-            cx.new(|cx| Root::new(dialog_view, window, cx).bg(cx.theme().background))
+            // Root stays transparent; AppDialog paints its own themed surface.
+            cx.new(|cx| Root::new(dialog_view, window, cx))
         })
         .expect("failed to open app dialog window");
     (dialog, handle)
