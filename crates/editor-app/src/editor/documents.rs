@@ -4,19 +4,38 @@ use crate::*;
 
 impl EditorApp {
     pub(crate) fn refresh_files(&mut self, cx: &mut Context<Self>) {
+        let snapshot = self.workspace.snapshot();
+        let count = snapshot.files.len();
+        self.update_workspace_tree(snapshot, cx);
+        self.status = t!("status.workspace_refreshed", count = count).to_string();
+        cx.notify();
+    }
+
+    /// Rebuild only after the worker reports a changed file or directory set.
+    fn update_workspace_tree(&mut self, snapshot: WorkspaceSnapshot, cx: &mut Context<Self>) {
+        if self.workspace_snapshot.as_ref() == Some(&snapshot) {
+            return;
+        }
         let root = self.workspace.root().to_path_buf();
-        let files = self.workspace.files();
-        let directories = self.workspace.directories();
         let items = restore_expanded(
             tree_items(
                 &root,
-                files.iter().map(|file| file.absolute_path.as_path()),
-                directories.iter().map(PathBuf::as_path),
+                snapshot
+                    .files
+                    .iter()
+                    .map(|file| file.absolute_path.as_path()),
+                snapshot.directories.iter().map(PathBuf::as_path),
             ),
             &self.session_state.expanded_directories,
-        );
+        )
+        .into_iter()
+        // Restore the project root separately so an older session still opens it by default.
+        .map(|item| item.expanded(self.session_state.explorer_root_expanded))
+        .collect::<Vec<_>>();
         // External tabs keep the last project file highlighted across a tree refresh.
         let selected_path = match self.active_path.as_ref() {
+            // Selecting a child would automatically expand a deliberately collapsed project root.
+            _ if !self.session_state.explorer_root_expanded => Some(root.clone()),
             Some(path) if path.starts_with(self.workspace.root()) => Some(path.clone()),
             Some(_) => self
                 .tree_state
@@ -33,7 +52,7 @@ impl EditorApp {
             state.set_items(items, cx);
             state.set_selected_item(selected_item.as_ref(), cx);
         });
-        self.status = t!("status.workspace_refreshed", count = files.len()).to_string();
+        self.workspace_snapshot = Some(snapshot);
         cx.notify();
     }
 
@@ -51,7 +70,12 @@ impl EditorApp {
         self.session_state.save();
     }
 
-    pub(crate) fn select_file_in_tree(&self, path: &Path, cx: &mut Context<Self>) {
+    pub(crate) fn select_file_in_tree(&mut self, path: &Path, cx: &mut Context<Self>) {
+        // Revealing a project file expands its root; retain that state on the next disk refresh.
+        if path.starts_with(self.workspace.root()) && !self.session_state.explorer_root_expanded {
+            self.session_state.explorer_root_expanded = true;
+            self.session_state.save();
+        }
         let id = path.to_string_lossy().into_owned();
         // A tree click already selected its row; avoid another id lookup.
         let already_selected = self

@@ -38,6 +38,18 @@ editor.select_all:
 explorer.copy:
   en: "Copy"
   zh-CN: "复制"
+explorer.special_copy:
+  en: "Special Copy"
+  zh-CN: "特殊复制"
+explorer.copy_file_name:
+  en: "Copy File Name"
+  zh-CN: "复制文件名"
+explorer.copy_absolute_path:
+  en: "Copy Absolute Disk Path"
+  zh-CN: "复制磁盘绝对路径"
+explorer.copy_project_root:
+  en: "Copy Project Relative Path"
+  zh-CN: "复制项目根路径"
 explorer.paste:
   en: "Paste"
   zh-CN: "粘贴"
@@ -59,6 +71,27 @@ explorer.new_file:
 explorer.rename:
   en: "Rename"
   zh-CN: "重命名"
+explorer.delete:
+  en: "Delete"
+  zh-CN: "删除"
+explorer.delete_file_preview:
+  en: "Permanently delete this file?"
+  zh-CN: "确定永久删除此文件吗？"
+explorer.delete_directory_preview:
+  en: "Permanently delete this directory and all its contents?"
+  zh-CN: "确定永久删除此目录及其中全部内容吗？"
+explorer.close_before_delete:
+  en: "Close open files in this path before deleting"
+  zh-CN: "删除前请关闭该路径下已打开的文件"
+explorer.delete_failed:
+  en: "Delete failed: %{error}"
+  zh-CN: "删除失败：%{error}"
+explorer.delete_outside_workspace:
+  en: "Cannot delete the workspace root or a path outside it"
+  zh-CN: "无法删除工作区根目录或其外部路径"
+explorer.delete_symlink:
+  en: "Cannot delete a symbolic link from the explorer"
+  zh-CN: "无法从资源管理器删除符号链接"
 explorer.refresh:
   en: "Refresh"
   zh-CN: "刷新"
@@ -71,6 +104,9 @@ explorer.cancel:
 explorer.copied:
   en: "File copied to clipboard"
   zh-CN: "文件已复制到剪贴板"
+explorer.text_copied:
+  en: "Text copied to clipboard"
+  zh-CN: "文本已复制到剪贴板"
 explorer.close_before_rename:
   en: "Close open files in this path before renaming"
   zh-CN: "重命名前请关闭该路径下已打开的文件"

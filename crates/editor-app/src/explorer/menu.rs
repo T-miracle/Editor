@@ -2,42 +2,69 @@
 
 use crate::ui::controls::menu::MenuStyle;
 use crate::*;
-use gpui_kit::KeyDownEvent;
+use gpui_kit::{ClipboardItem, KeyDownEvent};
 
 const MENU_WIDTH: f32 = 212.;
 const SUBMENU_WIDTH: f32 = 180.;
+const SPECIAL_COPY_SUBMENU_WIDTH: f32 = 230.;
 const ROW_HEIGHT: f32 = 29.;
 const WINDOW_MARGIN: f32 = 8.;
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Command {
     Copy,
+    SpecialCopy,
+    CopyFileName,
+    CopyAbsolutePath,
+    CopyProjectRoot,
     Paste,
     New,
     NewDirectory,
     NewFile,
+    Delete,
     Rename,
     Refresh,
 }
 
 const ROW_COMMANDS: &[Command] = &[
     Command::Copy,
+    Command::SpecialCopy,
     Command::Paste,
     Command::New,
+    Command::Delete,
     Command::Rename,
     Command::Refresh,
 ];
 const ROOT_COMMANDS: &[Command] = &[Command::Paste, Command::New, Command::Refresh];
 const NEW_COMMANDS: &[Command] = &[Command::NewDirectory, Command::NewFile];
+const SPECIAL_COPY_COMMANDS: &[Command] = &[
+    Command::CopyFileName,
+    Command::CopyAbsolutePath,
+    Command::CopyProjectRoot,
+];
 
 impl Command {
+    /// Only parent commands own a second menu; children remain executable actions.
+    fn submenu_commands(self) -> Option<&'static [Command]> {
+        match self {
+            Self::New => Some(NEW_COMMANDS),
+            Self::SpecialCopy => Some(SPECIAL_COPY_COMMANDS),
+            _ => None,
+        }
+    }
+
     fn label(self) -> String {
         match self {
             Self::Copy => t!("explorer.copy"),
+            Self::SpecialCopy => t!("explorer.special_copy"),
+            Self::CopyFileName => t!("explorer.copy_file_name"),
+            Self::CopyAbsolutePath => t!("explorer.copy_absolute_path"),
+            Self::CopyProjectRoot => t!("explorer.copy_project_root"),
             Self::Paste => t!("explorer.paste"),
             Self::New => t!("explorer.new"),
             Self::NewDirectory => t!("explorer.directory"),
             Self::NewFile => t!("explorer.file"),
+            Self::Delete => t!("explorer.delete"),
             Self::Rename => t!("explorer.rename"),
             Self::Refresh => t!("explorer.refresh"),
         }
@@ -47,10 +74,15 @@ impl Command {
     fn id(self) -> &'static str {
         match self {
             Self::Copy => "explorer-menu-copy",
+            Self::SpecialCopy => "explorer-menu-special-copy",
+            Self::CopyFileName => "explorer-menu-copy-file-name",
+            Self::CopyAbsolutePath => "explorer-menu-copy-absolute-path",
+            Self::CopyProjectRoot => "explorer-menu-copy-project-root",
             Self::Paste => "explorer-menu-paste",
             Self::New => "explorer-menu-new",
             Self::NewDirectory => "explorer-menu-directory",
             Self::NewFile => "explorer-menu-file",
+            Self::Delete => "explorer-menu-delete",
             Self::Rename => "explorer-menu-rename",
             Self::Refresh => "explorer-menu-refresh",
         }
@@ -65,7 +97,7 @@ pub(crate) struct ExplorerMenu {
     focus: FocusHandle,
     focused_main: usize,
     focused_sub: usize,
-    submenu_open: bool,
+    submenu: Option<Command>,
 }
 
 impl ExplorerMenu {
@@ -78,11 +110,17 @@ impl ExplorerMenu {
     }
 
     fn selected(&self) -> Command {
-        if self.submenu_open {
-            NEW_COMMANDS[self.focused_sub]
+        if let Some(commands) = self.submenu.and_then(Command::submenu_commands) {
+            commands[self.focused_sub]
         } else {
             self.commands()[self.focused_main]
         }
+    }
+
+    /// Resolve the main row presentation from the current menu navigation state.
+    fn main_row_selected(&self, index: usize) -> bool {
+        // The parent stays selected while focus moves through its child menu.
+        self.focused_main == index
     }
 }
 
@@ -94,6 +132,8 @@ impl EditorApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        // The visible project root uses workspace actions and cannot be renamed or deleted here.
+        let target = target.filter(|path| path != self.workspace.root());
         let folder = target.as_ref().is_none_or(|path| path.is_dir());
         let focus = cx.focus_handle();
         focus.focus(window, cx);
@@ -105,7 +145,7 @@ impl EditorApp {
             focus,
             focused_main: 0,
             focused_sub: 0,
-            submenu_open: false,
+            submenu: None,
         });
         cx.notify();
     }
@@ -122,7 +162,8 @@ impl EditorApp {
                 menu.focused_sub = index;
             } else {
                 menu.focused_main = index;
-                menu.submenu_open = command == Command::New;
+                menu.submenu = command.submenu_commands().map(|_| command);
+                menu.focused_sub = 0;
             }
             cx.notify();
         }
@@ -134,9 +175,9 @@ impl EditorApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if command == Command::New {
+        if command.submenu_commands().is_some() {
             if let Some(menu) = &mut self.explorer_menu {
-                menu.submenu_open = true;
+                menu.submenu = Some(command);
                 menu.focused_sub = 0;
                 cx.notify();
             }
@@ -150,6 +191,13 @@ impl EditorApp {
             .unwrap_or_else(|| self.workspace.root().to_path_buf());
         match command {
             Command::Copy => self.copy_explorer_path(&target, cx),
+            Command::CopyFileName | Command::CopyAbsolutePath | Command::CopyProjectRoot => {
+                // Tree targets and the workspace root are absolute; write text rather than CF_HDROP.
+                if let Some(text) = special_copy_text(command, &target, self.workspace.root()) {
+                    cx.write_to_clipboard(ClipboardItem::new_string(text));
+                    self.status = t!("explorer.text_copied").to_string();
+                }
+            }
             Command::Paste => self.paste_explorer_path(&target, menu.folder, cx),
             Command::NewDirectory => self.start_explorer_edit(
                 ExplorerEditKind::Directory,
@@ -161,11 +209,16 @@ impl EditorApp {
             Command::NewFile => {
                 self.start_explorer_edit(ExplorerEditKind::File, target, menu.folder, window, cx)
             }
+            Command::Delete => self.start_explorer_delete(target, window, cx),
             Command::Rename => {
                 self.start_explorer_edit(ExplorerEditKind::Rename, target, menu.folder, window, cx)
             }
-            Command::Refresh => self.refresh_files(cx),
-            Command::New => unreachable!(),
+            Command::Refresh => {
+                // Manual refresh also checks every open tab against its disk contents.
+                self.refresh_files(cx);
+                self.status = t!("status.refreshing_workspace").to_string();
+            }
+            Command::New | Command::SpecialCopy => unreachable!(),
         }
         cx.notify();
     }
@@ -183,8 +236,8 @@ impl EditorApp {
         match key {
             "escape" => {
                 cx.stop_propagation();
-                if menu.submenu_open {
-                    menu.submenu_open = false;
+                if menu.submenu.is_some() {
+                    menu.submenu = None;
                 } else {
                     self.explorer_menu = None;
                 }
@@ -193,8 +246,12 @@ impl EditorApp {
             "up" | "down" => {
                 cx.stop_propagation();
                 let main_len = menu.commands().len();
-                let (index, len) = if menu.submenu_open {
-                    (&mut menu.focused_sub, NEW_COMMANDS.len())
+                let sub_len = menu
+                    .submenu
+                    .and_then(Command::submenu_commands)
+                    .map(|commands| commands.len());
+                let (index, len) = if let Some(len) = sub_len {
+                    (&mut menu.focused_sub, len)
                 } else {
                     (&mut menu.focused_main, main_len)
                 };
@@ -205,15 +262,15 @@ impl EditorApp {
                 };
                 cx.notify();
             }
-            "right" if menu.selected() == Command::New => {
+            "right" if menu.selected().submenu_commands().is_some() => {
                 cx.stop_propagation();
-                menu.submenu_open = true;
+                menu.submenu = Some(menu.selected());
                 menu.focused_sub = 0;
                 cx.notify();
             }
-            "left" if menu.submenu_open => {
+            "left" if menu.submenu.is_some() => {
                 cx.stop_propagation();
-                menu.submenu_open = false;
+                menu.submenu = None;
                 cx.notify();
             }
             "enter" => {
@@ -266,7 +323,7 @@ impl EditorApp {
             }))
             .child(command.label())
             .child(div().flex_1())
-            .when(command == Command::New, |this| {
+            .when(command.submenu_commands().is_some(), |this| {
                 this.child(Icon::new(IconName::ChevronRight).xsmall())
             })
     }
@@ -305,7 +362,7 @@ impl EditorApp {
                     command,
                     index,
                     false,
-                    !menu.submenu_open && menu.focused_main == index,
+                    menu.main_row_selected(index),
                     &style,
                     cx,
                 )
@@ -317,35 +374,49 @@ impl EditorApp {
             .id("explorer-context-menu")
             .debug_selector(|| "explorer-context-menu".into())
             .role(gpui_kit::Role::Menu)
+            .on_any_mouse_down(|_, _, cx| cx.stop_propagation())
             .children(main_rows);
-        let submenu = if menu.submenu_open {
-            let sub_height = NEW_COMMANDS.len() as f32 * ROW_HEIGHT + style.padding_y * 2.;
-            let new_index = menu
+        let submenu = if let Some(parent) = menu.submenu {
+            // Anchor each child menu to its parent row so both mouse and keyboard share one state.
+            let commands = parent.submenu_commands().unwrap_or_default();
+            let submenu_width = if parent == Command::SpecialCopy {
+                SPECIAL_COPY_SUBMENU_WIDTH
+            } else {
+                SUBMENU_WIDTH
+            };
+            let sub_height = commands.len() as f32 * ROW_HEIGHT + style.padding_y * 2.;
+            let parent_index = menu
                 .commands()
                 .iter()
-                .position(|command| *command == Command::New)
+                .position(|command| *command == parent)
                 .unwrap_or(0);
             let preferred_x = left + px(MENU_WIDTH - 2.);
-            let sub_x = if preferred_x + px(SUBMENU_WIDTH + WINDOW_MARGIN)
+            let sub_x = if preferred_x + px(submenu_width + WINDOW_MARGIN)
                 <= window.viewport_size().width
             {
                 preferred_x
             } else {
-                (left - px(SUBMENU_WIDTH - 2.)).max(px(WINDOW_MARGIN))
+                (left - px(submenu_width - 2.)).max(px(WINDOW_MARGIN))
             };
-            let sub_y = (top + px(new_index as f32 * ROW_HEIGHT + style.padding_y)).min(
+            let sub_y = (top + px(parent_index as f32 * ROW_HEIGHT + style.padding_y)).min(
                 (window.viewport_size().height - px(sub_height + WINDOW_MARGIN))
                     .max(px(WINDOW_MARGIN)),
             );
+            let submenu_id = if parent == Command::SpecialCopy {
+                "explorer-special-copy-submenu"
+            } else {
+                "explorer-new-submenu"
+            };
             Some(
                 div().absolute().left(sub_x).top(sub_y).child(
                     style
-                        .card(SUBMENU_WIDTH)
-                        .id("explorer-new-submenu")
-                        .debug_selector(|| "explorer-new-submenu".into())
+                        .card(submenu_width)
+                        .id(submenu_id)
+                        .debug_selector(move || submenu_id.into())
                         .role(gpui_kit::Role::Menu)
+                        .on_any_mouse_down(|_, _, cx| cx.stop_propagation())
                         .children(
-                            NEW_COMMANDS
+                            commands
                                 .iter()
                                 .copied()
                                 .enumerate()
@@ -371,12 +442,18 @@ impl EditorApp {
             .id("explorer-menu-overlay")
             .absolute()
             .inset_0()
+            // Own hit testing across the window while either menu level is visible.
+            .occlude()
             .track_focus(&menu.focus)
             .capture_key_down(cx.listener(Self::explorer_menu_key_down))
+            .on_mouse_up(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+            .on_mouse_up(MouseButton::Right, |_, _, cx| cx.stop_propagation())
+            .on_scroll_wheel(|_, _, cx| cx.stop_propagation())
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(|this, _, _, cx| {
                     this.explorer_menu = None;
+                    cx.stop_propagation();
                     cx.notify();
                 }),
             )
@@ -392,6 +469,42 @@ impl EditorApp {
             .when_some(submenu, |this, submenu| this.child(submenu))
             .into_any_element()
     }
+}
+
+/// Copy the selected entry's name, disk path, or path relative to the workspace root.
+fn special_copy_text(command: Command, target: &Path, project_root: &Path) -> Option<String> {
+    match command {
+        Command::CopyFileName => target
+            .file_name()
+            .map(|name| name.to_string_lossy().into_owned()),
+        Command::CopyAbsolutePath => Some(clipboard_path_text(target)),
+        Command::CopyProjectRoot => target.strip_prefix(project_root).ok().map(|relative| {
+            // A root selection has no remaining components; represent the current directory as '.'.
+            if relative.as_os_str().is_empty() {
+                ".".to_owned()
+            } else {
+                clipboard_path_text(relative)
+            }
+        }),
+        _ => None,
+    }
+}
+
+/// Hide Windows verbatim prefixes from text paths while preserving valid UNC paths.
+fn clipboard_path_text(path: &Path) -> String {
+    let text = path.to_string_lossy();
+    #[cfg(windows)]
+    {
+        if let Some(unc) = text.strip_prefix(r"\\?\UNC\") {
+            return format!(r"\\{}", unc);
+        }
+        if let Some(local) = text.strip_prefix(r"\\?\") {
+            if local.as_bytes().get(1) == Some(&b':') {
+                return local.to_owned();
+            }
+        }
+    }
+    text.into_owned()
 }
 
 /// Clamp the menu to the window without changing the pointer target.

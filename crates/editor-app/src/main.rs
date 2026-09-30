@@ -11,7 +11,7 @@ mod ui;
 // Compile translations from the app's locale files and retain English as fallback.
 rust_i18n::i18n!("locales", fallback = "en");
 
-use editor_core::{DocumentSession, Workspace};
+use editor_core::{DocumentSession, Workspace, WorkspaceSnapshot};
 use gpui_base::dock::{DockArea, DockEvent, DockLayout, PanelEvent};
 use gpui_base::input::RopeExt as _;
 use gpui_base::input::{
@@ -57,7 +57,7 @@ use app::{EditorDockPanel, EditorDockPanelKind};
 use assets::AppAssets;
 use explorer::menu::ExplorerMenu;
 use explorer::tree as explorer_tree;
-use explorer::{ExplorerEdit, ExplorerEditKind};
+use explorer::{ExplorerDelete, ExplorerEdit, ExplorerEditKind};
 use explorer_tree::{find_tree_item, restore_expanded, tree_items};
 use icons::file_icon;
 use language::navigation as language_navigation;
@@ -87,6 +87,7 @@ actions!(
 
 struct EditorApp {
     workspace: Workspace,
+    workspace_snapshot: Option<WorkspaceSnapshot>,
     language_servers: HashMap<String, Arc<language_navigation::LanguageServer>>,
     file_store: NativeFileStore,
     history: Option<LocalHistory>,
@@ -129,6 +130,8 @@ struct EditorApp {
     hovered_tree_entry: Option<String>,
     /// Temporary name field for create and rename commands in the explorer.
     explorer_edit: Option<ExplorerEdit>,
+    /// A path is removed only after the delete preview is explicitly confirmed.
+    explorer_delete: Option<ExplorerDelete>,
     explorer_menu: Option<ExplorerMenu>,
     tabs: Vec<OpenTab>,
     active_path: Option<PathBuf>,
@@ -197,6 +200,10 @@ impl EditorApp {
                 TreeEvent::Collapsed(id) => Some((id.to_string(), false)),
             };
             if let Some((id, is_expanded)) = id {
+                // The project root has a default expansion state independent of child folders.
+                if Path::new(&id) == this.workspace.root() {
+                    this.session_state.explorer_root_expanded = is_expanded;
+                }
                 this.session_state
                     .expanded_directories
                     .retain(|path| path != &id);
@@ -284,6 +291,7 @@ impl EditorApp {
         });
         let mut this = Self {
             workspace,
+            workspace_snapshot: None,
             language_servers: HashMap::new(),
             file_store: NativeFileStore,
             history: LocalHistory::for_current_user().ok(),
@@ -313,6 +321,7 @@ impl EditorApp {
             settings_section: app::SettingsSection::AppearanceAndBehavior,
             hovered_tree_entry: None,
             explorer_edit: None,
+            explorer_delete: None,
             explorer_menu: None,
             tabs: Vec::new(),
             active_path: None,

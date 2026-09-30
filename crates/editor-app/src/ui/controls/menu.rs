@@ -71,6 +71,7 @@ impl MenuStyle {
         label: impl Into<SharedString>,
         selected: bool,
     ) -> gpui_base::Button {
+        // Buttons own their text style so submenu triggers match ordinary menu rows.
         gpui_base::Button::new(id)
             .role(Role::MenuItem)
             .accessibility_label(label)
@@ -79,6 +80,13 @@ impl MenuStyle {
             .h(px(29.))
             .w_full()
             .items_center()
+            .font_family(self.font_family.clone())
+            .text_size(px(self.font_size))
+            .font_weight(if self.bold {
+                FontWeight::BOLD
+            } else {
+                FontWeight::NORMAL
+            })
             .px(px(self.padding_x + 6.))
             .rounded(px((self.radius - 2.).max(2.)))
             .bg(if selected { self.hover } else { self.surface })

@@ -16,6 +16,9 @@ pub struct SessionState {
     pub explorer_width: f32,
     #[serde(default = "default_true")]
     pub explorer_visible: bool,
+    /// Newly introduced project roots start expanded for previously saved workspaces too.
+    #[serde(default = "default_true")]
+    pub explorer_root_expanded: bool,
     /// Generic plugin-manager dock dimensions persist independently of plugin-owned state.
     #[serde(default = "default_extension_height", alias = "terminal_height")]
     pub extension_height: f32,
@@ -42,6 +45,7 @@ impl SessionState {
             window_height: 820.,
             explorer_width: 280.,
             explorer_visible: true,
+            explorer_root_expanded: true,
             extension_height: default_extension_height(),
             extensions_visible: true,
             plugin_dock_sizes: Default::default(),

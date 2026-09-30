@@ -83,6 +83,25 @@ pub(super) fn rename(path: &Path, name: &str) -> Result<(), String> {
     fs::rename(path, target).map_err(|error| error.to_string())
 }
 
+/// Remove one reviewed workspace entry without following a symbolic-link target.
+pub(super) fn delete(root: &Path, path: &Path) -> Result<(), String> {
+    let root = root.canonicalize().map_err(|error| error.to_string())?;
+    let metadata = path.symlink_metadata().map_err(|error| error.to_string())?;
+    if metadata.file_type().is_symlink() {
+        return Err(t!("explorer.delete_symlink").to_string());
+    }
+    let resolved = path.canonicalize().map_err(|error| error.to_string())?;
+    if resolved == root || !resolved.starts_with(&root) {
+        return Err(t!("explorer.delete_outside_workspace").to_string());
+    }
+    if metadata.is_dir() {
+        fs::remove_dir_all(path)
+    } else {
+        fs::remove_file(path)
+    }
+    .map_err(|error| error.to_string())
+}
+
 pub(super) fn clipboard_paths(item: &ClipboardItem) -> Vec<PathBuf> {
     item.entries()
         .iter()
@@ -269,5 +288,27 @@ mod tests {
         );
         assert!(!root.path().join("batch/source.txt").exists());
         assert!(create(root.path(), "../escape", false).is_err());
+    }
+
+    #[test]
+    fn delete_removes_files_and_directories_but_never_the_root_or_external_files() {
+        let root = tempfile::tempdir().unwrap();
+        let external = tempfile::tempdir().unwrap();
+        let file = root.path().join("note.txt");
+        let folder = root.path().join("nested");
+        fs::write(&file, "note").unwrap();
+        fs::create_dir(&folder).unwrap();
+        fs::write(folder.join("child.txt"), "child").unwrap();
+        let outside = external.path().join("outside.txt");
+        fs::write(&outside, "outside").unwrap();
+
+        assert!(delete(root.path(), root.path()).is_err());
+        assert!(delete(root.path(), &outside).is_err());
+        assert!(outside.exists());
+        delete(root.path(), &file).unwrap();
+        delete(root.path(), &folder).unwrap();
+        assert!(!file.exists());
+        assert!(!folder.exists());
+        assert!(root.path().exists());
     }
 }

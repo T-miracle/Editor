@@ -420,6 +420,7 @@ impl Render for EditorApp {
             .child(self.render_plugin_popup(window, cx))
             .child(self.render_explorer_menu(window, cx))
             .child(self.render_explorer_edit(cx))
+            .child(self.render_explorer_delete(cx))
             .when_some(self.definition_notice, |this, notice| {
                 let left = px((notice.position.x / px(1.) - 28.).max(4.));
                 let top = px((notice.position.y / px(1.) - 38.).max(4.));

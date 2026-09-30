@@ -92,7 +92,16 @@ pub(crate) fn tree_items<'a>(
             }
         }
     }
-    into_items(root_node)
+    // A single workspace node keeps the project name visible above all of its contents.
+    let project_name = root
+        .file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .unwrap_or_else(|| root.to_string_lossy().into_owned());
+    vec![
+        TreeItem::new(root.to_string_lossy().into_owned(), project_name)
+            .children(into_items(root_node))
+            .expanded(true),
+    ]
 }
 
 fn tree_sort_key(name: &str) -> String {
@@ -116,6 +125,19 @@ mod tests {
         let folder = root.join("empty");
         let items = tree_items(root, std::iter::empty(), std::iter::once(folder.as_path()));
         assert_eq!(items.len(), 1);
-        assert_eq!(items[0].label.as_str(), "empty");
+        assert_eq!(items[0].label.as_str(), "workspace");
+        assert_eq!(items[0].children[0].label.as_str(), "empty");
+        assert!(find_tree_item(&items, &folder).is_some());
+    }
+
+    #[test]
+    fn project_root_is_visible_even_when_the_workspace_is_empty() {
+        let root = Path::new("projects").join("Editor");
+        let items = tree_items(&root, std::iter::empty(), std::iter::empty());
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].label.as_str(), "Editor");
+        assert_eq!(Path::new(items[0].id.as_str()), root);
+        assert!(items[0].is_expanded());
+        assert!(items[0].children.is_empty());
     }
 }
