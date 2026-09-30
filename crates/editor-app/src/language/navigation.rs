@@ -21,6 +21,126 @@ use std::{
 mod readiness_tests {
     use super::*;
 
+    /// Exercise the terminal import from the full editor workspace without a local SDK.
+    #[test]
+    #[ignore = "requires local Rust Analyzer and the editor workspace dependencies"]
+    fn host_sdk_completes_terminal_from_editor_workspace() {
+        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let manifest = plugin_schema::PluginManifest::parse(
+            &std::fs::read_to_string(root.join("plugins/rust/plugin.toml")).unwrap(),
+        )
+        .unwrap();
+        let server = LanguageServer::new(&root, manifest.languages[0].clone()).unwrap();
+        server.prepare_until_ready().unwrap();
+        let path = root.join("plugins/terminal/src/controls.rs");
+        let uri = file_uri(&path.canonicalize().unwrap()).unwrap();
+        for name in [
+            "Action",
+            "CanvasControls",
+            "MenuItem",
+            "PopupMenu",
+            "SideTab",
+            "SideTabs",
+            "UiEvent",
+        ] {
+            let prefix = &name[..3];
+            let source = format!(
+                "// Host protocol completion probe.\nuse plugin_protocol::ui::{{{prefix}}};\n"
+            );
+            let position = position_at_byte(&source, source.find(prefix).unwrap() + prefix.len());
+            let response = server.completions(uri.clone(), source, position).unwrap();
+            let items = match response {
+                CompletionResponse::Array(items) => items,
+                CompletionResponse::List(list) => list.items,
+            };
+            assert!(
+                items.iter().any(|item| item.label == name),
+                "missing {name}: {items:?}"
+            );
+        }
+        assert!(!root.join("plugins/terminal/sdk").exists());
+    }
+
+    /// Resolve completion and definition through the host cache for an excluded, SDK-free guest.
+    #[test]
+    #[ignore = "requires a local Rust Analyzer and Cargo toolchain"]
+    fn host_sdk_completes_nested_plugin_without_local_files() {
+        let root = tempfile::Builder::new()
+            .prefix("plugin SDK completion ")
+            .tempdir()
+            .unwrap();
+        let plugin = root.path().join("plugins/demo");
+        std::fs::create_dir_all(root.path().join("src")).unwrap();
+        std::fs::write(root.path().join("src/lib.rs"), "// Host fixture.\n").unwrap();
+        std::fs::write(
+            root.path().join("Cargo.toml"),
+            r#"[package]
+name = "sdk-host-fixture"
+version = "0.1.0"
+edition = "2024"
+[workspace]
+exclude = ["plugins/demo"]
+"#,
+        )
+        .unwrap();
+        std::fs::create_dir_all(plugin.join("src")).unwrap();
+        std::fs::write(plugin.join("manifest.json"), "{}").unwrap();
+        let manifest_source = r#"[package]
+name = "sdk-guest-fixture"
+version = "0.1.0"
+edition = "2024"
+[dependencies]
+plugin-protocol = { version = "=0.1.0", features = ["guest"] }
+"#;
+        std::fs::write(plugin.join("Cargo.toml"), manifest_source).unwrap();
+        let path = plugin.join("src/lib.rs");
+        let source = "// Host protocol import.\nuse plugin_protocol::ui::{Act};\n".to_owned();
+        std::fs::write(&path, &source).unwrap();
+        let repo = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let manifest = plugin_schema::PluginManifest::parse(
+            &std::fs::read_to_string(repo.join("plugins/rust/plugin.toml")).unwrap(),
+        )
+        .unwrap();
+        let server = LanguageServer::new(root.path(), manifest.languages[0].clone()).unwrap();
+        server.prepare_until_ready().unwrap();
+        // Include the server's loaded-workspace report when diagnosing integration failures.
+        let analysis_status = server
+            .connection
+            .lock()
+            .unwrap()
+            .as_mut()
+            .unwrap()
+            .request("rust-analyzer/analyzerStatus", json!({}))
+            .unwrap();
+        let uri = file_uri(&path).unwrap();
+        let position = position_at_byte(&source, source.find("Act").unwrap() + 3);
+        let response = server
+            .completions(uri.clone(), source.clone(), position)
+            .unwrap();
+        let items = match response {
+            CompletionResponse::Array(items) => items,
+            CompletionResponse::List(list) => list.items,
+        };
+        assert!(
+            items.iter().any(|item| item.label == "Action"),
+            "missing Action: {items:?}; server status: {analysis_status}"
+        );
+        let source = source.replace("{Act}", "{Action}");
+        let definitions = server.definitions(uri, source, position).unwrap();
+        assert!(
+            definitions
+                .iter()
+                .any(|definition| definition.target_uri.as_str().contains("plugin-sdk/")),
+            "definition must point to host SDK: {definitions:?}"
+        );
+        assert_eq!(
+            std::fs::read_to_string(plugin.join("Cargo.toml")).unwrap(),
+            manifest_source
+        );
+        assert!(!plugin.join("sdk").exists());
+        assert!(!plugin.join(".cargo").exists());
+    }
+
     /// Exercises the bundled plugin against the locally installed server and workspace.
     #[test]
     #[ignore = "run scripts/rust-readiness-smoke.ps1 with a local Rust language server"]
@@ -241,11 +361,14 @@ struct LanguageServerConnection {
     document_versions: HashMap<String, i32>,
     readiness: Option<LspReadiness>,
     ready: Option<bool>,
+    /// Keep host-injected options available for subsequent workspace/configuration requests.
+    configuration: Value,
 }
 
 impl LanguageServerConnection {
     /// Starts the plugin's server and completes the LSP handshake.
     fn start(root: &Path, root_uri: &Uri, language: &LanguageContribution) -> anyhow::Result<Self> {
+        let configuration = super::sdk::initialization_options(root, &language.id)?;
         let executable = resolve_server_executable(language)?;
         let mut child = Command::new(&executable)
             .args(&language.lsp_args)
@@ -267,6 +390,7 @@ impl LanguageServerConnection {
             document_versions: HashMap::new(),
             readiness: language.lsp_readiness.clone(),
             ready: None,
+            configuration,
         };
 
         let root_uri = root_uri.as_str();
@@ -280,8 +404,10 @@ impl LanguageServerConnection {
             json!({
                 "processId": std::process::id(),
                 "rootUri": root_uri,
-                "rootPath": root.to_string_lossy(),
+                // Match rootUri even for servers that still consult deprecated rootPath.
+                "rootPath": url::Url::parse(root_uri)?.to_file_path().ok(),
                 "workspaceFolders": [{ "uri": root_uri, "name": "workspace" }],
+                "initializationOptions": connection.configuration,
                 "capabilities": {
                     "workspace": { "workspaceFolders": true },
                     "textDocument": {
@@ -445,7 +571,19 @@ impl LanguageServerConnection {
                         .get("params")
                         .and_then(|params| params.get("items"))
                         .and_then(Value::as_array)
-                        .map(|items| Value::Array(vec![Value::Null; items.len()]))
+                        .map(|items| {
+                            Value::Array(
+                                items
+                                    .iter()
+                                    .map(|item| {
+                                        super::sdk::configuration_section(
+                                            &self.configuration,
+                                            item.get("section").and_then(Value::as_str),
+                                        )
+                                    })
+                                    .collect(),
+                            )
+                        })
                         .unwrap_or_else(|| json!([])),
                     _ => Value::Null,
                 };

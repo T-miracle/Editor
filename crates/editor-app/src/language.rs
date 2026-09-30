@@ -4,4 +4,5 @@ pub(crate) mod completion;
 pub(crate) mod hover;
 pub(crate) mod navigation;
 pub mod plugins;
+mod sdk;
 pub(crate) mod toolchains;

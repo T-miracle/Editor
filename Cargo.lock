@@ -1789,6 +1789,7 @@ dependencies = [
  "glob",
  "gpui-base",
  "gpui-kit",
+ "ignore",
  "lsp-types",
  "pinyin",
  "platform-windows",

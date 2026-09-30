@@ -60,19 +60,8 @@ pub fn run_cli() -> anyhow::Result<bool> {
                 .canonicalize()
                 .context("plugin Cargo.toml does not exist")?;
             anyhow::ensure!(manifest.is_file(), "plugin manifest must be a file");
-            let cache_root = dirs::cache_dir()
-                .context("no user cache directory available")?
-                .join("MeEditor")
-                .join("plugin-sdk");
-            let sdk = prepare_cache(&cache_root)?;
-            // JSON string quoting also escapes paths correctly for TOML string values.
-            let patch = format!(
-                "patch.crates-io.plugin-protocol.path={}",
-                serde_json::to_string(&sdk)?
-            );
             let status = Command::new("cargo")
-                .arg("--config")
-                .arg(patch)
+                .args(cargo_args()?)
                 .arg(operation)
                 .arg("--manifest-path")
                 .arg(manifest)
@@ -92,6 +81,35 @@ pub fn run_cli() -> anyhow::Result<bool> {
         _ => return Ok(false),
     }
     Ok(true)
+}
+
+/// Build and language analysis resolve the exact same host-owned, versioned SDK.
+pub(crate) fn cargo_args() -> anyhow::Result<Vec<String>> {
+    Ok(vec![
+        "--config".into(),
+        cargo_config()?.to_string_lossy().into_owned(),
+    ])
+}
+
+/// Keep Cargo configuration beside the host cache, shared by metadata, checks and builds.
+pub(crate) fn cargo_config() -> anyhow::Result<PathBuf> {
+    let cache_root = dirs::cache_dir()
+        .context("no user cache directory available")?
+        .join("MeEditor")
+        .join("plugin-sdk");
+    let sdk = prepare_cache(&cache_root)?;
+    // JSON string quoting also escapes Windows paths in TOML configuration values.
+    let contents = format!(
+        "# Host-managed plugin protocol dependency.\n[patch.crates-io]\nplugin-protocol = {{ path = {} }}\n",
+        serde_json::to_string(&sdk)?
+    );
+    let config = sdk.join("host-cargo.toml");
+    if !std::fs::read(&config).is_ok_and(|existing| existing == contents.as_bytes()) {
+        let mut file = tempfile::NamedTempFile::new_in(&sdk)?;
+        file.write_all(contents.as_bytes())?;
+        file.persist(&config)?;
+    }
+    Ok(config)
 }
 
 /// Content-addressed caches let different editor versions build plugins independently.

@@ -20,3 +20,5 @@ editor-app.exe --plugin-cargo terminal/Cargo.toml check --target wasm32-wasip2
 编辑器将内嵌接口按内容摘要缓存到系统用户缓存目录的 `MeEditor/plugin-sdk/<摘要>/`（Windows 为 `%LOCALAPPDATA%/MeEditor/plugin-sdk/<摘要>/`），通过本次 Cargo 命令的依赖覆盖选择该缓存。不同接口版本不会互相覆盖；缓存缺失或损坏会自动恢复。插件项目不需要 `sdk/`，也不引用主程序源码；发行目录只需主程序与插件包。接口变更时仍需核对 WIT 包版本和插件清单的 `protocol` 版本。
 
 开发机器需安装 Rust/Cargo 与 `wasm32-wasip2` 目标；使用已编译插件的用户无需这些工具。`--plugin-cargo` 执行开发者提供的 Cargo 项目，属于本机开发工具，不是运行时沙箱。为其他语言工具链或接口检查保留显式 `--export-plugin-sdk <目录>`，常规构建与发行不调用它。
+
+在本编辑器内开发插件时，Rust 语言服务自动使用与 `--plugin-cargo` 相同的宿主 SDK 缓存。编辑器通过 Rust Analyzer 的 `cargo.configPath` 注入依赖覆盖，并通过 `linkedProjects` 加入工作区内同时包含 `manifest.json` 与 `Cargo.toml` 的独立插件项目；发现过程遵循忽略规则，跳过构建产物和 vendor 目录。输入 `plugin_protocol::ui::` 可以获取类型补全、悬浮说明和定义跳转。插件目录无需增加 SDK、Cargo 配置或指向宿主源码的路径；定义跳转会打开宿主缓存中的协议源码。需要已启用 Rust 语言插件并安装 Rust Analyzer。
