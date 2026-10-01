@@ -36,6 +36,8 @@ pub(crate) struct DefinitionPopupFocus {
     hover: Rc<std::cell::RefCell<Option<gpui_base::input::HoverPopoverState>>>,
     /// Diagnostic text uses the same focus boundary as type documentation.
     diagnostic: Rc<std::cell::RefCell<Option<gpui_base::input::DiagnosticEntry>>>,
+    /// Invalidate deferred focus restoration when details are explicitly closed.
+    generation: Rc<Cell<u64>>,
     _subscription: Subscription,
 }
 
@@ -51,6 +53,8 @@ impl DefinitionPopupFocus {
             None::<gpui_base::input::DiagnosticEntry>,
         ));
         let diagnosed = diagnostic.clone();
+        let generation = Rc::new(Cell::new(0u64));
+        let restoration_generation = generation.clone();
         let focused = handle.clone();
         let subscription = cx.on_focus_in(&handle, window, move |app, window, cx| {
             let hover = hovered.borrow().clone();
@@ -59,12 +63,16 @@ impl DefinitionPopupFocus {
                 return;
             }
             let editor = app.editor.clone();
+            let generation = restoration_generation.get();
+            let restoration_generation = restoration_generation.clone();
             let focused = focused.clone();
             let app = cx.entity().downgrade();
             // EditorState clears hover on blur. Defer until every focus
             // listener has run, regardless of tab/editor creation order.
             window.defer(cx, move |window, cx| {
-                if !focused.contains_focused(window, cx) {
+                if restoration_generation.get() != generation
+                    || !focused.contains_focused(window, cx)
+                {
                     return;
                 }
                 let _ = app.update(cx, |app, cx| {
@@ -85,8 +93,16 @@ impl DefinitionPopupFocus {
             handle,
             hover,
             diagnostic,
+            generation,
             _subscription: subscription,
         }
+    }
+
+    /// Release both presentations and cancel restoration from an earlier focus event.
+    pub(crate) fn clear(&self) {
+        self.generation.set(self.generation.get().wrapping_add(1));
+        self.hover.borrow_mut().take();
+        self.diagnostic.borrow_mut().take();
     }
 
     /// Capture the current presentation rather than a potentially older LSP cache.

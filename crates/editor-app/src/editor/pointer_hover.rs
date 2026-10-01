@@ -5,6 +5,43 @@ use gpui_kit::MouseMoveEvent;
 use std::ops::Range;
 
 impl EditorApp {
+    /// Watch this editor window before shortcut actions consume their keystrokes.
+    pub(crate) fn install_hover_keyboard_dismissal(
+        window: &Window,
+        cx: &mut Context<Self>,
+    ) -> Subscription {
+        let target = window.window_handle();
+        let app = cx.entity().downgrade();
+        cx.intercept_keystrokes(move |_, window, cx| {
+            // Application keystroke interceptors also receive settings/plugin windows.
+            if window.window_handle() == target {
+                let _ = app.update(cx, |app, cx| app.editor_keyboard_move(window, cx));
+            }
+        })
+    }
+
+    /// Compare the caret after key dispatch so copy and modifier keys keep details open.
+    fn editor_keyboard_move(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let editor = self.editor.clone();
+        if !editor.read(cx).focus_handle(cx).is_focused(window) {
+            // Selecting or copying popup text belongs to its own focus path.
+            return;
+        }
+        let cursor = editor.read(cx).cursor();
+        let app = cx.entity().downgrade();
+        // Navigation actions run after interception. Observe their actual result
+        // rather than duplicating the editor's keybindings and movement rules.
+        window.defer(cx, move |_, cx| {
+            let _ = app.update(cx, |app, cx| {
+                if app.editor.entity_id() == editor.entity_id()
+                    && editor.read(cx).cursor() != cursor
+                {
+                    app.dismiss_pointer_hover(cx);
+                }
+            });
+        });
+    }
+
     /// Keep hover on visible text while canceling the base editor's competing waiter.
     pub(super) fn editor_pointer_move(
         &mut self,
@@ -87,7 +124,7 @@ impl EditorApp {
         if symbol == self.pointer_hover_symbol {
             if let (Some(symbol), Some(hover)) = (&symbol, &self.pointer_hover_cached) {
                 // Restore the app-owned result in the same event after native
-                // cancellation, without restarting its one-second LSP wait.
+                // cancellation, without restarting its one-second pointer wait.
                 let symbol = symbol.clone();
                 let hover = hover.clone();
                 self.editor.update(cx, |editor, cx| {
@@ -117,6 +154,9 @@ impl EditorApp {
         let generation = self.pointer_hover_generation;
         self.pointer_hover_pending = true;
         cx.spawn_in(window, async move |this, cx| {
+            // Only pointer presentation waits one second. The provider fetches
+            // concurrently and remains immediately available to Ctrl+I.
+            cx.background_executor().timer(Duration::from_secs(1)).await;
             let result = task.await;
             let _ = this.update_in(cx, |app, _, cx| {
                 if app.pointer_hover_generation != generation
@@ -166,6 +206,9 @@ impl EditorApp {
         self.pointer_hover_symbol = None;
         self.pointer_hover_pending = false;
         self.pointer_hover_cached = None;
+        // A focus restoration queued before editing or navigation must not
+        // reintroduce a popup after this dismissal.
+        self.definition_popup_focus.clear();
         self.editor
             .update(cx, |editor, cx| editor.clear_hover_state(cx));
         self.editor

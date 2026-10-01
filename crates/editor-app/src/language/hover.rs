@@ -77,7 +77,7 @@ impl HoverProvider for LanguageHoverProvider {
             {
                 (current.result.clone(), cache.generation, false)
             } else {
-                // Replacing the symbol invalidates work still waiting in the debounce period.
+                // Replacing the symbol invalidates work that has not started yet.
                 cache.generation = cache.generation.wrapping_add(1);
                 let result = Arc::new(Mutex::new(None));
                 cache.current = Some(CachedHover {
@@ -97,9 +97,6 @@ impl HoverProvider for LanguageHoverProvider {
             let result_for_worker = shared_result.clone();
             // This task outlives individual mouse-move waiters, which GPUI replaces on movement.
             cx.spawn(async move |cx| {
-                cx.background_executor()
-                    .timer(Duration::from_millis(120))
-                    .await;
                 let is_current =
                     cache.lock().expect("hover cache lock poisoned").generation == generation;
                 let result = if is_current {
@@ -129,9 +126,8 @@ impl HoverProvider for LanguageHoverProvider {
         }
 
         cx.spawn(async move |cx| {
-            // The editor's own 150 ms delay runs concurrently with this timer.
-            // Keep the card hidden for one second even when the result is cached.
-            cx.background_executor().timer(Duration::from_secs(1)).await;
+            // Presentation timing belongs to the pointer caller; keyboard requests
+            // can consume cached or completed documentation without a hover delay.
             loop {
                 if let Some(result) = shared_result
                     .lock()

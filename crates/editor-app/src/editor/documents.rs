@@ -338,6 +338,7 @@ impl EditorApp {
                             // document event, including edits without keydown.
                             if this.editor.entity_id() == changed_editor.entity_id() {
                                 this.invalidate_editor_previews(cx);
+                                this.dismiss_pointer_hover(cx);
                             }
                             // Each tab keeps its own revision, including background edits.
                             if let Some(index) = this.tabs.iter().position(|tab| {

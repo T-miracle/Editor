@@ -6,6 +6,9 @@ use gpui_kit::{TestAppContext, component::Root, gpui, size};
 use lsp_types::{Hover, HoverContents, MarkedString};
 use std::{cell::Cell, cell::RefCell, rc::Rc};
 
+#[path = "hover_keyboard_tests.rs"]
+mod keyboard;
+
 struct ReadyHover(Rc<Cell<usize>>);
 
 impl gpui_base::input::HoverProvider for ReadyHover {
@@ -85,7 +88,8 @@ fn hover_visible_row_after_scroll(cx: &mut TestAppContext) {
         });
     });
     cx.simulate_mouse_move(position, None::<MouseButton>, Default::default());
-    cx.executor().advance_clock(Duration::from_millis(500));
+    cx.run_until_parked();
+    cx.executor().advance_clock(Duration::from_secs(1));
     cx.run_until_parked();
     cx.update(|window, cx| window.draw(cx).clear(cx));
     assert!(
@@ -231,7 +235,8 @@ fn hover_visible_row_after_scroll(cx: &mut TestAppContext) {
     });
     // Selection movement must not leave a native hover waiter that can
     // replace the app-owned card after the pointer stops.
-    cx.executor().advance_clock(Duration::from_millis(200));
+    cx.run_until_parked();
+    cx.executor().advance_clock(Duration::from_secs(1));
     cx.run_until_parked();
     assert_eq!(requests.get(), initial_requests);
     cx.update(|window, cx| window.draw(cx).clear(cx));
@@ -309,6 +314,8 @@ fn hover_visible_row_after_scroll(cx: &mut TestAppContext) {
     });
     cx.simulate_mouse_move(blank_after_escape, None::<MouseButton>, Default::default());
     cx.simulate_mouse_move(position, None::<MouseButton>, Default::default());
+    cx.run_until_parked();
+    cx.executor().advance_clock(Duration::from_secs(1));
     cx.run_until_parked();
     cx.update(|window, cx| window.draw(cx).clear(cx));
     assert!(
@@ -483,7 +490,8 @@ fn hover_visible_row_without_scroll_uses_pointer_path(cx: &mut TestAppContext) {
     cx.update(|_, cx| {
         assert_eq!(view.read(cx).pointer_hover_symbol, Some(symbol_range));
     });
-    cx.executor().advance_clock(Duration::from_millis(200));
+    cx.run_until_parked();
+    cx.executor().advance_clock(Duration::from_secs(1));
     cx.run_until_parked();
     assert_eq!(
         requests.get(),
