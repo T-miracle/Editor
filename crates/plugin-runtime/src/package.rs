@@ -57,11 +57,16 @@ impl Package {
             actual_total += data.len();
             anyhow::ensure!(files.insert(name, data).is_none(), "Duplicate package path");
         }
-        let manifest: Manifest = serde_json::from_slice(
+        let mut manifest: Manifest = serde_json::from_slice(
             files
                 .get("manifest.json")
                 .ok_or_else(|| anyhow::anyhow!("Missing manifest.json"))?,
         )?;
+        // Older install files enter the same canonical identity as current market packages.
+        manifest.id = plugin_schema::canonical_plugin_id(&manifest.id).to_owned();
+        if manifest.id == "svg" {
+            manifest.name = "SVG".into();
+        }
         anyhow::ensure!(
             manifest.id.len() <= 100
                 && !manifest.id.is_empty()
@@ -74,7 +79,7 @@ impl Package {
         );
         semver::Version::parse(&manifest.version)?;
         anyhow::ensure!(
-            matches!(manifest.protocol, 1..=4),
+            matches!(manifest.protocol, 1..=6),
             "Unsupported plugin protocol"
         );
         anyhow::ensure!(
@@ -109,7 +114,7 @@ impl Package {
             let source = package_text(&files, path)?;
             let contributions = PluginManifest::parse(source)?;
             anyhow::ensure!(
-                contributions.plugin.id == manifest.id,
+                plugin_schema::canonical_plugin_id(&contributions.plugin.id) == manifest.id,
                 "Contribution manifest identity differs from package identity"
             );
             anyhow::ensure!(
@@ -158,8 +163,28 @@ impl Package {
                 "Invalid or duplicate panel ID"
             );
             anyhow::ensure!(
-                ["left", "right", "bottom"].contains(&panel.position.as_str()),
+                ["left", "right", "bottom", "editor"].contains(&panel.position.as_str()),
                 "Unsupported dock position"
+            );
+            // Older hosts do not know how to scope a preview to the current in-memory document.
+            anyhow::ensure!(
+                if panel.position == "editor" {
+                    manifest.protocol >= 6
+                        && manifest.permissions.contains("editor.commands")
+                        && !panel.file_extensions.is_empty()
+                        && panel.file_extensions.len() <= 32
+                        && panel.file_extensions.iter().all(|extension| {
+                            !extension.is_empty()
+                                && extension.len() <= 32
+                                && extension.bytes().all(|byte| {
+                                    byte.is_ascii_alphanumeric()
+                                        || matches!(byte, b'_' | b'-' | b'+')
+                                })
+                        })
+                } else {
+                    panel.file_extensions.is_empty()
+                },
+                "Editor previews require protocol 6, editor.commands, and valid file extensions"
             );
             // Panel artwork must come from this package and remain small enough for native UI.
             for icon in [&panel.icon_light, &panel.icon_dark].into_iter().flatten() {
@@ -284,12 +309,12 @@ pub(crate) fn atomic_write(path: &Path, bytes: &[u8]) -> anyhow::Result<()> {
 mod tests {
     use super::*;
 
-    /// New hosts accept legacy protocol 3 packages and reject versions they do not understand.
+    /// New preview packages use protocol 6 while all earlier packages remain installable.
     #[test]
-    fn package_accepts_protocol_four_and_preserves_version_boundary() {
-        for (protocol, supported) in [(3, true), (4, true), (5, false)] {
+    fn package_accepts_protocol_five_and_preserves_version_boundary() {
+        for (protocol, supported) in [(3, true), (4, true), (5, true), (6, true), (7, false)] {
             let manifest = serde_json::json!({
-                "id": "me.test", "name": "Test", "version": "0.1.0",
+                "id": "test", "name": "Test", "version": "0.1.0",
                 "protocol": protocol, "component": "test.wasm",
                 "permissions": [], "storage_limit": 1024
             });
@@ -310,7 +335,7 @@ mod tests {
     #[test]
     fn package_requires_component_or_declarative_contributions() {
         let manifest = serde_json::json!({
-            "id": "me.empty", "name": "Empty", "version": "0.1.0", "protocol": 1,
+            "id": "empty", "name": "Empty", "version": "0.1.0", "protocol": 1,
             "permissions": [], "storage_limit": 1024
         });
         let mut zip = zip::ZipWriter::new(Cursor::new(Vec::new()));

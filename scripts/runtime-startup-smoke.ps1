@@ -46,7 +46,7 @@ try {
         # Close normally first so the plugin worker can persist its last snapshot.
         if (-not [PluginSmokeWindow]::Close($process.Id)) { throw 'Could not send close to the hidden test window' }
         if (-not $process.WaitForExit(10000)) { throw 'Editor did not finish normal shutdown' }
-        $stateFiles = Get-ChildItem -LiteralPath "$pluginRoot/data/me.terminal" -Filter 'state-*.json'
+        $stateFiles = Get-ChildItem -LiteralPath "$pluginRoot/data/terminal" -Filter 'state-*.json'
         if ($stateFiles.Count -eq 0) { throw 'Terminal state was not persisted' }
         Write-Output "PASS: native startup, three dynamic panels and normal shutdown; logs: $runRoot"
     } finally {

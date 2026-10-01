@@ -1,7 +1,7 @@
 {
-  "id":"me.example",
+  "id":"example",
   "name":"插件示例：计数与笔记",
-  "version":"0.2.0",
+  "version":"0.2.1",
   "protocol":2,
   "component":"example.wasm",
   "permissions":[],

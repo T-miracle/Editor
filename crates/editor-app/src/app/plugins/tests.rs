@@ -56,16 +56,22 @@ fn installed_runtime_plugin_is_visible_while_starting(cx: &mut TestAppContext) {
     let directory = tempfile::tempdir().unwrap();
     let root = directory.path().join(".runtime-plugin-test");
     std::fs::create_dir_all(&root).unwrap();
-    let manifest = serde_json::from_str::<plugin_runtime::plugin_protocol::Manifest>(include_str!(
-        "../../../../../plugins/terminal/manifest.json"
-    ))
+    let mut manifest = serde_json::from_str::<plugin_runtime::plugin_protocol::Manifest>(
+        include_str!("../../../../../plugins/terminal/manifest.json"),
+    )
     .unwrap();
+    // Replay a real pre-rename installation through editor startup, not a migration-private API.
+    manifest.id = "me.terminal".into();
+    let old_data = root.join("data/me.terminal");
+    std::fs::create_dir_all(&old_data).unwrap();
+    std::fs::write(old_data.join("settings.json"), "preserved settings").unwrap();
+    std::fs::write(old_data.join("state-project.json"), "preserved snapshot").unwrap();
     let installed = plugin_runtime::Installed {
         manifest: manifest.clone(),
         digest: "fixture".into(),
         grants: manifest.permissions.clone(),
         enabled: true,
-        project_enabled: Default::default(),
+        project_enabled: std::collections::BTreeSet::from(["retained-project".into()]),
         global_enabled: None,
         error: None,
     };
@@ -87,6 +93,35 @@ fn installed_runtime_plugin_is_visible_while_starting(cx: &mut TestAppContext) {
     assert!(
         cx.debug_bounds("plugin-loading-indicator").is_some(),
         "an enabled runtime plugin must show startup loading in the status bar"
+    );
+    let migrated = plugin_runtime::Manager::read_registry(&root).unwrap();
+    assert!(!migrated.contains_key("me.terminal"));
+    assert_eq!(migrated["terminal"].manifest.id, "terminal");
+    assert!(migrated["terminal"].enabled);
+    assert_eq!(
+        migrated["terminal"].grants,
+        migrated["terminal"].manifest.permissions
+    );
+    assert!(
+        migrated["terminal"]
+            .project_enabled
+            .contains("retained-project")
+    );
+    assert_eq!(
+        std::fs::read_to_string(root.join("data/terminal/settings.json")).unwrap(),
+        "preserved settings"
+    );
+    assert_eq!(
+        std::fs::read_to_string(root.join("data/terminal/state-project.json")).unwrap(),
+        "preserved snapshot"
+    );
+    // Originals remain recoverable, and a second startup must not overwrite newer canonical data.
+    assert!(old_data.join("settings.json").exists());
+    std::fs::write(root.join("data/terminal/settings.json"), "new settings").unwrap();
+    plugin_runtime::Manager::read_registry(&root).unwrap();
+    assert_eq!(
+        std::fs::read_to_string(root.join("data/terminal/settings.json")).unwrap(),
+        "new settings"
     );
 }
 
@@ -196,7 +231,7 @@ fn stale_rust_timeout_after_project_reenable(cx: &mut TestAppContext) {
 fn project_rust_registry(workspace: &Workspace) -> PathBuf {
     let root = workspace.root().join(".runtime-plugin-test");
     let digest = "a".repeat(64);
-    let package = root.join("packages/me.rust").join(&digest);
+    let package = root.join("packages/rust").join(&digest);
     std::fs::create_dir_all(&package).unwrap();
     // This fixture exercises declaration and scope resolution; grammar is already validated below.
     std::fs::write(
@@ -219,7 +254,7 @@ fn project_rust_registry(workspace: &Workspace) -> PathBuf {
     };
     std::fs::write(
         root.join("registry.json"),
-        serde_json::to_vec(&BTreeMap::from([("me.rust", installed)])).unwrap(),
+        serde_json::to_vec(&BTreeMap::from([("rust", installed)])).unwrap(),
     )
     .unwrap();
     root
@@ -277,14 +312,14 @@ fn project_only_rust_startup_survives_registry_refresh(cx: &mut TestAppContext) 
 
             // A real package replacement must still invalidate the previous instance.
             let mut registry = plugin_runtime::Manager::read_registry(&root).unwrap();
-            let replacement = root.join("packages/me.rust").join("b".repeat(64));
+            let replacement = root.join("packages/rust").join("b".repeat(64));
             std::fs::create_dir_all(&replacement).unwrap();
             std::fs::copy(
                 app.plugin_loads[0].package_root.join("plugin.toml"),
                 replacement.join("plugin.toml"),
             )
             .unwrap();
-            registry.get_mut("me.rust").unwrap().digest = "b".repeat(64);
+            registry.get_mut("rust").unwrap().digest = "b".repeat(64);
             std::fs::write(
                 root.join("registry.json"),
                 serde_json::to_vec(&registry).unwrap(),
@@ -302,7 +337,7 @@ fn project_only_rust_startup_survives_registry_refresh(cx: &mut TestAppContext) 
             assert_eq!(app.plugin_loads[0].state, PluginLoadState::Loading);
 
             // Removing the project exception must remove Rust despite the retained-state optimization.
-            registry.get_mut("me.rust").unwrap().project_enabled.clear();
+            registry.get_mut("rust").unwrap().project_enabled.clear();
             std::fs::write(
                 root.join("registry.json"),
                 serde_json::to_vec(&registry).unwrap(),
@@ -313,6 +348,69 @@ fn project_only_rust_startup_survives_registry_refresh(cx: &mut TestAppContext) 
             assert!(app.plugin_loads.is_empty());
             assert!(language_plugins::language_for_path(Path::new("main.rs")).is_none());
         })
+    });
+}
+
+/// Removing HTML resets every open alias while leaving built-in CSS active.
+#[gpui::test]
+fn removed_html_plugin_resets_aliases_and_preserves_builtin_languages(cx: &mut TestAppContext) {
+    cx.update(|cx| {
+        gpui_kit::init(cx);
+        typography::init(cx);
+        apply_theme(builtin_theme(false), cx);
+    });
+    let directory = tempfile::tempdir().unwrap();
+    let workspace = Workspace::open(directory.path()).unwrap();
+    for name in ["index.html", "legacy.HTM", "style.css"] {
+        std::fs::write(directory.path().join(name), "").unwrap();
+    }
+    let slot = Rc::new(RefCell::new(None));
+    let capture = slot.clone();
+    let (_, cx) = cx.add_window_view(move |window, cx| {
+        let app = cx.new(|cx| EditorApp::new(workspace, None, window, cx));
+        *capture.borrow_mut() = Some(app.clone());
+        Root::new(app, window, cx)
+    });
+    let app = slot.borrow_mut().take().unwrap();
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+        app.update(cx, |app, cx| {
+            extensions::contributions::refresh(directory.path()).unwrap();
+            for name in ["index.html", "legacy.HTM", "style.css"] {
+                app.open_file(directory.path().join(name), window, cx);
+            }
+        });
+    });
+    // Opening starts in plain text and schedules highlighting after the first frame.
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+        app.update(cx, |app, cx| {
+            assert_eq!(app.tabs.len(), 3);
+            // HTML is plain text before installation; simulate the loaded grammar on both aliases.
+            for tab in &app.tabs[..2] {
+                assert_eq!(tab.editor.read(cx).language_name().as_ref(), "text");
+                tab.editor
+                    .update(cx, |editor, cx| editor.set_highlighter("html", cx));
+            }
+            // Set the unrelated tab's loaded state without relying on frame callbacks.
+            app.tabs[2]
+                .editor
+                .update(cx, |editor, cx| editor.set_highlighter("css", cx));
+            app.plugin_loads = vec![PluginLoadEntry {
+                plugin: language_plugins::BundledPlugin::Html,
+                package_root: PathBuf::new(),
+                state: PluginLoadState::Enabled,
+                grammar_loaded: true,
+                server_loading: false,
+            }];
+            // The registry no longer includes HTML after disable/uninstall.
+            app.sync_runtime_contributions(window, cx);
+            assert!(app.plugin_loads.is_empty());
+            for tab in &app.tabs[..2] {
+                assert_eq!(tab.editor.read(cx).language_name().as_ref(), "text");
+            }
+            assert_eq!(app.tabs[2].editor.read(cx).language_name().as_ref(), "css");
+        });
     });
 }
 

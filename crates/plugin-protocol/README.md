@@ -2,9 +2,15 @@
 
 原生界面协议与示例见 [UI.md](UI.md)。`plugin_protocol::ui` 提供布局、控件、主题角色、弹窗与事件，使用它的插件声明 `protocol = 2`；宿主仍兼容 protocol 1 画布插件。
 
+画布组合控件使用 `CanvasControls/SideTabs`；左右停靠使用 protocol 5 的 `SideTabs.position`，省略位置的旧包保持右侧停靠。编译提示由新版宿主内嵌的 SDK 自动提供，无需在插件项目复制接口文件。
+
 本目录是主程序持有的版本化插件接口。`wit/plugin.wit` 定义 WebAssembly Component Model 的导入与导出；Rust crate `plugin-protocol` 定义通过该接口传递的 JSON 消息、场景和权限名称。主程序把这些接口文件编入可执行文件，并自动管理插件编译所需的接口缓存。
 
 `host.request` 是主程序在运行时提供的导入。插件通过它请求 PTY、工作区、私有存储、剪贴板和编辑器操作；主程序逐次检查插件权限。WIT 和 Rust 类型只在编译插件时使用，安装后的 `.wasm` 不读取 SDK 文件。
+
+获授 `editor.commands` 的插件可调用 `Request::Editor { command: "hide_panel:<panel-id>".into() }` 隐藏自己的已声明面板。原生宿主按请求插件 ID 查找面板，不能隐藏其他插件或编辑器内置面板；隐藏状态写入编辑器会话，面板大小与插件实例仍保留。该请求异步执行，不产生 `.result` 回调。插件自行决定何时隐藏及如何管理会话。
+
+用户通过面板按钮打开窗口、或宿主调用命令并显示面板时，会发送作用域为该 `Surface` 的 `Event::Command { id: "panel.opened", ... }`，无需插件在清单声明这个生命周期事件。插件据此初始化空界面，已有状态保持不变；同一次打开可能伴随普通焦点事件，插件不应因此重复初始化。
 
 宿主主动调用插件使用 `Event::Command`。可选 `arguments` 是插件自行定义的 JSON 参数；旧宿主省略该字段仍可反序列化，旧插件也可忽略新字段。原有 `cwd`、`text` 字段继续用于编辑器操作回调。该扩展保持现有 JSON/WIT 接口及清单协议版本，宿主不引入终端等功能的专属类型。`plugin_runtime::Manager::invoke_command(plugin_id, command_id, arguments)` 检查已运行插件、声明命令及 64 KiB 参数上限，随后沿原有串行事件和权限检查执行；编辑器 UI 通过 `EditorApp::invoke_plugin_command` 异步排队并显示插件面板。
 

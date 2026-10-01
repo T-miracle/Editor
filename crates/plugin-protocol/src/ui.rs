@@ -1,5 +1,7 @@
 //! Portable native UI: plugins own state, while the host owns layout, input and theme.
-//! Documents require protocol 2; new canvas controls use protocol 4. No GPUI objects cross this interface.
+//! Documents require protocol 2; canvas controls use protocol 4, selectable dock edges protocol 5.
+//! Editor-local file previews and color vector painting use protocol 6 in the canvas messages.
+//! No GPUI objects cross this interface.
 
 use serde::{Deserialize, Serialize};
 

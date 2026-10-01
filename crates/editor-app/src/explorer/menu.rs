@@ -1,14 +1,12 @@
-//! Project-owned explorer menu appearance over GPUI's existing tree and pointer events.
+//! Explorer commands built with GPUI Kit's PopupMenu, menu items and native submenus.
 
-use crate::ui::controls::menu::MenuStyle;
 use crate::*;
-use gpui_kit::{ClipboardItem, KeyDownEvent};
+use gpui_kit::component::menu::{PopupMenu as KitPopupMenu, PopupMenuItem};
+use gpui_kit::{ClipboardItem, DismissEvent, anchored};
 
 const MENU_WIDTH: f32 = 212.;
 const SUBMENU_WIDTH: f32 = 180.;
 const SPECIAL_COPY_SUBMENU_WIDTH: f32 = 230.;
-const ROW_HEIGHT: f32 = 29.;
-const WINDOW_MARGIN: f32 = 8.;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Command {
@@ -71,6 +69,7 @@ impl Command {
         .to_string()
     }
 
+    #[cfg(test)]
     fn id(self) -> &'static str {
         match self {
             Self::Copy => "explorer-menu-copy",
@@ -89,42 +88,59 @@ impl Command {
     }
 }
 
-/// The menu stores only its target and navigation state; file actions stay on EditorApp.
+/// Retain the operation target and component lifetime; the native menu owns navigation and styling.
 pub(crate) struct ExplorerMenu {
     target: Option<PathBuf>,
     folder: bool,
     position: Point<Pixels>,
-    focus: FocusHandle,
-    focused_main: usize,
-    focused_sub: usize,
-    submenu: Option<Command>,
+    popup: Entity<KitPopupMenu>,
+    _dismiss: Subscription,
 }
 
-impl ExplorerMenu {
-    fn commands(&self) -> &'static [Command] {
-        if self.target.is_some() {
-            ROW_COMMANDS
+/// Build documented menu items and submenus while dispatching file operations to their owner.
+fn build_menu(
+    mut menu: KitPopupMenu,
+    commands: &'static [Command],
+    owner: WeakEntity<EditorApp>,
+    window: &mut Window,
+    cx: &mut Context<KitPopupMenu>,
+) -> KitPopupMenu {
+    for command in commands.iter().copied() {
+        if command == Command::Refresh {
+            menu = menu.separator();
+        }
+        if let Some(children) = command.submenu_commands() {
+            let child_owner = owner.clone();
+            menu = menu.submenu(command.label(), window, cx, move |submenu, window, cx| {
+                let width = if command == Command::SpecialCopy {
+                    SPECIAL_COPY_SUBMENU_WIDTH
+                } else {
+                    SUBMENU_WIDTH
+                };
+                build_menu(
+                    submenu.min_w(px(width)),
+                    children,
+                    child_owner.clone(),
+                    window,
+                    cx,
+                )
+            });
         } else {
-            ROOT_COMMANDS
+            let action_owner = owner.clone();
+            menu = menu.item(
+                PopupMenuItem::new(command.label()).on_click(move |_, window, cx| {
+                    let _ = action_owner.update(cx, |app, cx| {
+                        app.run_explorer_menu_command(command, window, cx);
+                    });
+                }),
+            );
         }
     }
-
-    fn selected(&self) -> Command {
-        if let Some(commands) = self.submenu.and_then(Command::submenu_commands) {
-            commands[self.focused_sub]
-        } else {
-            self.commands()[self.focused_main]
-        }
-    }
-
-    /// Resolve the main row presentation from the current menu navigation state.
-    fn main_row_selected(&self, index: usize) -> bool {
-        // The parent stays selected while focus moves through its child menu.
-        self.focused_main == index
-    }
+    menu
 }
 
 impl EditorApp {
+    /// Open the component at the pointer while keeping virtual tree rows independent of its lifetime.
     pub(crate) fn open_explorer_menu(
         &mut self,
         target: Option<PathBuf>,
@@ -132,41 +148,49 @@ impl EditorApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        // The visible project root uses workspace actions and cannot be renamed or deleted here.
+        // The project root exposes workspace commands and cannot be renamed or deleted.
         let target = target.filter(|path| path != self.workspace.root());
         let folder = target.as_ref().is_none_or(|path| path.is_dir());
-        let focus = cx.focus_handle();
-        focus.focus(window, cx);
+        let commands = if target.is_some() {
+            ROW_COMMANDS
+        } else {
+            ROOT_COMMANDS
+        };
+        let owner = cx.entity().downgrade();
+        let previous_focus = window
+            .focused(cx)
+            .unwrap_or_else(|| self.editor.focus_handle(cx));
+        let popup = KitPopupMenu::build(window, cx, |menu, window, cx| {
+            build_menu(
+                menu.min_w(px(MENU_WIDTH)).action_context(previous_focus),
+                commands,
+                owner,
+                window,
+                cx,
+            )
+        });
+        let popup_id = popup.entity_id();
+        let dismiss = cx.subscribe(&popup, move |this, _, _: &DismissEvent, cx| {
+            // A delayed dismissal from an older menu must not close a newly opened one.
+            if this
+                .explorer_menu
+                .as_ref()
+                .is_some_and(|menu| menu.popup.entity_id() == popup_id)
+            {
+                this.explorer_menu = None;
+                cx.notify();
+            }
+        });
+        popup.focus_handle(cx).focus(window, cx);
         self.plugin_popup = None;
         self.explorer_menu = Some(ExplorerMenu {
             target,
             folder,
             position,
-            focus,
-            focused_main: 0,
-            focused_sub: 0,
-            submenu: None,
+            popup,
+            _dismiss: dismiss,
         });
         cx.notify();
-    }
-
-    fn select_explorer_menu_item(
-        &mut self,
-        command: Command,
-        index: usize,
-        submenu: bool,
-        cx: &mut Context<Self>,
-    ) {
-        if let Some(menu) = &mut self.explorer_menu {
-            if submenu {
-                menu.focused_sub = index;
-            } else {
-                menu.focused_main = index;
-                menu.submenu = command.submenu_commands().map(|_| command);
-                menu.focused_sub = 0;
-            }
-            cx.notify();
-        }
     }
 
     fn run_explorer_menu_command(
@@ -175,14 +199,6 @@ impl EditorApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if command.submenu_commands().is_some() {
-            if let Some(menu) = &mut self.explorer_menu {
-                menu.submenu = Some(command);
-                menu.focused_sub = 0;
-                cx.notify();
-            }
-            return;
-        }
         let Some(menu) = self.explorer_menu.take() else {
             return;
         };
@@ -223,229 +239,20 @@ impl EditorApp {
         cx.notify();
     }
 
-    fn explorer_menu_key_down(
-        &mut self,
-        event: &KeyDownEvent,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        let Some(menu) = &mut self.explorer_menu else {
-            return;
-        };
-        let key = event.keystroke.key.as_str();
-        match key {
-            "escape" => {
-                cx.stop_propagation();
-                if menu.submenu.is_some() {
-                    menu.submenu = None;
-                } else {
-                    self.explorer_menu = None;
-                }
-                cx.notify();
-            }
-            "up" | "down" => {
-                cx.stop_propagation();
-                let main_len = menu.commands().len();
-                let sub_len = menu
-                    .submenu
-                    .and_then(Command::submenu_commands)
-                    .map(|commands| commands.len());
-                let (index, len) = if let Some(len) = sub_len {
-                    (&mut menu.focused_sub, len)
-                } else {
-                    (&mut menu.focused_main, main_len)
-                };
-                *index = if key == "down" {
-                    (*index + 1) % len
-                } else {
-                    (*index + len - 1) % len
-                };
-                cx.notify();
-            }
-            "right" if menu.selected().submenu_commands().is_some() => {
-                cx.stop_propagation();
-                menu.submenu = Some(menu.selected());
-                menu.focused_sub = 0;
-                cx.notify();
-            }
-            "left" if menu.submenu.is_some() => {
-                cx.stop_propagation();
-                menu.submenu = None;
-                cx.notify();
-            }
-            "enter" => {
-                cx.stop_propagation();
-                let command = menu.selected();
-                self.run_explorer_menu_command(command, window, cx);
-            }
-            _ => {}
-        }
-    }
-
-    fn explorer_menu_row(
-        &self,
-        command: Command,
-        index: usize,
-        submenu: bool,
-        selected: bool,
-        style: &MenuStyle,
-        cx: &mut Context<Self>,
-    ) -> impl IntoElement {
-        let view = cx.entity();
-        style
-            .row(command.id(), command.label(), selected)
-            .debug_selector(move || command.id().into())
-            .role(gpui_kit::Role::MenuItem)
-            .accessibility_label(command.label())
-            .focusable(false)
-            .flex()
-            .h(px(ROW_HEIGHT))
-            .w_full()
-            .items_center()
-            .px(px(style.padding_x + 6.))
-            .rounded(px((style.radius - 2.).max(2.)))
-            .bg(if selected { style.hover } else { style.surface })
-            .text_color(if selected {
-                style.hover_foreground
-            } else {
-                style.foreground
-            })
-            .on_hover(move |hovered, _, cx| {
-                if *hovered {
-                    let _ = view.update(cx, |app, cx| {
-                        app.select_explorer_menu_item(command, index, submenu, cx)
-                    });
-                }
-            })
-            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-            .on_click(cx.listener(move |this, _, window, cx| {
-                this.run_explorer_menu_command(command, window, cx)
-            }))
-            .child(command.label())
-            .child(div().flex_1())
-            .when(command.submenu_commands().is_some(), |this| {
-                this.child(Icon::new(IconName::ChevronRight).xsmall())
-            })
-    }
-
+    /// The host only positions the component and consumes outside presses; Kit draws both menu levels.
     pub(crate) fn render_explorer_menu(
         &self,
-        window: &Window,
+        _window: &Window,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
         let Some(menu) = &self.explorer_menu else {
             return div().into_any_element();
         };
-        let style = MenuStyle::current(cx);
-        let main_height = menu.commands().len() as f32 * ROW_HEIGHT + style.padding_y * 2. + 9.;
-        let (left, top) = menu_position(
-            menu.position,
-            window.viewport_size(),
-            MENU_WIDTH,
-            main_height,
-        );
-        let mut main_rows = Vec::new();
-        for (index, command) in menu.commands().iter().copied().enumerate() {
-            if command == Command::Refresh {
-                main_rows.push(
-                    div()
-                        .h(px(9.))
-                        .px_2()
-                        .flex()
-                        .items_center()
-                        .child(div().h(px(1.)).w_full().bg(style.border))
-                        .into_any_element(),
-                );
-            }
-            main_rows.push(
-                self.explorer_menu_row(
-                    command,
-                    index,
-                    false,
-                    menu.main_row_selected(index),
-                    &style,
-                    cx,
-                )
-                .into_any_element(),
-            );
-        }
-        let main = style
-            .card(MENU_WIDTH)
-            .id("explorer-context-menu")
-            .debug_selector(|| "explorer-context-menu".into())
-            .role(gpui_kit::Role::Menu)
-            .on_any_mouse_down(|_, _, cx| cx.stop_propagation())
-            .children(main_rows);
-        let submenu = if let Some(parent) = menu.submenu {
-            // Anchor each child menu to its parent row so both mouse and keyboard share one state.
-            let commands = parent.submenu_commands().unwrap_or_default();
-            let submenu_width = if parent == Command::SpecialCopy {
-                SPECIAL_COPY_SUBMENU_WIDTH
-            } else {
-                SUBMENU_WIDTH
-            };
-            let sub_height = commands.len() as f32 * ROW_HEIGHT + style.padding_y * 2.;
-            let parent_index = menu
-                .commands()
-                .iter()
-                .position(|command| *command == parent)
-                .unwrap_or(0);
-            let preferred_x = left + px(MENU_WIDTH - 2.);
-            let sub_x = if preferred_x + px(submenu_width + WINDOW_MARGIN)
-                <= window.viewport_size().width
-            {
-                preferred_x
-            } else {
-                (left - px(submenu_width - 2.)).max(px(WINDOW_MARGIN))
-            };
-            let sub_y = (top + px(parent_index as f32 * ROW_HEIGHT + style.padding_y)).min(
-                (window.viewport_size().height - px(sub_height + WINDOW_MARGIN))
-                    .max(px(WINDOW_MARGIN)),
-            );
-            let submenu_id = if parent == Command::SpecialCopy {
-                "explorer-special-copy-submenu"
-            } else {
-                "explorer-new-submenu"
-            };
-            Some(
-                div().absolute().left(sub_x).top(sub_y).child(
-                    style
-                        .card(submenu_width)
-                        .id(submenu_id)
-                        .debug_selector(move || submenu_id.into())
-                        .role(gpui_kit::Role::Menu)
-                        .on_any_mouse_down(|_, _, cx| cx.stop_propagation())
-                        .children(
-                            commands
-                                .iter()
-                                .copied()
-                                .enumerate()
-                                .map(|(index, command)| {
-                                    self.explorer_menu_row(
-                                        command,
-                                        index,
-                                        true,
-                                        menu.focused_sub == index,
-                                        &style,
-                                        cx,
-                                    )
-                                    .into_any_element()
-                                })
-                                .collect::<Vec<_>>(),
-                        ),
-                ),
-            )
-        } else {
-            None
-        };
         div()
             .id("explorer-menu-overlay")
             .absolute()
             .inset_0()
-            // Own hit testing across the window while either menu level is visible.
             .occlude()
-            .track_focus(&menu.focus)
-            .capture_key_down(cx.listener(Self::explorer_menu_key_down))
             .on_mouse_up(MouseButton::Left, |_, _, cx| cx.stop_propagation())
             .on_mouse_up(MouseButton::Right, |_, _, cx| cx.stop_propagation())
             .on_scroll_wheel(|_, _, cx| cx.stop_propagation())
@@ -465,8 +272,18 @@ impl EditorApp {
                     cx.notify();
                 }),
             )
-            .child(div().absolute().left(left).top(top).child(main))
-            .when_some(submenu, |this, submenu| this.child(submenu))
+            .child(
+                anchored()
+                    .position(menu.position)
+                    .snap_to_window_with_margin(px(8.))
+                    .child(
+                        div()
+                            .id("explorer-context-menu")
+                            .debug_selector(|| "explorer-context-menu".into())
+                            .on_any_mouse_down(|_, _, cx| cx.stop_propagation())
+                            .child(menu.popup.clone()),
+                    ),
+            )
             .into_any_element()
     }
 }
@@ -505,24 +322,6 @@ fn clipboard_path_text(path: &Path) -> String {
         }
     }
     text.into_owned()
-}
-
-/// Clamp the menu to the window without changing the pointer target.
-fn menu_position(
-    position: Point<Pixels>,
-    viewport: gpui_kit::Size<Pixels>,
-    width: f32,
-    height: f32,
-) -> (Pixels, Pixels) {
-    let left = position
-        .x
-        .min((viewport.width - px(width + WINDOW_MARGIN)).max(px(WINDOW_MARGIN)))
-        .max(px(WINDOW_MARGIN));
-    let top = position
-        .y
-        .min((viewport.height - px(height + WINDOW_MARGIN)).max(px(WINDOW_MARGIN)))
-        .max(px(WINDOW_MARGIN));
-    (left, top)
 }
 
 #[cfg(test)]

@@ -5,6 +5,24 @@ use thiserror::Error;
 mod theme_effects;
 pub use theme_effects::{ThemeWindow, ThemeWindowBackground};
 
+/// Read pre-rename identifiers without retaining their prefix in current manifests or UI state.
+pub fn canonical_plugin_id(id: &str) -> &str {
+    match id.strip_prefix("me.").unwrap_or(id) {
+        "svg-preview" => "svg",
+        id => id,
+    }
+}
+
+/// Migrate a flattened color/font role while preserving everything after its plugin namespace.
+pub fn canonical_plugin_token(token: &str) -> String {
+    let token = token.strip_prefix("me.").unwrap_or(token);
+    if let Some(role) = token.strip_prefix("svg-preview.") {
+        format!("svg.{role}")
+    } else {
+        token.to_owned()
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct PluginManifest {
     pub plugin: PluginMetadata,
@@ -65,7 +83,12 @@ pub struct PluginMetadata {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct LanguageContribution {
     pub id: String,
+    /// Extensions without a leading dot, matched after exact file names.
+    #[serde(default)]
     pub extensions: Vec<String>,
+    /// Complete file basenames such as Cargo.lock; a suffix alone is not enough.
+    #[serde(default)]
+    pub filenames: Vec<String>,
     pub grammar: PathBuf,
     pub highlights: PathBuf,
     /// Tree-sitter language ABI version exported by the grammar module.
@@ -168,10 +191,18 @@ pub enum PluginThemeColor {
 impl ThemeDefinition {
     /// Flatten the theme-file tree into the stable runtime plugin token API.
     pub fn plugin_colors(&self) -> BTreeMap<String, String> {
-        let mut colors = self.legacy_plugin_colors.clone();
+        let mut colors = self
+            .legacy_plugin_colors
+            .iter()
+            .map(|(key, value)| (canonical_plugin_token(key), value.clone()))
+            .collect();
         for (plugin, theme) in &self.plugins {
             for (name, value) in &theme.colors {
-                flatten_plugin_color(&mut colors, format!("{plugin}.{name}"), value);
+                flatten_plugin_color(
+                    &mut colors,
+                    format!("{}.{name}", canonical_plugin_id(plugin)),
+                    value,
+                );
             }
         }
         colors
@@ -181,10 +212,12 @@ impl ThemeDefinition {
         self.plugins
             .iter()
             .flat_map(|(plugin, theme)| {
-                theme
-                    .typography
-                    .iter()
-                    .map(move |(role, style)| (format!("{plugin}.{role}"), style.clone()))
+                theme.typography.iter().map(move |(role, style)| {
+                    (
+                        format!("{}.{role}", canonical_plugin_id(plugin)),
+                        style.clone(),
+                    )
+                })
             })
             .collect()
     }
@@ -279,8 +312,10 @@ pub enum ManifestError {
     Parse(String),
     #[error("plugin id must contain only lowercase ASCII letters, digits, dots, or hyphens")]
     InvalidPluginId,
-    #[error("language {0} does not declare an extension")]
-    MissingExtension(String),
+    #[error("language {0} does not declare an extension or file name")]
+    MissingLanguageSelector(String),
+    #[error("invalid language file name selector: {0}")]
+    InvalidLanguageFilename(String),
     #[error("plugin asset path is absolute: {0}")]
     AbsolutePath(String),
     #[error("plugin asset path must stay inside the plugin directory: {0}")]
@@ -349,8 +384,19 @@ impl PluginManifest {
         }
 
         for language in &self.languages {
-            if language.extensions.is_empty() {
-                return Err(ManifestError::MissingExtension(language.id.clone()));
+            if language.extensions.is_empty() && language.filenames.is_empty() {
+                return Err(ManifestError::MissingLanguageSelector(language.id.clone()));
+            }
+            for filename in &language.filenames {
+                // A file name selector is one basename, never a path or a wildcard.
+                if filename.is_empty()
+                    || matches!(filename.as_str(), "." | "..")
+                    || filename
+                        .chars()
+                        .any(|character| matches!(character, '/' | '\\' | '*' | '?' | '[' | ']'))
+                {
+                    return Err(ManifestError::InvalidLanguageFilename(filename.clone()));
+                }
             }
             if language.grammar.is_absolute() || language.highlights.is_absolute() {
                 return Err(ManifestError::AbsolutePath(language.id.clone()));
@@ -709,7 +755,7 @@ mod tests {
         let manifest = PluginManifest::parse(
             r#"
                 [plugin]
-                id = "me.rust"
+                id = "rust"
                 name = "Rust"
                 version = "0.1.0"
                 host_version = ">=0.1.0"
@@ -725,9 +771,36 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(manifest.plugin.id, "me.rust");
+        assert_eq!(manifest.plugin.id, "rust");
         assert_eq!(manifest.languages[0].extensions, ["rs"]);
+        assert!(manifest.languages[0].filenames.is_empty());
         assert_eq!(manifest.languages[0].tree_sitter_abi, 15);
+    }
+
+    /// Exact filenames can be the only selector, but wildcard lockfile rules are rejected.
+    #[test]
+    fn validates_exact_language_filenames() {
+        let source = r#"
+            [plugin]
+            id = "lockfile"
+            name = "Lockfile"
+            version = "0.1.0"
+            host_version = ">=0.1.0"
+
+            [[languages]]
+            id = "toml"
+            filenames = ["Cargo.lock"]
+            grammar = "grammar/toml.wasm"
+            highlights = "queries/highlights.scm"
+            tree_sitter_abi = 15
+        "#;
+        let manifest = PluginManifest::parse(source).unwrap();
+        assert!(manifest.languages[0].extensions.is_empty());
+        assert_eq!(manifest.languages[0].filenames, ["Cargo.lock"]);
+        assert!(matches!(
+            PluginManifest::parse(&source.replace("Cargo.lock", "*.lock")),
+            Err(ManifestError::InvalidLanguageFilename(_))
+        ));
     }
 
     /// Nested plugin colors flatten for the runtime and reject malformed overrides.
@@ -738,7 +811,7 @@ mod tests {
         {
             let PluginThemeColor::Group(ansi) = file.themes[0]
                 .plugins
-                .get_mut("me.terminal")
+                .get_mut("terminal")
                 .unwrap()
                 .colors
                 .get_mut("ansi")
@@ -751,14 +824,14 @@ mod tests {
         file.validate().unwrap();
         file.themes[0]
             .legacy_plugin_colors
-            .insert("me.terminal.ansi.yellow".into(), "#123456".into());
+            .insert("terminal.ansi.yellow".into(), "#123456".into());
         assert_eq!(
-            file.themes[0].plugin_colors()["me.terminal.ansi.yellow"],
+            file.themes[0].plugin_colors()["terminal.ansi.yellow"],
             "#795100"
         );
         let PluginThemeColor::Group(ansi) = file.themes[0]
             .plugins
-            .get_mut("me.terminal")
+            .get_mut("terminal")
             .unwrap()
             .colors
             .get_mut("ansi")
@@ -770,7 +843,7 @@ mod tests {
         assert!(matches!(
             file.validate(),
             Err(ThemeFileError::InvalidColor(path, _))
-                if path == "plugins.me.terminal.ansi.yellow"
+                if path == "plugins.terminal.ansi.yellow"
         ));
     }
 
@@ -783,10 +856,10 @@ mod tests {
             .unwrap()
             .remove("plugins");
         old_file["themes"][0]["plugin_colors"] =
-            serde_json::json!({ "me.terminal.ansi.yellow": "#123456" });
+            serde_json::json!({ "terminal.ansi.yellow": "#123456" });
         let file = ThemeFile::parse(&old_file.to_string()).unwrap();
         assert_eq!(
-            file.themes[0].plugin_colors()["me.terminal.ansi.yellow"],
+            file.themes[0].plugin_colors()["terminal.ansi.yellow"],
             "#123456"
         );
         assert!(
@@ -802,14 +875,14 @@ mod tests {
         let mut file = ThemeFile::parse(source).unwrap();
         file.themes[0]
             .plugins
-            .get_mut("me.terminal")
+            .get_mut("terminal")
             .unwrap()
             .colors
             .insert("ansi.red".into(), PluginThemeColor::Color("#123456".into()));
         assert!(matches!(
             file.validate(),
             Err(ThemeFileError::InvalidPluginColorKey(path))
-                if path == "plugins.me.terminal.ansi.red"
+                if path == "plugins.terminal.ansi.red"
         ));
     }
 
@@ -818,14 +891,14 @@ mod tests {
         let source = include_str!("../../editor-app/assets/themes/default.json");
         let mut file = ThemeFile::parse(source).unwrap();
         assert_eq!(
-            file.themes[0].plugin_text_styles()["me.terminal.tab"]
+            file.themes[0].plugin_text_styles()["terminal.tab"]
                 .family
                 .as_deref(),
             Some("Segoe UI")
         );
         file.themes[0]
             .plugins
-            .get_mut("me.terminal")
+            .get_mut("terminal")
             .unwrap()
             .typography
             .get_mut("tab")
@@ -834,7 +907,7 @@ mod tests {
         assert!(matches!(
             file.validate(),
             Err(ThemeFileError::InvalidFontStyle(path, _))
-                if path == "plugins.me.terminal.typography.tab.size_px"
+                if path == "plugins.terminal.typography.tab.size_px"
         ));
     }
 }

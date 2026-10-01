@@ -1,6 +1,6 @@
 # 终端 WebAssembly 插件
 
-0.5.1 使用清单 protocol 4：侧边 Tab 栏、菜单、重命名、滚动和拖动行为由主程序原生模块提供，菜单样式与资源管理器右键菜单共用。插件通过 `src/controls.rs` 提交条目并处理类型化事件；Alacritty 核心、屏幕网格、滚动历史、会话状态和 Shell 配置仍由插件持有。需要使用支持 protocol 4 的新版编辑器。架构与包格式见 [运行时插件说明](../../docs/runtime-plugins.md)。
+当前版本使用清单 protocol 5：侧边 Tab 栏、菜单、重命名、滚动和拖动行为由主程序原生模块提供，菜单样式与资源管理器右键菜单共用。插件通过 `src/controls.rs` 提交条目、左右位置并处理类型化事件；Alacritty 核心、屏幕网格、滚动历史、会话状态和 Shell 配置仍由插件持有。需要使用支持 protocol 5 的新版编辑器。架构与包格式见 [运行时插件说明](../../docs/runtime-plugins.md)。
 
 ## 安装与更新
 
@@ -10,11 +10,15 @@
 
 同 ID 包执行更新。更新前保存会话并关闭旧 Shell 及其子进程；恢复 Tab、配置和旧输出后启动新 Shell，不重放旧命令。恢复保留原有网格尺寸、文字样式、软换行、光标位置与历史滚动位置，不插入提示文字或新增命令行；旧格式中自动生成的恢复分隔行会在迁移时清除。验证失败保留旧版；切换后失败会重新启用旧版。正常关闭编辑器后再次打开也会恢复这些数据。
 
+修改插件源码或替换编辑器 EXE 不会自动更新已经安装的 WASM。修复后需在插件管理中安装新生成的 `dist/plugins/terminal.zip`，并确认已安装版本为 0.5.6 或更高。0.5.6 修正了恢复时的 ConPTY 光标继承：新 Shell 从当前提示符的行首重新绘制，避免首次改变高度时清掉旧提示符并露出多余空行；实际命令输出中的空行继续原样保留。
+
 ## 界面与操作
 
+- 选中 Tab 的文字默认跟随编辑器文档 Tab 的选中强调色，主题可用 `ui.tab.active.foreground` 单独覆盖。
+- 关闭最后一个 Tab 时，插件关闭该会话并通过 `hide_panel:terminal` 请求宿主自动隐藏整个终端面板；关闭按钮、菜单和 Ctrl+Shift+W 的行为一致，隐藏状态随编辑器会话保存。重新打开空面板时，插件自动创建一个默认 Shell Tab；已有会话保持原样，等待宿主保存的运行请求完成后创建其指定会话，不额外插入默认 Tab。0.5.7 的这些交互需要更新编辑器宿主，并在插件管理中更新终端 ZIP。
 - 新安装终端后面板默认隐藏，可从底部工具栏的终端按钮打开；按钮在面板显示时使用选中样式。终端面板位于底部，使用编辑器共享的 Dock，可拖动调整尺寸。隐藏不停止程序。
-- 右侧竖向 Tab：普通新建统一使用 Shell 工具名，例如多个 PowerShell 都叫 `powershell`，不再追加数字；宿主传入名称时使用该名称。已有会话的原名称不变。Tab 通过独立 ID 区分，允许名称重复；支持切换、关闭、拖动排序、双击改名。改名时自动聚焦、全选且不显示输入框边框，Enter 或失焦保存；过长名称省略显示，不遮挡关闭按钮。拖动终端内容与 Tab 栏之间的分隔线可调整 Tab 栏宽度，该宽度随会话恢复。Tab 过多时可在列表上滚动。
-- 右侧 Tab 栏的左边缘内侧可拖动调整宽度，悬浮时显示横向调整指针。选中 Tab 与命令区同色相连，其左侧不绘制贯穿边线；其余列表和空白区域保留边框。命令区有内边距，滚动条贴近右侧边界，使用与资源管理器相同的控件；有历史时滚动会显示滚动条，停止滚动 1 秒后隐藏，没有有效历史时不显示。
+- 竖向 Tab 默认在右侧，可通过 `tab_position` 配置在左侧。普通新建统一使用 Shell 工具名，例如多个 PowerShell 都叫 `powershell`，不再追加数字；宿主传入名称时使用该名称。已有会话的原名称不变。Tab 通过独立 ID 区分，允许名称重复；支持切换、关闭、拖动排序、双击改名。改名时自动聚焦、全选且不显示输入框边框，Enter 或失焦保存；过长名称省略显示，不遮挡关闭按钮。拖动终端内容与 Tab 栏之间的分隔线可调整 Tab 栏宽度，位置和宽度随会话恢复。Tab 过多时可在列表上滚动。
+- Tab 栏默认底色为 `rgb(247, 248, 250)`，主题可覆盖；内置暗色主题覆盖为适合暗色界面的背景。选中 Tab 使用完整边框，靠近命令区的边线为 1px `rgb(53, 116, 240)`，不再留缺口。标签及关闭按钮不使用鼠标悬停变色。Tab 栏在右侧时，强调边线和宽度拖动手柄在左侧；在左侧时，两者移至右侧。命令区有内边距，滚动条贴近右侧边界，使用与资源管理器相同的控件和显示动画；没有有效历史时不显示。
 - 标题栏 `+` 新建，`⌄` 展开 Shell 与终端操作，`≡` 显示插件声明的命令，`—` 隐藏面板。较矮面板中的菜单可滚动。
 - “运行项目”先请求编辑器保存当前文件，再新建会话执行 `run_command`。未配置时检测 Rust 的 `cargo run`，或 Node 的 `npm run dev` / `npm start`。
 - “在当前文件目录打开”使用当前文件父目录；“发送选中内容”把编辑器选区作为粘贴发送，不额外追加回车。
@@ -42,7 +46,7 @@
 ```rust
 // 在编辑器功能中创建一个指定名称和工作目录的终端。
 self.invoke_plugin_command(
-    "me.terminal",
+    "terminal",
     "terminal.new",
     serde_json::json!({ "name": "构建输出", "cwd": project_directory }),
     window,
@@ -51,7 +55,7 @@ self.invoke_plugin_command(
 
 // 后续运行项目功能可复用此入口：先保存当前文件，再新建具名终端并运行命令。
 self.invoke_plugin_command(
-    "me.terminal",
+    "terminal",
     "terminal.run",
     serde_json::json!({ "name": "运行 Editor", "cwd": project_directory, "command": "cargo run" }),
     window,
@@ -70,11 +74,12 @@ self.invoke_plugin_command(
 
 ## 自定义配置
 
-通过“主题 / 配置”打开插件私有 `settings.json`，保存后执行“重新加载终端配置”。默认路径：`%APPDATA%/MeEditor/runtime-plugins/data/me.terminal/settings.json`。配置放在用户目录，不从打开的项目自动读取。
+通过“主题 / 配置”打开插件私有 `settings.json`，保存后执行“重新加载终端配置”。默认路径：`%APPDATA%/MeEditor/runtime-plugins/data/terminal/settings.json`。配置放在用户目录，不从打开的项目自动读取。
 
 ```json
 {
   "enabled": true,
+  "tab_position": "right",
   "font_family": "Cascadia Mono",
   "font_size": 14,
   "history": 10000,
@@ -94,15 +99,15 @@ self.invoke_plugin_command(
 }
 ```
 
-JSON 不支持注释。`enabled` 控制是否允许新建会话，正式停用请使用插件管理；`default_profile` 从 0 开始；字号为 8–32，历史最多 100000 行。颜色使用 `#RRGGBB`，`ansi` 可填 16 个颜色。`run_command` 仅在用户执行“运行项目”时运行。字体和颜色设置作为插件备用值；当前编辑器主题提供同名属性时，主题优先。
+JSON 不支持注释。`enabled` 控制是否允许新建会话，正式停用请使用插件管理；`tab_position` 为 `"right"`（默认）或 `"left"`，保存并执行“重新加载终端配置”后立即切换，不重启 Shell；`default_profile` 从 0 开始；字号为 8–32，历史最多 100000 行。颜色使用 `#RRGGBB`，`ansi` 可填 16 个颜色。`run_command` 仅在用户执行“运行项目”时运行。字体和颜色设置作为插件备用值；当前编辑器主题提供同名属性时，主题优先。
 
-终端插件内置与 Editor 浅色、深色代码区域相配的两套配色，随编辑器主题模式切换。编辑器内置的浅色、深色主题也各自声明完整的 16 色 ANSI 覆盖。当前主题的 `plugins["me.terminal"]` 颜色优先；未声明的 ANSI 色依次取插件私有配置和插件内置配色。默认文字、背景、光标与选区优先取当前主题的专属颜色或通用颜色。当前主题的字体角色优先于插件私有字体设置。
+终端插件内置与 Editor 浅色、深色代码区域相配的两套配色，随编辑器主题模式切换。编辑器内置的浅色、深色主题也各自声明完整的 16 色 ANSI 覆盖。当前主题的 `plugins["terminal"]` 颜色优先；未声明的 ANSI 色依次取插件私有配置和插件内置配色。默认文字、背景、光标与选区优先取当前主题的专属颜色或通用颜色。当前主题的字体角色优先于插件私有字体设置。
 
 **外部主题对接接口：**安装并启用的编辑器主题包与内置主题使用同一套 `themes[].plugins` 契约。宿主自动把当前主题的通用颜色、字体及插件专属样式放入 `Environment`，切换主题或更新主题包时发送 `Event::Theme`；终端收到后立即重算样式，无需主题包直接调用终端插件。主题包可按浅色和深色分别覆盖终端颜色与字体，例如：
 
 ```json
 "plugins": {
-  "me.terminal": {
+  "terminal": {
     "typography": {
       "content": { "family": "Cascadia Mono", "size_px": 15 },
       "tab": { "family": "Segoe UI", "size_px": 14, "bold": true },
@@ -122,9 +127,9 @@ JSON 不支持注释。`enabled` 控制是否允许新建会话，正式停用�
 }
 ```
 
-终端只读取 `plugins["me.terminal"]` 下的配置。外部主题未声明的 ANSI 键继续使用插件私有配置或内置配色，不继承内置编辑器主题的 ANSI 覆盖；通用背景、文字等颜色仍取当前外部主题。`typography` 的 `content`、`tab`、`menu`、`error` 分别控制终端内容、标签、菜单和错误文字；各角色未声明的字体属性继承主题的 `typography.mono` 或 `typography.ui`。可覆盖的终端文字类型与主题键如下；每个键都是独立的 `#RRGGBB` 值，省略时继承插件或编辑器默认值。
+终端只读取 `plugins["terminal"]` 下的配置。外部主题未声明的 ANSI 键继续使用插件私有配置或内置配色，不继承内置编辑器主题的 ANSI 覆盖；通用背景、文字等颜色仍取当前外部主题。`typography` 的 `content`、`tab`、`menu`、`error` 分别控制终端内容、标签、菜单和错误文字；各角色未声明的字体属性继承主题的 `typography.mono` 或 `typography.ui`。可覆盖的终端文字类型与主题键如下；每个键都是独立的 `#RRGGBB` 值，省略时继承插件或编辑器默认值。
 
-| 终端内容 | `plugins["me.terminal"]` 下的主题键 |
+| 终端内容 | `plugins["terminal"]` 下的主题键 |
 | --- | --- |
 | 默认文字、背景、光标、光标内文字、选区背景 | `foreground`、`background`、`cursor`、`cursor_text`、`selection` |
 | ANSI 标准文字 0–7 | `ansi.black`、`ansi.red`、`ansi.green`、`ansi.yellow`、`ansi.blue`、`ansi.magenta`、`ansi.cyan`、`ansi.white` |
@@ -133,13 +138,13 @@ JSON 不支持注释。`enabled` 控制是否允许新建会话，正式停用�
 | 加粗、弱化的默认文字 | `bright_foreground`、`dim_foreground` |
 | 256 色索引 16–255 | `indexed.16` 至 `indexed.255`，可只覆盖需要调整的索引 |
 
-终端自行绘制的界面也可在 `plugins["me.terminal"].ui` 下逐项覆盖，省略时沿用当前编辑器通用颜色或终端默认色：
+终端自行绘制的界面也可在 `plugins["terminal"].ui` 下逐项覆盖，省略时沿用当前编辑器通用颜色或终端默认色：
 
 | 终端界面 | `ui` 下的主题键 |
 | --- | --- |
 | 标签栏底色、外侧分隔线 | `tab_bar.background`、`tab_bar.border` |
 | 标签行分隔线 | `tab.border` |
-| 选中标签底色、文字 | `tab.active.background`、`tab.active.foreground` |
+| 选中标签底色、文字、朝向命令区的边线 | `tab.active.background`、`tab.active.foreground`、`tab.active.inner_border` |
 | 未选中标签底色、文字 | `tab.inactive.background`、`tab.inactive.foreground` |
 | 关闭按钮底色、文字 | `tab.close.background`、`tab.close.foreground` |
 | 标签重命名输入框底色、文字 | `tab.rename.background`、`tab.rename.foreground` |
@@ -155,6 +160,10 @@ ANSI 颜色 0–15 同时可用于前景或背景；加粗、弱化属性将标�
 ## 验证范围
 
 `./target/release/editor-app.exe --plugin-cargo plugins/terminal/Cargo.toml test --lib` 验证输入编码、Tab 与快照、目录追踪、边框和滚动。`cargo test -p editor-app extensions::tests` 验证动态停靠、中文输入与原生编辑提交。实际 ZIP 包 + ConPTY 测试为 `cargo run -p plugin-runtime --example smoke -- dist/plugins/terminal.zip`。
+
+Windows 恢复提示符间距回归测试为 `cargo run -p plugin-runtime --example terminal_startup -- dist/plugins/terminal.zip`，使用实际 ConPTY、PowerShell 和磁盘快照，检查启动前后调整尺寸、恢复时高度缩小及宽度变化，确保不出现多余空行或同一行重复提示符。
+
+恢复已有命令输出后的首次高度变化使用 `cargo run -p plugin-runtime --example terminal_resize -- dist/plugins/terminal.zip` 验证。测试先保存三行命令、输出和提示符，再重新加载 WASM 与 Shell；每次调整后等待真实 ConPTY 重绘，检查行距，同时覆盖反复增高、缩小、快速拖动和调整后的下一次命令。`--minimal` 仅测试首次增高，`--fresh` 跳过恢复以作对照。测试使用 PowerShell 内置 `Write-Output`，无需 Node.js；数据与进程均位于独立临时运行时。
 
 Windows 已进行实际运行验证。图片协议、kitty 扩展键盘协议和 Shell 命令检测不在此版本内；没有逐一验证所有第三方 TUI。OSC 52 剪贴板访问不启用，复制粘贴由用户操作触发。
 
@@ -172,3 +181,9 @@ Windows 已进行实际运行验证。图片协议、kitty 扩展键盘协议和
 0.5.2 恢复输出时保留画面、光标与滚动位置，不再加入恢复提示或额外换行；Ctrl+C/V 直接复制、粘贴，命令区右键菜单提供复制、粘贴和清空所有缓冲区内容。
 
 0.5.3 新终端使用工具名或宿主指定名称，不再递增命名。宿主可通过通用命令 API 主动创建终端或传入运行任务，名称、目录及 Shell 选择由终端插件处理。
+
+0.5.4 终端滚动条沿用宿主资源管理器的样式与显示动画，取消插件单独的一秒隐藏计时。
+
+0.5.5 标签栏默认浅色背景为 `#F7F8FA`，选中项补全边框并使用 1px `#3574F0` 内侧边线；取消标签悬停变色。支持配置左右摆放，强调边线、宽度拖动手柄、命令区绘制和输入坐标随之切换，保留拖动排序及持久布局。
+
+0.5.6 修复恢复旧终端时两个提示符之间出现空白的问题。新 ConPTY 的首次光标继承查询从已保存的空默认 PowerShell 提示符行起点启动，解析器随首段实际输出同步，避免额外换行或将提示符拼接在旧行末尾；含有待提交命令、任务输出或自定义提示符的行按原位置恢复。旧快照仅迁移末尾两个相同默认 PowerShell 提示符之间已保存的空白；命令输出、带样式的空白和新快照中的原有空行保持不变。

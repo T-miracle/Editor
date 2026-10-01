@@ -27,6 +27,9 @@ url = "2.5"
 plugin-runtime = { path = "../plugin-runtime" }
 futures = "0.3"
 sha2 = "0.10"
+# Full-color plugin vectors are rasterized on the existing background worker.
+resvg = "=0.45.1"
+image = { version = "0.25", default-features = false }
 tempfile.workspace = true
 # Discover nested plugin manifests without traversing ignored build output.
 ignore.workspace = true

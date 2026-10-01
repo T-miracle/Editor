@@ -13,7 +13,7 @@ impl Terminal {
         let content_style = self.text_style("content", true);
         let error_style = self.text_style("error", false);
         let content_size = content_style.size_px.unwrap();
-        let right = self.tab_left();
+        let left = self.content_left();
         let mut scene = Scene {
             panel: "terminal".into(),
             font: content_style.family.clone().unwrap(),
@@ -43,7 +43,7 @@ impl Terminal {
                     if cell.is_wide_continuation() {
                         continue;
                     }
-                    let x = 8. + col as f32 * self.cw;
+                    let x = left + 8. + col as f32 * self.cw;
                     let y = 8. + row as f32 * self.ch;
                     let width = self.cw * if cell.is_wide() { 2. } else { 1. };
                     let mut foreground = self.resolve(cell.fgcolor(), tab, false);
@@ -97,7 +97,7 @@ impl Terminal {
                 }
             }
             let (row, col) = screen.cursor_position();
-            let x = 8. + col as f32 * self.cw;
+            let x = left + 8. + col as f32 * self.cw;
             let y = 8. + (row as usize + offset) as f32 * self.ch;
             scene.cursor = Rect {
                 x,
@@ -143,21 +143,22 @@ impl Terminal {
                 scene.scroll = Some(ScrollInfo {
                     id: "output".into(),
                     rect: Rect {
-                        x: 0.,
+                        x: left,
                         y: 8.,
-                        w: right,
+                        w: self.content_width(),
                         h: (self.height - 16.).max(0.),
                     },
                     content: (self.height - 16.).max(0.) + history as f32 * self.ch,
                     offset: history.saturating_sub(offset) as f32 * self.ch,
-                    hide_after_ms: Some(1000),
+                    // Let the host apply the same hover, drag and idle animation as the explorer.
+                    hide_after_ms: None,
                 });
             }
         }
         if let Some(error) = &self.error {
             text(
                 &mut scene,
-                8.,
+                left + 8.,
                 (self.height - 24.).max(0.),
                 error.chars().take(120).collect(),
                 self.ui_color("error.foreground", self.color(1)),

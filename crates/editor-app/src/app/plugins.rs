@@ -108,23 +108,6 @@ impl EditorApp {
             if !self.plugin_loads.iter().any(|entry| entry.plugin == plugin) {
                 language_plugins::mask_language(plugin.language_id());
                 self.language_servers.remove(plugin.language_id());
-                for tab in &self.tabs {
-                    if tab
-                        .session
-                        .path()
-                        .extension()
-                        .and_then(|part| part.to_str())
-                        == Some(if plugin == language_plugins::BundledPlugin::Rust {
-                            "rs"
-                        } else {
-                            "toml"
-                        })
-                    {
-                        tab.editor.update(cx, |editor, cx| {
-                            editor.set_highlighter("text".to_owned(), cx)
-                        });
-                    }
-                }
             }
         }
         for entry in &mut self.plugin_loads {
@@ -144,11 +127,14 @@ impl EditorApp {
         for tab in &self.tabs {
             let path = tab.session.path();
             let Some(contribution) = language_plugins::language_for_path(path) else {
-                // A removed plugin must release its native editor LSP providers.
-                if matches!(
-                    path.extension().and_then(|part| part.to_str()),
-                    Some("rs" | "toml")
-                ) {
+                // Match the previously loaded language so aliases such as .htm and
+                // exact filenames reset without disturbing unrelated built-in grammars.
+                if previous.iter().any(|entry| {
+                    entry.plugin.language_id() == tab.editor.read(cx).language_name().as_ref()
+                }) {
+                    tab.editor.update(cx, |editor, cx| {
+                        editor.set_highlighter("text".to_owned(), cx)
+                    });
                     editor::detach_language_server(&tab.editor, cx);
                 }
                 continue;

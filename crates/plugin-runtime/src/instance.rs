@@ -172,6 +172,11 @@ fn validate_scene(scene: &Scene) -> anyhow::Result<()> {
         anyhow::ensure!(
             match paint {
                 Paint::Fill { rect: r, .. } => rect(r),
+                Paint::Svg {
+                    rect: r,
+                    clip,
+                    source,
+                } => rect(r) && rect(clip) && !source.is_empty() && source.len() <= 1024 * 1024,
                 Paint::Text {
                     x,
                     y,
@@ -191,6 +196,22 @@ fn validate_scene(scene: &Scene) -> anyhow::Result<()> {
             "Invalid paint operation"
         );
     }
+    // Vector source and raster work have their own quota, independent of cheap rectangle drawing.
+    let vectors = scene
+        .paint
+        .iter()
+        .filter_map(|paint| {
+            if let Paint::Svg { source, .. } = paint {
+                Some(source.len())
+            } else {
+                None
+            }
+        })
+        .collect::<Vec<_>>();
+    anyhow::ensure!(
+        vectors.len() <= 16 && vectors.iter().sum::<usize>() <= 2 * 1024 * 1024,
+        "Vector scene quota exceeded"
+    );
     anyhow::ensure!(
         scene.widgets.iter().all(|w| {
             rect(&w.rect)
@@ -550,10 +571,29 @@ impl Instance {
         let reply: Reply = serde_json::from_str(&result)?;
         let mut panels = std::collections::BTreeSet::new();
         for scene in reply.scene.iter().chain(&reply.scenes) {
+            anyhow::ensure!(
+                self.protocol >= 6
+                    || !scene
+                        .paint
+                        .iter()
+                        .any(|paint| matches!(paint, Paint::Svg { .. })),
+                "Vector drawing requires manifest protocol 6 or newer"
+            );
             // Protocol 3 scenes may deserialize their legacy `chrome` field into `controls`.
             anyhow::ensure!(
                 scene.controls.is_none() || self.protocol >= 3,
                 "Canvas controls require manifest protocol 3 or newer"
+            );
+            // An older host would silently dock left controls on the wrong side of the grid.
+            anyhow::ensure!(
+                self.protocol >= 5
+                    || !scene.controls.as_ref().is_some_and(|controls| {
+                        controls
+                            .sidebar
+                            .as_ref()
+                            .is_some_and(|tabs| tabs.position == ui::SideTabsPosition::Left)
+                    }),
+                "Left sidebars require manifest protocol 5 or newer"
             );
             anyhow::ensure!(
                 scene.ui.is_none() || self.protocol >= 2,

@@ -1,9 +1,13 @@
 //! Generic runtime-plugin dock and manager. Feature behavior arrives from installed packages.
 mod commands;
 pub(crate) mod contributions;
+mod images;
 mod native_controls;
 #[cfg(test)]
 mod native_ui_tests;
+mod preview;
+#[cfg(test)]
+mod preview_tests;
 mod surface;
 #[cfg(test)]
 mod tests;
@@ -45,8 +49,14 @@ pub struct ExtensionPanel {
     pub(crate) entries: Vec<Installed>,
     pub(crate) startup: BTreeMap<String, String>,
     scenes: HashMap<String, Arc<Scene>>,
+    /// Raster images are paired with their exact scene and prepared outside the UI thread.
+    images: images::SceneImages,
     active: Option<String>,
     surface_id: Option<String>,
+    /// Editor-local surfaces are selected by the active document instead of the outer dock tree.
+    editor_preview: bool,
+    /// The editor's revision token avoids copying unchanged documents on every shell repaint.
+    preview_document: Option<(PathBuf, u64)>,
     panel_title: String,
     /// Cache package-owned artwork so repainting does not read from disk.
     panel_icons: [Option<Vec<u8>>; 2],
@@ -147,7 +157,11 @@ impl ExtensionPanel {
         }
         let worker = Arc::new(Worker::start(root.clone(), environment));
         // The initial registry snapshot is visible before the background worker starts WASM.
-        let startup = worker.state.lock().unwrap().startup.clone();
+        let (startup, entries) = {
+            let state = worker.state.lock().unwrap();
+            // A fast cached worker can finish before this UI view is constructed.
+            (state.startup.clone(), state.entries.clone())
+        };
         let shutdown = worker.tx.clone();
         let quit = cx.on_app_quit(move |_, _| {
             let (tx, rx) = futures::channel::oneshot::channel();
@@ -173,11 +187,14 @@ impl ExtensionPanel {
             workspace,
             root,
             worker,
-            entries: vec![],
+            entries,
             startup,
             scenes: HashMap::new(),
+            images: BTreeMap::new(),
             active: None,
             surface_id: None,
+            editor_preview: false,
+            preview_document: None,
             panel_title: "插件管理".into(),
             panel_icons: [None, None],
             panel_icon_digest: None,
@@ -254,8 +271,11 @@ impl ExtensionPanel {
             entries,
             startup: BTreeMap::new(),
             scenes,
+            images: BTreeMap::new(),
             active: Some(id),
             surface_id: Some(panel.id),
+            editor_preview: panel.position == "editor",
+            preview_document: None,
             panel_title: panel.title,
             panel_icons,
             panel_icon_digest,
@@ -341,6 +361,7 @@ impl ExtensionPanel {
                     // The replacement guest starts at its default size; force one native measure.
                     self.instance_epoch = epoch;
                     self.last_size = (0., 0., 0., 0.);
+                    self.preview_document = None;
                     self.native_ui = None;
                     self.canvas_controls = None;
                     self.command_popup = None;
@@ -371,6 +392,7 @@ impl ExtensionPanel {
                 .iter()
                 .map(|(id, s)| (id.clone(), s.clone()))
                 .collect();
+            self.images = state.images.clone();
             self.processes = state
                 .processes
                 .iter()
@@ -424,6 +446,11 @@ impl ExtensionPanel {
                     let root = self.root.clone();
                     cx.defer(move |cx| {
                         let _ = parent.update(cx, |app, cx| {
+                            // Scope panel operations to the plugin that emitted this host request.
+                            if let Some(panel) = command.strip_prefix("hide_panel:") {
+                                app.hide_plugin_panel(&id, panel, cx);
+                                return;
+                            }
                             let mut cwd = None;
                             let mut text = None;
                             match command.as_str() {
@@ -523,6 +550,13 @@ impl ExtensionPanel {
     }
     pub fn focus(&self, window: &mut Window, cx: &mut App) {
         self.focus.focus(window, cx);
+    }
+    /// Reveal a plugin surface and notify its owner even when the old focus handle is retained.
+    /// Plugins decide whether opening an empty view requires new state or process resources.
+    pub(crate) fn show(&self, window: &mut Window, cx: &mut App) {
+        self.visible.set(true);
+        self.command("panel.opened".into());
+        self.focus(window, cx);
     }
     fn current_scene(&self) -> Option<Arc<Scene>> {
         self.active
@@ -656,7 +690,7 @@ fn environment(workspace: &Path, cx: &App) -> protocol::Environment {
         byte(c.r) << 16 | byte(c.g) << 8 | byte(c.b)
     }
     let typography = theme::typography(cx);
-    protocol::Environment {
+    let mut environment = protocol::Environment {
         workspace: workspace.display().to_string(),
         os: std::env::consts::OS.into(),
         background: color(cx.theme().background),
@@ -691,7 +725,21 @@ fn environment(workspace: &Path, cx: &App) -> protocol::Environment {
                 )
             })
             .collect(),
+    };
+    // Installed older WASM guests keep their original theme namespace until the package is updated.
+    for (key, value) in environment.theme_colors.clone() {
+        environment
+            .theme_colors
+            .entry(format!("me.{key}"))
+            .or_insert(value);
     }
+    for (key, value) in environment.theme_text_styles.clone() {
+        environment
+            .theme_text_styles
+            .entry(format!("me.{key}"))
+            .or_insert(value);
+    }
+    environment
 }
 fn key_matches(shortcut: &str, event: &KeyDownEvent) -> bool {
     let parts: Vec<_> = shortcut.split('-').collect();
@@ -711,6 +759,14 @@ impl Focusable for ExtensionPanel {
 impl dock::BasePanel for ExtensionPanel {
     fn panel_name(&self) -> &'static str {
         "Extensions"
+    }
+    /// A stable plugin/panel key distinguishes different contributions across process restarts.
+    fn dump(&self, _: &App) -> gpui_base::dock::PanelState {
+        let name = match (&self.active, &self.surface_id) {
+            (Some(plugin), Some(panel)) => format!("plugin:{plugin}/{panel}"),
+            _ => "Extensions".into(),
+        };
+        gpui_base::dock::PanelState::new(name)
     }
     fn closable(&self, _: &App) -> bool {
         false
@@ -817,6 +873,9 @@ impl EditorApp {
             return;
         }
         self.shutting_down = true;
+        self.capture_dock_layout(cx);
+        // Read the current tree before saving, including the last click immediately before exit.
+        self.capture_explorer_state(cx);
         self.persist_session();
         self.status = "正在保存插件状态…".into();
         cx.notify();
@@ -873,6 +932,8 @@ impl EditorApp {
                     .small()
                     .compact()
                     .ghost()
+                    // Match the existing 24px compact icon width without changing button widths.
+                    .h(px(24.))
                     .when(visible, |button| {
                         button
                             .bg(selected_style.background.unwrap_or(cx.theme().list_active))
@@ -881,9 +942,10 @@ impl EditorApp {
                     .on_click(cx.listener(move |app, _, window, cx| {
                         panel.update(cx, |panel, cx| {
                             let visible = !panel.visible.get();
-                            panel.visible.set(visible);
                             if visible {
-                                panel.focus(window, cx);
+                                panel.show(window, cx);
+                            } else {
+                                panel.visible.set(false);
                             }
                             cx.notify();
                         });
@@ -950,6 +1012,10 @@ impl EditorApp {
                 _ => gpui_base::dock::DockPlacement::Bottom,
             };
             if let Some(panel) = self.plugin_panels.get(&key) {
+                // Editor-local contributions are rendered inside the current document's panel.
+                if descriptor.position == "editor" {
+                    continue;
+                }
                 // Reattach a hidden panel when reopened after its empty region was removed.
                 let panel_id = gpui_base::dock::PanelId::from(panel.entity_id());
                 if panel.read(cx).visible.get() && self.dock_area.read(cx).panel(panel_id).is_none()
@@ -988,7 +1054,7 @@ impl EditorApp {
                     cx,
                 )
             });
-            if initially_visible {
+            if initially_visible && !panel.read(cx).editor_preview {
                 self.dock_area.update(cx, |area, cx| {
                     crate::local_dock::add_panel_view(
                         area,
@@ -1002,6 +1068,9 @@ impl EditorApp {
             }
             self.plugin_panels.insert(key, panel);
         }
+        // Startup factories now have every available plugin view to bind to the saved layout.
+        self.sync_editor_previews(cx);
+        self.restore_dock_layout(window, cx);
         // Upstream retains empty dock regions. Remove their layout boxes at the app boundary,
         // while plugin entities and saved sizes remain available for reopening.
         for placement in [

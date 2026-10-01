@@ -6,6 +6,8 @@ impl Terminal {
     pub(super) fn event(&mut self, event: Event) {
         self.ui_revision = self.ui_revision.wrapping_add(1);
         match event {
+            // File-scoped document events belong to preview plugins, never to terminal input.
+            Event::Document { .. } => {}
             Event::Ui(event) => self.ui_event(event),
             Event::Surface { event, .. } => self.event(*event),
             Event::Resize {
@@ -92,7 +94,7 @@ impl Terminal {
                 shift,
             } => self.pointer(&kind, x, y, button, clicks, shift),
             Event::Wheel { delta, shift, x, y } => {
-                if x >= self.tab_left() || self.menu.is_some() {
+                if x < self.content_left() || x >= self.content_right() || self.menu.is_some() {
                     return;
                 }
                 if !shift
@@ -173,6 +175,12 @@ impl Terminal {
     /// Menu entries and declared host commands converge on these guest-owned actions.
     pub(super) fn command(&mut self, id: &str, cwd: Option<String>, text: Option<String>) {
         match id.trim_start_matches("terminal.") {
+            "panel.opened" => {
+                // An explicit reopen creates one default session; an awaited run supplies its own.
+                if self.tabs.is_empty() && self.pending_runs.is_empty() {
+                    self.add(self.settings.default_profile, self.env.workspace.clone());
+                }
+            }
             "new" => self.add(
                 self.settings.default_profile,
                 cwd.unwrap_or(self.env.workspace.clone()),
@@ -337,14 +345,21 @@ impl Terminal {
     }
     /// Hit testing, tab ordering and selection are terminal behavior.
     fn pointer(&mut self, kind: &str, x: f32, y: f32, button: u8, clicks: u8, shift: bool) {
-        if x >= self.tab_left() || self.menu.is_some() || !x.is_finite() || !y.is_finite() {
+        if x < self.content_left()
+            || x >= self.content_right()
+            || self.menu.is_some()
+            || !x.is_finite()
+            || !y.is_finite()
+        {
             return;
         }
+        // Keep selection and TUI mouse reports local to the command grid on either side.
+        let grid_left = self.content_left() + 8.;
         let Some(tab) = self.tabs.get_mut(self.active) else {
             return;
         };
         let (rows, columns) = tab.term.screen().size();
-        let col = ((x - 8.) / self.cw)
+        let col = ((x - grid_left) / self.cw)
             .floor()
             .clamp(0., (columns as usize - 1) as f32) as usize;
         let row = ((y - 8.) / self.ch)
@@ -393,9 +408,9 @@ impl Terminal {
         }
         if kind == "down" && button == 0 {
             // The unused grid and panel padding must not begin a local text selection.
-            let in_grid = x >= 8.
+            let in_grid = x >= grid_left
                 && y >= 8.
-                && x < 8. + columns as f32 * self.cw
+                && x < grid_left + columns as f32 * self.cw
                 && y < 8. + rows as f32 * self.ch;
             if in_grid && col < tab.term.screen().content_end(row as u16) as usize {
                 tab.term.select(row as u16, col as u16, clicks);

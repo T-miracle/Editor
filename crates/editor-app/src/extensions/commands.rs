@@ -47,6 +47,25 @@ impl ExtensionPanel {
 }
 
 impl EditorApp {
+    /// Hide only a panel declared by the requesting plugin and save its visibility preference.
+    /// The plugin decides when to close its view; the host owns native dock layout and persistence.
+    pub(crate) fn hide_plugin_panel(&mut self, plugin: &str, panel: &str, cx: &mut Context<Self>) {
+        let key = format!("{plugin}/{panel}");
+        let Some(panel) = self.plugin_panels.get(&key).cloned() else {
+            return;
+        };
+        panel.update(cx, |panel, cx| {
+            panel.visible.set(false);
+            cx.notify();
+        });
+        self.session_state
+            .plugin_panel_visibility
+            .insert(key, false);
+        self.persist_session();
+        self.dock_area.update(cx, |_, cx| cx.notify());
+        cx.notify();
+    }
+
     /// Entry point for project run/build actions: queue a plugin command and reveal its first panel.
     /// This is asynchronous and never installs or enables a plugin on the caller's behalf.
     pub(crate) fn invoke_plugin_command(
@@ -74,8 +93,7 @@ impl EditorApp {
             .cloned();
         if let Some(panel) = panel {
             panel.update(cx, |panel, cx| {
-                panel.visible.set(true);
-                panel.focus(window, cx);
+                panel.show(window, cx);
                 cx.notify();
             });
             self.dock_area.update(cx, |_, cx| cx.notify());

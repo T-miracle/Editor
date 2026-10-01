@@ -1,4 +1,5 @@
 //! Serializable user settings, validated before applying them to live views.
+use plugin_protocol::ui::SideTabsPosition;
 use serde::{Deserialize, Serialize};
 
 /// Named shell program and separately escaped arguments; never interpolated as a command.
@@ -27,6 +28,8 @@ pub struct Palette {
 #[serde(default, deny_unknown_fields)]
 pub struct Settings {
     pub enabled: bool,
+    /// Sidebar placement also moves the canvas origin; older settings default to the right.
+    pub tab_position: SideTabsPosition,
     pub font_family: String,
     pub font_size: f32,
     pub history: usize,
@@ -70,6 +73,7 @@ impl Default for Settings {
         }];
         Self {
             enabled: true,
+            tab_position: SideTabsPosition::Right,
             font_family: "Cascadia Mono".into(),
             font_size: 14.,
             history: 10_000,

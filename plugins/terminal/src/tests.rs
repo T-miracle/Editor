@@ -56,7 +56,8 @@ fn blank_history_and_real_history_have_distinct_scroll_ranges() {
     });
     let scene = app.scene();
     let scroll = scene.scroll.unwrap();
-    assert_eq!(scroll.hide_after_ms, Some(1000));
+    // An absent guest timeout keeps visibility under the host's shared scrollbar policy.
+    assert_eq!(scroll.hide_after_ms, None);
     assert_eq!(scroll.rect.x + scroll.rect.w, app.width - 180.);
     assert!(scroll.content > scroll.rect.h);
     app.event(Event::Scroll {
@@ -128,6 +129,110 @@ fn terminal_delegates_tab_controls_to_canvas_controls() {
             .iter()
             .any(|p| matches!(p,Paint::Text{text,..} if text==&app.tabs[0].name))
     );
+}
+
+/// Moving the sidebar shifts rendering, selection and menu anchors while preserving the grid.
+#[test]
+fn left_tabs_keep_canvas_input_and_persistent_layout_in_sync() {
+    assert_eq!(
+        Settings::parse("{}").unwrap().tab_position,
+        ui::SideTabsPosition::Right
+    );
+    let settings = Settings::parse(r#"{"tab_position":"left"}"#).unwrap();
+    assert_eq!(settings.tab_position, ui::SideTabsPosition::Left);
+    assert!(Settings::parse(r#"{"tab_position":"top"}"#).is_err());
+    let mut terminal = app();
+    terminal.event(Event::Resize {
+        width: 1000.,
+        height: 600.,
+        cell_width: 8.,
+        cell_height: 20.,
+    });
+    output(&mut terminal, b"SELECT ME");
+    let dimensions = terminal.tabs[0].term.screen().size();
+    terminal.settings.tab_position = ui::SideTabsPosition::Left;
+    terminal.resize_grid();
+    assert_eq!(terminal.tabs[0].term.screen().size(), dimensions);
+    let scene = terminal.scene();
+    assert_eq!(
+        scene.controls.unwrap().sidebar.unwrap().position,
+        ui::SideTabsPosition::Left
+    );
+    assert_eq!(
+        scene.cursor.x,
+        terminal.effective_tab_width() + 8. + 9. * terminal.cw
+    );
+    assert!(
+        scene
+            .paint
+            .iter()
+            .any(|paint| matches!(paint, Paint::Text { x, text, .. }
+        if *x == terminal.effective_tab_width() + 8. && text == "S"))
+    );
+    let x = terminal.content_left() + 8.;
+    terminal.event(Event::Pointer {
+        kind: "down".into(),
+        x,
+        y: 8.,
+        button: 0,
+        clicks: 2,
+        shift: false,
+    });
+    assert_eq!(terminal.selected_text().as_deref(), Some("SELECT"));
+    terminal.event(Event::Pointer {
+        kind: "up".into(),
+        x,
+        y: 8.,
+        button: 0,
+        clicks: 1,
+        shift: false,
+    });
+    // Sidebar presses must not clear the command area's selection or open its context menu.
+    terminal.event(Event::Pointer {
+        kind: "down".into(),
+        x: 12.,
+        y: 8.,
+        button: 2,
+        clicks: 1,
+        shift: false,
+    });
+    assert!(terminal.menu.is_none());
+    let id = terminal.tabs[0].id.to_string();
+    terminal.event(Event::Ui(ui::UiEvent {
+        revision: 0,
+        node: "sessions".into(),
+        action: ui::Action::Context { id, x: 12., y: 16. },
+    }));
+    assert_eq!(terminal.menu_position, (12., 16.));
+    terminal.menu = None;
+    output(
+        &mut terminal,
+        (0..70)
+            .map(|i| format!("\r\nline{i}"))
+            .collect::<String>()
+            .as_bytes(),
+    );
+    let scroll = terminal.scene().scroll.unwrap();
+    assert_eq!(scroll.rect.x, terminal.effective_tab_width());
+    assert_eq!(scroll.rect.x + scroll.rect.w, terminal.width);
+    terminal.event(Event::Wheel {
+        delta: 3.,
+        shift: false,
+        x: scroll.rect.x + 10.,
+        y: 30.,
+    });
+    let offset = terminal.tabs[0].term.screen().scrollback();
+    assert!(offset > 0);
+    terminal.event(Event::Wheel {
+        delta: 3.,
+        shift: false,
+        x: 10.,
+        y: 30.,
+    });
+    assert_eq!(terminal.tabs[0].term.screen().scrollback(), offset);
+    let restored = Terminal::prepare(terminal.env.clone(), Some(terminal.snapshot())).unwrap();
+    assert_eq!(restored.settings.tab_position, ui::SideTabsPosition::Left);
+    assert_eq!(restored.tab_width, terminal.tab_width);
 }
 
 /// Cwd metadata remains intact even when ConPTY splits an escape across reads.
@@ -261,11 +366,11 @@ fn editor_theme_can_override_every_terminal_palette_role() {
     for (index, name) in names.iter().enumerate() {
         environment
             .theme_colors
-            .insert(format!("me.terminal.ansi.{name}"), 0x112200 + index as u32);
+            .insert(format!("terminal.ansi.{name}"), 0x112200 + index as u32);
     }
     for (index, name) in names[..8].iter().enumerate() {
         environment.theme_colors.insert(
-            format!("me.terminal.ansi.dim_{name}"),
+            format!("terminal.ansi.dim_{name}"),
             0x223300 + index as u32,
         );
     }
@@ -281,7 +386,7 @@ fn editor_theme_can_override_every_terminal_palette_role() {
     ] {
         environment
             .theme_colors
-            .insert(format!("me.terminal.{name}"), value);
+            .insert(format!("terminal.{name}"), value);
     }
     terminal.event(Event::Theme(environment));
     for index in 0..16 {
@@ -324,7 +429,7 @@ fn live_theme_updates_terminal_text_styles() {
         bold: None,
     };
     environment.theme_text_styles.insert(
-        "me.terminal.tab".into(),
+        "terminal.tab".into(),
         FontStyle {
             family: Some("Theme Tab".into()),
             size_px: Some(19.),
@@ -355,7 +460,7 @@ fn partial_external_theme_keeps_plugin_ansi_fallbacks() {
     environment.foreground = 0xe0e8f0;
     environment
         .theme_colors
-        .insert("me.terminal.ansi.red".into(), 0xf08070);
+        .insert("terminal.ansi.red".into(), 0xf08070);
     terminal.event(Event::Theme(environment));
 
     assert_eq!(terminal.color(1), 0xf08070);
@@ -396,7 +501,7 @@ fn external_theme_overrides_terminal_window_colors() {
     for (index, role) in roles.iter().enumerate() {
         environment
             .theme_colors
-            .insert(format!("me.terminal.ui.{role}"), 0x123400 + index as u32);
+            .insert(format!("terminal.ui.{role}"), 0x123400 + index as u32);
     }
     terminal.event(Event::Theme(environment));
     let scene = terminal.scene();
@@ -405,6 +510,8 @@ fn external_theme_overrides_terminal_window_colors() {
         assert_eq!(
             scene.paint.iter().any(|paint| match paint {
                 Paint::Fill { color, .. } | Paint::Text { color, .. } => *color == expected,
+                // Vector operations belong to other plugins and carry their colors in SVG source.
+                Paint::Svg { .. } => false,
             }),
             role == &"error.foreground",
             "missing {role}"
@@ -472,6 +579,121 @@ fn native_sidebar_events_keep_session_identity_and_resize_pty() {
     }));
     assert!(terminal.menu.is_none());
     terminal.scene().controls.unwrap().validate().unwrap();
+}
+
+/// Every close entry point hides the panel only after its last session and process are removed.
+#[test]
+fn final_tab_close_requests_panel_hiding_for_all_close_actions() {
+    for action in ["tab", "shortcut", "command"] {
+        let mut terminal = app();
+        terminal.add(0, terminal.env.workspace.clone());
+        let first = terminal.tabs[0].id;
+        let last = terminal.tabs[1].id;
+        let last_handle = terminal.tabs[1].handle.unwrap();
+        CALLS.with(|calls| calls.borrow_mut().clear());
+        terminal.event(Event::Ui(ui::UiEvent {
+            revision: 0,
+            node: "sessions".into(),
+            action: ui::Action::Close(first.to_string()),
+        }));
+        assert_eq!(terminal.tabs.len(), 1);
+        assert_eq!(terminal.tabs[terminal.active].id, last);
+        assert!(!CALLS.with(
+            |calls| calls.borrow().iter().any(|request| matches!(request,
+                Request::Editor { command } if command.starts_with("hide_panel:")
+            ))
+        ));
+        CALLS.with(|calls| calls.borrow_mut().clear());
+        terminal.menu = Some(TerminalMenu::Commands);
+        terminal.rename = Some(last);
+        let event = match action {
+            "tab" => Event::Ui(ui::UiEvent {
+                revision: 0,
+                node: "sessions".into(),
+                action: ui::Action::Close(last.to_string()),
+            }),
+            "shortcut" => Event::Key {
+                key: "w".into(),
+                ctrl: true,
+                shift: true,
+                alt: false,
+            },
+            _ => Event::Command {
+                id: "terminal.close".into(),
+                cwd: None,
+                text: None,
+                arguments: None,
+            },
+        };
+        terminal.event(event);
+        assert!(terminal.tabs.is_empty(), "{action}");
+        assert!(terminal.menu.is_none());
+        assert!(terminal.rename.is_none());
+        assert!(
+            terminal
+                .scene()
+                .controls
+                .unwrap()
+                .sidebar
+                .unwrap()
+                .items
+                .is_empty()
+        );
+        CALLS.with(|calls| {
+            let requests = calls.borrow();
+            // Process retirement precedes panel hiding and must not launch a replacement shell.
+            assert!(
+                matches!(&requests[..], [Request::Close { handle }, Request::Editor { command }]
+                if *handle == last_handle && command == "hide_panel:terminal"),
+                "{action}: {requests:?}"
+            );
+        });
+        CALLS.with(|calls| calls.borrow_mut().clear());
+        terminal.close(0);
+        assert!(CALLS.with(|calls| calls.borrow().is_empty()));
+    }
+}
+
+/// Reopening a closed panel starts one default shell and preserves existing or pending sessions.
+#[test]
+fn opening_empty_terminal_creates_one_default_tab() {
+    let mut terminal = app();
+    terminal.close(0);
+    CALLS.with(|calls| calls.borrow_mut().clear());
+    let opened = || Event::Surface {
+        panel: "terminal".into(),
+        event: Box::new(Event::Command {
+            id: "panel.opened".into(),
+            cwd: None,
+            text: None,
+            arguments: None,
+        }),
+    };
+    terminal.event(opened());
+    assert_eq!(terminal.tabs.len(), 1);
+    assert_eq!(terminal.tabs[0].name, "powershell");
+    assert_eq!(terminal.tabs[0].cwd, terminal.env.workspace);
+    let handle = terminal.tabs[0].handle;
+    terminal.event(opened());
+    terminal.event(Event::Focus(true));
+    assert_eq!(terminal.tabs.len(), 1);
+    assert_eq!(terminal.tabs[0].handle, handle);
+    assert_eq!(
+        CALLS.with(|calls| calls
+            .borrow()
+            .iter()
+            .filter(|request| matches!(request, Request::Spawn { .. }))
+            .count()),
+        1
+    );
+    terminal.close(0);
+    terminal
+        .pending_runs
+        .push_back(commands::OpenOptions::default());
+    CALLS.with(|calls| calls.borrow_mut().clear());
+    terminal.event(opened());
+    assert!(terminal.tabs.is_empty());
+    assert!(CALLS.with(|calls| calls.borrow().is_empty()));
 }
 
 /// A live editor mode change recolors existing terminal cells without recreating the Shell.
@@ -558,7 +780,7 @@ fn selection_starts_only_within_printed_line_content() {
     assert!(!terminal.scene().paint.iter().any(|paint| matches!(
         paint,
         Paint::Fill { rect, color, .. }
-            if rect.y == 8. && rect.x >= line_end && rect.x < terminal.tab_left()
+            if rect.y == 8. && rect.x >= line_end && rect.x < terminal.content_right()
                 && *color == terminal.selection_color()
     )));
 }
@@ -829,6 +1051,176 @@ fn restoring_prompt_does_not_append_text_or_move_caret() {
         assert_eq!(terminal.tabs[0].term.screen().cursor_position(), cursor);
         assert_eq!(terminal.tabs[0].term.history(), 0);
         assert!(terminal.scene().scroll.is_none());
+    }
+}
+
+/// ConPTY's first query starts the new shell at the line's beginning, keeping saved cells intact.
+#[test]
+fn restored_conpty_bootstrap_preserves_frame_and_avoids_prompt_gap() {
+    let mut terminal = app();
+    terminal.event(Event::Resize {
+        width: 1600.,
+        height: 380.,
+        cell_width: 8.4,
+        cell_height: 21.,
+    });
+    output(&mut terminal, b"PS C:\\project> \r\nPS C:\\project> ");
+    let caret = terminal.tabs[0].term.screen().cursor_position();
+    let mut restored = Terminal::prepare(terminal.env.clone(), Some(terminal.snapshot())).unwrap();
+    restored.activate();
+    restored.event(Event::Resize {
+        width: 1600.,
+        height: 310.,
+        cell_width: 8.4,
+        cell_height: 21.,
+    });
+    let contents = restored.tabs[0].term.screen().contents();
+    assert_eq!(restored.tabs[0].term.screen().cursor_position(), caret);
+    CALLS.with(|calls| calls.borrow_mut().clear());
+    // Readers can split the four-byte inherited-cursor query across arbitrary output chunks.
+    for part in [b"\x1b".as_slice(), b"[6".as_slice()] {
+        output(&mut restored, part);
+        assert!(writes().is_empty());
+    }
+    output(&mut restored, b"n");
+    assert_eq!(writes(), b"\x1b[2;1R");
+    assert_eq!(restored.tabs[0].term.screen().contents(), contents);
+    assert_eq!(restored.tabs[0].term.screen().cursor_position(), caret);
+    // When the viewport is unchanged ConPTY can print directly, without a separate CUP.
+    output(&mut restored, b"PS C:\\project> ");
+    assert_eq!(restored.tabs[0].term.screen().contents(), contents);
+    assert_eq!(restored.tabs[0].term.screen().cursor_position(), caret);
+    CALLS.with(|calls| calls.borrow_mut().clear());
+    // Later application queries still receive the real saved caret, never the bootstrap column.
+    output(&mut restored, b"\x1b[6n");
+    assert_eq!(
+        writes(),
+        format!("\x1b[{};{}R", caret.0 + 1, caret.1 + 1).as_bytes()
+    );
+}
+
+/// Restored command output stays adjacent to its prompt across both grid resize and ConPTY startup.
+#[test]
+fn restored_command_transcript_keeps_spacing_after_height_changes() {
+    let mut terminal = app();
+    terminal.event(Event::Resize {
+        width: 1600.,
+        height: 310.,
+        cell_width: 8.4,
+        cell_height: 21.,
+    });
+    output(
+        &mut terminal,
+        b"PS C:\\project> node -v\r\nv24.19.0\r\nPS C:\\project> ",
+    );
+    let contents = terminal.tabs[0].term.screen().contents();
+    let caret = terminal.tabs[0].term.screen().cursor_position();
+    let mut restored = Terminal::prepare(terminal.env.clone(), Some(terminal.snapshot())).unwrap();
+    restored.activate();
+    CALLS.with(|calls| calls.borrow_mut().clear());
+    output(&mut restored, b"\x1b[6n");
+    // Reporting the old prompt's final column lets ConPTY place the new shell one row lower;
+    // its first height redraw then erases the saved prompt and reveals that empty row.
+    assert_eq!(writes(), b"\x1b[3;1R");
+    output(&mut restored, b"PS C:\\project> ");
+    for height in [500., 200., 380., 140., 620., 310.] {
+        restored.event(Event::Resize {
+            width: 1600.,
+            height,
+            cell_width: 8.4,
+            cell_height: 21.,
+        });
+        // Added blank viewport rows are harmless; an interior blank before the prompt is not.
+        assert_eq!(
+            restored.tabs[0].term.screen().contents().trim_end(),
+            contents.trim_end()
+        );
+        assert_eq!(restored.tabs[0].term.screen().cursor_position(), caret);
+    }
+}
+
+/// A fresh process must not reuse a row containing pending input, task output or custom prompts.
+#[test]
+fn restored_conpty_keeps_nonempty_command_and_task_output() {
+    for bytes in [
+        b"PS C:\\project> echo pending".as_slice(),
+        b"task output without trailing newline".as_slice(),
+        b"custom> ".as_slice(),
+    ] {
+        let mut terminal = app();
+        output(&mut terminal, bytes);
+        let mut restored =
+            Terminal::prepare(terminal.env.clone(), Some(terminal.snapshot())).unwrap();
+        restored.activate();
+        let caret = restored.tabs[0].term.screen().cursor_position();
+        let contents = restored.tabs[0].term.screen().contents();
+        CALLS.with(|calls| calls.borrow_mut().clear());
+        output(&mut restored, b"\x1b[6n");
+        assert_eq!(
+            writes(),
+            format!("\x1b[{};{}R", caret.0 + 1, caret.1 + 1).as_bytes()
+        );
+        assert_eq!(restored.tabs[0].term.screen().contents(), contents);
+        // Native PowerShell starts a new prompt after the existing partial row, keeping its text.
+        output(&mut restored, b"\r\nPS C:\\project> ");
+        assert_eq!(
+            restored.tabs[0].term.screen().contents().lines().next(),
+            contents.lines().next()
+        );
+    }
+}
+
+/// Repair only the previous startup bug's trailing duplicate default PowerShell prompts.
+#[test]
+fn legacy_restore_repairs_prompt_gap_but_keeps_command_output_blank_lines() {
+    let mut terminal = app();
+    output(
+        &mut terminal,
+        b"PS C:\\project> \r\n\r\n\r\nPS C:\\project> ",
+    );
+    let mut old: serde_json::Value = serde_json::from_str(&terminal.snapshot().data).unwrap();
+    old["recovery_version"] = 0.into();
+    let restored = Terminal::prepare(
+        terminal.env.clone(),
+        Some(Snapshot {
+            schema: 1,
+            data: serde_json::to_string(&old).unwrap(),
+        }),
+    )
+    .unwrap();
+    assert_eq!(restored.tabs[0].term.screen().cursor_position().0, 1);
+    assert_eq!(
+        restored.tabs[0]
+            .term
+            .screen()
+            .contents()
+            .lines()
+            .take(2)
+            .filter(|line| line.starts_with("PS "))
+            .count(),
+        2
+    );
+    // A fresh-format snapshot retains intentional blank lines, including user-designed prompts.
+    let untouched = Terminal::prepare(terminal.env.clone(), Some(terminal.snapshot())).unwrap();
+    assert_eq!(untouched.tabs[0].term.screen().cursor_position().0, 3);
+    for output_bytes in [
+        b"PS C:\\project> command\r\n\r\n\r\nPS C:\\project> ".as_slice(),
+        b"text\r\n\r\nPS C:\\project> ".as_slice(),
+    ] {
+        let mut terminal = app();
+        output(&mut terminal, output_bytes);
+        let contents = terminal.tabs[0].term.screen().contents();
+        let mut saved: serde_json::Value = serde_json::from_str(&terminal.snapshot().data).unwrap();
+        saved["recovery_version"] = 0.into();
+        let restored = Terminal::prepare(
+            terminal.env.clone(),
+            Some(Snapshot {
+                schema: 1,
+                data: serde_json::to_string(&saved).unwrap(),
+            }),
+        )
+        .unwrap();
+        assert_eq!(restored.tabs[0].term.screen().contents(), contents);
     }
 }
 

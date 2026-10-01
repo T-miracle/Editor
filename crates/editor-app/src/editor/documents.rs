@@ -32,17 +32,16 @@ impl EditorApp {
         // Restore the project root separately so an older session still opens it by default.
         .map(|item| item.expanded(self.session_state.explorer_root_expanded))
         .collect::<Vec<_>>();
-        // External tabs keep the last project file highlighted across a tree refresh.
-        let selected_path = match self.active_path.as_ref() {
+        // Preserve click selection across refreshes even when it differs from the active tab.
+        let selected_path = if !self.session_state.explorer_root_expanded {
             // Selecting a child would automatically expand a deliberately collapsed project root.
-            _ if !self.session_state.explorer_root_expanded => Some(root.clone()),
-            Some(path) if path.starts_with(self.workspace.root()) => Some(path.clone()),
-            Some(_) => self
-                .tree_state
+            Some(root.clone())
+        } else {
+            // An unselected tree stays unselected; the active tab may be in a collapsed subtree.
+            self.tree_state
                 .read(cx)
                 .selected_item()
-                .map(|item| PathBuf::from(item.id.as_str())),
-            None => None,
+                .map(|item| PathBuf::from(item.id.as_str()))
         };
         let selected_item = selected_path
             .as_ref()
@@ -122,6 +121,7 @@ impl EditorApp {
         if let Some(snapshot) = update.snapshot {
             self.update_workspace_tree(snapshot, cx);
         }
+        let mut preview_reloaded = false;
         for (path, disk_contents, read_at) in update.documents {
             if renamed_from.iter().any(|old| path.starts_with(old)) {
                 continue;
@@ -153,6 +153,8 @@ impl EditorApp {
                         .update(cx, |editor, cx| editor.set_value(contents, window, cx));
                     tab.suppress_change = false;
                     tab.disk_digest = digest;
+                    // set_value is silent and keeps the clean revision, so refresh its preview explicitly.
+                    preview_reloaded |= self.active_path.as_ref() == Some(&path);
                     DiskState::Synced
                 }
             };
@@ -168,6 +170,10 @@ impl EditorApp {
                 }
                 cx.notify();
             }
+        }
+        if preview_reloaded {
+            self.invalidate_editor_previews(cx);
+            self.sync_editor_previews(cx);
         }
         if !update.native {
             tracing::warn!(
@@ -237,9 +243,21 @@ impl EditorApp {
     }
 
     pub(crate) fn open_file(&mut self, path: PathBuf, window: &mut Window, cx: &mut Context<Self>) {
+        // Explorer and other explicit file navigation retain their reveal behavior.
+        self.open_file_with_reveal(path, true, window, cx);
+    }
+
+    /// Apply one reveal policy to both an existing tab and a newly opened document.
+    fn open_file_with_reveal(
+        &mut self,
+        path: PathBuf,
+        reveal: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let path = path.canonicalize().unwrap_or(path);
         if let Some(index) = self.tabs.iter().position(|tab| tab.session.path() == path) {
-            self.activate_tab(index, window, cx);
+            self.activate_tab_with_reveal(index, reveal, window, cx);
             return;
         }
 
@@ -316,6 +334,11 @@ impl EditorApp {
                 let subscription =
                     cx.subscribe(&editor, |this, changed_editor, event: &InputEvent, cx| {
                         if matches!(event, InputEvent::Change) {
+                            // Handle typing, paste, undo and IME through the
+                            // document event, including edits without keydown.
+                            if this.editor.entity_id() == changed_editor.entity_id() {
+                                this.invalidate_editor_previews(cx);
+                            }
                             // Each tab keeps its own revision, including background edits.
                             if let Some(index) = this.tabs.iter().position(|tab| {
                                 tab.editor.entity_id() == changed_editor.entity_id()
@@ -357,7 +380,7 @@ impl EditorApp {
                     _observer: observer,
                 });
                 self.sync_watched_documents();
-                self.activate_tab(self.tabs.len() - 1, window, cx);
+                self.activate_tab_with_reveal(self.tabs.len() - 1, reveal, window, cx);
                 self.refresh_syntax_diagnostics(self.editor.entity_id(), cx);
                 let editor = self.tabs.last().unwrap().editor.downgrade();
                 // Start highlighting only after the loaded text has painted once.
@@ -395,7 +418,13 @@ impl EditorApp {
             return false;
         }
         let path = path.canonicalize().unwrap_or(path);
-        self.open_file(path.clone(), window, cx);
+        // Definition jumps follow the same explorer preference as tab switching.
+        self.open_file_with_reveal(
+            path.clone(),
+            self.session_state.explorer_reveal_on_tab_switch,
+            window,
+            cx,
+        );
         // Opening can fail; do not move the caret in the previously active file.
         if self.active_path.as_deref() != Some(path.as_path()) {
             return false;
@@ -490,6 +519,25 @@ impl EditorApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        // Ordinary switches follow the saved preference; explicit navigation supplies its own policy.
+        self.activate_tab_with_reveal(
+            index,
+            self.session_state.explorer_reveal_on_tab_switch,
+            window,
+            cx,
+        );
+    }
+
+    /// Activate document content while keeping explorer navigation an explicit caller choice.
+    fn activate_tab_with_reveal(
+        &mut self,
+        index: usize,
+        reveal: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        // A selection gesture belongs to one uninterrupted visit to its document.
+        self.cancel_text_drag(cx);
         let Some(tab) = self.tabs.get(index) else {
             return;
         };
@@ -505,8 +553,8 @@ impl EditorApp {
         self.editor = tab.editor.clone();
         // A completion index belongs to one document and must not cross tabs.
         self.completion_popup.reset();
-        // Every activation path, including tabs and definition jumps, updates the explorer.
-        if path.starts_with(self.workspace.root()) {
+        // Session restoration preserves saved directory states instead of revealing each tab.
+        if reveal && !self.restoring_documents && path.starts_with(self.workspace.root()) {
             self.select_file_in_tree(&path, cx);
         }
         // Keep the selected tab fully visible when opening or switching files.
@@ -559,6 +607,11 @@ impl EditorApp {
         if !self.tabs.is_empty() {
             self.activate_tab(index.min(self.tabs.len() - 1), window, cx);
         } else {
+            // Retire document interactions before mounting the non-editable empty canvas.
+            self.cancel_text_drag(cx);
+            self.dismiss_pointer_hover(cx);
+            self.completion_popup.reset();
+            window.blur(cx);
             self.editor = cx.new(|cx| {
                 EditorState::new(window, cx)
                     .language("text".to_string())
@@ -572,6 +625,8 @@ impl EditorApp {
             });
             self.status = t!("status.no_open_files").to_string();
             self.persist_session();
+            // Dock panels cache their rendered content independently of the app shell.
+            self.editor_panel.update(cx, |_, cx| cx.notify());
             cx.notify();
         }
     }
@@ -813,10 +868,8 @@ fn language_for_path(path: &Path) -> String {
         .and_then(|extension| extension.to_str())
         .unwrap_or("")
     {
-        "js" | "jsx" => "javascript",
         "ts" | "tsx" => "typescript",
         "vue" => "vue",
-        "html" | "htm" => "html",
         "css" => "css",
         "json" => "json",
         "md" | "markdown" => "markdown",

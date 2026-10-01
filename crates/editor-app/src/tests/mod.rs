@@ -21,11 +21,14 @@ mod settings_dialog_tests {
             cx.set_reduce_motion(true);
         });
         let directory = tempfile::tempdir().unwrap();
+        // Row-height checks require an open document; empty workspaces render a canvas.
+        let path = directory.path().join("settings.txt");
+        std::fs::write(&path, "settings layout").unwrap();
         let workspace = Workspace::open(directory.path()).unwrap();
         let view_slot = Rc::new(RefCell::new(None));
         let capture = view_slot.clone();
         let (_, editor_cx) = app_cx.add_window_view(move |window, cx| {
-            let view = cx.new(|cx| EditorApp::new(workspace, None, window, cx));
+            let view = cx.new(|cx| EditorApp::new(workspace, Some(path), window, cx));
             *capture.borrow_mut() = Some(view.clone());
             Root::new(view, window, cx)
         });
@@ -72,6 +75,31 @@ mod settings_dialog_tests {
             dialog_cx.debug_bounds("dialog-0").is_some(),
             "the settings window must render its own content"
         );
+        // The explorer preference starts disabled and its visible checkbox writes the saved choice.
+        assert!(!dialog_cx.update(|_, cx| {
+            editor_view
+                .read(cx)
+                .session_state
+                .explorer_reveal_on_tab_switch
+        }));
+        let reveal = dialog_cx.debug_bounds("settings-explorer-reveal").unwrap();
+        dialog_cx.simulate_click(reveal.center(), Default::default());
+        dialog_cx.run_until_parked();
+        dialog_cx.update(|window, cx| window.draw(cx).clear(cx));
+        assert!(dialog_cx.update(|_, cx| {
+            let app = editor_view.read(cx);
+            crate::SessionState::load(app.workspace.root()).explorer_reveal_on_tab_switch
+        }));
+        // Toggling off must take effect without reopening either window.
+        dialog_cx.simulate_click(reveal.center(), Default::default());
+        dialog_cx.run_until_parked();
+        dialog_cx.update(|window, cx| window.draw(cx).clear(cx));
+        assert!(!dialog_cx.update(|_, cx| {
+            editor_view
+                .read(cx)
+                .session_state
+                .explorer_reveal_on_tab_switch
+        }));
         let title = dialog_cx
             .debug_bounds("app-dialog-title-bar")
             .expect("the dialog must render a title bar");
@@ -172,8 +200,9 @@ mod file_highlight_tests {
             cx.set_reduce_motion(true);
         });
         let directory = tempfile::tempdir().unwrap();
-        let path = directory.path().join("example.js");
-        std::fs::write(&path, "const loaded = true;\n").unwrap();
+        // Use a built-in language so frame ordering is independent of installed plugin packages.
+        let path = directory.path().join("example.css");
+        std::fs::write(&path, "body { color: red; }\n").unwrap();
         let workspace = Workspace::open(directory.path()).unwrap();
         let view_slot = Rc::new(RefCell::new(None));
         let capture = view_slot.clone();
@@ -187,7 +216,7 @@ mod file_highlight_tests {
         cx.update(|_, cx| {
             let app = view.read(cx);
             let editor = app.tabs[0].editor.read(cx);
-            assert_eq!(editor.text().to_string(), "const loaded = true;\n");
+            assert_eq!(editor.text().to_string(), "body { color: red; }\n");
             assert_eq!(editor.language_name().as_ref(), "text");
         });
 
@@ -199,10 +228,7 @@ mod file_highlight_tests {
         cx.update(|window, cx| window.simulate_next_frame(cx));
         cx.update(|_, cx| {
             let app = view.read(cx);
-            assert_eq!(
-                app.tabs[0].editor.read(cx).language_name().as_ref(),
-                "javascript"
-            );
+            assert_eq!(app.tabs[0].editor.read(cx).language_name().as_ref(), "css");
         });
     }
 }

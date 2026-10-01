@@ -33,7 +33,7 @@
         }
       },
       "plugins": {
-        "me.terminal": {
+        "terminal": {
           "typography": {
             "content": {
               "family": "Cascadia Mono",
@@ -757,7 +757,7 @@
         }
       },
       "plugins": {
-        "me.terminal": {
+        "terminal": {
           "typography": {
             "content": {
               "family": "Cascadia Mono",
@@ -797,6 +797,9 @@
             "bright_magenta": "#d8b7f0",
             "bright_cyan": "#8fd3df",
             "bright_white": "#f7f8fa"
+          },
+          "ui": {
+            "tab_bar": { "background": "#2b2d30" }
           }
         }
       },

@@ -66,7 +66,7 @@ fn contrast(a: u32, b: u32) -> f32 {
 impl Terminal {
     /// Event::Theme replaces the environment; every painted text role resolves on demand.
     pub(super) fn text_style(&self, role: &str, monospace: bool) -> FontStyle {
-        let style = self.env.font_style("me.terminal", role, monospace);
+        let style = self.env.font_style("terminal", role, monospace);
         FontStyle {
             family: Some(
                 style
@@ -80,7 +80,7 @@ impl Terminal {
 
     /// Read only this plugin's color tokens from the editor's generic theme API.
     fn theme_color(&self, name: &str) -> Option<u32> {
-        self.env.color("me.terminal", name)
+        self.env.color("terminal", name)
     }
 
     /// Let editor themes style plugin-owned controls while preserving host colors as defaults.

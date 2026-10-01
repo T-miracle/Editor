@@ -1,17 +1,27 @@
 # 插件原生界面协议 v1
 
-## 画布与原生菜单、侧边 Tab 栏组合（清单 protocol 4）
+## 编辑区预览与彩色 SVG 绘制（清单 protocol 6）
+
+面板使用 `position: "editor"` 与非空 `file_extensions`（扩展名不含点，大小写不敏感）。需要在清单中申请并获得 `editor.commands`。宿主选择当前文件匹配的可见预览，将原生编辑器和插件面板放入可拖动的左右分栏；预览不加入外部停靠树。多个插件匹配时按插件／面板 ID 排序选择首个。
+
+`Event::Surface { panel, event: Event::Document { path, text } }` 提供当前内存内容，包括未保存修改。`path: None` 和空 `text` 表示离开这个文档。热更新后宿主会重新发送当前文档。插件不需要读取文件或替换编辑控件。
+
+画布可发送 `Paint::Svg { rect, clip, source }`：`rect` 是图像的目标尺寸和位置，`clip` 是可见视口。宿主后台按可见交集渲染，保持 SVG 颜色与 alpha；绘图按列表顺序叠加，因此棋盘应放在 SVG 操作之前。SVG 源码每项最多 1 MiB，一份场景最多 16 项、合计最多 2 MiB。每张可见栅格最多 2048×2048 像素，缩放时重新绘制可见区域；外部文件／URL 图像不解析，嵌入资源可用。
+
+文件预览事件与 SVG 绘图需要 protocol 6；旧宿主拒绝新包，避免安装后出现错误停靠或空图像。WIT 世界保持不变。完整独立插件见 `plugins/svg`。
+
+## 画布与原生菜单、侧边 Tab 栏组合（清单 protocol 5）
 
 画布插件使用 `Scene.controls: Option<ui::CanvasControls>`。字符网格留在 `Scene.paint`，侧边栏和菜单交给宿主原生模块；不与 `Scene.ui` 或旧 `widgets` 混用。`CanvasControls.revision` 随 `UiEvent` 返回。宿主仍接受旧插件发出的 `chrome` 字段，新插件统一发出 `controls`。
 
-- `SideTabs`：稳定条目 ID、完整名称、选中项、可关闭/禁用状态、宽度范围、可选重命名目标。右侧停靠，滚动、省略显示、双击编辑、Enter/失焦提交、Escape 取消、关闭、中键关闭、拖动排序及宽度拖动由宿主管理。
+- `SideTabs`：稳定条目 ID、完整名称、选中项、可关闭/禁用状态、宽度范围、可选重命名目标。`position: SideTabsPosition` 可选 `Left` / `Right`，JSON 为 `"left"` / `"right"`，省略时沿用右侧停靠。滚动、省略显示、双击编辑、Enter/失焦提交、Escape 取消、关闭、中键关闭、拖动排序及宽度拖动由宿主管理。调整宽度的手柄和选中项的内侧边线始终朝向画布，左停靠时位于右侧。
 - `PopupMenu`：面板内锚点和菜单项；支持禁用、分隔线、鼠标悬停、方向键、Home/End、Enter、Escape、外部点击关闭及原生滚动。卡片和条目样式与资源管理器右键菜单共用。
 - 事件：侧边栏返回 `Select(id)`、`Close(id)`、`Rename { id, value }`、`Move { from, to }`（移动到目标原索引）、`Resize(width)`、`Context { id, x, y }`（坐标相对侧边栏）；菜单返回 `Select(command_id)` 或 `Dismiss`。插件按 ID 修改业务状态并返回新场景，无需做控件坐标命中。
-- 画布仍收到完整面板的 `Resize`；插件按 `sidebar.width` 为右侧栏预留空间。菜单锚点以面板左上角为原点，由宿主限制到窗口可见范围。
-- 配色使用 `plugins[ID].ui.tab_bar`、`ui.tab.active/inactive/close/rename`、`ui.menu`，字体使用 `typography.tab/menu`。未覆盖项继承当前系统/安装主题，并复用 `components.explorer_menu` 的菜单样式。
+- 画布仍收到完整面板的 `Resize`；插件按 `sidebar.width` 为声明的一侧预留空间，左侧布局需要同步平移绘制和鼠标命中坐标。菜单锚点以面板左上角为原点，由宿主限制到窗口可见范围。
+- 配色使用 `plugins[ID].ui.tab_bar`、`ui.tab.active/inactive/close/rename`、`ui.menu`，字体使用 `typography.tab/menu`。标签栏背景默认 `#F7F8FA`，选中项保留完整边框，朝向画布的 1px 边线默认 `#3574F0`，可用 `tab.active.inner_border` 覆盖。标签和关闭按钮不使用悬停变色。其余未覆盖项继承当前系统/安装主题，并复用 `components.explorer_menu` 的菜单样式。
 - 每组最多 512 项，单项标签最多 4 KiB、总标签最多 64 KiB，条目 ID 唯一且不含控制字符。侧边栏宽度为有限的 0–1200 数值，并满足最小/当前/最大宽度顺序。
 
-完整接入示例见 `plugins/terminal/src/controls.rs`；旧的清单 protocol 1/2/3 继续可用，其中 protocol 3 插件的 `chrome` 字段由新宿主兼容读取。新插件应声明 protocol 4，使旧宿主明确拒绝不认识 `controls` 的安装包。
+完整接入示例见 `plugins/terminal/src/controls.rs`；旧的清单 protocol 1/2/3/4 继续可用，其中 protocol 3 插件的 `chrome` 字段由新宿主兼容读取。支持左右摆放的插件声明 protocol 5，使旧宿主明确拒绝无法正确布局的安装包；旧插件省略 `position` 时仍使用右侧布局。WIT 世界不变。
 
 需要插件清单 `"protocol": 2`。旧宿主会拒绝安装该插件，避免把新界面静默显示成空白；新版宿主继续支持 protocol 1 的画布插件。WIT 世界不变，原生界面通过 `Reply.scene` / `Reply.scenes` 的 `Scene.ui` 传递。
 

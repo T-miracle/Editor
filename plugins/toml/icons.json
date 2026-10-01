@@ -3,6 +3,7 @@
   "icons": [
     {
       "extensions": ["toml"],
+      "files": ["Cargo.lock", "uv.lock"],
       "light": "icons/file.svg",
       "dark": "icons/file_dark.svg"
     }

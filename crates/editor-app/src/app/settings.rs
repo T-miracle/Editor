@@ -1,6 +1,6 @@
 //! Owns the settings navigation and the content shown by each category.
 
-use crate::ui::controls::DialogContent;
+use crate::ui::controls::{Checkbox, DialogContent};
 use crate::*;
 use gpui_kit::{AnyElement, App, Entity, component::scroll::ScrollableElement};
 
@@ -163,13 +163,18 @@ fn render_section(view: &Entity<EditorApp>, section: SettingsSection, cx: &mut A
 
 /// Renders the existing theme and file explorer controls under appearance.
 fn render_appearance(view: &Entity<EditorApp>, cx: &mut App) -> AnyElement {
-    let (dark, explorer_visible) = {
+    let (dark, explorer_visible, reveal_on_tab_switch) = {
         let settings = view.read(cx);
-        (settings.dark_theme, settings.explorer_visible)
+        (
+            settings.dark_theme,
+            settings.explorer_visible,
+            settings.session_state.explorer_reveal_on_tab_switch,
+        )
     };
     let light_view = view.clone();
     let dark_view = view.clone();
     let explorer_view = view.clone();
+    let reveal_view = view.clone();
 
     v_flex()
         .gap_6()
@@ -248,6 +253,25 @@ fn render_appearance(view: &Entity<EditorApp>, cx: &mut App) -> AnyElement {
                         .text_xs()
                         .text_color(cx.theme().muted_foreground)
                         .child(t!("settings.resize_hint").to_string()),
+                )
+                .child(
+                    div()
+                        .id("settings-explorer-reveal")
+                        .debug_selector(|| "settings-explorer-reveal".into())
+                        .child(
+                            Checkbox::new("settings-explorer-reveal-checkbox")
+                                .label(t!("settings.explorer_reveal_on_tab_switch").to_string())
+                                .checked(reveal_on_tab_switch)
+                                .on_change(move |checked, _, cx| {
+                                    // Apply immediately and retain the choice when reopening this workspace.
+                                    reveal_view.update(cx, |this, cx| {
+                                        this.session_state.explorer_reveal_on_tab_switch = *checked;
+                                        this.persist_session();
+                                        this.refresh_dialog(cx);
+                                        cx.notify();
+                                    });
+                                }),
+                        ),
                 ),
         )
         .into_any_element()

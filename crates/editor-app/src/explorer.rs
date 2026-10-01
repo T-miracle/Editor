@@ -2,6 +2,7 @@
 
 // sort.rs remains unregistered until its collation rules replace the live tree ordering.
 mod files;
+mod interaction;
 pub(crate) mod menu;
 pub(crate) mod tree;
 

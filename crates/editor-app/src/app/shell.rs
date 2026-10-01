@@ -165,7 +165,7 @@ impl dock::BasePanel for EditorDockPanel {
 impl DockPanel for EditorDockPanel {
     fn title(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         match self.kind {
-            // Match plugin panel titles: shared dock styling, an icon-label row and a hide control.
+            // Order explorer actions as locate, collapse all, expand all, then minimize.
             EditorDockPanelKind::Explorer => h_flex()
                 .w_full()
                 .items_center()
@@ -179,6 +179,69 @@ impl DockPanel for EditorDockPanel {
                         .gap_2()
                         .child(explorer_panel_icon(cx).small())
                         .child(div().truncate().child(t!("panel.explorer").to_string())),
+                )
+                .child(
+                    div()
+                        .id("explorer-reveal-active-file")
+                        .debug_selector(|| "explorer-reveal-active-file".into())
+                        .child(
+                            Button::new("explorer-reveal")
+                                // The custom target inherits the current title-bar text color.
+                                .icon(Icon::default().path("icons/explorer-locate.svg"))
+                                .tooltip(t!("explorer.reveal_active_file").to_string())
+                                .accessibility_label(t!("explorer.reveal_active_file").to_string())
+                                .small()
+                                .compact()
+                                .ghost()
+                                .on_click(cx.listener(|this, _, window, cx| {
+                                    // Consume the title action so it cannot start a dock gesture.
+                                    cx.stop_propagation();
+                                    let _ = this.parent.update(cx, |app, cx| {
+                                        app.reveal_active_file_in_explorer(window, cx);
+                                    });
+                                })),
+                        ),
+                )
+                .child(
+                    div()
+                        .id("explorer-collapse-all")
+                        .debug_selector(|| "explorer-collapse-all".into())
+                        .child(
+                            Button::new("explorer-collapse-all-button")
+                                .icon(Icon::default().path("icons/explorer-collapse-all.svg"))
+                                .tooltip(t!("explorer.collapse_all").to_string())
+                                .accessibility_label(t!("explorer.collapse_all").to_string())
+                                .small()
+                                .compact()
+                                .ghost()
+                                .on_click(cx.listener(|this, _, _, cx| {
+                                    // Consume header actions so they cannot start a dock gesture.
+                                    cx.stop_propagation();
+                                    let _ = this.parent.update(cx, |app, cx| {
+                                        app.set_all_explorer_directories_expanded(false, cx);
+                                    });
+                                })),
+                        ),
+                )
+                .child(
+                    div()
+                        .id("explorer-expand-all")
+                        .debug_selector(|| "explorer-expand-all".into())
+                        .child(
+                            Button::new("explorer-expand-all-button")
+                                .icon(Icon::default().path("icons/explorer-expand-all.svg"))
+                                .tooltip(t!("explorer.expand_all").to_string())
+                                .accessibility_label(t!("explorer.expand_all").to_string())
+                                .small()
+                                .compact()
+                                .ghost()
+                                .on_click(cx.listener(|this, _, _, cx| {
+                                    cx.stop_propagation();
+                                    let _ = this.parent.update(cx, |app, cx| {
+                                        app.set_all_explorer_directories_expanded(true, cx);
+                                    });
+                                })),
+                        ),
                 )
                 .child(
                     Button::new("explorer-hide")
@@ -236,6 +299,8 @@ impl EditorApp {
                     .small()
                     .compact()
                     .ghost()
+                    // Match the existing 24px compact icon width for a rounded square highlight.
+                    .h(px(24.))
                     .tooltip(t!("panel.explorer").to_string())
                     .when(self.explorer_visible, |button| {
                         button
@@ -436,6 +501,18 @@ impl Render for EditorApp {
             .child(self.render_explorer_menu(window, cx))
             .child(self.render_explorer_edit(cx))
             .child(self.render_explorer_delete(cx))
+            .when_some(self.notification.as_ref(), |this, notification| {
+                // Center the card near the top, keeping a margin when the window is narrow.
+                let width = px(380.).min((window.viewport_size().width - px(24.)).max(px(0.)));
+                this.child(
+                    div()
+                        .absolute()
+                        .left((window.viewport_size().width - width) / 2.)
+                        .top(px(64.))
+                        .w(width)
+                        .child(notification.clone()),
+                )
+            })
             .when_some(self.definition_notice, |this, notice| {
                 let left = px((notice.position.x / px(1.) - 28.).max(4.));
                 let top = px((notice.position.y / px(1.) - 38.).max(4.));

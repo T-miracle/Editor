@@ -295,6 +295,10 @@ pub(super) struct Emulator {
     parser: Processor,
     replies: Rc<RefCell<Replies>>,
     selection: Option<Selection>,
+    /// Only a new Windows PTY's first output can be its inherited-cursor bootstrap query.
+    bootstrap: Option<Vec<u8>>,
+    /// Synchronize the parser with the inherited line origin when real process output arrives.
+    bootstrap_line_start: bool,
 }
 impl Emulator {
     /// Construct an Alacritty screen with bounded history.
@@ -323,6 +327,8 @@ impl Emulator {
             parser: Processor::new(),
             replies,
             selection: None,
+            bootstrap: None,
+            bootstrap_line_start: false,
         }
     }
     /// Borrow the active viewport for rendering and input mode checks.
@@ -336,8 +342,52 @@ impl Emulator {
     pub fn replies_mut(&self) -> RefMut<'_, Replies> {
         self.replies.borrow_mut()
     }
+    /// Reuse a saved empty default prompt, while keeping pending input and task output intact.
+    pub fn begin_process(&mut self, windows: bool, prompt: Option<&str>) {
+        let grid = self.term.grid();
+        self.bootstrap = (windows
+            && prompt
+                .is_some_and(|prompt| grid_line_text(grid, grid.cursor.point.line.0) == prompt))
+        .then(Vec::new);
+        self.bootstrap_line_start = false;
+    }
     /// Feed PTY output to Alacritty; no output is sent back as shell input.
     pub fn process(&mut self, bytes: &[u8]) {
+        // portable-pty enables ConPTY cursor inheritance. A saved prompt's final column makes
+        // PowerShell insert a newline. Startup can look correct until the first height redraw
+        // clears the saved prompt row and exposes the gap in the restored command transcript.
+        // Answer only this initial query with column one; normal application DSR stays upstream.
+        const INHERIT_QUERY: &[u8] = b"\x1b[6n";
+        let buffered = if let Some(mut initial) = self.bootstrap.take() {
+            initial.extend_from_slice(bytes);
+            if initial.len() < INHERIT_QUERY.len() && INHERIT_QUERY.starts_with(&initial) {
+                self.bootstrap = Some(initial);
+                return;
+            }
+            if initial.starts_with(INHERIT_QUERY) {
+                let row = self.screen().cursor_position().0 + 1;
+                self.replies
+                    .borrow_mut()
+                    .bytes
+                    .extend_from_slice(format!("\x1b[{row};1R").as_bytes());
+                self.bootstrap_line_start = true;
+                Some(initial.split_off(INHERIT_QUERY.len()))
+            } else {
+                // Shells without this bootstrap keep all original bytes, including split ESCs.
+                Some(initial)
+            }
+        } else {
+            None
+        };
+        let bytes = buffered.as_deref().unwrap_or(bytes);
+        if self.bootstrap_line_start && !bytes.is_empty() {
+            // ConPTY may emit the prompt without CUP when no resize redraw is needed. Match
+            // its reported column before parsing output, but keep the saved caret until then.
+            let grid = self.term.grid_mut();
+            grid.cursor.point.column = Column(0);
+            grid.cursor.input_needs_wrap = false;
+            self.bootstrap_line_start = false;
+        }
         self.parser.advance(&mut self.term, bytes);
         // Keep OSC palette changes available to subsequent color-query callbacks.
         let mut replies = self.replies.borrow_mut();
@@ -384,6 +434,43 @@ impl Emulator {
         }
         // A snapshot is never allowed to issue terminal query responses to the new process.
         self.replies.borrow_mut().bytes.clear();
+    }
+    /// Migrate the old startup artifact only between two identical empty default prompts.
+    pub fn repair_legacy_prompt_gap(&mut self, prompt: &str) {
+        let grid = self.term.primary_grid();
+        let cursor = grid.cursor.clone();
+        let row = cursor.point.line.0;
+        // Never compact printed commands, colored blank output, wrapped prompts or later content.
+        if row <= 1
+            || grid_line_text(grid, row) != prompt
+            || grid[Line(row)][Column(grid.columns() - 1)]
+                .flags
+                .contains(Flags::WRAPLINE)
+            || (row + 1..grid.screen_lines() as i32).any(|line| snapshot_line_end(grid, line) > 0)
+        {
+            return;
+        }
+        let Some(previous) = (0..row)
+            .rev()
+            .find(|&line| snapshot_line_end(grid, line) > 0)
+        else {
+            return;
+        };
+        let gap = row - previous - 1;
+        if gap == 0
+            || grid_line_text(grid, previous) != prompt
+            || grid[Line(previous)][Column(grid.columns() - 1)]
+                .flags
+                .contains(Flags::WRAPLINE)
+        {
+            return;
+        }
+        let offset = grid.display_offset();
+        self.process(format!("\x1b[{};1H\x1b[{gap}M", previous + 2).as_bytes());
+        let grid = self.term.primary_grid_mut();
+        grid.cursor = cursor;
+        grid.cursor.point.line -= gap;
+        self.set_scrollback(offset.min(self.history()));
     }
     /// Resize the emulator grid without introducing a line of shell input.
     pub fn resize(&mut self, rows: u16, cols: u16) {
@@ -636,6 +723,21 @@ fn snapshot_line_end(grid: &Grid<Cell>, line: i32) -> usize {
         .find(|&col| !row[Column(col)].is_empty())
         .map(|col| col + 1)
         .unwrap_or(0)
+}
+
+/// Read one physical row for prompt matching, including combining marks and excluding padding.
+fn grid_line_text(grid: &Grid<Cell>, line: i32) -> String {
+    let mut text = String::new();
+    for col in 0..grid[Line(line)].occupied_len().min(grid.columns()) {
+        let cell = &grid[Point::new(Line(line), Column(col))];
+        if !cell.flags.contains(Flags::WIDE_CHAR_SPACER) {
+            text.push(cell.c);
+            if let Some(extra) = cell.zerowidth() {
+                text.extend(extra.iter());
+            }
+        }
+    }
+    text.trim_end().to_owned()
 }
 
 /// Emit ANSI SGR attributes without any executable shell or OSC control sequences.

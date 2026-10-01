@@ -105,7 +105,9 @@ impl Contribution {
     fn read(root: &Path, manifest_path: &str, id: &str, digest: &str) -> anyhow::Result<Self> {
         let root = root.canonicalize()?;
         let source = read_asset(&root, Path::new(manifest_path))?;
-        let manifest = PluginManifest::parse(std::str::from_utf8(&source)?)?;
+        let mut manifest = PluginManifest::parse(std::str::from_utf8(&source)?)?;
+        // Immutable migrated packages may still contain their original declarative manifest.
+        manifest.plugin.id = plugin_schema::canonical_plugin_id(&manifest.plugin.id).to_owned();
         anyhow::ensure!(manifest.plugin.id == id, "Contribution identity mismatch");
         let icons = manifest
             .file_icons
@@ -179,23 +181,42 @@ fn read_asset(root: &Path, path: &Path) -> anyhow::Result<Vec<u8>> {
     Ok(std::fs::read(resolved)?)
 }
 
-/// Return the owning package and configuration for a matching source extension.
+/// Return the owning package and configuration for a matching source file.
 pub fn language_for_path(path: &Path) -> Option<(String, LanguageContribution)> {
-    let extension = path.extension()?.to_str()?;
     let catalog = CATALOG.read().unwrap().clone();
-    catalog.plugins.iter().find_map(|(id, contribution)| {
-        contribution
-            .manifest
-            .languages
-            .iter()
-            .find(|language| {
-                language
-                    .extensions
-                    .iter()
-                    .any(|candidate| candidate.eq_ignore_ascii_case(extension))
-            })
-            .map(|language| (id.clone(), language.clone()))
-    })
+    language_for_path_in_catalog(&catalog, path)
+}
+
+/// Exact basenames win over extension selectors across all installed plugins.
+fn language_for_path_in_catalog(
+    catalog: &Catalog,
+    path: &Path,
+) -> Option<(String, LanguageContribution)> {
+    let filename = path.file_name()?.to_str()?;
+    for (id, contribution) in &catalog.plugins {
+        if let Some(language) = contribution.manifest.languages.iter().find(|language| {
+            language
+                .filenames
+                .iter()
+                .any(|candidate| candidate.eq_ignore_ascii_case(filename))
+        }) {
+            return Some((id.clone(), language.clone()));
+        }
+    }
+
+    // A generic .lock extension is deliberately absent from the TOML contribution.
+    let extension = path.extension()?.to_str()?;
+    for (id, contribution) in &catalog.plugins {
+        if let Some(language) = contribution.manifest.languages.iter().find(|language| {
+            language
+                .extensions
+                .iter()
+                .any(|candidate| candidate.eq_ignore_ascii_case(extension))
+        }) {
+            return Some((id.clone(), language.clone()));
+        }
+    }
+    None
 }
 
 /// Locate an enabled package so its grammar can be validated off the UI thread.
@@ -248,18 +269,90 @@ pub fn asset(path: &str) -> Option<Vec<u8>> {
 mod tests {
     use super::*;
 
+    /// JavaScript aliases resolve from the installed manifest and carry valid themed icons.
+    #[test]
+    fn javascript_package_resolves_extensions_and_icons() {
+        let plugins = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../plugins");
+        let javascript = Contribution::read(
+            &plugins.join("javascript"),
+            "plugin.toml",
+            "javascript",
+            &"a".repeat(64),
+        )
+        .unwrap();
+        assert_eq!(javascript.assets.len(), 2);
+        let mut catalog = Catalog::default();
+        catalog.plugins.insert("javascript".to_owned(), javascript);
+        for path in ["main.js", "module.mjs", "legacy.cjs", "View.jsx", "MAIN.JS"] {
+            let (_, language) = language_for_path_in_catalog(&catalog, Path::new(path)).unwrap();
+            assert_eq!(language.id, "javascript");
+            let icons = catalog.plugins["javascript"].icons.as_ref().unwrap();
+            let extension = Path::new(path).extension().unwrap().to_str().unwrap();
+            assert!(
+                icons.icons[0]
+                    .extensions
+                    .iter()
+                    .any(|candidate| candidate.eq_ignore_ascii_case(extension))
+            );
+        }
+        // TypeScript and JSON retain their own language identities.
+        for path in ["main.ts", "View.tsx", "package.json"] {
+            assert!(language_for_path_in_catalog(&catalog, Path::new(path)).is_none());
+        }
+        catalog.plugins.clear();
+        assert!(language_for_path_in_catalog(&catalog, Path::new("main.js")).is_none());
+    }
+
     /// Source assets use the same validated directory format copied into each ZIP.
     #[test]
     fn declarative_language_packages_expose_their_distinct_resources() {
         let plugins = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../plugins");
         let digest = "a".repeat(64);
         let rust =
-            Contribution::read(&plugins.join("rust"), "plugin.toml", "me.rust", &digest).unwrap();
+            Contribution::read(&plugins.join("rust"), "plugin.toml", "rust", &digest).unwrap();
         assert_eq!(rust.manifest.languages[0].id, "rust");
         assert!(!rust.assets.is_empty());
         let toml =
-            Contribution::read(&plugins.join("toml"), "plugin.toml", "me.toml", &digest).unwrap();
+            Contribution::read(&plugins.join("toml"), "plugin.toml", "toml", &digest).unwrap();
         assert_eq!(toml.manifest.languages[0].id, "toml");
         assert!(rust.theme.is_none() && toml.theme.is_none());
+
+        // Both HTML suffixes resolve to one language and ship valid theme-specific icons.
+        let html =
+            Contribution::read(&plugins.join("html"), "plugin.toml", "html", &digest).unwrap();
+        assert_eq!(html.assets.len(), 2);
+        assert_eq!(
+            html.icons.as_ref().unwrap().icons[0].extensions,
+            ["html", "htm"]
+        );
+        let mut html_catalog = Catalog::default();
+        html_catalog.plugins.insert("html".to_owned(), html);
+        for path in ["index.html", "legacy.htm", "INDEX.HTML", "LEGACY.HTM"] {
+            let (owner, language) =
+                language_for_path_in_catalog(&html_catalog, Path::new(path)).unwrap();
+            assert_eq!(owner, "html");
+            assert_eq!(language.id, "html");
+        }
+        for path in ["view.xhtml", "component.vue", "image.svg", "index.html.txt"] {
+            assert!(language_for_path_in_catalog(&html_catalog, Path::new(path)).is_none());
+        }
+
+        // Known lockfiles use TOML, while a shared .lock suffix cannot select a grammar.
+        let mut catalog = Catalog::default();
+        catalog.plugins.insert("toml".to_owned(), toml);
+        for path in ["config.toml", "Cargo.lock", "uv.lock", "CARGO.LOCK"] {
+            assert_eq!(
+                language_for_path_in_catalog(&catalog, Path::new(path))
+                    .map(|(_, language)| language.id),
+                Some("toml".to_owned()),
+                "{path} should select the TOML plugin"
+            );
+        }
+        for path in ["composer.lock", "Gemfile.lock", "random.lock"] {
+            assert!(
+                language_for_path_in_catalog(&catalog, Path::new(path)).is_none(),
+                "{path} must not be classified by its .lock suffix"
+            );
+        }
     }
 }

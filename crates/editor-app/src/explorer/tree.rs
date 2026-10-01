@@ -1,8 +1,25 @@
 //! Builds and locates entries in the workspace explorer tree.
 
-use gpui_base::TreeItem;
+use gpui_base::{TreeItem, TreeState};
 use pinyin::ToPinyin;
 use std::path::{Path, PathBuf};
+
+/// Recover the owned hierarchy from the tree's visible flattened entries.
+pub(crate) fn root_items(state: &TreeState) -> Vec<TreeItem> {
+    (0..)
+        .map_while(|index| state.entry(index))
+        .filter(|entry| entry.is_root())
+        .map(|entry| entry.item().clone())
+        .collect()
+}
+
+/// TreeItem clones share expansion state, including children hidden below a collapsed ancestor.
+pub(crate) fn collapse_descendants(item: &TreeItem) {
+    for child in &item.children {
+        child.clone().expanded(false);
+        collapse_descendants(child);
+    }
+}
 
 pub(crate) fn restore_expanded(items: Vec<TreeItem>, expanded: &[String]) -> Vec<TreeItem> {
     items

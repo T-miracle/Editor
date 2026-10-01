@@ -1,0 +1,16 @@
+file_icons = "icons.json"
+
+[plugin]
+id = "html"
+name = "HTML"
+version = "0.1.1"
+host_version = ">=0.1.0"
+
+[[languages]]
+id = "html"
+# Both common HTML suffixes share the same parser and highlight query.
+extensions = ["html", "htm"]
+grammar = "grammar/html.wasm"
+highlights = "queries/highlights.scm"
+# The pinned upstream 0.23.2 grammar exports ABI 14, supported by the host.
+tree_sitter_abi = 14

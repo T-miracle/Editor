@@ -14,6 +14,7 @@ fn init(cx: &mut TestAppContext) {
 fn model() -> SideTabs {
     SideTabs {
         id: "tabs".into(),
+        position: SideTabsPosition::Right,
         items: ["one", "two"]
             .into_iter()
             .map(|id| SideTab {
@@ -34,10 +35,11 @@ fn model() -> SideTabs {
 fn style(cx: &App) -> SideTabsStyle {
     let menu = MenuStyle::current(cx);
     SideTabsStyle {
-        background: menu.surface,
+        background: gpui_kit::rgb(0xf7f8fa).into(),
         border: menu.border,
-        active: menu.hover,
+        active: gpui_kit::rgb(0xffffff).into(),
         active_foreground: menu.foreground,
+        active_inner_border: gpui_kit::rgb(0x3574f0).into(),
         menu,
         close_background: None,
         close_foreground: None,
@@ -165,4 +167,144 @@ fn side_tabs_preserves_native_rename_during_guest_updates(cx: &mut TestAppContex
         id: "one".into(),
         value: "中文会话".into()
     }));
+}
+
+/// Left placement mirrors the divider hit target and drag direction without changing tab IDs.
+#[gpui::test]
+fn left_side_tabs_resize_and_reorder_use_the_inner_edge(cx: &mut TestAppContext) {
+    init(cx);
+    let events = Rc::new(RefCell::new(vec![]));
+    let sink = events.clone();
+    let (_, cx) = cx.add_window_view(move |window, cx| {
+        let view = cx.new(|cx| {
+            let mut tabs = model();
+            tabs.position = SideTabsPosition::Left;
+            SideTabBar::new(
+                tabs,
+                style(cx),
+                cx.focus_handle(),
+                move |action, _, _| sink.borrow_mut().push(action),
+                Rc::new(Cell::new(None)),
+                |_| {},
+                cx,
+            )
+        });
+        Root::new(view, window, cx)
+    });
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+    let first = cx.debug_bounds("side-tab-one").unwrap().center();
+    let second = cx.debug_bounds("side-tab-two").unwrap().center();
+    cx.simulate_mouse_down(second, MouseButton::Left, Default::default());
+    cx.simulate_mouse_move(first, MouseButton::Left, Default::default());
+    cx.simulate_mouse_up(first, MouseButton::Left, Default::default());
+    cx.run_until_parked();
+    assert!(events.borrow().contains(&Action::Move {
+        from: "two".into(),
+        to: "one".into()
+    }));
+    let bar = cx.debug_bounds("native-side-tabs").unwrap();
+    let handle = cx.debug_bounds("side-tabs-resize").unwrap();
+    assert_eq!(handle.right(), bar.right());
+    let start = handle.center();
+    let grown = start + point(px(40.), px(0.));
+    cx.simulate_mouse_down(start, MouseButton::Left, Default::default());
+    cx.simulate_mouse_move(grown, MouseButton::Left, Default::default());
+    assert!(
+        !events
+            .borrow()
+            .iter()
+            .any(|event| matches!(event, Action::Resize(_)))
+    );
+    cx.simulate_mouse_up(grown, MouseButton::Left, Default::default());
+    cx.run_until_parked();
+    assert!(events.borrow().contains(&Action::Resize(220.)));
+}
+
+/// Visible paint, rather than submitted quads alone, guards shared separators and inner accents.
+#[gpui::test]
+fn side_tabs_paint_complete_borders_without_hover_changes(cx: &mut TestAppContext) {
+    init(cx);
+    for position in [SideTabsPosition::Right, SideTabsPosition::Left] {
+        let (_, cx) = cx.add_window_view(move |window, cx| {
+            let view = cx.new(|cx| {
+                let mut tabs = model();
+                tabs.position = position;
+                SideTabBar::new(
+                    tabs,
+                    style(cx),
+                    cx.focus_handle(),
+                    |_, _, _| {},
+                    Rc::new(Cell::new(None)),
+                    |_| {},
+                    cx,
+                )
+            });
+            Root::new(view, window, cx)
+        });
+        cx.update(|window, cx| window.draw(cx).clear(cx));
+        let row = cx.debug_bounds("side-tab-one").unwrap();
+        cx.update(|window, _| {
+            let scale = window.scale_factor();
+            let quads = window.painted_quads();
+            let border = quads
+                .iter()
+                .find(|quad| {
+                    quad.bounds.origin.x.0 / scale == row.left() / px(1.)
+                        && quad.bounds.origin.y.0 / scale == row.top() / px(1.)
+                        && quad.border_widths.left.0 > 0.
+                })
+                .expect("the selected row keeps its outer and bottom borders");
+            // The dock title or previous row already supplies the shared top separator.
+            assert_eq!(border.border_widths.top.0, 0.);
+            for width in [
+                border.border_widths.left,
+                border.border_widths.right,
+                border.border_widths.bottom,
+            ] {
+                assert_eq!(width.0 / scale, 1.);
+            }
+            let accent = quads
+                .iter()
+                .find(|quad| quad.background == gpui_kit::rgb(0x3574f0).into())
+                .expect("the selected row paints its inner accent");
+            // A submitted accent can still disappear when the scroll container clips its border.
+            let visible = accent.bounds.intersect(&accent.content_mask.bounds);
+            assert_eq!(visible.size.width.0 / scale, 1.);
+            assert_eq!(accent.bounds.size.width.0 / scale, 1.);
+            assert_eq!(
+                accent.bounds.size.height.0 / scale,
+                row.size.height / px(1.)
+            );
+            let edge = match position {
+                SideTabsPosition::Left => row.right() - px(1.),
+                SideTabsPosition::Right => row.left(),
+            };
+            assert_eq!(accent.bounds.left().0 / scale, edge / px(1.));
+        });
+        let painted = |window: &mut Window| {
+            window
+                .painted_quads()
+                .into_iter()
+                .map(|quad| {
+                    (
+                        quad.bounds,
+                        quad.background,
+                        quad.border_color,
+                        quad.border_widths,
+                    )
+                })
+                .collect::<Vec<_>>()
+        };
+        let before = cx.update(|window, _| painted(window));
+        // Both the inactive tab and the close button must retain their normal paint on hover.
+        let second = cx.debug_bounds("side-tab-two").unwrap();
+        for point in [
+            second.center(),
+            point(second.right() - px(14.), second.center().y),
+        ] {
+            cx.simulate_mouse_move(point, None, Default::default());
+            cx.update(|window, cx| window.draw(cx).clear(cx));
+            assert_eq!(cx.update(|window, _| painted(window)), before);
+        }
+    }
 }

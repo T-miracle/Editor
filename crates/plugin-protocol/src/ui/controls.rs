@@ -1,7 +1,7 @@
-//! Native controls composed around a canvas; new packages use manifest protocol 4.
+//! Native controls composed around a canvas; left/right sidebars use manifest protocol 5.
 use super::*;
 
-/// The canvas keeps its full panel coordinates; the sidebar occupies its right edge.
+/// The canvas keeps its full panel coordinates; the sidebar occupies the declared edge.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct CanvasControls {
     pub revision: u64,
@@ -12,12 +12,24 @@ pub struct CanvasControls {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct SideTabs {
     pub id: String,
+    /// Omitted by older guests, which always placed their sidebar on the right.
+    #[serde(default)]
+    pub position: SideTabsPosition,
     pub items: Vec<SideTab>,
     pub selected: Option<String>,
     pub rename: Option<String>,
     pub width: f32,
     pub min_width: f32,
     pub max_width: f32,
+}
+
+/// Selects the sidebar's dock edge; its inner border and resize handle face the canvas.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SideTabsPosition {
+    Left,
+    #[default]
+    Right,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]

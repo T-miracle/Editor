@@ -28,7 +28,8 @@ impl StatusBar {
 impl RenderOnce for StatusBar {
     fn render(self, _: &mut Window, _: &mut App) -> impl IntoElement {
         h_flex()
-            .h(px(26.))
+            // Keep status contents vertically centered within the requested 32px bar.
+            .h(px(32.))
             .w_full()
             .items_center()
             .gap_3()

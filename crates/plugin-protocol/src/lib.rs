@@ -46,6 +46,10 @@ pub struct Panel {
     pub id: String,
     pub title: String,
     pub position: String,
+    /// Protocol 6 editor-local previews match these case-insensitive extensions without dots.
+    /// Other panel positions leave this list empty and retain their independent dock behavior.
+    #[serde(default)]
+    pub file_extensions: Vec<String>,
     /// Used only when this panel has no saved visibility preference yet.
     #[serde(default = "panel_visible_by_default")]
     pub default_visible: bool,
@@ -154,7 +158,7 @@ impl Environment {
 }
 
 /// Physical surface coordinates let a guest lay out its own interface.
-#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct Rect {
     pub x: f32,
     pub y: f32,
@@ -171,6 +175,13 @@ impl Rect {
 /// A declarative drawing list; text is shaped by the native host text system.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum Paint {
+    /// Protocol 6 draws a full-color vector above preceding operations, preserving transparency.
+    /// The explicit clip bounds raster allocation when the image is zoomed beyond its viewport.
+    Svg {
+        rect: Rect,
+        clip: Rect,
+        source: String,
+    },
     Fill {
         rect: Rect,
         color: u32,
@@ -263,6 +274,12 @@ pub enum Message {
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum Event {
+    /// Protocol 6 supplies the active in-memory document to a permission-checked editor preview.
+    /// A missing path clears the previous document when its file no longer matches the panel.
+    Document {
+        path: Option<String>,
+        text: String,
+    },
     /// Native UI events are scoped by the enclosing Surface message.
     Ui(ui::UiEvent),
     /// Native events retain their originating panel when a plugin declares several surfaces.
@@ -285,6 +302,7 @@ pub enum Event {
         handle: u64,
     },
     Command {
+        /// Declared command, host reply, or `panel.opened` lifecycle event scoped by Surface.
         id: String,
         cwd: Option<String>,
         text: Option<String>,
@@ -371,6 +389,8 @@ pub enum Request {
     },
     ClipboardWrite(String),
     ClipboardRead,
+    /// Native editor operations, including `hide_panel:<declared-panel-id>` for this plugin only.
+    /// Panel hiding is asynchronous and uses the existing `editor.commands` permission.
     Editor {
         command: String,
     },
@@ -425,7 +445,7 @@ mod tests {
             ..Default::default()
         };
         environment.theme_text_styles.insert(
-            "me.example.body".into(),
+            "example.body".into(),
             FontStyle {
                 size_px: Some(18.),
                 ..Default::default()
@@ -433,9 +453,9 @@ mod tests {
         );
         environment
             .theme_colors
-            .insert("me.example.body.foreground".into(), 0x123456);
+            .insert("example.body.foreground".into(), 0x123456);
         assert_eq!(
-            environment.font_style("me.example", "body", false),
+            environment.font_style("example", "body", false),
             FontStyle {
                 family: Some("Editor UI".into()),
                 size_px: Some(18.),
@@ -443,7 +463,7 @@ mod tests {
             }
         );
         assert_eq!(
-            environment.color("me.example", "body.foreground"),
+            environment.color("example", "body.foreground"),
             Some(0x123456)
         );
         assert_eq!(environment.color("another.plugin", "body.foreground"), None);

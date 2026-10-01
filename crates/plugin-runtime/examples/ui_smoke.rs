@@ -15,7 +15,7 @@ fn main() -> anyhow::Result<()> {
     manager.install(&package, Default::default())?;
     let send = |manager: &mut Manager, panel: &str, node: &str, action| {
         manager.event(
-            "me.example",
+            "example",
             Event::Surface {
                 panel: panel.into(),
                 event: Box::new(Event::Ui(UiEvent {
@@ -35,7 +35,7 @@ fn main() -> anyhow::Result<()> {
     )?;
     send(&mut manager, "counter", "open-dialog", Action::Click)?;
     assert!(
-        manager.live["me.example"].scenes["counter"]
+        manager.live["example"].scenes["counter"]
             .ui
             .as_ref()
             .unwrap()
@@ -44,30 +44,30 @@ fn main() -> anyhow::Result<()> {
     );
     send(&mut manager, "counter", "sample-dialog", Action::Dismiss)?;
     assert!(
-        manager.live["me.example"].scenes["counter"]
+        manager.live["example"].scenes["counter"]
             .ui
             .as_ref()
             .unwrap()
             .dialog
             .is_none()
     );
-    for scene in manager.live["me.example"].scenes.values() {
+    for scene in manager.live["example"].scenes.values() {
         scene.ui.as_ref().unwrap().validate().unwrap();
     }
-    let snapshot = manager.live.get_mut("me.example").unwrap().snapshot()?;
+    let snapshot = manager.live.get_mut("example").unwrap().snapshot()?;
     assert_eq!(snapshot.data, "[1,\"中文笔记\"]");
     // A guest cannot silently opt into native UI while declaring legacy compatibility.
     let mut legacy = package.clone();
     legacy.manifest.protocol = 1;
     assert!(manager.install(&legacy, Default::default()).is_err());
-    assert_eq!(manager.installed["me.example"].manifest.protocol, 2);
+    assert_eq!(manager.installed["example"].manifest.protocol, 2);
     assert_eq!(
-        manager.live.get_mut("me.example").unwrap().snapshot()?.data,
+        manager.live.get_mut("example").unwrap().snapshot()?.data,
         snapshot.data
     );
     manager.install(&package, Default::default())?;
     assert_eq!(
-        manager.live.get_mut("me.example").unwrap().snapshot()?.data,
+        manager.live.get_mut("example").unwrap().snapshot()?.data,
         snapshot.data
     );
     println!(

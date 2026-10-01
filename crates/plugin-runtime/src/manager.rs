@@ -74,14 +74,14 @@ impl Manager {
     pub fn workspace(&self) -> &str {
         &self.environment.workspace
     }
-    /// Read installed plugin metadata without starting their WASM components.
+    /// Read metadata without starting WASM; first read migrates legacy IDs and preserves private data.
     pub fn read_registry(root: &Path) -> anyhow::Result<BTreeMap<String, Installed>> {
         let installed = match std::fs::read(root.join("registry.json")) {
             Ok(bytes) => serde_json::from_slice(&bytes)?,
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => BTreeMap::new(),
             Err(e) => return Err(e.into()),
         };
-        Ok(installed)
+        crate::migration::migrate_registry(root, installed)
     }
     pub fn open(root: PathBuf, environment: Environment) -> anyhow::Result<Self> {
         std::fs::create_dir_all(&root)?;
@@ -500,6 +500,31 @@ impl Manager {
         )
     }
     pub fn event(&mut self, id: &str, event: Event) -> anyhow::Result<()> {
+        // Never deliver document text to a guest without the same editor permission as native reads.
+        let mut inner = &event;
+        let mut surfaces = Vec::new();
+        while let Event::Surface { panel, event } = inner {
+            surfaces.push(panel);
+            inner = event;
+        }
+        if matches!(inner, Event::Document { .. }) {
+            anyhow::ensure!(
+                surfaces.len() == 1,
+                "Document events must be scoped to one editor preview surface"
+            );
+            let entry = self
+                .installed
+                .get(id)
+                .ok_or_else(|| anyhow::anyhow!("Unknown plugin"))?;
+            anyhow::ensure!(
+                entry.manifest.protocol >= 6
+                    && entry.grants.contains("editor.commands")
+                    && entry.manifest.panels.iter().any(|descriptor| {
+                        descriptor.id == *surfaces[0] && descriptor.position == "editor"
+                    }),
+                "Document previews require a declared surface and editor.commands grant"
+            );
+        }
         let instance = self
             .live
             .get_mut(id)
@@ -558,7 +583,7 @@ mod icon_tests {
         let digest = "a".repeat(64);
         let icons = root
             .path()
-            .join("packages/me.example")
+            .join("packages/example")
             .join(&digest)
             .join("icons");
         std::fs::create_dir_all(&icons).unwrap();
@@ -568,7 +593,7 @@ mod icon_tests {
         std::fs::write(icons.join("dark.svg"), dark).unwrap();
         let installed = Installed {
             manifest: Manifest {
-                id: "me.example".into(),
+                id: "example".into(),
                 name: "Example".into(),
                 version: "1.0.0".into(),
                 protocol: 1,
@@ -576,6 +601,7 @@ mod icon_tests {
                 contributions: None,
                 permissions: BTreeSet::new(),
                 panels: vec![Panel {
+                    file_extensions: vec![],
                     id: "main".into(),
                     title: "Main".into(),
                     position: "bottom".into(),
@@ -616,13 +642,13 @@ mod scope_tests {
         let root = directory.path().join("plugins");
         let digest = "a".repeat(64);
         let contribution = root
-            .join("packages/me.example")
+            .join("packages/example")
             .join(&digest)
             .join("plugin.toml");
         std::fs::create_dir_all(contribution.parent().unwrap()).unwrap();
         std::fs::write(contribution, "").unwrap();
         let manifest = Manifest {
-            id: "me.example".into(),
+            id: "example".into(),
             name: "Example".into(),
             version: "1.0.0".into(),
             protocol: 1,
@@ -644,7 +670,7 @@ mod scope_tests {
         };
         std::fs::write(
             root.join("registry.json"),
-            serde_json::to_vec(&BTreeMap::from([("me.example", installed)])).unwrap(),
+            serde_json::to_vec(&BTreeMap::from([("example", installed)])).unwrap(),
         )
         .unwrap();
         let environment = Environment {
@@ -652,27 +678,23 @@ mod scope_tests {
             ..Environment::default()
         };
         let mut manager = Manager::open(root.clone(), environment).unwrap();
-        assert!(!manager.installed["me.example"].enabled);
+        assert!(!manager.installed["example"].enabled);
         assert!(
-            manager.installed["me.example"]
+            manager.installed["example"]
                 .project_enabled
                 .contains("project-a")
         );
-        assert!(!Manager::read_registry(&root).unwrap()["me.example"].enabled);
-        manager.set_project_enabled("me.example", false).unwrap();
+        assert!(!Manager::read_registry(&root).unwrap()["example"].enabled);
+        manager.set_project_enabled("example", false).unwrap();
         assert!(
-            !manager.installed["me.example"]
+            !manager.installed["example"]
                 .project_enabled
                 .contains("project-a")
         );
-        manager.set_project_enabled("me.example", true).unwrap();
+        manager.set_project_enabled("example", true).unwrap();
         let persisted = Manager::read_registry(&root).unwrap();
-        assert!(!persisted["me.example"].enabled);
-        assert!(
-            persisted["me.example"]
-                .project_enabled
-                .contains("project-a")
-        );
+        assert!(!persisted["example"].enabled);
+        assert!(persisted["example"].project_enabled.contains("project-a"));
     }
 }
 impl Drop for Manager {

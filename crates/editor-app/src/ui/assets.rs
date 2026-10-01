@@ -18,6 +18,10 @@ macro_rules! file_icons {
 }
 
 file_icons! {
+    // Custom explorer actions share the title's theme color through monochrome SVG rendering.
+    "icons/explorer-locate.svg" => "../../assets/icons/explorer-locate.svg",
+    "icons/explorer-collapse-all.svg" => "../../assets/icons/explorer-collapse-all.svg",
+    "icons/explorer-expand-all.svg" => "../../assets/icons/explorer-expand-all.svg",
     "file-icons/config.svg" => "../../assets/file-icons/config.svg",
     "file-icons/config_dark.svg" => "../../assets/file-icons/config_dark.svg",
     "file-icons/file.svg" => "../../assets/file-icons/file.svg",
@@ -70,6 +74,25 @@ mod tests {
     fn exposes_every_embedded_file_icon() {
         for path in FILE_ICON_PATHS {
             assert!(file_icon(path).is_some(), "missing embedded icon: {path}");
+        }
+    }
+
+    /// Every header action must resolve its SVG from the application bundle in either theme.
+    #[test]
+    fn exposes_explorer_title_icons() {
+        for path in [
+            "icons/explorer-locate.svg",
+            "icons/explorer-collapse-all.svg",
+            "icons/explorer-expand-all.svg",
+        ] {
+            assert!(AppAssets.load(path).unwrap().is_some());
+            assert!(
+                AppAssets
+                    .list("icons/")
+                    .unwrap()
+                    .iter()
+                    .any(|entry| entry == path)
+            );
         }
     }
 }

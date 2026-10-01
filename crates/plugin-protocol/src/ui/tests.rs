@@ -6,6 +6,7 @@ fn canvas_controls_rejects_ambiguous_items_and_unbounded_geometry() {
     let mut controls = CanvasControls {
         sidebar: Some(SideTabs {
             id: "tabs".into(),
+            position: SideTabsPosition::Right,
             items: vec![SideTab {
                 id: "one".into(),
                 label: "One".into(),
@@ -31,6 +32,21 @@ fn canvas_controls_rejects_ambiguous_items_and_unbounded_geometry() {
     let duplicate = controls.sidebar.as_ref().unwrap().items[0].clone();
     controls.sidebar.as_mut().unwrap().items.push(duplicate);
     assert!(controls.validate().is_err());
+}
+
+/// Older canvas controls retain their right dock; new controls round-trip either edge.
+#[test]
+fn sidebar_position_defaults_for_old_guests_and_round_trips_left() {
+    let legacy = serde_json::json!({
+        "id": "tabs", "items": [], "selected": null, "rename": null,
+        "width": 180., "min_width": 80., "max_width": 480.
+    });
+    let mut tabs: SideTabs = serde_json::from_value(legacy).unwrap();
+    assert_eq!(tabs.position, SideTabsPosition::Right);
+    tabs.position = SideTabsPosition::Left;
+    let value = serde_json::to_value(&tabs).unwrap();
+    assert_eq!(value["position"], "left");
+    assert_eq!(serde_json::from_value::<SideTabs>(value).unwrap(), tabs);
 }
 
 #[test]

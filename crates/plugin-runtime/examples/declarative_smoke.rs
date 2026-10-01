@@ -1,4 +1,4 @@
-//! Verify host-managed Rust and TOML packages through real lifecycle calls.
+//! Verify host-managed language packages through real lifecycle calls.
 
 use plugin_runtime::{Manager, Package, plugin_protocol::Environment};
 use std::{
@@ -14,7 +14,7 @@ fn main() -> anyhow::Result<()> {
     let legacy = Package::read(&packages.join("example.zip"))?;
     let mut files = legacy.files;
     let mut manifest = legacy.manifest;
-    manifest.id = "me.rust".into();
+    manifest.id = "rust".into();
     files.insert("manifest.json".into(), serde_json::to_vec(&manifest)?);
     let mut archive = zip::ZipWriter::new(Cursor::new(Vec::new()));
     for (name, bytes) in files {
@@ -24,10 +24,10 @@ fn main() -> anyhow::Result<()> {
     let legacy = Package::from_bytes(&archive.finish()?.into_inner())?;
     manager.install(&legacy, Default::default())?;
     anyhow::ensure!(
-        manager.live.contains_key("me.rust"),
+        manager.live.contains_key("rust"),
         "legacy guest did not start"
     );
-    for name in ["rust", "toml"] {
+    for name in ["rust", "toml", "html", "javascript"] {
         let package = Package::read(&packages.join(format!("{name}.zip")))?;
         // Declarative packages install without a guest instance; the host owns their state.
         manager.install(&package, Default::default())?;
@@ -58,21 +58,37 @@ fn main() -> anyhow::Result<()> {
         manager.enable(&package.manifest.id)?;
     }
     // Uninstall one resource package to verify its registry entry disappears.
-    manager.uninstall("me.toml", false)?;
+    manager.uninstall("toml", false)?;
     anyhow::ensure!(
-        !manager.installed.contains_key("me.toml"),
+        !manager.installed.contains_key("toml"),
         "uninstall did not remove package"
     );
     // Restart restores enabled resource packages from the registry without guest instances.
     drop(manager);
     let manager = Manager::open(root.path().to_owned(), Environment::default())?;
     anyhow::ensure!(
-        manager.installed["me.rust"].enabled && !manager.installed.contains_key("me.toml"),
+        manager.installed["rust"].enabled
+            && manager.installed["html"].enabled
+            && manager.installed["javascript"].enabled
+            && !manager.installed.contains_key("toml"),
         "enabled packages were not restored"
     );
     anyhow::ensure!(
         manager.live.is_empty(),
         "restart launched a declarative guest"
+    );
+    // HTML must also uninstall cleanly after its enabled state survives a restart.
+    let mut manager = manager;
+    manager.uninstall("html", false)?;
+    anyhow::ensure!(
+        !manager.installed.contains_key("html"),
+        "HTML uninstall did not remove package"
+    );
+    // JavaScript resources must also disappear cleanly after registry restoration.
+    manager.uninstall("javascript", false)?;
+    anyhow::ensure!(
+        !manager.installed.contains_key("javascript"),
+        "JavaScript uninstall did not remove package"
     );
     println!("PASS: declarative lifecycle, restart, and migration from a guest-backed package");
     Ok(())

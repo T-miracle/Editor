@@ -1,0 +1,9 @@
+{
+  "id": "javascript",
+  "name": "JavaScript",
+  "version": "0.1.1",
+  "protocol": 1,
+  "contributions": "plugin.toml",
+  "permissions": [],
+  "storage_limit": 1024
+}

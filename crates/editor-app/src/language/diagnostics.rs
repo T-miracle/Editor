@@ -259,6 +259,50 @@ mod tests {
         assert!(check("toml", "name = \"中文😀\"\nvalue = 1\n").1.is_empty());
     }
 
+    /// An unfinished HTML attribute reports a Unicode-safe error that disappears on correction.
+    #[test]
+    fn html_incomplete_attribute_and_correction() {
+        let (text, errors) = check("html", "<div title=\"中文😀");
+        assert!(!errors.is_empty());
+        for error in errors {
+            let range = text.position_to_offset(&error.range.start)
+                ..text.position_to_offset(&error.range.end);
+            assert!(!range.is_empty());
+            assert!(!text.slice(range).to_string().is_empty());
+        }
+        assert!(
+            check("html", "<div title=\"中文😀\">&amp;</div>")
+                .1
+                .is_empty()
+        );
+    }
+
+    /// JavaScript errors retain visible Unicode-safe ranges and clear after an edit.
+    #[test]
+    fn javascript_error_and_correction() {
+        let (text, errors) = check("javascript", "const label = \"中文😀\";\nconst value = ;");
+        assert!(!errors.is_empty());
+        assert!(errors.iter().any(|error| error.range.start.line == 1));
+        for error in errors {
+            let range = text.position_to_offset(&error.range.start)
+                ..text.position_to_offset(&error.range.end);
+            assert!(!range.is_empty());
+            assert!(!text.slice(range).to_string().is_empty());
+            assert_eq!(error.source.as_deref(), Some("javascript"));
+        }
+        // Reuse parser state to exercise a correction in the same open document.
+        let mut diagnostics = SyntaxDiagnostics::default();
+        assert!(!diagnostics.check("javascript", &text).is_empty());
+        assert!(
+            diagnostics
+                .check(
+                    "javascript",
+                    &Rope::from("const label = \"中文😀\";\nconst value = <span>{label}</span>;")
+                )
+                .is_empty()
+        );
+    }
+
     /// Zero-width ranges at CRLF and EOF never split an emoji or underline a newline.
     #[test]
     fn missing_token_has_visible_unicode_anchor() {

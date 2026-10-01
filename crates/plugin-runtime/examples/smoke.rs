@@ -1,7 +1,7 @@
 //! Exercise the real packaged guest, native PTY, snapshot restore and hot update.
 use plugin_runtime::{
     Manager, Package,
-    plugin_protocol::{Environment, Event, Paint},
+    plugin_protocol::{Environment, Event, Paint, ui::SideTabsPosition},
 };
 use std::{
     path::PathBuf,
@@ -92,6 +92,50 @@ fn main() -> anyhow::Result<()> {
         "No terminal output; error: {:?}",
         manager.live[id].error
     );
+    // Configuration moves the live WASM layout without replacing its PTY or changing cells.
+    let before = manager.live[id].scene.as_ref().unwrap();
+    assert_eq!(
+        before
+            .controls
+            .as_ref()
+            .unwrap()
+            .sidebar
+            .as_ref()
+            .unwrap()
+            .position,
+        SideTabsPosition::Right
+    );
+    let cursor = before.cursor;
+    let width = before
+        .controls
+        .as_ref()
+        .unwrap()
+        .sidebar
+        .as_ref()
+        .unwrap()
+        .width;
+    let pids = manager.live[id].process_ids();
+    let snapshot = manager.live.get_mut(id).unwrap().snapshot()?;
+    let mut saved: serde_json::Value = serde_json::from_str(&snapshot.data)?;
+    saved["settings"]["tab_position"] = "left".into();
+    std::fs::write(
+        manager.data_directory(id).join("settings.json"),
+        serde_json::to_vec(&saved["settings"])?,
+    )?;
+    manager.invoke_command(id, "terminal.reload", serde_json::Value::Null)?;
+    let left = manager.live[id].scene.as_ref().unwrap();
+    assert_eq!(
+        left.controls
+            .as_ref()
+            .unwrap()
+            .sidebar
+            .as_ref()
+            .unwrap()
+            .position,
+        SideTabsPosition::Left
+    );
+    assert_eq!(left.cursor.x, cursor.x + width);
+    assert_eq!(manager.live[id].process_ids(), pids);
     manager.checkpoint()?;
     let old_pids = manager.live[id].process_ids();
     let mut invalid = package.clone();
@@ -148,6 +192,21 @@ fn main() -> anyhow::Result<()> {
     drop(manager);
     let mut manager = Manager::open(temp.path().to_owned(), environment)?;
     assert!(manager.live.contains_key(id));
+    // Hot update and editor restart both retain the plugin's declared sidebar edge.
+    assert_eq!(
+        manager.live[id]
+            .scene
+            .as_ref()
+            .unwrap()
+            .controls
+            .as_ref()
+            .unwrap()
+            .sidebar
+            .as_ref()
+            .unwrap()
+            .position,
+        SideTabsPosition::Left
+    );
     // The real component receives host parameters while ordinary terminal labels stay unnumbered.
     let pids = manager.live[id].process_ids();
     assert!(
@@ -263,15 +322,78 @@ fn main() -> anyhow::Result<()> {
     );
     let snapshot = manager.live.get_mut(id).unwrap().snapshot()?;
     assert!(snapshot.data.contains("宿主运行"));
+    // Closing all packaged guest sessions emits one panel-hide request after the final PTY closes.
+    let sessions = manager.live[id].process_count();
+    manager.live.get_mut(id).unwrap().effects();
+    for remaining in (0..sessions).rev() {
+        manager.invoke_command(id, "terminal.close", serde_json::Value::Null)?;
+        assert_eq!(manager.live[id].process_count(), remaining);
+        let effects = manager.live.get_mut(id).unwrap().effects();
+        assert_eq!(
+            effects
+                .iter()
+                .filter(|effect| matches!(effect,
+                    plugin_runtime::plugin_protocol::Request::Editor { command }
+                        if command == "hide_panel:terminal"
+                ))
+                .count(),
+            usize::from(remaining == 0),
+        );
+    }
+    assert!(
+        manager.live[id]
+            .scene
+            .as_ref()
+            .unwrap()
+            .controls
+            .as_ref()
+            .unwrap()
+            .sidebar
+            .as_ref()
+            .unwrap()
+            .items
+            .is_empty()
+    );
+    // Native panel reopening is a scoped lifecycle event and creates exactly one fresh shell.
+    for _ in 0..2 {
+        manager.event(
+            id,
+            Event::Surface {
+                panel: "terminal".into(),
+                event: Box::new(Event::Command {
+                    id: "panel.opened".into(),
+                    cwd: None,
+                    text: None,
+                    arguments: None,
+                }),
+            },
+        )?;
+        assert_eq!(manager.live[id].process_count(), 1);
+        assert_eq!(
+            manager.live[id]
+                .scene
+                .as_ref()
+                .unwrap()
+                .controls
+                .as_ref()
+                .unwrap()
+                .sidebar
+                .as_ref()
+                .unwrap()
+                .items
+                .len(),
+            1,
+        );
+    }
     manager.uninstall(id, true)?;
     assert!(!manager.data_directory(id).exists());
     // An unrelated, permissionless package declares and renders two different native surfaces.
     // Test the companion package from the same output directory as the supplied terminal ZIP.
     let example = Package::read(&package_path.with_file_name("example.zip"))?;
     manager.install(&example, Default::default())?;
-    assert_eq!(manager.live["me.example"].scenes.len(), 2);
+    assert_eq!(manager.live["example"].scenes.len(), 2);
     manager.event(
-        "me.example",
+        "example",
         Event::Command {
             id: "increment".into(),
             cwd: None,
@@ -282,7 +404,7 @@ fn main() -> anyhow::Result<()> {
     assert!(
         manager
             .live
-            .get_mut("me.example")
+            .get_mut("example")
             .unwrap()
             .snapshot()?
             .data
@@ -302,13 +424,13 @@ fn main() -> anyhow::Result<()> {
     let failing = Package::from_bytes(&archive.finish()?.into_inner())?;
     assert!(manager.install(&failing, Default::default()).is_err());
     assert_eq!(
-        manager.installed["me.example"].manifest.version,
+        manager.installed["example"].manifest.version,
         example.manifest.version
     );
     assert!(
         manager
             .live
-            .get_mut("me.example")
+            .get_mut("example")
             .unwrap()
             .snapshot()?
             .data
@@ -317,13 +439,13 @@ fn main() -> anyhow::Result<()> {
     let mut escalated = example.clone();
     escalated.manifest.permissions.insert("clipboard".into());
     assert!(manager.install(&escalated, Default::default()).is_err());
-    manager.uninstall("me.example", false)?;
-    assert!(manager.data_directory("me.example").exists());
+    manager.uninstall("example", false)?;
+    assert!(manager.data_directory("example").exists());
     manager.install(&example, Default::default())?;
     assert!(
         manager
             .live
-            .get_mut("me.example")
+            .get_mut("example")
             .unwrap()
             .snapshot()?
             .data

@@ -1,19 +1,50 @@
 use super::*;
 use crate::theme::{apply_theme, builtin_theme};
 use editor_core::Workspace;
-use gpui_kit::{AppContext as _, TestAppContext, component::Root, gpui};
+use gpui_kit::{AppContext as _, TestAppContext, VisualTestContext, component::Root, gpui};
 use std::{cell::RefCell, rc::Rc};
 
-#[test]
-fn menu_position_stays_inside_window() {
-    let (x, y) = menu_position(
-        point(px(950.), px(720.)),
-        size(px(1000.), px(760.)),
-        MENU_WIDTH,
-        160.,
-    );
-    assert!(x + px(MENU_WIDTH) <= px(1000.));
-    assert!(y + px(160.) <= px(760.));
+/// Query the component's native accessibility facts instead of maintaining custom menu-row selectors.
+trait NativeMenuTest {
+    fn menu_bounds(&mut self, selector: &str) -> Option<Bounds<Pixels>>;
+    fn menu_selected(&mut self, command: Command) -> bool;
+}
+
+impl NativeMenuTest for VisualTestContext {
+    fn menu_bounds(&mut self, selector: &str) -> Option<Bounds<Pixels>> {
+        let command = ROW_COMMANDS
+            .iter()
+            .chain(ROOT_COMMANDS)
+            .chain(NEW_COMMANDS)
+            .chain(SPECIAL_COPY_COMMANDS)
+            .find(|command| command.id() == selector)
+            .copied();
+        self.update(|window, _| {
+            gpui_base::test_support::snapshots(window).into_iter().find(|item| {
+                if let Some(command) = command {
+                    item.role() == Some(gpui_kit::Role::MenuItem)
+                        && item.label() == Some(command.label().as_str())
+                } else {
+                    item.role() == Some(gpui_kit::Role::Menu)
+                        && item.path().iter().any(|id| {
+                            matches!(id, gpui_kit::ElementId::Name(name) if name.as_str() == "submenu")
+                        })
+                }
+            }).map(|item| item.bounds())
+        })
+    }
+
+    fn menu_selected(&mut self, command: Command) -> bool {
+        self.update(|window, _| {
+            gpui_base::test_support::snapshots(window)
+                .into_iter()
+                .any(|item| {
+                    item.role() == Some(gpui_kit::Role::MenuItem)
+                        && item.label() == Some(command.label().as_str())
+                        && item.selected() == Some(true)
+                })
+        })
+    }
 }
 
 #[test]
@@ -93,14 +124,79 @@ fn builtin_themes_define_explorer_menu_colors(cx: &mut TestAppContext) {
             assert!(styles.base.background.is_some());
             assert!(styles.base.border.is_some());
             assert!(styles.hover.background.is_some());
-            // Every menu row must declare the shared menu font size, including submenu parents.
-            let menu_style = MenuStyle::current(cx);
-            let mut new_row = menu_style.row("font-size-check", "New", false);
-            assert_eq!(
-                new_row.style().text.font_size,
-                Some(px(menu_style.font_size).into())
-            );
         }
+    });
+}
+
+/// Native anchoring and keyboard actions must work without the removed host navigation state.
+#[gpui::test]
+fn component_menu_snaps_to_window_and_navigates_with_keyboard(cx: &mut TestAppContext) {
+    cx.update(|cx| {
+        gpui_kit::init(cx);
+        typography::init(cx);
+        apply_theme(builtin_theme(false), cx);
+        cx.set_reduce_motion(true);
+    });
+    let directory = tempfile::tempdir().unwrap();
+    let workspace = Workspace::open(directory.path()).unwrap();
+    let slot = Rc::new(RefCell::new(None));
+    let capture = slot.clone();
+    let (_, visual) = cx.add_window_view(move |window, cx| {
+        let app = cx.new(|cx| EditorApp::new(workspace, None, window, cx));
+        *capture.borrow_mut() = Some(app.clone());
+        Root::new(app, window, cx)
+    });
+    let app = slot.borrow_mut().take().unwrap();
+    visual.simulate_resize(size(px(800.), px(600.)));
+    for dark in [false, true] {
+        visual.update(|window, cx| {
+            apply_theme(builtin_theme(dark), cx);
+            app.update(cx, |app, cx| {
+                app.open_explorer_menu(None, point(px(790.), px(590.)), window, cx);
+            });
+        });
+        visual.run_until_parked();
+        visual.update(|window, cx| window.draw(cx).clear(cx));
+        let bounds = visual.debug_bounds("explorer-context-menu").unwrap();
+        assert!(bounds.origin.x >= px(0.) && bounds.origin.y >= px(0.));
+        assert!(bounds.origin.x + bounds.size.width <= px(800.));
+        assert!(bounds.origin.y + bounds.size.height <= px(600.));
+        visual.simulate_keystrokes("escape");
+        visual.run_until_parked();
+        assert!(visual.update(|_, cx| app.read(cx).explorer_menu.is_none()));
+    }
+    visual.update(|window, cx| {
+        app.update(cx, |app, cx| {
+            app.open_explorer_menu(None, point(px(100.), px(100.)), window, cx);
+        });
+    });
+    visual.update(|window, cx| window.draw(cx).clear(cx));
+    for key in ["down", "down", "right"] {
+        visual.simulate_keystrokes(key);
+        visual.run_until_parked();
+        visual.update(|window, cx| window.draw(cx).clear(cx));
+    }
+    assert!(visual.menu_selected(Command::New));
+    assert!(visual.menu_bounds("explorer-new-submenu").is_some());
+    visual.simulate_keystrokes("enter");
+    visual.run_until_parked();
+    visual.update(|window, cx| window.draw(cx).clear(cx));
+    assert!(visual.update(|_, cx| app.read(cx).explorer_menu.is_none()));
+    assert!(visual.update(|_, cx| app.read(cx).explorer_edit.is_some()));
+    // Dismissal must not steal focus from the newly opened name input.
+    visual.simulate_input("new-folder");
+    visual.update(|_, cx| {
+        assert_eq!(
+            app.read(cx)
+                .explorer_edit
+                .as_ref()
+                .unwrap()
+                .input
+                .read(cx)
+                .value()
+                .to_string(),
+            "new-folder"
+        );
     });
 }
 
@@ -131,27 +227,26 @@ fn empty_explorer_opens_project_menu_and_new_submenu(cx: &mut TestAppContext) {
     window_cx.update(|window, cx| window.draw(cx).clear(cx));
     assert!(window_cx.update(|_, cx| app.read(cx).explorer_menu.is_some()));
     assert!(window_cx.debug_bounds("explorer-context-menu").is_some());
-    assert!(window_cx.debug_bounds("explorer-menu-rename").is_none());
-    assert!(window_cx.debug_bounds("explorer-menu-delete").is_none());
-    let new = window_cx.debug_bounds("explorer-menu-new").unwrap();
+    assert!(window_cx.menu_bounds("explorer-menu-rename").is_none());
+    assert!(window_cx.menu_bounds("explorer-menu-delete").is_none());
+    let new = window_cx.menu_bounds("explorer-menu-new").unwrap();
+    window_cx.simulate_mouse_move(new.center(), None, Default::default());
+    window_cx.run_until_parked();
+    window_cx.update(|window, cx| window.draw(cx).clear(cx));
     window_cx.simulate_click(new.center(), Default::default());
     window_cx.run_until_parked();
     window_cx.update(|window, cx| window.draw(cx).clear(cx));
-    assert!(window_cx.debug_bounds("explorer-new-submenu").is_some());
+    assert!(window_cx.menu_bounds("explorer-new-submenu").is_some());
     // Moving into the child menu must leave its parent visibly selected.
-    let directory_item = window_cx.debug_bounds("explorer-menu-directory").unwrap();
+    let directory_item = window_cx.menu_bounds("explorer-menu-directory").unwrap();
     window_cx.simulate_mouse_move(
         directory_item.center(),
         MouseButton::Left,
         Default::default(),
     );
     window_cx.run_until_parked();
-    assert!(window_cx.update(|_, cx| {
-        app.read(cx)
-            .explorer_menu
-            .as_ref()
-            .is_some_and(|menu| menu.main_row_selected(1))
-    }));
+    window_cx.update(|window, cx| window.draw(cx).clear(cx));
+    assert!(window_cx.menu_selected(Command::New));
     window_cx.simulate_click(directory_item.center(), Default::default());
     window_cx.run_until_parked();
     window_cx.update(|window, cx| window.draw(cx).clear(cx));
@@ -197,10 +292,10 @@ fn right_clicked_file_is_the_menu_target(cx: &mut TestAppContext) {
             .and_then(|menu| menu.target.clone())
     });
     assert_eq!(target, Some(file.canonicalize().unwrap()));
-    assert!(window_cx.debug_bounds("explorer-menu-rename").is_some());
-    assert!(window_cx.debug_bounds("explorer-menu-delete").is_some());
+    assert!(window_cx.menu_bounds("explorer-menu-rename").is_some());
+    assert!(window_cx.menu_bounds("explorer-menu-delete").is_some());
     // The default tab is open, so deletion must preserve its backing file and editor buffer.
-    let delete = window_cx.debug_bounds("explorer-menu-delete").unwrap();
+    let delete = window_cx.menu_bounds("explorer-menu-delete").unwrap();
     window_cx.simulate_click(delete.center(), Default::default());
     window_cx.run_until_parked();
     assert!(file.exists());
@@ -239,18 +334,19 @@ fn special_copy_submenu_writes_text_to_clipboard(cx: &mut TestAppContext) {
         window_cx.simulate_mouse_down(row.center(), MouseButton::Right, Default::default());
         window_cx.run_until_parked();
         window_cx.update(|window, cx| window.draw(cx).clear(cx));
-        let parent = window_cx
-            .debug_bounds("explorer-menu-special-copy")
-            .unwrap();
+        let parent = window_cx.menu_bounds("explorer-menu-special-copy").unwrap();
+        window_cx.simulate_mouse_move(parent.center(), None, Default::default());
+        window_cx.run_until_parked();
+        window_cx.update(|window, cx| window.draw(cx).clear(cx));
         window_cx.simulate_click(parent.center(), Default::default());
         window_cx.run_until_parked();
         window_cx.update(|window, cx| window.draw(cx).clear(cx));
         assert!(
             window_cx
-                .debug_bounds("explorer-special-copy-submenu")
+                .menu_bounds("explorer-special-copy-submenu")
                 .is_some()
         );
-        let action = window_cx.debug_bounds(selector).unwrap();
+        let action = window_cx.menu_bounds(selector).unwrap();
         window_cx.simulate_click(action.center(), Default::default());
         window_cx.run_until_parked();
         assert_eq!(
@@ -285,15 +381,16 @@ fn clicking_outside_an_open_submenu_does_not_press_the_panel_beneath(cx: &mut Te
     window_cx.simulate_mouse_down(row.center(), MouseButton::Right, Default::default());
     window_cx.run_until_parked();
     window_cx.update(|window, cx| window.draw(cx).clear(cx));
-    let parent = window_cx
-        .debug_bounds("explorer-menu-special-copy")
-        .unwrap();
+    let parent = window_cx.menu_bounds("explorer-menu-special-copy").unwrap();
+    window_cx.simulate_mouse_move(parent.center(), None, Default::default());
+    window_cx.run_until_parked();
+    window_cx.update(|window, cx| window.draw(cx).clear(cx));
     window_cx.simulate_click(parent.center(), Default::default());
     window_cx.run_until_parked();
     window_cx.update(|window, cx| window.draw(cx).clear(cx));
     assert!(
         window_cx
-            .debug_bounds("explorer-special-copy-submenu")
+            .menu_bounds("explorer-special-copy-submenu")
             .is_some()
     );
 
@@ -339,7 +436,7 @@ fn deleting_a_file_requires_confirmation(cx: &mut TestAppContext) {
     window_cx.simulate_mouse_down(row.center(), MouseButton::Right, Default::default());
     window_cx.run_until_parked();
     window_cx.update(|window, cx| window.draw(cx).clear(cx));
-    let delete = window_cx.debug_bounds("explorer-menu-delete").unwrap();
+    let delete = window_cx.menu_bounds("explorer-menu-delete").unwrap();
     window_cx.simulate_click(delete.center(), Default::default());
     window_cx.run_until_parked();
     window_cx.update(|window, cx| window.draw(cx).clear(cx));
@@ -363,7 +460,7 @@ fn deleting_a_file_requires_confirmation(cx: &mut TestAppContext) {
     window_cx.simulate_mouse_down(row.center(), MouseButton::Right, Default::default());
     window_cx.run_until_parked();
     window_cx.update(|window, cx| window.draw(cx).clear(cx));
-    let delete = window_cx.debug_bounds("explorer-menu-delete").unwrap();
+    let delete = window_cx.menu_bounds("explorer-menu-delete").unwrap();
     window_cx.simulate_click(delete.center(), Default::default());
     window_cx.run_until_parked();
     window_cx.update(|window, cx| window.draw(cx).clear(cx));

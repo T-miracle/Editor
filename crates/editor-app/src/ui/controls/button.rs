@@ -71,6 +71,7 @@ pub(crate) struct Button {
     tooltip: Option<SharedString>,
     small: bool,
     compact: bool,
+    outline: bool,
     loading: bool,
     disabled: bool,
 }
@@ -87,6 +88,7 @@ impl Button {
             tooltip: None,
             small: false,
             compact: false,
+            outline: false,
             loading: false,
             disabled: false,
         }
@@ -150,6 +152,12 @@ impl Button {
         self
     }
 
+    /// Keep an accent border and label while retaining a soft variant-colored background.
+    pub(crate) fn outline(mut self) -> Self {
+        self.outline = true;
+        self
+    }
+
     pub(crate) fn small(mut self) -> Self {
         self.small = true;
         self
@@ -208,6 +216,25 @@ impl RenderOnce for Button {
                 style.active,
             ),
         };
+        // Filled variants use their background as the accent; custom variants supply a readable label color.
+        let outline_color = match self.variant {
+            Variant::Primary | Variant::Danger => background,
+            _ => foreground,
+        };
+        let (background, foreground, hover, active) = if self.outline {
+            // Solid primary/danger variants receive a light tint; custom palettes keep their chosen fills.
+            let (background, hover, active) = match self.variant {
+                Variant::Primary | Variant::Danger => (
+                    outline_color.opacity(0.08),
+                    outline_color.opacity(0.13),
+                    outline_color.opacity(0.20),
+                ),
+                _ => (background, hover, active),
+            };
+            (background, outline_color, hover, active)
+        } else {
+            (background, foreground, hover, active)
+        };
         let height = if self.small { 24. } else { 28. };
         let icon = if self.loading {
             Some(Icon::new(IconName::Loader))
@@ -227,6 +254,9 @@ impl RenderOnce for Button {
             .min_w(px(if self.compact { height } else { 48. }))
             .px(px(if self.compact { 4. } else { 10. }))
             .rounded(palette.radius)
+            .when(self.outline, |button| {
+                button.border_1().border_color(outline_color.opacity(0.65))
+            })
             .bg(background)
             .text_color(foreground)
             .text_size(px(if self.small { 12. } else { 13. }))

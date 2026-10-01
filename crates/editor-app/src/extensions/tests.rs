@@ -16,7 +16,7 @@ fn editor_theme_api_publishes_external_terminal_overrides(cx: &mut TestAppContex
         external.typography.mono.family = Some("External Mono".into());
         external.plugins.clear();
         external.plugins.insert(
-            "me.terminal".into(),
+            "terminal".into(),
             plugin_schema::PluginTheme {
                 colors: std::collections::BTreeMap::from([(
                     "ansi".into(),
@@ -41,7 +41,9 @@ fn editor_theme_api_publishes_external_terminal_overrides(cx: &mut TestAppContex
         let environment = environment(std::path::Path::new("workspace"), cx);
         assert!(environment.dark);
         assert_eq!(environment.background, 0x1e1f22);
-        assert_eq!(environment.theme_colors.len(), 1);
+        // Already installed guests retain their legacy theme tokens until updated.
+        assert_eq!(environment.theme_colors.len(), 2);
+        assert_eq!(environment.theme_colors["terminal.ansi.red"], 0xf08070);
         assert_eq!(environment.theme_colors["me.terminal.ansi.red"], 0xf08070);
         assert_eq!(environment.ui_font.family.as_deref(), Some("External UI"));
         assert_eq!(environment.ui_font.size_px, Some(16.));
@@ -50,7 +52,7 @@ fn editor_theme_api_publishes_external_terminal_overrides(cx: &mut TestAppContex
             Some("External Mono")
         );
         assert_eq!(
-            environment.font_style("me.terminal", "tab", false),
+            environment.font_style("terminal", "tab", false),
             protocol::FontStyle {
                 family: Some("External Tabs".into()),
                 size_px: Some(18.),
@@ -60,9 +62,9 @@ fn editor_theme_api_publishes_external_terminal_overrides(cx: &mut TestAppContex
     });
 }
 
-/// Market versions select the same action used by the confirmation dialog.
+/// Explicit local-package confirmations still describe the version being installed accurately.
 #[test]
-fn market_version_actions_cover_install_update_and_downgrade() {
+fn package_confirmation_labels_cover_install_update_and_downgrade() {
     assert_eq!(surface::package_action("2.0.0", None), "安装");
     assert_eq!(surface::package_action("2.0.0", Some("1.0.0")), "更新");
     assert_eq!(surface::package_action("1.0.0", Some("2.0.0")), "降级安装");
@@ -113,7 +115,7 @@ fn market_install_button_reports_loading_before_inspection(cx: &mut TestAppConte
     let dialog_cx = VisualTestContext::from_window(dialog_window, cx).into_mut();
     dialog_cx.update(|window, cx| window.draw(cx).clear(cx));
     let install = dialog_cx
-        .debug_bounds("plugin-primary-action-region")
+        .debug_bounds("plugin-install-action-region")
         .unwrap();
     dialog_cx.simulate_click(install.center(), Default::default());
     let action =
@@ -202,7 +204,7 @@ fn second_market_install_shows_visible_consent(cx: &mut TestAppContext) {
     let dialog_cx = VisualTestContext::from_window(dialog_window, cx).into_mut();
     dialog_cx.update(|window, cx| window.draw(cx).clear(cx));
     let install = dialog_cx
-        .debug_bounds("plugin-primary-action-region")
+        .debug_bounds("plugin-install-action-region")
         .unwrap();
     dialog_cx.simulate_click(install.center(), Default::default());
     dialog_cx.update(|_, cx| {
@@ -272,7 +274,7 @@ fn second_market_install_shows_visible_consent(cx: &mut TestAppContext) {
     // Reopen the same package to prove cancellation does not block its next install.
     dialog_cx.update(|window, cx| window.draw(cx).clear(cx));
     let install = dialog_cx
-        .debug_bounds("plugin-primary-action-region")
+        .debug_bounds("plugin-install-action-region")
         .unwrap();
     dialog_cx.simulate_click(install.center(), Default::default());
     dialog_cx.update(|_, cx| {
@@ -331,14 +333,23 @@ fn uninstall_dialog_offers_both_data_choices(cx: &mut TestAppContext) {
     editor_cx.update(|window, cx| {
         let owner = app.read(cx).extensions.clone();
         owner.update(cx, |owner, cx| {
+            // An available upgrade must not replace the installed plugin's uninstall control.
+            let mut upgrade = manifest.clone();
+            upgrade.version = "2.0.0".into();
+            owner.manager_packages = vec![Package {
+                manifest: upgrade,
+                digest: "upgrade".into(),
+                files: Default::default(),
+                source: Some("upgrade.zip".into()),
+            }];
             let mut state = owner.worker.state.lock().unwrap();
             state.entries = vec![Installed {
                 manifest: manifest.clone(),
                 digest: "fixture".into(),
                 grants: manifest.permissions.clone(),
-                enabled: true,
+                enabled: false,
                 project_enabled: Default::default(),
-                global_enabled: Some(true),
+                global_enabled: Some(false),
                 error: None,
             }];
             drop(state);
@@ -354,8 +365,32 @@ fn uninstall_dialog_offers_both_data_choices(cx: &mut TestAppContext) {
     let dialog_cx = VisualTestContext::from_window(dialog_window, cx).into_mut();
     dialog_cx.update(|window, cx| window.draw(cx).clear(cx));
     let uninstall = dialog_cx
-        .debug_bounds("plugin-primary-action-region")
+        .debug_bounds("plugin-uninstall-action-region")
         .unwrap();
+    let update = dialog_cx
+        .debug_bounds("plugin-update-action-region")
+        .unwrap();
+    // The installed tab must offer upgrades before removal without a market-tab visit.
+    assert!(!dialog_cx.update(|_, cx| app.read(cx).extensions.read(cx).manager_market));
+    assert!(
+        update.right() <= uninstall.left(),
+        "update must be left of uninstall"
+    );
+    assert!(
+        dialog_cx
+            .debug_bounds("plugin-install-action-region")
+            .is_none()
+    );
+    let project = dialog_cx
+        .debug_bounds("plugin-project-scope-region")
+        .unwrap();
+    let global = dialog_cx
+        .debug_bounds("plugin-global-scope-region")
+        .unwrap();
+    assert!(
+        global.right() <= project.left(),
+        "project scope must be right of global scope"
+    );
     dialog_cx.simulate_click(uninstall.center(), Default::default());
     dialog_cx.run_until_parked();
     dialog_cx.update(|window, cx| window.draw(cx).clear(cx));
@@ -374,7 +409,7 @@ fn uninstall_dialog_offers_both_data_choices(cx: &mut TestAppContext) {
     for delete_data in [false, true] {
         dialog_cx.update(|window, cx| window.draw(cx).clear(cx));
         let uninstall = dialog_cx
-            .debug_bounds("plugin-primary-action-region")
+            .debug_bounds("plugin-uninstall-action-region")
             .unwrap();
         dialog_cx.simulate_click(uninstall.center(), Default::default());
         dialog_cx.run_until_parked();
@@ -511,12 +546,12 @@ fn plugin_panel_registration_input_and_ime(cx: &mut TestAppContext) {
             }];
             state
                 .scenes
-                .insert("me.terminal/terminal".into(), Arc::new(scene.clone()));
+                .insert("terminal/terminal".into(), Arc::new(scene.clone()));
             drop(state);
             owner.poll(cx);
         });
         app.update(cx, |app, cx| app.sync_plugin_panels(window, cx));
-        let panel = app.read(cx).plugin_panels["me.terminal/terminal"].clone();
+        let panel = app.read(cx).plugin_panels["terminal/terminal"].clone();
         panel.update(cx, |panel, cx| {
             panel.poll(cx);
             panel.focus(window, cx);
@@ -642,14 +677,14 @@ fn plugin_panel_registration_input_and_ime(cx: &mut TestAppContext) {
             });
             panel
                 .scenes
-                .insert("me.terminal/terminal".into(), Arc::new(scene.clone()));
+                .insert("terminal/terminal".into(), Arc::new(scene.clone()));
             panel
                 .worker
                 .state
                 .lock()
                 .unwrap()
                 .scenes
-                .insert("me.terminal/terminal".into(), Arc::new(scene));
+                .insert("terminal/terminal".into(), Arc::new(scene));
             panel.sync_edit(window, cx);
             cx.notify();
         });

@@ -24,6 +24,28 @@ pub(super) fn arguments(profile: &Profile) -> Vec<String> {
     }
     args
 }
+
+/// Recognize only the default empty PowerShell prompt for the legacy spacing migration.
+pub(super) fn default_prompt(profile: &Profile, cwd: &str) -> Option<String> {
+    let tool = profile
+        .program
+        .rsplit(['/', '\\'])
+        .next()?
+        .to_ascii_lowercase();
+    if !matches!(
+        tool.as_str(),
+        "powershell.exe" | "powershell" | "pwsh.exe" | "pwsh"
+    ) {
+        return None;
+    }
+    // The PTY removes device prefixes before launching the shell; match the same displayed path.
+    let cwd = if let Some(path) = cwd.strip_prefix(r"\\?\UNC\") {
+        format!(r"\\{path}")
+    } else {
+        cwd.strip_prefix(r"\\?\").unwrap_or(cwd).to_owned()
+    };
+    Some(format!("PS {}>", cwd.replace('/', "\\")))
+}
 #[derive(Default)]
 pub(super) struct Metadata {
     pub cwd: Option<String>,

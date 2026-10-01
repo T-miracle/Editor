@@ -1,0 +1,19 @@
+{
+  "id": "svg",
+  "name": "SVG",
+  "version": "0.1.3",
+  "protocol": 6,
+  "component": "svg.wasm",
+  "permissions": ["editor.commands"],
+  "storage_limit": 1024,
+  "panels": [
+    {
+      "id": "preview",
+      "title": "SVG",
+      "position": "editor",
+      "file_extensions": ["svg"],
+      "default_visible": true
+    }
+  ],
+  "commands": []
+}

@@ -4,6 +4,8 @@
 mod definition_tests;
 pub(crate) mod diagnostics;
 mod documents;
+#[cfg(test)]
+mod empty_canvas_tests;
 pub(crate) mod file_watch;
 #[cfg(test)]
 mod file_watch_tests;
@@ -12,6 +14,8 @@ mod hover_hit_test;
 mod pointer_hover;
 pub(crate) use popovers::{CompletionPopupState, DefinitionPopupFocus};
 mod popovers;
+pub(crate) use text_drag::TextDragState;
+mod text_drag;
 mod view;
 
 pub(crate) use documents::{attach_language_server, detach_language_server};

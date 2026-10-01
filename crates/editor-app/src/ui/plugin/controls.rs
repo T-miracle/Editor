@@ -7,7 +7,7 @@ use gpui_kit::component::ActiveTheme as _;
 use gpui_kit::*;
 use plugin_runtime::plugin_protocol::{
     Environment,
-    ui::{CanvasControls, UiEvent},
+    ui::{CanvasControls, SideTabsPosition, UiEvent},
 };
 use std::{cell::Cell, rc::Rc};
 
@@ -65,11 +65,17 @@ impl CanvasControlsView {
         style
     }
     fn tabs_style(&self, cx: &App) -> SideTabsStyle {
+        // A neutral sidebar default remains overridable by the owning plugin's theme roles.
+        let background = self.color("tab_bar.background", rgb(0xf7f8fa).into());
+        // Document tabs use their selected border accent for both the label and selected edge.
+        // Plugin-specific foreground and border roles remain independently overridable.
+        let selected_border =
+            crate::ui::theme::component_styles(cx, plugin_schema::ThemeComponent::EditorTab)
+                .selected
+                .border
+                .unwrap_or(cx.theme().primary);
         let mut menu = self.menu_style("tab", cx);
-        menu.surface = self.color(
-            "tab.inactive.background",
-            self.color("tab_bar.background", cx.theme().tab_bar),
-        );
+        menu.surface = self.color("tab.inactive.background", background);
         menu.foreground = self.color("tab.inactive.foreground", cx.theme().foreground);
         menu.border = self.color(
             "tab.border",
@@ -81,11 +87,12 @@ impl CanvasControlsView {
                 .map(|v| rgb(v).into())
         };
         SideTabsStyle {
-            background: self.color("tab_bar.background", cx.theme().tab_bar),
+            background,
             border: self.color("tab_bar.border", cx.theme().border),
             menu,
             active: self.color("tab.active.background", cx.theme().background),
-            active_foreground: self.color("tab.active.foreground", cx.theme().foreground),
+            active_foreground: self.color("tab.active.foreground", selected_border),
+            active_inner_border: self.color("tab.active.inner_border", selected_border),
             close_background: color("tab.close.background"),
             close_foreground: color("tab.close.foreground"),
             rename_background: color("tab.rename.background"),
@@ -118,7 +125,9 @@ impl CanvasControlsView {
             self.model.sidebar.as_ref().map(|m| &m.id) != model.sidebar.as_ref().map(|m| &m.id);
         let width_changed = self.model.sidebar.as_ref().map(|tabs| tabs.width)
             != model.sidebar.as_ref().map(|tabs| tabs.width);
-        if sidebar_changed || width_changed {
+        let position_changed = self.model.sidebar.as_ref().map(|tabs| tabs.position)
+            != model.sidebar.as_ref().map(|tabs| tabs.position);
+        if sidebar_changed || width_changed || position_changed {
             // An updated guest width acknowledges a pending local divider preview.
             self.sidebar_width.set(None);
         }
@@ -216,15 +225,18 @@ impl Render for CanvasControlsView {
     fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
         let mut view = div().size_full().relative();
         if let (Some(tabs), Some(sidebar)) = (&self.model.sidebar, &self.sidebar) {
-            view = view.child(
-                div()
-                    .absolute()
-                    .right_0()
-                    .top_0()
-                    .w(px(self.sidebar_width.get().unwrap_or(tabs.width)))
-                    .h_full()
-                    .child(sidebar.clone()),
-            );
+            let dock = div()
+                .absolute()
+                .top_0()
+                .w(px(self.sidebar_width.get().unwrap_or(tabs.width)))
+                .h_full()
+                .child(sidebar.clone());
+            // Fixed width belongs to the declared dock edge, independent of panel resize.
+            let dock = match tabs.position {
+                SideTabsPosition::Left => dock.left_0(),
+                SideTabsPosition::Right => dock.right_0(),
+            };
+            view = view.child(dock);
         }
         if let Some(menu) = &self.menu {
             view = view.child(menu.clone());
@@ -239,7 +251,7 @@ mod tests {
     use gpui_kit::{AppContext as _, TestAppContext, component::Root, gpui, point, px, rgb, size};
     use plugin_runtime::plugin_protocol::{
         Environment, FontStyle,
-        ui::{CanvasControls, SideTabs},
+        ui::{CanvasControls, SideTabs, SideTabsPosition},
     };
     use std::{cell::RefCell, rc::Rc};
 
@@ -262,6 +274,7 @@ mod tests {
         let view = slot.borrow_mut().take().unwrap();
         let tabs = SideTabs {
             id: "tabs".into(),
+            position: SideTabsPosition::Right,
             items: Vec::new(),
             selected: None,
             rename: None,
@@ -288,7 +301,7 @@ mod tests {
             let sidebar = view.read(cx).sidebar.as_ref().unwrap().clone();
             sidebar.update(cx, |bar, _| bar.model.width = 220.);
             view.read(cx).sidebar_width.set(Some(220.));
-            let mut updated = model;
+            let mut updated = model.clone();
             updated.revision = 2;
             view.update(cx, |view, cx| {
                 view.update(
@@ -306,9 +319,28 @@ mod tests {
             cx.debug_bounds("native-side-tabs").unwrap().size.width,
             px(220.)
         );
+        // Changing edges cancels a pending divider preview rather than reusing its old width.
+        cx.update(|window, cx| {
+            let mut updated = model;
+            updated.revision = 3;
+            updated.sidebar.as_mut().unwrap().position = SideTabsPosition::Left;
+            view.update(cx, |view, cx| {
+                view.update(
+                    updated,
+                    Environment::default(),
+                    point(px(0.), px(0.)),
+                    window,
+                    cx,
+                )
+            });
+            window.draw(cx).clear(cx);
+        });
+        let sidebar = cx.debug_bounds("native-side-tabs").unwrap();
+        assert_eq!(sidebar.left(), px(0.));
+        assert_eq!(sidebar.size.width, px(180.));
     }
 
-    /// The host anchors a plugin sidebar to the right edge without scaling its width.
+    /// Each dock edge remains anchored without scaling the sidebar width during window resize.
     #[gpui::test]
     fn sidebar_width_stays_fixed_when_window_resizes(cx: &mut TestAppContext) {
         cx.update(|cx| {
@@ -325,10 +357,11 @@ mod tests {
             Root::new(view, window, cx)
         });
         let view = slot.borrow_mut().take().unwrap();
-        let controls = CanvasControls {
+        let mut controls = CanvasControls {
             revision: 1,
             sidebar: Some(SideTabs {
                 id: "tabs".into(),
+                position: SideTabsPosition::Right,
                 items: Vec::new(),
                 selected: None,
                 rename: None,
@@ -338,23 +371,31 @@ mod tests {
             }),
             menu: None,
         };
-        cx.update(|window, cx| {
-            view.update(cx, |view, cx| {
-                view.update(
-                    controls,
-                    Environment::default(),
-                    point(px(0.), px(0.)),
-                    window,
-                    cx,
-                )
+        for position in [SideTabsPosition::Right, SideTabsPosition::Left] {
+            controls.sidebar.as_mut().unwrap().position = position;
+            cx.update(|window, cx| {
+                view.update(cx, |view, cx| {
+                    view.update(
+                        controls.clone(),
+                        Environment::default(),
+                        point(px(0.), px(0.)),
+                        window,
+                        cx,
+                    )
+                });
             });
-        });
-        for width in [900., 320., 160., 800.] {
-            cx.simulate_resize(size(px(width), px(400.)));
-            cx.update(|window, cx| window.draw(cx).clear(cx));
-            let sidebar = cx.debug_bounds("native-side-tabs").unwrap();
-            assert_eq!(sidebar.size.width, px(180.));
-            assert!((sidebar.right() - px(width)).abs() < px(1.));
+            for width in [900., 320., 160., 800.] {
+                cx.simulate_resize(size(px(width), px(400.)));
+                cx.update(|window, cx| window.draw(cx).clear(cx));
+                let sidebar = cx.debug_bounds("native-side-tabs").unwrap();
+                assert_eq!(sidebar.size.width, px(180.));
+                match position {
+                    SideTabsPosition::Left => assert_eq!(sidebar.left(), px(0.)),
+                    SideTabsPosition::Right => {
+                        assert!((sidebar.right() - px(width)).abs() < px(1.))
+                    }
+                }
+            }
         }
     }
 
@@ -367,12 +408,21 @@ mod tests {
             crate::ui::typography::init(cx);
             crate::ui::theme::apply_theme(crate::ui::theme::builtin_theme(false), cx);
             let mut view = CanvasControlsView::new("plugin".into(), cx.focus_handle(), |_, _| {});
+            // Defaults are stable across host themes; explicit plugin roles take precedence.
+            let tabs = view.tabs_style(cx);
+            assert_eq!(tabs.background, rgb(0xf7f8fa).into());
+            assert_eq!(tabs.menu.surface, tabs.background);
+            assert_eq!(tabs.active_inner_border, rgb(0x3574f0).into());
+            assert_eq!(tabs.active_foreground, rgb(0x3574f0).into());
             view.environment
                 .theme_colors
                 .insert("plugin.ui.menu.background".into(), 0x123456);
             view.environment
                 .theme_colors
                 .insert("plugin.ui.tab.active.foreground".into(), 0xabcdef);
+            view.environment
+                .theme_colors
+                .insert("plugin.ui.tab.active.inner_border".into(), 0x456789);
             view.environment
                 .theme_colors
                 .insert("plugin.ui.tab.rename.background".into(), 0x345678);
@@ -387,11 +437,37 @@ mod tests {
             assert_eq!(view.menu_style("menu", cx).surface, rgb(0x123456).into());
             let tabs = view.tabs_style(cx);
             assert_eq!(tabs.active_foreground, rgb(0xabcdef).into());
+            assert_eq!(tabs.active_inner_border, rgb(0x456789).into());
             assert_eq!(tabs.rename_background, Some(rgb(0x345678).into()));
             assert_eq!(tabs.menu.font_size, 19.);
             assert!(tabs.menu.bold);
             view.environment.theme_colors.clear();
             assert_ne!(view.menu_style("menu", cx).surface, rgb(0x123456).into());
+            // Changing the editor's tab accent also changes an unoverridden plugin tab accent.
+            let mut theme = crate::ui::theme::builtin_theme(false).clone();
+            theme
+                .components
+                .get_mut(&plugin_schema::ThemeComponent::EditorTab)
+                .unwrap()
+                .selected
+                .as_mut()
+                .unwrap()
+                .border = Some("#f13563".into());
+            crate::ui::theme::apply_theme(&theme, cx);
+            assert_eq!(
+                view.tabs_style(cx).active_inner_border,
+                rgb(0xf13563).into()
+            );
+            // Unoverridden labels follow the same editor accent when the theme changes.
+            assert_eq!(view.tabs_style(cx).active_foreground, rgb(0xf13563).into());
+            view.environment
+                .theme_colors
+                .insert("plugin.ui.tab.active.inner_border".into(), 0x456789);
+            assert_eq!(
+                view.tabs_style(cx).active_inner_border,
+                rgb(0x456789).into()
+            );
+            assert_eq!(view.tabs_style(cx).active_foreground, rgb(0xf13563).into());
         });
     }
 }

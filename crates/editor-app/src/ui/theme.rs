@@ -3,7 +3,6 @@
 use std::{
     collections::BTreeMap,
     sync::{Arc, LazyLock},
-    time::Duration,
 };
 
 mod window;
@@ -127,25 +126,6 @@ pub fn apply_theme(theme: &ThemeDefinition, cx: &mut App) {
         .map(color)
         .unwrap_or(accent);
     let title_bar = theme.components.get(&ThemeComponent::WindowTitleBar);
-    let scrollbar = theme.components.get(&ThemeComponent::Scrollbar);
-    let scrollbar_thumb = scrollbar
-        .and_then(|styles| styles.base.background.as_deref())
-        .map(color)
-        .unwrap_or(accent);
-    let scrollbar_thumb_hover = scrollbar
-        .and_then(|styles| styles.hover.as_ref())
-        .and_then(|styles| styles.background.as_deref())
-        .map(color)
-        .unwrap_or(accent);
-    let scrollbar_thumb_active = scrollbar
-        .and_then(|styles| styles.active.as_ref())
-        .and_then(|styles| styles.background.as_deref())
-        .map(color)
-        .unwrap_or(accent);
-    // Multiply the theme's optional alpha by the scrollbar's interaction opacity.
-    let scrollbar_thumb = scrollbar_thumb.opacity(0.55);
-    let scrollbar_thumb_hover = scrollbar_thumb_hover.opacity(0.7);
-    let scrollbar_thumb_active = scrollbar_thumb_active.opacity(0.8);
 
     // Update legacy colors, renderable tokens and the Base projection together;
     // otherwise Root would retain the component library's opaque background.
@@ -216,39 +196,6 @@ pub fn apply_theme(theme: &ThemeDefinition, cx: &mut App) {
     apply_font_sizes(cx, theme_typography);
     Theme::sync_base(cx);
 
-    let base_theme = gpui_base::Theme::global_mut(cx);
-    let scrollbar = base_theme.scrollbar.clone();
-    let motion = scrollbar.motion().with_idle(Duration::from_secs(2));
-    // Keep explorer and editor scrollbars visible for two seconds after activity.
-    base_theme.scrollbar = scrollbar.with_motion(motion).with_styles(
-        gpui_base::ScrollbarStyles::default()
-            // Use one eight-pixel width in every state so hovering cannot resize the bar.
-            .track(|style| style.width(px(8.)))
-            .track_hover(|style| style.width(px(8.)))
-            .track_active(|style| style.width(px(8.)))
-            .thumb(|style| {
-                style
-                    .bg(scrollbar_thumb)
-                    .width(px(8.))
-                    .inset(px(0.))
-                    .radius(px(4.))
-            })
-            .thumb_hover(|style| {
-                style
-                    .bg(scrollbar_thumb_hover)
-                    .width(px(8.))
-                    .inset(px(0.))
-                    .radius(px(4.))
-            })
-            .thumb_active(|style| {
-                style
-                    .bg(scrollbar_thumb_active)
-                    .width(px(8.))
-                    .inset(px(0.))
-                    .radius(px(4.))
-            }),
-    );
-
     let components = theme
         .components
         .iter()
@@ -283,6 +230,8 @@ pub fn apply_theme(theme: &ThemeDefinition, cx: &mut App) {
             window: theme.window,
         });
     }
+    // Runtime colors must be available before native editor scrollbar styles are resolved.
+    super::controls::install_scrollbar_theme(cx);
     window::register(cx);
     // Re-render existing Roots so theme switches also restore an opaque window.
     cx.refresh_windows();
@@ -458,11 +407,11 @@ mod tests {
             let ansi = theme
                 .plugin_colors()
                 .keys()
-                .filter(|key| key.starts_with("me.terminal.ansi."))
+                .filter(|key| key.starts_with("terminal.ansi."))
                 .count();
             assert_eq!(ansi, 16, "{} must define all ANSI colors", theme.id);
         }
-        assert_eq!(light.plugin_colors()["me.terminal.ansi.yellow"], "#8a5a00");
-        assert_eq!(dark.plugin_colors()["me.terminal.ansi.yellow"], "#d7ba7d");
+        assert_eq!(light.plugin_colors()["terminal.ansi.yellow"], "#8a5a00");
+        assert_eq!(dark.plugin_colors()["terminal.ansi.yellow"], "#d7ba7d");
     }
 }

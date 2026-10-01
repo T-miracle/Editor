@@ -23,15 +23,21 @@ pub fn language_for_path(path: &Path) -> Option<LanguageContribution> {
 pub enum BundledPlugin {
     Rust,
     Toml,
+    /// HTML and HTM files use the bundled upstream HTML grammar.
+    Html,
+    /// JavaScript and JSX share the package's WASM grammar.
+    JavaScript,
 }
 
 impl BundledPlugin {
-    pub const ALL: [Self; 2] = [Self::Rust, Self::Toml];
+    pub const ALL: [Self; 4] = [Self::Rust, Self::Toml, Self::Html, Self::JavaScript];
 
     pub fn name(self) -> &'static str {
         match self {
             Self::Rust => "Rust",
             Self::Toml => "TOML",
+            Self::Html => "HTML",
+            Self::JavaScript => "JavaScript",
         }
     }
 
@@ -39,13 +45,17 @@ impl BundledPlugin {
         match self {
             Self::Rust => "rust",
             Self::Toml => "toml",
+            Self::Html => "html",
+            Self::JavaScript => "javascript",
         }
     }
 
     pub fn manifest_id(self) -> &'static str {
         match self {
-            Self::Rust => "me.rust",
-            Self::Toml => "me.toml",
+            Self::Rust => "rust",
+            Self::Toml => "toml",
+            Self::Html => "html",
+            Self::JavaScript => "javascript",
         }
     }
 }
@@ -280,7 +290,9 @@ mod tests {
     #[test]
     fn source_plugins_load_independently() {
         prepare_bundled_plugins();
-        for (name, directory) in [("Rust", "rust"), ("TOML", "toml")] {
+        for plugin in BundledPlugin::ALL {
+            let name = plugin.name();
+            let directory = plugin.language_id();
             let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
                 .join("../../plugins")
                 .join(directory);
@@ -296,7 +308,7 @@ mod tests {
         fs::write(
             directory.path().join("plugin.toml"),
             r#"[plugin]
-id = "me.missing-test"
+id = "missing-test"
 name = "Missing test"
 version = "0.1.0"
 host_version = ">=0.1.0"
@@ -311,7 +323,139 @@ tree_sitter_abi = 15
         )
         .unwrap();
         let error = register_plugin(directory.path()).unwrap_err();
-        assert!(error.to_string().contains("me.missing-test failed to load"));
+        assert!(error.to_string().contains("missing-test failed to load"));
+    }
+
+    /// The shipped HTML WASM and query must parse real markup and capture its tokens.
+    #[test]
+    fn bundled_html_plugin_parses_and_highlights_markup() {
+        use tree_sitter::StreamingIterator as _;
+
+        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../plugins/html");
+        let manifest =
+            PluginManifest::parse(&fs::read_to_string(root.join("plugin.toml")).unwrap()).unwrap();
+        let (grammar, query) =
+            load_plugin_language(&root.canonicalize().unwrap(), &manifest.languages[0]).unwrap();
+        let (mut parser, language) = create_parser(&grammar).unwrap();
+        parser.set_language(&language).unwrap();
+        let source = r#"<!DOCTYPE html>
+<!-- 中文 comment -->
+<html><head><style>body { color: red; }</style></head>
+<body><div class="card" data-id=demo hidden>中文😀 &amp;<br><img src='x.png'/></div>
+<script>if (a < b) { console.log("<tag>"); }</script></body></html>"#;
+        let tree = parser.parse(source, None).unwrap();
+        assert!(
+            !tree.root_node().has_error(),
+            "{}",
+            tree.root_node().to_sexp()
+        );
+        let query = tree_sitter::Query::new(&language, &query).unwrap();
+        let mut cursor = tree_sitter::QueryCursor::new();
+        let mut matches = cursor.matches(&query, tree.root_node(), source.as_bytes());
+        let mut captures = Vec::new();
+        while let Some(found) = matches.next() {
+            for capture in found.captures {
+                captures.push((
+                    query.capture_names()[capture.index as usize],
+                    &source[capture.node.byte_range()],
+                ));
+            }
+        }
+        for expected in [
+            ("constant", "<!DOCTYPE html>"),
+            ("comment", "<!-- 中文 comment -->"),
+            ("tag", "div"),
+            ("attribute", "class"),
+            ("string", "\"card\""),
+            ("string", "demo"),
+            ("string.special", "&amp;"),
+            ("operator", "="),
+            ("punctuation.bracket", "/>"),
+        ] {
+            assert!(
+                captures.contains(&expected),
+                "missing capture: {expected:?}"
+            );
+        }
+        // Optional closing tags and void elements are legal HTML, including fragments.
+        for source in ["<ul><li>one<li>two</ul>", "<input disabled><br>", ""] {
+            assert!(!parser.parse(source, None).unwrap().root_node().has_error());
+        }
+        // An unfinished quoted attribute must still yield a parser error for diagnostics.
+        assert!(
+            parser
+                .parse("<div class=\"unfinished", None)
+                .unwrap()
+                .root_node()
+                .has_error()
+        );
+    }
+
+    /// Validate the shipped JS parser and captures across modules, modern syntax, and JSX.
+    #[test]
+    fn bundled_javascript_plugin_parses_and_highlights_source() {
+        use tree_sitter::StreamingIterator as _;
+
+        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../plugins/javascript");
+        let manifest =
+            PluginManifest::parse(&fs::read_to_string(root.join("plugin.toml")).unwrap()).unwrap();
+        let (grammar, query) =
+            load_plugin_language(&root.canonicalize().unwrap(), &manifest.languages[0]).unwrap();
+        let (mut parser, language) = create_parser(&grammar).unwrap();
+        parser.set_language(&language).unwrap();
+        let source = r#"// Unicode text and modern syntax remain valid in JavaScript.
+import { readFile } from "node:fs/promises";
+export async function greet(user) {
+    const label = user?.name ?? "世界😀";
+    await readFile(`./${label}.txt`);
+    return <section title={label}>{label}<br /></section>;
+}"#;
+        let tree = parser.parse(source, None).unwrap();
+        assert!(
+            !tree.root_node().has_error(),
+            "{}",
+            tree.root_node().to_sexp()
+        );
+        let query = tree_sitter::Query::new(&language, &query).unwrap();
+        let mut cursor = tree_sitter::QueryCursor::new();
+        let mut matches = cursor.matches(&query, tree.root_node(), source.as_bytes());
+        let mut captures = Vec::new();
+        while let Some(found) = matches.next() {
+            for capture in found.captures {
+                captures.push((
+                    query.capture_names()[capture.index as usize],
+                    &source[capture.node.byte_range()],
+                ));
+            }
+        }
+        for expected in [
+            ("keyword", "export"),
+            ("function", "greet"),
+            ("variable.parameter", "user"),
+            ("property", "name"),
+            ("operator", "??"),
+            ("string", "\"世界😀\""),
+            ("tag", "section"),
+            ("attribute", "title"),
+        ] {
+            assert!(
+                captures.contains(&expected),
+                "missing capture: {expected:?}"
+            );
+        }
+        // CommonJS, classes, regex literals, and JSX fragments use the same parser.
+        for source in [
+            "module.exports = value => /hello/iu.test(value);",
+            "class Counter { #value = 0; next() { return ++this.#value; } }",
+            "const view = <><Widget {...props} /></>;",
+            "",
+        ] {
+            assert!(!parser.parse(source, None).unwrap().root_node().has_error());
+        }
+        // Recovery nodes must expose invalid code to the editor's syntax diagnostics.
+        for source in ["const value = ;", "function broken( {", "const x = <div>"] {
+            assert!(parser.parse(source, None).unwrap().root_node().has_error());
+        }
     }
 
     /// The bundled Rust plugin must supply a usable WASM parser and highlight query.

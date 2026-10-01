@@ -1,8 +1,8 @@
 {
-  "id": "me.terminal",
+  "id": "terminal",
   "name": "终端",
-  "version": "0.5.3",
-  "protocol": 4,
+  "version": "0.5.8",
+  "protocol": 5,
   "component": "terminal.wasm",
   "permissions": ["process.pty", "workspace.read", "storage", "clipboard", "editor.commands"],
   "storage_limit": 16777216,

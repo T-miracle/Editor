@@ -11,6 +11,7 @@ impl Terminal {
             revision: self.ui_revision,
             sidebar: Some(SideTabs {
                 id: "sessions".into(),
+                position: self.settings.tab_position,
                 width,
                 // Only divider dragging changes these limits; window resizing never does.
                 min_width: MIN_TAB_WIDTH,
@@ -96,8 +97,10 @@ impl Terminal {
                 if let Some(index) = index(&id) {
                     self.active = index;
                     self.menu = Some(TerminalMenu::Commands);
-                    self.menu_position =
-                        ((self.tab_left() + x).clamp(0., 10000.), y.clamp(0., 10000.));
+                    self.menu_position = (
+                        (self.tab_origin() + x).clamp(0., 10000.),
+                        y.clamp(0., 10000.),
+                    );
                 }
             }
             Action::Close(id) => {

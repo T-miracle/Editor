@@ -1,9 +1,9 @@
 file_icons = "icons.json"
 
 [plugin]
-id = "me.rust"
+id = "rust"
 name = "Rust"
-version = "0.1.0"
+version = "0.1.1"
 host_version = ">=0.1.0"
 
 [[languages]]

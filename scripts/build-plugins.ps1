@@ -20,16 +20,23 @@ try {
         if ($LASTEXITCODE -ne 0) { throw 'Terminal WASM build failed' }
         & $hostPath --plugin-cargo 'plugins/example/Cargo.toml' build --target wasm32-wasip2 --release
         if ($LASTEXITCODE -ne 0) { throw 'Example WASM build failed' }
+        # File-scoped previews compile against the same host-managed interface as dock plugins.
+        & $hostPath --plugin-cargo 'plugins/svg/Cargo.toml' build --target wasm32-wasip2 --release
+        if ($LASTEXITCODE -ne 0) { throw 'SVG preview WASM build failed' }
     } finally { $env:CARGO_TARGET_DIR = $previousTargetDir }
     New-Item -ItemType Directory -Force $Output | Out-Null
     Add-Type -AssemblyName System.IO.Compression
     # Remove legacy package filenames, including the theme now built into the editor.
-    foreach ($name in @('terminal', 'example', 'rust', 'toml')) {
+    foreach ($name in @('terminal', 'example', 'svg', 'rust', 'toml', 'html', 'javascript')) {
         Remove-Item -LiteralPath (Join-Path $Output "me.$name.zip") -Force -ErrorAction SilentlyContinue
     }
     Remove-Item -LiteralPath (Join-Path $Output 'me.default-light-theme.zip') -Force -ErrorAction SilentlyContinue
     Remove-Item -LiteralPath (Join-Path $Output 'default-light-theme.zip') -Force -ErrorAction SilentlyContinue
-    foreach ($plugin in @(@('terminal', 'terminal_guest'), @('example', 'example_guest'))) {
+    # Retire the old SVG filename so the market never offers two identities for the same plugin.
+    foreach ($legacySvgPackage in @('svg-preview.zip', 'me.svg-preview.zip')) {
+        Remove-Item -LiteralPath (Join-Path $Output $legacySvgPackage) -Force -ErrorAction SilentlyContinue
+    }
+    foreach ($plugin in @(@('terminal', 'terminal_guest'), @('example', 'example_guest'), @('svg', 'svg_guest'))) {
     # Plugin packages are ordinary ZIP archives with the standard .zip extension.
     $destination = [IO.Path]::GetFullPath((Join-Path $Output "$($plugin[0]).zip"))
     $stream = [IO.File]::Create($destination)
@@ -45,6 +52,12 @@ try {
             $packageFiles += ,@('icons/terminal_light.svg', 'plugins/terminal/icons/terminal_light.svg')
             $packageFiles += ,@('icons/terminal_dark.svg', 'plugins/terminal/icons/terminal_dark.svg')
         }
+        if ($plugin[0] -eq 'svg') {
+            # Keep editable vector sources beside the component that embeds the same toolbar assets.
+            foreach ($icon in @('zoom-in', 'zoom-out', 'actual-size', 'fit-window')) {
+                $packageFiles += ,@("icons/$icon.svg", "plugins/svg/icons/$icon.svg")
+            }
+        }
         foreach ($item in $packageFiles) {
             $entry = $archive.CreateEntry($item[0])
             $entryStream = $entry.Open()
@@ -54,7 +67,7 @@ try {
     } finally { $archive.Dispose(); $stream.Dispose() }
     Write-Output $destination
     }
-    foreach ($name in @('rust', 'toml')) {
+    foreach ($name in @('rust', 'toml', 'html', 'javascript')) {
         # Declarative language packages contain only resources; the host owns their lifecycle.
         $destination = [IO.Path]::GetFullPath((Join-Path $Output "$name.zip"))
         $stream = [IO.File]::Create($destination)

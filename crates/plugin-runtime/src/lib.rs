@@ -1,6 +1,7 @@
 //! Sandboxed component execution and transactional local package lifecycle.
 mod instance;
 mod manager;
+mod migration;
 mod package;
 mod process;
 pub use instance::Instance;

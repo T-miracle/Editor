@@ -1,14 +1,16 @@
 file_icons = "icons.json"
 
 [plugin]
-id = "me.toml"
+id = "toml"
 name = "TOML"
-version = "0.1.0"
+version = "0.1.1"
 host_version = ">=0.1.0"
 
 [[languages]]
 id = "toml"
 extensions = ["toml"]
+# These known lockfiles use TOML; other .lock files remain unclassified.
+filenames = ["Cargo.lock", "uv.lock"]
 grammar = "grammar/toml.wasm"
 highlights = "queries/highlights.scm"
 tree_sitter_abi = 15

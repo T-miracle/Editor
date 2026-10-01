@@ -2,8 +2,9 @@
 use super::*;
 use crate::ui::controls::ButtonCustomVariant;
 use crate::ui::controls::Checkbox;
+use crate::ui::controls::SegmentedTabs;
 use crate::ui::controls::tab_strip;
-use crate::ui::controls::vertical_scrollbar;
+use crate::ui::controls::vertical_viewport_scrollbar;
 use gpui_base::{ScrollbarHandle, ScrollbarMode};
 use gpui_kit::component::WindowExt as _;
 use gpui_kit::component::dialog::{DialogAction, DialogClose, DialogFooter};
@@ -147,7 +148,7 @@ mod scroll_tests {
             offset: 0.,
             hide_after_ms: Some(1000),
         };
-        scroll.update(Bounds::default(), Some(info.clone()), "me.terminal".into());
+        scroll.update(Bounds::default(), Some(info.clone()), "terminal".into());
         let started = scroll.0.borrow().last_activity.unwrap();
         assert!(scroll.visible_at(&info, started + Duration::from_millis(999)));
         assert!(!scroll.visible_at(&info, started + Duration::from_millis(1000)));
@@ -162,7 +163,7 @@ mod scroll_tests {
         );
         scroll.set_offset(point(px(0.), px(-40.)));
         assert!(
-            matches!(rx.try_recv(), Ok(Work::Event(id, PluginEvent::Scroll { offset, .. })) if id == "me.terminal" && offset == 40.)
+            matches!(rx.try_recv(), Ok(Work::Event(id, PluginEvent::Scroll { offset, .. })) if id == "terminal" && offset == 40.)
         );
         let refreshed = scroll.0.borrow().last_activity.unwrap();
         assert!(scroll.visible_at(&info, refreshed + Duration::from_millis(999)));
@@ -188,8 +189,31 @@ impl ExtensionPanel {
                 cx,
             );
         }
-        for operation in &scene.paint {
+        for (index, operation) in scene.paint.iter().enumerate() {
             match operation {
+                protocol::Paint::Svg { .. } => {
+                    let key = format!(
+                        "{}/{}",
+                        self.active.as_deref().unwrap_or_default(),
+                        scene.panel
+                    );
+                    if let Some(image) = self
+                        .images
+                        .get(&key)
+                        .and_then(|images| images.get(index))
+                        .and_then(Option::as_ref)
+                    {
+                        let image_bounds = rect_bounds(image.rect, bounds.origin);
+                        let _ = window.paint_image(
+                            bounds,
+                            image_bounds,
+                            gpui_kit::Corners::default(),
+                            image.image.clone(),
+                            0,
+                            false,
+                        );
+                    }
+                }
                 protocol::Paint::Fill {
                     rect,
                     color,
@@ -299,7 +323,7 @@ impl ExtensionPanel {
         let permissions = package.manifest.permissions.clone();
         let owner = cx.entity().downgrade();
         let install_owner = owner.clone();
-        window.open_dialog(cx, move |dialog, _, _| {
+        window.open_dialog(cx, move |dialog, _, cx| {
             let name = name.clone();
             let source = source.clone();
             let permissions = permissions.clone();
@@ -371,7 +395,11 @@ impl ExtensionPanel {
                                     DialogAction::new().child(
                                         Button::new("confirm-plugin-install")
                                             .label(format!("确认{action}"))
-                                            .primary(),
+                                            .primary()
+                                            .when(action == "更新", |button| {
+                                                button.custom(update_button_style(cx))
+                                            })
+                                            .outline(),
                                     ),
                                 ),
                         ),
@@ -412,7 +440,7 @@ impl ExtensionPanel {
         let entry = self.entries.iter().find(|entry| entry.manifest.id == id);
         let name = entry
             .map(|entry| entry.manifest.name.clone())
-            .unwrap_or_else(|| id.strip_prefix("me.").unwrap_or(&id).to_owned());
+            .unwrap_or_else(|| plugin_schema::canonical_plugin_id(&id).to_owned());
         let executable = entry.is_some_and(|entry| entry.manifest.component.is_some());
         let count = self.processes.get(&id).copied().unwrap_or(0);
         let impact = if executable {
@@ -421,7 +449,7 @@ impl ExtensionPanel {
             "将撤销此插件提供的语法、主题或图标资源。".to_owned()
         };
         let owner = cx.entity().downgrade();
-        window.open_dialog(cx, move |dialog, _, _| {
+        window.open_dialog(cx, move |dialog, _, cx| {
             let preserve_owner = owner.clone();
             let delete_owner = owner.clone();
             let cancel_owner = owner.clone();
@@ -473,7 +501,11 @@ impl ExtensionPanel {
                                             } else {
                                                 "确认停用"
                                             })
-                                            .primary(),
+                                            .primary()
+                                            .when(remove, |button| {
+                                                button.custom(uninstall_button_style(cx))
+                                            })
+                                            .outline(),
                                     ),
                                 ),
                         )
@@ -485,7 +517,8 @@ impl ExtensionPanel {
                                     .child(
                                         Button::new("confirm-plugin-delete")
                                             .label("卸载并删除数据")
-                                            .danger()
+                                            .custom(uninstall_button_style(cx))
+                                            .outline()
                                             .on_click(move |_, window, cx| {
                                                 let queued = delete_owner
                                                     .update(cx, |this, cx| {
@@ -544,6 +577,10 @@ impl ExtensionPanel {
     /// Install and destructive lifecycle actions have explicit, reviewable native controls.
     fn manager(&mut self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
         if self.manager_search.is_none() {
+            // Installed details need available versions before the user visits the market tab.
+            if self.manager_packages.is_empty() {
+                self.load_market_packages();
+            }
             // Keep search input state alive across manager repaints and focus changes.
             let input = cx.new(|cx| InputState::new(window, cx).placeholder("搜索插件"));
             self.manager_search_subscription =
@@ -729,17 +766,14 @@ impl ExtensionPanel {
         if let Some(manifest) = selected_manifest {
             let id = manifest.id.clone();
             let installed_version = selected_entry.map(|entry| entry.manifest.version.as_str());
-            let action = if self.manager_market {
-                package_action(&manifest.version, installed_version)
-            } else {
-                "卸载"
-            };
-            let package_path = self
-                .manager_market
-                .then_some(selected_package)
-                .flatten()
+            let package_path = selected_package
                 .and_then(|package| package.source.as_ref())
                 .map(PathBuf::from);
+            // Installation and updates have distinct controls; older packages expose no downgrade action.
+            let can_install = selected_entry.is_none();
+            let can_update = selected_package.is_some_and(|package| {
+                package_action(&package.manifest.version, installed_version) == "更新"
+            });
             let global_enabled =
                 selected_entry.is_some_and(|entry| entry.global_enabled.unwrap_or(entry.enabled));
             let project_enabled = selected_entry.is_some_and(|entry| {
@@ -747,14 +781,14 @@ impl ExtensionPanel {
                     .project_enabled
                     .contains(&self.workspace.to_string_lossy().to_string())
             });
-            let action_id = id.clone();
-            // Both ZIP inspection and installation keep the selected action visibly busy.
-            let primary_loading = self.progress.as_ref().is_some_and(|progress| {
+            let uninstall_id = id.clone();
+            // Package inspection belongs to install/update; removal has its own loading state.
+            let install_loading = self.progress.as_ref().is_some_and(|progress| {
                 progress.action == LifecycleAction::Inspect
-                    || (matches!(
-                        progress.action,
-                        LifecycleAction::Install | LifecycleAction::Uninstall
-                    ) && progress.id == id)
+                    || (progress.action == LifecycleAction::Install && progress.id == id)
+            });
+            let uninstall_loading = self.progress.as_ref().is_some_and(|progress| {
+                progress.action == LifecycleAction::Uninstall && progress.id == id
             });
             let project_id = id.clone();
             let project_owner = cx.entity().downgrade();
@@ -779,73 +813,127 @@ impl ExtensionPanel {
                         h_flex()
                             .gap_2()
                             .items_center()
-                            .child(
-                                div()
-                                    .id("plugin-primary-action-region")
-                                    .debug_selector(|| "plugin-primary-action-region".into())
-                                    .child(
-                                        Button::new("plugin-primary-action")
-                                            .label(action)
-                                            .when(action != "已安装", |button| button.primary())
-                                            .when(primary_loading, |button| {
-                                                button.icon(IconName::Loader)
-                                            })
-                                            .loading(primary_loading)
-                                            .disabled(busy || action == "已安装")
-                                            .on_click(cx.listener(move |this, _, _, cx| {
-                                                if let Some(path) = package_path.clone() {
-                                                    this.queue_lifecycle(Work::Inspect(path));
-                                                } else {
-                                                    this.confirm = Some((action_id.clone(), true));
+                            .when(can_install, |row| {
+                                let package_path = package_path.clone();
+                                row.child(
+                                    div()
+                                        .id("plugin-install-action-region")
+                                        .debug_selector(|| "plugin-install-action-region".into())
+                                        .child(
+                                            Button::new("plugin-install-action")
+                                                .label("安装")
+                                                .primary()
+                                                .outline()
+                                                .loading(install_loading)
+                                                .disabled(busy || package_path.is_none())
+                                                .on_click(cx.listener(move |this, _, _, cx| {
+                                                    if let Some(path) = package_path.clone() {
+                                                        this.queue_lifecycle(Work::Inspect(path));
+                                                    }
+                                                    cx.notify();
+                                                })),
+                                        ),
+                                )
+                            })
+                            .when(can_update, |row| {
+                                let package_path = package_path.clone();
+                                row.child(
+                                    div()
+                                        .id("plugin-update-action-region")
+                                        .debug_selector(|| "plugin-update-action-region".into())
+                                        .child(
+                                            Button::new("plugin-update-action")
+                                                .label("更新")
+                                                .custom(update_button_style(cx))
+                                                .outline()
+                                                .loading(install_loading)
+                                                .disabled(busy || package_path.is_none())
+                                                .on_click(cx.listener(move |this, _, _, cx| {
+                                                    if let Some(path) = package_path.clone() {
+                                                        this.queue_lifecycle(Work::Inspect(path));
+                                                    }
+                                                    cx.notify();
+                                                })),
+                                        ),
+                                )
+                            })
+                            .when(selected_entry.is_some(), |row| {
+                                row.child(
+                                    div()
+                                        .id("plugin-uninstall-action-region")
+                                        .debug_selector(|| "plugin-uninstall-action-region".into())
+                                        .child(
+                                            Button::new("plugin-uninstall-action")
+                                                .label("卸载")
+                                                .custom(uninstall_button_style(cx))
+                                                .outline()
+                                                .loading(uninstall_loading)
+                                                .disabled(busy)
+                                                .on_click(cx.listener(move |this, _, _, cx| {
+                                                    this.confirm =
+                                                        Some((uninstall_id.clone(), true));
                                                     this.confirm_dialog_open = false;
-                                                }
-                                                cx.notify();
-                                            })),
-                                    ),
-                            )
+                                                    cx.notify();
+                                                })),
+                                        ),
+                                )
+                            })
                             .when_some(
                                 selected_id.clone().zip(selected_global),
                                 |row, (id, enabled)| {
                                     let owner = cx.entity().downgrade();
-                                    row.child(div().w(px(176.)).child(tab_strip(
-                                        "plugin-global-scope",
-                                        usize::from(!enabled),
-                                        ["全局启动", "全局禁用"],
-                                        move |index, _, cx| {
-                                            let enable = index == 0;
-                                            if busy || enable == enabled {
-                                                return;
-                                            }
-                                            let _ = owner.update(cx, |this, cx| {
-                                                this.queue_lifecycle(if enable {
-                                                    Work::Enable(id.clone())
-                                                } else {
-                                                    Work::Disable(id.clone())
-                                                });
-                                                cx.notify();
-                                            });
-                                        },
-                                        cx,
-                                    )))
+                                    row.child(
+                                        div()
+                                            .id("plugin-global-scope-region")
+                                            .debug_selector(|| "plugin-global-scope-region".into())
+                                            .w(px(176.))
+                                            .child(
+                                                SegmentedTabs::new("plugin-global-scope")
+                                                    .selected_index(usize::from(!enabled))
+                                                    .labels(["全局启动", "全局禁用"])
+                                                    .disabled(busy)
+                                                    .on_change(move |index, _, cx| {
+                                                        let enable = index == 0;
+                                                        if busy || enable == enabled {
+                                                            return;
+                                                        }
+                                                        let _ = owner.update(cx, |this, cx| {
+                                                            this.queue_lifecycle(if enable {
+                                                                Work::Enable(id.clone())
+                                                            } else {
+                                                                Work::Disable(id.clone())
+                                                            });
+                                                            cx.notify();
+                                                        });
+                                                    }),
+                                            ),
+                                    )
                                 },
                             )
+                            // Project overrides follow the global choice in the same row.
                             .when(selected_entry.is_some() && !global_enabled, |row| {
                                 row.child(
-                                    Checkbox::new("plugin-project-enabled")
-                                        .label("本项目启用")
-                                        .checked(project_enabled)
-                                        .disabled(busy)
-                                        .on_change(move |checked, _, cx| {
-                                            let checked = *checked;
-                                            let _ = project_owner.update(cx, |this, cx| {
-                                                let _ =
-                                                    this.worker.tx.send(Work::SetProjectEnabled(
-                                                        project_id.clone(),
-                                                        checked,
-                                                    ));
-                                                cx.notify();
-                                            });
-                                        }),
+                                    div()
+                                        .id("plugin-project-scope-region")
+                                        .debug_selector(|| "plugin-project-scope-region".into())
+                                        .child(
+                                            Checkbox::new("plugin-project-enabled")
+                                                .label("本项目启用")
+                                                .checked(project_enabled)
+                                                .disabled(busy)
+                                                .on_change(move |checked, _, cx| {
+                                                    let checked = *checked;
+                                                    let _ = project_owner.update(cx, |this, cx| {
+                                                        let _ = this.worker.tx.send(
+                                                            Work::SetProjectEnabled(
+                                                                project_id.clone(),
+                                                                checked,
+                                                            ),
+                                                        );
+                                                        cx.notify();
+                                                    });
+                                                }),
+                                        ),
                                 )
                             }),
                     ),
@@ -916,7 +1004,35 @@ impl ExtensionPanel {
     }
 }
 
-/// Use the same version comparison for the market button and its confirmation.
+/// Amber accents distinguish upgrade outlines and their subtle interaction states.
+fn update_button_style(cx: &App) -> ButtonCustomVariant {
+    let (background, foreground, hover, active) = if cx.theme().is_dark() {
+        (0x524234, 0xffd29d, 0x614c39, 0x705740)
+    } else {
+        (0xfff0d9, 0x9c570d, 0xffe5bd, 0xffd99f)
+    };
+    ButtonCustomVariant::new(cx)
+        .color(rgb(background).into())
+        .foreground(rgb(foreground).into())
+        .hover(rgb(hover).into())
+        .active(rgb(active).into())
+}
+
+/// Rose accents keep removal outlines readable in both editor themes.
+fn uninstall_button_style(cx: &App) -> ButtonCustomVariant {
+    let (background, foreground, hover, active) = if cx.theme().is_dark() {
+        (0x553b43, 0xffbdc9, 0x65424b, 0x764953)
+    } else {
+        (0xffe6ea, 0xb93851, 0xffd3dc, 0xffc1ce)
+    };
+    ButtonCustomVariant::new(cx)
+        .color(rgb(background).into())
+        .foreground(rgb(foreground).into())
+        .hover(rgb(hover).into())
+        .active(rgb(active).into())
+}
+
+/// Compare versions for update availability and explicitly chosen local-package confirmations.
 pub(super) fn package_action(available: &str, installed: Option<&str>) -> &'static str {
     let Some(current) = installed else {
         return "安装";
@@ -1164,7 +1280,7 @@ impl Render for ExtensionPanel {
             );
         if let Some(info) = scene.as_ref().and_then(|s| s.scroll.as_ref()) {
             if self.scroll.visible(info) {
-                let bar = vertical_scrollbar(&self.scroll, cx).viewport_from_layout();
+                let bar = vertical_viewport_scrollbar(&self.scroll, cx);
                 // While the guest's overlay is present, keep the native thumb fully visible.
                 let bar = if info.hide_after_ms.is_some() {
                     bar.mode(ScrollbarMode::Always)

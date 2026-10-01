@@ -1,0 +1,15 @@
+file_icons = "icons.json"
+
+[plugin]
+id = "javascript"
+name = "JavaScript"
+version = "0.1.1"
+host_version = ">=0.1.0"
+
+[[languages]]
+id = "javascript"
+# The JavaScript grammar also parses JSX and both module filename conventions.
+extensions = ["js", "mjs", "cjs", "jsx"]
+grammar = "grammar/javascript.wasm"
+highlights = "queries/highlights.scm"
+tree_sitter_abi = 15

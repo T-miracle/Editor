@@ -3,17 +3,20 @@ use super::{Input, menu::MenuStyle, vertical_scrollbar};
 #[cfg(test)]
 mod tests;
 use gpui_base::{
-    Tab, Tabs,
+    ElementExt as _, Tab, Tabs,
     input::{InputEvent, InputState},
 };
 use gpui_kit::{
     App, AppContext as _, Bounds, Context, DispatchPhase, Entity, FocusHandle, Focusable as _,
     FontWeight, Hsla, InteractiveElement, IntoElement, KeyDownEvent, MouseButton, MouseDownEvent,
-    MouseMoveEvent, MouseUpEvent, ParentElement, Pixels, Render, ScrollHandle, SharedString,
-    StatefulInteractiveElement, Styled, Subscription, Window, canvas, div, px,
+    MouseMoveEvent, MouseUpEvent, ParentElement, Pixels, Point, Render, ScrollHandle, SharedString,
+    StatefulInteractiveElement, Styled, Subscription, Window, canvas, div, fill, px, size,
 };
-use plugin_runtime::plugin_protocol::ui::{Action, SideTabs};
+use plugin_runtime::plugin_protocol::ui::{Action, SideTabs, SideTabsPosition};
 use std::{cell::Cell, rc::Rc};
+
+/// Keep row layout, reorder hit testing and the selected border on the same vertical grid.
+const TAB_HEIGHT: f32 = 32.;
 
 #[derive(Clone)]
 pub(crate) struct SideTabsStyle {
@@ -22,6 +25,8 @@ pub(crate) struct SideTabsStyle {
     pub menu: MenuStyle,
     pub active: Hsla,
     pub active_foreground: Hsla,
+    /// Accent for the selected tab's complete one-pixel border facing the canvas.
+    pub active_inner_border: Hsla,
     pub close_background: Option<Hsla>,
     pub close_foreground: Option<Hsla>,
     pub rename_background: Option<Hsla>,
@@ -32,6 +37,12 @@ struct Editing {
     state: Entity<InputState>,
     _subscriptions: Vec<Subscription>,
 }
+/// Distinguish a deliberate reorder from an ordinary click or double-click rename.
+struct Drag {
+    id: String,
+    start: Point<Pixels>,
+    moved: bool,
+}
 pub(crate) struct SideTabBar {
     pub model: SideTabs,
     pub style: SideTabsStyle,
@@ -40,7 +51,7 @@ pub(crate) struct SideTabBar {
     focus: FocusHandle,
     editing: Option<Editing>,
     requested_rename: Option<String>,
-    drag: Option<String>,
+    drag: Option<Drag>,
     resizing: Option<(Pixels, f32)>,
     preview_width: Rc<Cell<Option<f32>>>,
     suppress_click: bool,
@@ -81,6 +92,12 @@ impl SideTabBar {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.model.position != model.position {
+            // A new dock edge invalidates both the old drag direction and its width preview.
+            self.resizing = None;
+            self.drag = None;
+            self.preview_width.set(None);
+        }
         let rename = model.rename.clone();
         let new_request = rename != self.requested_rename;
         if self
@@ -171,8 +188,14 @@ impl SideTabBar {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.drag.is_some() {
-            cx.stop_propagation();
+        if let Some(drag) = &mut self.drag {
+            if event.pressed_button != Some(MouseButton::Left) {
+                self.drag = None;
+            } else {
+                let delta = event.position - drag.start;
+                drag.moved |= delta.x.abs() >= px(4.) || delta.y.abs() >= px(4.);
+                cx.stop_propagation();
+            }
         }
         if let Some((start, width)) = self.resizing {
             if event.pressed_button != Some(MouseButton::Left) {
@@ -184,8 +207,13 @@ impl SideTabBar {
                 cx.notify();
                 return;
             }
-            let width = (width + (start - event.position.x) / px(1.))
-                .clamp(self.model.min_width, self.model.max_width);
+            // Drag toward the canvas to grow a sidebar, mirroring the right dock on the left.
+            let delta = (event.position.x - start) / px(1.);
+            let delta = match self.model.position {
+                SideTabsPosition::Left => delta,
+                SideTabsPosition::Right => -delta,
+            };
+            let width = (width + delta).clamp(self.model.min_width, self.model.max_width);
             if width != self.model.width {
                 // Preview the divider locally; avoid a WASM round trip and PTY resize per pixel.
                 self.model.width = width;
@@ -210,19 +238,26 @@ impl SideTabBar {
             cx.stop_propagation();
             return;
         }
-        let Some(from) = self.drag.take() else {
+        let Some(drag) = self.drag.take() else {
             return;
         };
-        if event.button != MouseButton::Left || !self.bounds.contains(&event.position) {
+        if event.button != MouseButton::Left || !drag.moved {
             return;
         }
-        let index = ((event.position.y - self.bounds.top() - self.scroll.offset().y) / px(32.))
-            .floor()
-            .max(0.) as usize;
+        // A completed or cancelled drag must not select the row under its release click.
+        self.suppress_click = true;
+        if !self.bounds.contains(&event.position) {
+            return;
+        }
+        let from = drag.id;
+        let index = ((event.position.y - self.bounds.top() - self.scroll.offset().y)
+            / px(TAB_HEIGHT))
+        .floor()
+        .max(0.) as usize;
         if let Some(item) = self
             .model
             .items
-            .get(index)
+            .get(index.min(self.model.items.len().saturating_sub(1)))
             .filter(|item| item.id != from && !item.disabled)
         {
             self.suppress_click = true;
@@ -241,6 +276,10 @@ impl SideTabBar {
 impl Render for SideTabBar {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let style = self.style.clone();
+        let on_left = self.model.position == SideTabsPosition::Left;
+        // Measure the selected row after scrolling, then paint its edge outside row clipping.
+        let selected_top = Rc::new(Cell::new(None::<Pixels>));
+        let accent_color = style.active_inner_border;
         let mut tabs = Tabs::new("side-tabs-list").flex().flex_col().w_full();
         for (index, item) in self.model.items.iter().enumerate() {
             let id = item.id.clone();
@@ -249,7 +288,8 @@ impl Render for SideTabBar {
             let mut row = div()
                 .id(SharedString::from(debug.clone()))
                 .debug_selector(move || debug.clone())
-                .h(px(32.))
+                .h(px(TAB_HEIGHT))
+                .relative()
                 .flex_shrink_0()
                 .flex()
                 .items_center()
@@ -258,11 +298,10 @@ impl Render for SideTabBar {
                 } else {
                     style.menu.surface
                 })
-                .border_b_1()
+                .border_1()
+                // The title bar or preceding row already paints the shared top separator.
+                .border_t_0()
                 .border_color(style.menu.border);
-            if !active {
-                row = row.border_l_1().border_color(style.border);
-            }
             if let Some(editing) = self.editing.as_ref().filter(|edit| edit.id == id) {
                 row = row
                     .capture_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
@@ -299,7 +338,6 @@ impl Render for SideTabBar {
                     } else {
                         style.menu.foreground
                     })
-                    .hover(|s| s.bg(style.menu.hover))
                     .capture_any_mouse_down(cx.listener(
                         move |this, event: &MouseDownEvent, window, cx| {
                             if event.button != MouseButton::Left {
@@ -318,7 +356,11 @@ impl Render for SideTabBar {
                                 this.begin_edit(&pressed, window, cx);
                                 cx.stop_propagation();
                             } else {
-                                this.drag = Some(pressed.clone());
+                                this.drag = Some(Drag {
+                                    id: pressed.clone(),
+                                    start: event.position,
+                                    moved: false,
+                                });
                             }
                         },
                     ))
@@ -389,7 +431,6 @@ impl Render for SideTabBar {
                             } else {
                                 style.menu.foreground
                             }))
-                            .hover(|s| s.bg(style.menu.hover))
                             .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                             .on_click(cx.listener(move |this, _, window, cx| {
                                 this.emit(Action::Close(close.clone()), window, cx)
@@ -398,8 +439,51 @@ impl Render for SideTabBar {
                     );
                 }
             }
-            tabs = tabs.child(row);
+            let measured = selected_top.clone();
+            tabs = tabs.child(row.on_prepaint(move |bounds, _, _| {
+                if active {
+                    // The row has no top border, so its content top is also its outer top.
+                    measured.set(Some(bounds.top()));
+                }
+            }));
         }
+        // The divider and its hit target always follow the edge facing the command canvas.
+        let divider = div().absolute().top_0().w(px(1.)).h_full().bg(style.border);
+        let divider = if on_left {
+            divider.right_0()
+        } else {
+            divider.left_0()
+        };
+        let resize = div()
+            .id("side-tabs-resize")
+            .debug_selector(|| "side-tabs-resize".into())
+            .absolute()
+            .top_0()
+            .w(px(6.))
+            .h_full()
+            .cursor_col_resize()
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(|this, event: &MouseDownEvent, _, cx| {
+                    if this.editing.is_none() {
+                        this.resizing = Some((event.position.x, this.model.width));
+                        this.drag = None;
+                    }
+                    cx.stop_propagation();
+                }),
+            );
+        let resize = if on_left {
+            resize.right_0()
+        } else {
+            resize.left_0()
+        };
+        // Leave the inner resize target accessible when the left sidebar also scrolls.
+        let scrollbar = div().absolute().left_0().top_0().bottom_0();
+        let scrollbar = if on_left {
+            scrollbar.right(px(6.))
+        } else {
+            scrollbar.right_0()
+        };
         let owner = cx.entity().downgrade();
         let paint_owner = owner.clone();
         div()
@@ -407,6 +491,7 @@ impl Render for SideTabBar {
             .debug_selector(|| "native-side-tabs".into())
             .relative()
             .size_full()
+            .overflow_hidden()
             .bg(style.background)
             .font_family(style.menu.font_family.clone())
             .text_size(px(style.menu.font_size))
@@ -419,15 +504,7 @@ impl Render for SideTabBar {
             .on_mouse_up(MouseButton::Left, |_, _, cx| cx.stop_propagation())
             .on_mouse_up(MouseButton::Right, |_, _, cx| cx.stop_propagation())
             .on_mouse_up(MouseButton::Middle, |_, _, cx| cx.stop_propagation())
-            .child(
-                div()
-                    .absolute()
-                    .left_0()
-                    .top_0()
-                    .w(px(1.))
-                    .h_full()
-                    .bg(style.border),
-            )
+            .child(divider)
             .child(
                 div()
                     .id("side-tabs-scroll")
@@ -436,39 +513,26 @@ impl Render for SideTabBar {
                     .track_scroll(&self.scroll)
                     .child(tabs),
             )
-            .child(
-                div()
-                    .absolute()
-                    .inset_0()
-                    .child(vertical_scrollbar(&self.scroll, cx)),
-            )
-            .child(
-                div()
-                    .id("side-tabs-resize")
-                    .debug_selector(|| "side-tabs-resize".into())
-                    .absolute()
-                    .left_0()
-                    .top_0()
-                    .w(px(6.))
-                    .h_full()
-                    .cursor_col_resize()
-                    .on_mouse_down(
-                        MouseButton::Left,
-                        cx.listener(|this, event: &MouseDownEvent, _, cx| {
-                            if this.editing.is_none() {
-                                this.resizing = Some((event.position.x, this.model.width));
-                                this.drag = None;
-                            }
-                            cx.stop_propagation();
-                        }),
-                    ),
-            )
+            .child(scrollbar.child(vertical_scrollbar(&self.scroll, cx)))
+            .child(resize)
             .child(
                 canvas(
                     move |bounds, _, cx| {
                         let _ = owner.update(cx, |this, _| this.bounds = bounds);
                     },
-                    move |_, _, window, _| {
+                    move |viewport, _, window, _| {
+                        if let Some(top) = selected_top.get() {
+                            // Draw last at the actual border pixel, retaining full visibility
+                            // for either dock edge while the sidebar viewport clips scrolled rows.
+                            let x = if on_left {
+                                viewport.right() - px(1.)
+                            } else {
+                                viewport.left()
+                            };
+                            let edge =
+                                Bounds::new(Point::new(x, top), size(px(1.), px(TAB_HEIGHT)));
+                            window.paint_quad(fill(edge, accent_color));
+                        }
                         let moved = paint_owner.clone();
                         let released = paint_owner.clone();
                         window.on_mouse_event(move |event: &MouseMoveEvent, phase, window, cx| {

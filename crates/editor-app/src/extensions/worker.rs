@@ -78,6 +78,8 @@ pub(super) struct Published {
     pub entries: Vec<Installed>,
     pub startup: BTreeMap<String, String>,
     pub scenes: BTreeMap<String, Arc<Scene>>,
+    /// Each scene's full-color image operations are ready before the UI observes that scene.
+    pub images: super::images::SceneImages,
     pub effects: Vec<(String, Request)>,
     pub pending: Option<Package>,
     pub status: Option<String>,
@@ -154,6 +156,7 @@ impl Worker {
                 }
             };
             let mut last_save = Instant::now();
+            let mut vectors = super::images::VectorRenderer::default();
             loop {
                 let work = match rx.recv_timeout(Duration::from_millis(30)) {
                     Ok(work) => Some(work),
@@ -216,6 +219,8 @@ impl Worker {
                     }
                     last_save = Instant::now();
                 }
+                // Vector parsing and rendering stay on this worker, outside the shared-state lock.
+                let images = vectors.prepare(&scenes);
                 let mut published = output.lock().unwrap();
                 let replacement_succeeded = result.is_ok();
                 // Startup loading ends only after Manager::open has restored every enabled plugin.
@@ -248,6 +253,7 @@ impl Worker {
                     })
                     .collect();
                 published.scenes = scenes;
+                published.images = images;
                 published.processes = processes;
                 published.effects.extend(effects);
                 published.generation += 1;

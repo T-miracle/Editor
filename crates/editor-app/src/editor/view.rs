@@ -33,18 +33,11 @@ impl EditorApp {
         let tree = gpui_base::Tree::new(&self.tree_state)
             .item(move |index, entry, entry_state, _window, cx| {
                 let selected = entry_state.is_selected();
-                let hover_view = view.clone();
                 view.update(cx, |app, cx| {
                     let item = entry.item();
-                    let row_id = item.id.clone();
-                    let hovered = app
-                        .hovered_tree_entry
-                        .as_deref()
-                        .is_some_and(|id| id == row_id.as_str());
+                    // Only explicit selection changes the row appearance; pointer hover is inert.
                     let row_style = if selected {
                         row_styles.selected
-                    } else if hovered {
-                        row_styles.hover
                     } else {
                         row_styles.base
                     };
@@ -69,8 +62,10 @@ impl EditorApp {
                         Path::new(item.id.as_str()),
                         is_folder,
                         &theme::active_theme(app.dark_theme),
-                    );
-                    let disclosure = if entry.is_folder() {
+                    )
+                    // Slightly enlarge explorer icons without changing tab-strip icon sizing.
+                    .size(px(16.));
+                    let disclosure = if is_folder {
                         Icon::new(if entry.is_expanded() {
                             IconName::ChevronDown
                         } else {
@@ -86,6 +81,9 @@ impl EditorApp {
                         .debug_selector(move || format!("explorer-row-{index}").into())
                         .w_full()
                         .min_h(px(24.))
+                        // Center the content within the whole row, including its minimum height.
+                        .flex()
+                        .items_center()
                         .bg(row_background)
                         .when(selected, |this| {
                             this.rounded(px(row_style.radius_px.unwrap_or(5.)))
@@ -97,25 +95,21 @@ impl EditorApp {
                         .when_some(row_border, |this, border| {
                             this.border_l_1().border_color(border)
                         })
-                        .on_hover(move |is_hovered, _, cx| {
-                            let row_id = row_id.clone();
-                            let _ = hover_view.update(cx, |app, cx| {
-                                if *is_hovered {
-                                    app.hovered_tree_entry = Some(row_id.to_string());
-                                    cx.notify();
-                                } else if app.hovered_tree_entry.as_deref() == Some(row_id.as_str())
-                                {
-                                    app.hovered_tree_entry = None;
-                                    cx.notify();
-                                }
-                            });
-                        })
+                        .on_mouse_down(
+                            MouseButton::Left,
+                            cx.listener(move |this, _, window, cx| {
+                                // Prevent the base tree from expanding folders on mouse down.
+                                cx.stop_propagation();
+                                this.select_explorer_row(index, window, cx);
+                            }),
+                        )
                         .on_mouse_down(
                             MouseButton::Right,
                             cx.listener({
                                 let path = PathBuf::from(item.id.as_str());
                                 move |this, event: &MouseDownEvent, window, cx| {
                                     cx.stop_propagation();
+                                    this.select_explorer_row(index, window, cx);
                                     this.open_explorer_menu(
                                         Some(path.clone()),
                                         event.position,
@@ -127,17 +121,60 @@ impl EditorApp {
                         )
                         .child(
                             h_flex()
+                                .w_full()
+                                .min_w(px(0.))
+                                .items_center()
                                 .gap_1()
                                 .child(
                                     div()
-                                        .size(px(12.))
+                                        .id(format!("explorer-disclosure-{index}"))
+                                        .debug_selector(move || {
+                                            format!("explorer-disclosure-{index}").into()
+                                        })
+                                        // Center the 12 px glyph inside a slightly larger click target.
+                                        .size(px(16.))
                                         .flex_shrink_0()
+                                        .flex()
+                                        .items_center()
                                         .justify_center()
+                                        .when(is_folder, |arrow| {
+                                            arrow
+                                                .on_mouse_down(
+                                                    MouseButton::Left,
+                                                    cx.listener(move |this, _, window, cx| {
+                                                        cx.stop_propagation();
+                                                        this.select_explorer_row(index, window, cx);
+                                                    }),
+                                                )
+                                                .on_click(cx.listener({
+                                                    let path = PathBuf::from(item.id.as_str());
+                                                    move |this, _, _, cx| {
+                                                        // Consume arrow clicks so the row cannot toggle twice.
+                                                        cx.stop_propagation();
+                                                        this.toggle_explorer_directory(&path, cx);
+                                                    }
+                                                }))
+                                        })
                                         .child(disclosure),
                                 )
-                                .child(div().size(px(16.)).flex_shrink_0().child(icon))
+                                .child(
+                                    h_flex()
+                                        .id(format!("explorer-icon-{index}"))
+                                        .debug_selector(move || {
+                                            format!("explorer-icon-{index}").into()
+                                        })
+                                        .size(px(16.))
+                                        .flex_shrink_0()
+                                        .items_center()
+                                        .justify_center()
+                                        .child(icon),
+                                )
                                 .child(
                                     div()
+                                        .id(format!("explorer-label-{index}"))
+                                        .debug_selector(move || {
+                                            format!("explorer-label-{index}").into()
+                                        })
                                         .flex_1()
                                         .min_w(px(0.))
                                         .truncate()
@@ -146,8 +183,14 @@ impl EditorApp {
                         )
                         .on_click(cx.listener({
                             let item = item.clone();
-                            move |this, _, window, cx| {
-                                if !is_folder {
+                            move |this, event: &ClickEvent, window, cx| {
+                                // A single click selects only; double clicks activate the row.
+                                if event.click_count() != 2 {
+                                    return;
+                                }
+                                if is_folder {
+                                    this.toggle_explorer_directory(Path::new(item.id.as_str()), cx);
+                                } else {
                                     this.open_file(PathBuf::from(item.id.as_str()), window, cx);
                                 }
                             }
@@ -198,7 +241,7 @@ impl EditorApp {
     fn render_tabs(&self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let tab_styles = component_styles(cx, ThemeComponent::EditorTab);
         let close_styles = component_styles(cx, ThemeComponent::EditorTabClose);
-        let tabs = self.tabs.iter().map(|tab| {
+        let tabs = self.tabs.iter().enumerate().map(|(index, tab)| {
             let path = tab.session.path().to_path_buf();
             let is_active = self.active_path.as_ref() == Some(&path);
             let is_external = !path.starts_with(self.workspace.root());
@@ -226,6 +269,7 @@ impl EditorApp {
             let external_background = gpui_kit::rgb(0xfff4c2);
             h_flex()
                 .id(format!("editor-tab:{}", path.to_string_lossy()))
+                .debug_selector(move || format!("editor-tab-{index}").into())
                 .relative()
                 .h_full()
                 .w(px(190.))
@@ -341,7 +385,14 @@ impl EditorApp {
                         })),
                 )
                 .on_click(cx.listener(move |this, _, window, cx| {
-                    this.open_file(activate_path.clone(), window, cx);
+                    // A tab click activates existing content and follows the explorer preference.
+                    if let Some(index) = this
+                        .tabs
+                        .iter()
+                        .position(|tab| tab.session.path() == activate_path)
+                    {
+                        this.activate_tab(index, window, cx);
+                    }
                 }))
                 .on_drag(drag_payload, |drag, _, _, cx| cx.new(|_| drag.clone()))
                 .on_drop(cx.listener(move |this, drag: &EditorTabDrag, _, cx| {
@@ -461,6 +512,19 @@ impl EditorApp {
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
         let style = component_styles(cx, ThemeComponent::Editor).base;
+        // No document means no input handler, gutter, tab strip or drop caret.
+        if self.tabs.is_empty() {
+            return v_flex()
+                .debug_selector(|| "editor-panel-content".into())
+                .size_full()
+                .min_h_0()
+                .child(crate::ui::controls::empty_editor_canvas(
+                    t!("editor.select_file").to_string(),
+                    style.background.unwrap_or(cx.theme().background),
+                    cx.theme().muted_foreground,
+                ))
+                .into_any_element();
+        }
         // Modal surfaces own the window until dismissed; ordinary floating
         // panels can remain below the raised definition details layer.
         let hover_enabled = self.explorer_edit.is_none()
@@ -479,111 +543,133 @@ impl EditorApp {
             )
         };
         let app = cx.entity().downgrade();
+        // Preserve the native editor and all its popovers while a plugin adds a sibling preview.
+        let source = div()
+            .debug_selector(|| "editor-source-pane".into())
+            .flex_1()
+            .min_h_0()
+            .relative()
+            // Capture selection presses before the base editor collapses them.
+            .when(hover_enabled, |view| {
+                view.capture_any_mouse_down(cx.listener(Self::text_drag_press))
+                    .capture_action(cx.listener(Self::text_drag_escape))
+            })
+            // Register drag listeners before the editor's own selection listeners.
+            .child(self.render_text_drag_events(cx))
+            .on_mouse_move(cx.listener(Self::editor_pointer_move))
+            .on_mouse_up(MouseButton::Middle, move |event, window, cx| {
+                let position = event.position;
+                let app = app.clone();
+                cx.stop_propagation();
+                window.defer(cx, move |window, cx| {
+                    // Reuse the editor's own hit testing to place the caret under the click.
+                    let modifiers = Modifiers::default();
+                    window.dispatch_event(
+                        PlatformInput::MouseDown(MouseDownEvent {
+                            button: MouseButton::Left,
+                            position,
+                            modifiers,
+                            click_count: 1,
+                            first_mouse: false,
+                        }),
+                        cx,
+                    );
+                    window.dispatch_event(
+                        PlatformInput::MouseUp(MouseUpEvent {
+                            button: MouseButton::Left,
+                            position,
+                            modifiers,
+                            click_count: 1,
+                        }),
+                        cx,
+                    );
+                    let _ = app.update(cx, |app, cx| {
+                        app.request_definition(Some(position), window, cx);
+                    });
+                });
+            })
+            .child(
+                super::popovers::render(
+                    &self.editor,
+                    &self.completion_popup,
+                    &self.definition_popup_focus,
+                    style,
+                    hover_enabled,
+                    window,
+                    cx,
+                )
+                .unwrap_or_else(|| {
+                    Editor::new(&self.editor)
+                        // Preserve live edit restrictions when the styled component renders.
+                        .readonly(!editable)
+                        .disabled(!enabled)
+                        .context_menu(move |menu, _, cx| {
+                            // Route the menu action through the same fresh LSP request as F12.
+                            menu.menu_with_disabled(
+                                t!("editor.go_to_definition").to_string(),
+                                !(enabled && has_definition),
+                                Box::new(NavigateToDefinition),
+                            )
+                            .menu_with_disabled(
+                                t!("editor.code_actions").to_string(),
+                                !(editable && has_code_actions),
+                                Box::new(gpui_base::input::ToggleCodeActions),
+                            )
+                            .separator()
+                            // Cut and Copy validate the live selection when their actions run.
+                            .menu_with_disabled(
+                                t!("editor.cut").to_string(),
+                                !editable,
+                                Box::new(gpui_base::input::Cut),
+                            )
+                            .menu_with_disabled(
+                                t!("editor.copy").to_string(),
+                                !enabled,
+                                Box::new(gpui_base::input::Copy),
+                            )
+                            .menu_with_disabled(
+                                t!("editor.paste").to_string(),
+                                !(editable && cx.read_from_clipboard().is_some()),
+                                Box::new(gpui_base::input::Paste),
+                            )
+                            .separator()
+                            .menu(
+                                t!("editor.select_all").to_string(),
+                                Box::new(gpui_base::input::SelectAll),
+                            )
+                        })
+                        .bordered(false)
+                        .p_0()
+                        .size_full()
+                        .min_h_0()
+                        .bg(style.background.unwrap_or(cx.theme().background))
+                        .text_color(style.foreground.unwrap_or(cx.theme().foreground))
+                        .font_family(cx.theme().mono_font_family.clone())
+                        .text_size(
+                            style
+                                .font_size_px
+                                .map(px)
+                                .unwrap_or(cx.theme().mono_font_size),
+                        )
+                        .into_any_element()
+                }),
+            )
+            // Paint the drop caret after the text, using the current editor layout.
+            .child(self.render_text_drag_caret(cx))
+            .into_any_element();
+        let body = if let Some(preview) = self.active_editor_preview(cx) {
+            self.render_editor_preview_split(source, preview, cx)
+        } else {
+            source
+        };
         v_flex()
             // Expose the editor extent for layout regression checks when docks disappear.
             .debug_selector(|| "editor-panel-content".into())
             .size_full()
             .min_h_0()
             .child(self.render_tabs(window, cx))
-            .child(
-                div()
-                    .flex_1()
-                    .min_h_0()
-                    .on_mouse_move(cx.listener(Self::editor_pointer_move))
-                    .on_mouse_up(MouseButton::Middle, move |event, window, cx| {
-                        let position = event.position;
-                        let app = app.clone();
-                        cx.stop_propagation();
-                        window.defer(cx, move |window, cx| {
-                            // Reuse the editor's own hit testing to place the caret under the click.
-                            let modifiers = Modifiers::default();
-                            window.dispatch_event(
-                                PlatformInput::MouseDown(MouseDownEvent {
-                                    button: MouseButton::Left,
-                                    position,
-                                    modifiers,
-                                    click_count: 1,
-                                    first_mouse: false,
-                                }),
-                                cx,
-                            );
-                            window.dispatch_event(
-                                PlatformInput::MouseUp(MouseUpEvent {
-                                    button: MouseButton::Left,
-                                    position,
-                                    modifiers,
-                                    click_count: 1,
-                                }),
-                                cx,
-                            );
-                            let _ = app.update(cx, |app, cx| {
-                                app.request_definition(Some(position), window, cx);
-                            });
-                        });
-                    })
-                    .child(
-                        super::popovers::render(
-                            &self.editor,
-                            &self.completion_popup,
-                            &self.definition_popup_focus,
-                            style,
-                            hover_enabled,
-                            window,
-                            cx,
-                        )
-                        .unwrap_or_else(|| {
-                            Editor::new(&self.editor)
-                                .context_menu(move |menu, _, cx| {
-                                    // Route the menu action through the same fresh LSP request as F12.
-                                    menu.menu_with_disabled(
-                                        t!("editor.go_to_definition").to_string(),
-                                        !(enabled && has_definition),
-                                        Box::new(NavigateToDefinition),
-                                    )
-                                    .menu_with_disabled(
-                                        t!("editor.code_actions").to_string(),
-                                        !(editable && has_code_actions),
-                                        Box::new(gpui_base::input::ToggleCodeActions),
-                                    )
-                                    .separator()
-                                    // Cut and Copy validate the live selection when their actions run.
-                                    .menu_with_disabled(
-                                        t!("editor.cut").to_string(),
-                                        !editable,
-                                        Box::new(gpui_base::input::Cut),
-                                    )
-                                    .menu_with_disabled(
-                                        t!("editor.copy").to_string(),
-                                        !enabled,
-                                        Box::new(gpui_base::input::Copy),
-                                    )
-                                    .menu_with_disabled(
-                                        t!("editor.paste").to_string(),
-                                        !(editable && cx.read_from_clipboard().is_some()),
-                                        Box::new(gpui_base::input::Paste),
-                                    )
-                                    .separator()
-                                    .menu(
-                                        t!("editor.select_all").to_string(),
-                                        Box::new(gpui_base::input::SelectAll),
-                                    )
-                                })
-                                .bordered(false)
-                                .p_0()
-                                .size_full()
-                                .min_h_0()
-                                .bg(style.background.unwrap_or(cx.theme().background))
-                                .text_color(style.foreground.unwrap_or(cx.theme().foreground))
-                                .font_family(cx.theme().mono_font_family.clone())
-                                .text_size(
-                                    style
-                                        .font_size_px
-                                        .map(px)
-                                        .unwrap_or(cx.theme().mono_font_size),
-                                )
-                                .into_any_element()
-                        }),
-                    ),
-            )
+            // Keep the editor's flexible height when the body is either a source pane or a split.
+            .child(v_flex().flex_1().min_h_0().child(body))
+            .into_any_element()
     }
 }

@@ -1,16 +1,40 @@
 _version: 2
+notification.close:
+  en: "Close notification"
+  zh-CN: "关闭通知"
 panel.explorer:
   en: "Explorer"
   zh-CN: "资源管理器"
 panel.minimize_explorer:
   en: "Minimize Explorer"
   zh-CN: "最小化资源管理器"
+explorer.reveal_active_file:
+  en: "Locate active file"
+  zh-CN: "定位当前文件"
+explorer.collapse_all:
+  en: "Collapse all"
+  zh-CN: "全部折叠"
+explorer.expand_all:
+  en: "Expand all"
+  zh-CN: "全部展开"
+explorer.reveal_failed:
+  en: "Cannot locate file"
+  zh-CN: "无法定位文件"
+explorer.reveal_outside_workspace:
+  en: "The active tab's file is outside this project and cannot be located in Explorer."
+  zh-CN: "当前标签页的文件不在本项目内，无法在资源管理器中定位。"
+explorer.reveal_no_active_file:
+  en: "There is no open file to locate."
+  zh-CN: "当前没有打开的文件可供定位。"
+explorer.reveal_unavailable_file:
+  en: "This file is not shown in Explorer. It may have been deleted or excluded."
+  zh-CN: "该文件未显示在资源管理器中，可能已被删除或被排除。"
 panel.editor:
   en: "Editor"
   zh-CN: "编辑器"
 editor.select_file:
   en: "Select a file from the Explorer"
-  zh-CN: "请从资源管理器中选择一个文件"
+  zh-CN: "请从资源管理器选择文件"
 editor.untitled:
   en: "Untitled"
   zh-CN: "未命名"
@@ -275,6 +299,9 @@ settings.layout:
 settings.file_explorer:
   en: "File explorer"
   zh-CN: "文件资源管理器"
+settings.explorer_reveal_on_tab_switch:
+  en: "Reveal files in Explorer when switching tabs"
+  zh-CN: "切换标签页时定位到资源管理器"
 settings.visible:
   en: "Visible"
   zh-CN: "显示"

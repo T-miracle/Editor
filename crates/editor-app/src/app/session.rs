@@ -8,6 +8,9 @@ use std::{
     path::{Path, PathBuf},
 };
 
+#[cfg(test)]
+mod tests;
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct SessionState {
     pub workspace: String,
@@ -19,6 +22,9 @@ pub struct SessionState {
     /// Newly introduced project roots start expanded for previously saved workspaces too.
     #[serde(default = "default_true")]
     pub explorer_root_expanded: bool,
+    /// Tab switches leave the explorer untouched unless this workspace preference is enabled.
+    #[serde(default)]
+    pub explorer_reveal_on_tab_switch: bool,
     /// Generic plugin-manager dock dimensions persist independently of plugin-owned state.
     #[serde(default = "default_extension_height", alias = "terminal_height")]
     pub extension_height: f32,
@@ -29,6 +35,9 @@ pub struct SessionState {
     pub plugin_dock_sizes: std::collections::BTreeMap<String, f32>,
     #[serde(default)]
     pub plugin_panel_visibility: std::collections::BTreeMap<String, bool>,
+    /// Base serializes the complete split tree, dock extents and open state.
+    #[serde(default)]
+    pub dock_layout: Option<gpui_base::dock::DockAreaState>,
     pub open_tabs: Vec<String>,
     pub active_file: Option<String>,
     pub expanded_directories: Vec<String>,
@@ -46,10 +55,12 @@ impl SessionState {
             explorer_width: 280.,
             explorer_visible: true,
             explorer_root_expanded: true,
+            explorer_reveal_on_tab_switch: false,
             extension_height: default_extension_height(),
             extensions_visible: true,
             plugin_dock_sizes: Default::default(),
             plugin_panel_visibility: Default::default(),
+            dock_layout: None,
             open_tabs: Vec::new(),
             active_file: None,
             expanded_directories: Vec::new(),
@@ -82,7 +93,45 @@ impl SessionState {
                 }
             }
         }
+        state.migrate_plugin_ids();
         state
+    }
+
+    /// Restore old exclusions, visibility choices and dock bindings using the current plugin IDs.
+    fn migrate_plugin_ids(&mut self) {
+        for id in &mut self.disabled_plugins {
+            *id = plugin_schema::canonical_plugin_id(id).to_owned();
+        }
+        let visibility = std::mem::take(&mut self.plugin_panel_visibility);
+        for (key, visible) in &visibility {
+            if canonical_panel_key(key) == *key {
+                self.plugin_panel_visibility.insert(key.clone(), *visible);
+            }
+        }
+        for (key, visible) in visibility {
+            self.plugin_panel_visibility
+                .entry(canonical_panel_key(&key))
+                .or_insert(visible);
+        }
+        if let Some(layout) = &mut self.dock_layout {
+            migrate_panel_names(&mut layout.center);
+            for slot in [
+                &mut layout.left_dock,
+                &mut layout.right_dock,
+                &mut layout.bottom_dock,
+            ] {
+                if let Some(dock) = slot.take() {
+                    let mut panel = dock.panel().clone();
+                    migrate_panel_names(&mut panel);
+                    *slot = Some(gpui_base::dock::DockState::new(
+                        panel,
+                        dock.placement(),
+                        dock.size(),
+                        dock.open(),
+                    ));
+                }
+            }
+        }
     }
 
     pub fn save(&self) {
@@ -96,6 +145,25 @@ impl SessionState {
                 }
             }
         }
+    }
+}
+
+/// Only the owner portion of a persisted panel key changes; the declared panel ID stays intact.
+fn canonical_panel_key(key: &str) -> String {
+    if let Some((plugin, panel)) = key.split_once('/') {
+        format!("{}/{panel}", plugin_schema::canonical_plugin_id(plugin))
+    } else {
+        plugin_schema::canonical_plugin_id(key).to_owned()
+    }
+}
+
+/// Rewrite stable dock names without altering split sizes, tab order or the open/closed state.
+fn migrate_panel_names(panel: &mut gpui_base::dock::PanelState) {
+    if let Some(key) = panel.panel_name.strip_prefix("plugin:") {
+        panel.panel_name = format!("plugin:{}", canonical_panel_key(key));
+    }
+    for child in &mut panel.children {
+        migrate_panel_names(child);
     }
 }
 

@@ -2,11 +2,15 @@
 
 ## 原生界面协议
 
-终端插件 0.5.1 使用 `protocol = 4` 与 `Scene.controls`：画布负责字符网格，主程序提供独立的侧边 Tab 栏和共享原生菜单。侧边栏支持滚动、重命名、关闭、排序和宽度调整；菜单及面板标题命令菜单使用资源管理器同款卡片/条目封装。条目以稳定 ID 回传操作，配色和字体实时取自主题。宿主兼容旧 protocol 3 插件的 `chrome` 字段；旧宿主拒绝 protocol 4 新包。
+SVG 预览插件使用 `protocol = 6`：清单面板声明 `position = "editor"` 与 `file_extensions = ["svg"]`，宿主在匹配文件的编辑区内创建可拖动的左右分栏。获得 `editor.commands` 授权后，插件接收面板范围内的 `Event::Document { path, text }`，内容来自当前内存文档，包括未保存修改；切换到不匹配文件或隐藏预览时发送空文档并收起分栏。编辑器保留原生输入、标签、补全和诊断行为。停用、卸载和热更新沿用已有生命周期。
+
+通用 `Paint::Svg { rect, clip, source }` 保留原有颜色与透明度；前面的绘图构成底层，SVG 可叠在棋盘上。主程序后台解析、按可见区域裁剪并缓存矢量图，UI 线程只提交图像；普通停靠插件不使用此接口。协议 1–5 继续兼容。
+
+终端插件 0.5.5 使用 `protocol = 5` 与 `Scene.controls`：画布负责字符网格，主程序提供独立的侧边 Tab 栏和共享原生菜单。侧边栏支持左右停靠、滚动、重命名、关闭、排序和宽度调整；选中项保留完整边框，内侧强调线及宽度拖动手柄随停靠侧改变，标签不使用悬停变色。菜单及面板标题命令菜单使用资源管理器同款卡片/条目封装。条目以稳定 ID 回传操作，配色和字体实时取自主题。宿主继续支持 protocol 1–4，兼容旧 protocol 3 插件的 `chrome` 字段；旧宿主拒绝 protocol 5 新包，避免把左侧布局错误显示为右侧。
 
 插件可声明 `protocol = 2`，使用 `plugin_protocol::ui::Document/Node` 返回行列布局和原生控件树，宿主通过 gpui-base 实现布局、输入、焦点、滚动和模态弹窗。协议、事件、主题角色与限制见 [插件原生界面协议](../crates/plugin-protocol/UI.md)。该文档及 Rust 接口由主程序内嵌，并自动提供给插件构建。protocol 1 的画布终端继续兼容；示例插件 0.2.0 演示新接口。
 
-编辑器提供通用安装接口。终端和示例插件通过 WebAssembly Component Model 执行；Rust 和 TOML 是由宿主管理生命周期的声明式资源包。亮色与深色基础主题内置于编辑器，首次启动默认使用亮色主题。终端核心使用插件目录内的 Alacritty 0.26.0 WASM 适配版，元数据解析使用上游 `vte`。语言插件包携带 Tree-sitter WASM grammar；其他主题插件仍可携带主题和图标资源，由宿主验证并注册。
+编辑器提供通用安装接口。终端和示例插件通过 WebAssembly Component Model 执行；Rust、TOML、HTML 和 JavaScript 是由宿主管理生命周期的声明式资源包。亮色与深色基础主题内置于编辑器，首次启动默认使用亮色主题。终端核心使用插件目录内的 Alacritty 0.26.0 WASM 适配版，元数据解析使用上游 `vte`。语言插件包携带 Tree-sitter WASM grammar；其他主题插件仍可携带主题和图标资源，由宿主验证并注册。
 
 ## 构建与安装
 
@@ -21,15 +25,15 @@ cargo build -p editor-app
 ./scripts/package-editor.ps1
 ```
 
-开发输出包含 `dist/plugins/terminal.zip`、`example.zip`、`rust.zip` 和 `toml.zip`。插件包是标准 ZIP，都包含 `manifest.json`；可执行插件另含组件 `.wasm`，声明式插件只包含各自资源。打包后的使用者不需要 Rust、Cargo 或源代码。
+开发输出包含 `dist/plugins/terminal.zip`、`example.zip`、`svg.zip`、`rust.zip`、`toml.zip`、`html.zip` 和 `javascript.zip`。插件包是标准 ZIP，都包含 `manifest.json`；可执行插件另含组件 `.wasm`，声明式插件只包含各自资源。打包后的使用者不需要 Rust、Cargo 或源代码。
 
 面板可在清单中声明 `icon_light` 和 `icon_dark`，分别指向包内 SVG。宿主验证并读取这两份资源，在浅色、深色主题间切换时自动更新面板标题和底部切换按钮。终端插件的图标位于 `plugins/terminal/icons/`；更新已经安装的终端插件时，选择新版 `terminal.zip` 即可替换图标。
 
 打开编辑器标题栏的“插件管理”，选择“安装 / 更新本机插件包”，确认来源及权限后即可使用。也可选择“查看随附插件”。安装成功会注册清单中的停靠面板、标题工具按钮、命令菜单和快捷键，或加载语言、主题和图标资源。终端默认停靠底部，示例包声明右侧计数器和底部笔记两个面板。面板尺寸可以像资源管理器一样拖动调整，底部按钮可以隐藏和显示各面板。
 
-Rust 和 TOML 插件安装后才提供对应文件的语法、图标及语言服务配置；停用或卸载会撤销这些贡献。内置主题无需安装插件，也可在设置中切换亮色和深色。两个声明式包的 `contributions` 字段指向各自包内的 `plugin.toml`，由宿主直接管理安装、启用、停用和卸载；更新这些包无需重新编译编辑器。
+Rust、TOML、HTML 和 JavaScript 插件安装后才提供对应文件的语法、图标及声明的语言服务配置；停用或卸载会撤销这些贡献。HTML 支持 `.html` 和 `.htm`，当前不包含 LSP 或 JavaScript/CSS 嵌入高亮，详见 [HTML 插件说明](../plugins/html/README.md)。JavaScript 支持 `.js`、`.mjs`、`.cjs` 和 `.jsx`，提供独立的语法解析与高亮，详见 [JavaScript 插件说明](../plugins/javascript/README.md)。内置主题无需安装插件，也可在设置中切换亮色和深色。这些声明式包的 `contributions` 字段指向各自包内的 `plugin.toml`，由宿主直接管理安装、启用、停用和卸载；更新这些包无需重新编译编辑器。
 
-可用 `cargo run -p plugin-runtime --example declarative_smoke -- dist/plugins` 验证两个包的安装、启用、停用和卸载。
+可用 `cargo run -p plugin-runtime --example declarative_smoke -- dist/plugins` 验证这些包的安装、启用、停用和卸载。
 
 同 ID 插件包执行更新，版本号与协议版本分别校验。编辑器进程保持运行。停用、卸载先显示关闭程序确认；卸载可以保留或删除该插件的全部私有数据，插件代码包会移除。保留数据后重装可以恢复。
 
@@ -48,9 +52,9 @@ Rust 和 TOML 插件安装后才提供对应文件的语法、图标及语言服
 
 主程序不识别终端命令、ANSI、光标模式、Shell 类型或终端 Tab。它绘制插件描述的矩形、文本及标准按钮/输入控件，并把原生事件连同面板 ID 发回插件。新增功能无需修改主程序中的枚举或终端专用槽位。
 
-主题通过通用 `Environment` 传给插件：背景、文字、弱化文字、边框、强调色、选区、明暗模式、UI/等宽字体，以及主题文件 `themes[].plugins` 中按插件 ID 分组的命名颜色和文字样式。插件用 `Environment::color(plugin_id, role)`、`Environment::font_style(plugin_id, role, monospace)` 读取本插件样式；宿主在主题变化时发送 `Event::Theme(Environment)`，插件应保存新环境并重新生成所有界面。主题包不需要直接调用插件。当前主题对同名颜色和字体属性的优先级高于插件私有配置。终端配置放在 `plugins["me.terminal"]`，全部角色和优先级见[终端插件说明](../plugins/terminal/README.md)。
+主题通过通用 `Environment` 传给插件：背景、文字、弱化文字、边框、强调色、选区、明暗模式、UI/等宽字体，以及主题文件 `themes[].plugins` 中按插件 ID 分组的命名颜色和文字样式。插件用 `Environment::color(plugin_id, role)`、`Environment::font_style(plugin_id, role, monospace)` 读取本插件样式；宿主在主题变化时发送 `Event::Theme(Environment)`，插件应保存新环境并重新生成所有界面。主题包不需要直接调用插件。当前主题对同名颜色和字体属性的优先级高于插件私有配置。终端配置放在 `plugins["terminal"]`，全部角色和优先级见[终端插件说明](../plugins/terminal/README.md)。
 
-插件绘制的 `Paint::Text` 可逐项指定字体，`Scene` 提供默认字体；原生 `Widget` 的可选 `style` 包含字体、文字、背景以及悬停和按下背景。插件从当前环境解析这些值后随场景交给宿主，主题变化时重新发布场景。示例插件演示了 `me.example.body.foreground`、`me.example.control.*` 和 `me.example.typography.body`。旧插件未提供这些字段时继续使用宿主通用主题。
+插件绘制的 `Paint::Text` 可逐项指定字体，`Scene` 提供默认字体；原生 `Widget` 的可选 `style` 包含字体、文字、背景以及悬停和按下背景。插件从当前环境解析这些值后随场景交给宿主，主题变化时重新发布场景。示例插件演示了 `example.body.foreground`、`example.control.*` 和 `example.typography.body`。旧插件未提供这些字段时继续使用宿主通用主题。
 
 ## 契约与权限
 
@@ -64,7 +68,7 @@ WIT 世界为 `editor:plugin/plugin@0.1.0`，只有宿主 `request` 导入与插
 | `workspace.read` | 读取当前工作区内的受限文件；拒绝绝对路径、目录穿越与符号链接逃逸 |
 | `storage` | 读写本插件的私有配置文件 |
 | `clipboard` | 请求原生 UI 线程读写剪贴板 |
-| `editor.commands` | 请求读取选区、取得当前文件目录、保存文件和打开私有配置 |
+| `editor.commands` | 请求读取选区、取得当前文件目录、保存文件、打开私有配置或隐藏本插件声明的面板 |
 
 **PTY 程序以当前用户身份运行，具备该用户的文件、进程与网络权限。** WASM 本身没有这些环境权限；安装界面对 `process.pty` 明确展示其含义。此能力适合终端等确实需要运行本机工具的插件，不等同于为子进程提供操作系统级文件沙箱。
 
@@ -89,6 +93,8 @@ WIT 世界为 `editor:plugin/plugin@0.1.0`，只有宿主 `request` 导入与插
 快照按工作区隔离，每三秒检查保存一次，正常退出时等待最后一次保存完成。崩溃时使用最后一次成功的快照。终端历史受 `history` 行数与总输出字节限制约束，超额舍弃最旧内容。宿主以临时文件和原子替换保存数据。失败或恶意插件仍可停用和卸载；取快照失败则保留上次有效数据。
 
 默认安装目录为 `%APPDATA%/MeEditor/runtime-plugins`。`ME_EDITOR_PLUGIN_HOME` 可指定隔离的测试或便携目录。`packages/` 保存版本代码，`data/<id>/` 保存配置及各工作区快照，`registry.json` 记录当前版本、授权与启停状态。
+
+插件 ID 为 `terminal`、`example`、`svg`、`rust`、`toml`、`html`、`javascript`，不再带 `me.` 前缀。SVG 名称为 `SVG`，源码目录为 `plugins/svg`，安装包为 `svg.zip`。新版主程序首次读取旧安装记录时迁移 ID，并复制包、配置及快照到新目录；权限、全局启停和项目启用状态保持不变。旧目录及 `registry.before-plugin-id-rename.json` 作为可恢复的备份保留。工作区的面板显示状态和 Dock 布局也随 ID 迁移。
 
 ## 验证
 

@@ -21,9 +21,9 @@ use gpui_base::input::{
 };
 use gpui_base::{TreeEvent, TreeItem, TreeState};
 use gpui_kit::{
-    App, AppContext as _, Bounds, Context, Entity, EventEmitter, FocusHandle, Focusable,
-    HighlightStyle, InteractiveElement as _, IntoElement, KeyBinding, Modifiers, MouseButton,
-    MouseDownEvent, MouseUpEvent, ParentElement, Pixels, PlatformInput, Point, Render,
+    App, AppContext as _, Bounds, ClickEvent, Context, Entity, EventEmitter, FocusHandle,
+    Focusable, HighlightStyle, InteractiveElement as _, IntoElement, KeyBinding, Modifiers,
+    MouseButton, MouseDownEvent, MouseUpEvent, ParentElement, Pixels, PlatformInput, Point, Render,
     ScrollHandle, ScrollStrategy, ScrollWheelEvent, StatefulInteractiveElement, StyleRefinement,
     Styled, Subscription, WeakEntity, Window, WindowBounds, WindowControlArea, WindowHandle,
     actions,
@@ -105,6 +105,8 @@ struct EditorApp {
     completion_popup: Rc<editor::CompletionPopupState>,
     /// Text selection may take focus without dismissing the displayed details.
     definition_popup_focus: editor::DefinitionPopupFocus,
+    /// Preserve a pressed selection until it becomes a text move or an ordinary click.
+    editor_text_drag: editor::TextDragState,
     /// Cancels app-level hover requests when the pointer moves to another symbol.
     pointer_hover_generation: u64,
     /// Keep cached details and Escape suppression within one document revision.
@@ -119,6 +121,10 @@ struct EditorApp {
     _editor_observer: Subscription,
     tree_state: Entity<TreeState>,
     dock_area: Entity<DockArea>,
+    /// Host panels keep their original identity when Base reloads a saved split tree.
+    explorer_panel: Entity<EditorDockPanel>,
+    /// Saved plugin leaves are restored after the startup registry becomes available.
+    pending_dock_restore: bool,
     /// Generic runtime plugin dock; packages own all feature behavior.
     extensions: Entity<extensions::ExtensionPanel>,
     /// Installed manifests dynamically contribute native dock panel entities.
@@ -142,7 +148,6 @@ struct EditorApp {
     _dialog_closed_subscription: Option<Subscription>,
     /// Remembers the selected settings category while the dialog is reopened.
     settings_section: app::SettingsSection,
-    hovered_tree_entry: Option<String>,
     /// Temporary name field for create and rename commands in the explorer.
     explorer_edit: Option<ExplorerEdit>,
     /// A path is removed only after the delete preview is explicitly confirmed.
@@ -150,8 +155,12 @@ struct EditorApp {
     explorer_menu: Option<ExplorerMenu>,
     tabs: Vec<OpenTab>,
     active_path: Option<PathBuf>,
+    /// Restoring saved tabs must not reveal files inside directories the user left collapsed.
+    restoring_documents: bool,
     status: String,
     definition_notice: Option<DefinitionNotice>,
+    /// A local nonmodal card replaces informational dialogs and never owns the editor's focus.
+    notification: Option<Entity<ui::controls::Notification>>,
     definition_request_id: u64,
     plugin_loads: Vec<PluginLoadEntry>,
     /// Rejects completion from a grammar task belonging to an older package version.
@@ -238,11 +247,21 @@ impl EditorApp {
                 if Path::new(&id) == this.workspace.root() {
                     this.session_state.explorer_root_expanded = is_expanded;
                 }
-                this.session_state
-                    .expanded_directories
-                    .retain(|path| path != &id);
+                this.session_state.expanded_directories.retain(|path| {
+                    if is_expanded {
+                        path != &id
+                    } else {
+                        // Collapsing by mouse or keyboard also forgets every descendant's expansion.
+                        !Path::new(path).starts_with(Path::new(&id))
+                    }
+                });
                 if is_expanded {
                     this.session_state.expanded_directories.push(id);
+                } else {
+                    let roots = explorer_tree::root_items(this.tree_state.read(cx));
+                    if let Some(item) = find_tree_item(&roots, Path::new(&id)) {
+                        explorer_tree::collapse_descendants(item);
+                    }
                 }
                 this.session_state.save();
             }
@@ -291,7 +310,8 @@ impl EditorApp {
             area.set_center(
                 DockLayout::h_split()
                     .child(
-                        DockLayout::tabs().panel_view(dock::panel_handle(explorer_panel), cx),
+                        DockLayout::tabs()
+                            .panel_view(dock::panel_handle(explorer_panel.clone()), cx),
                         Some(px(session_state.explorer_width)),
                     )
                     .child(
@@ -302,24 +322,9 @@ impl EditorApp {
                 cx,
             );
         });
-        let dock_subscription = cx.subscribe(&dock_area, |this, area, event, cx| {
+        let dock_subscription = cx.subscribe(&dock_area, |this, _, event, cx| {
             if matches!(event, DockEvent::LayoutChanged) {
-                let layout = area.read(cx).dump(cx);
-                for (name, dock) in [
-                    ("left", &layout.left_dock),
-                    ("right", &layout.right_dock),
-                    ("bottom", &layout.bottom_dock),
-                ] {
-                    if let Some(dock) = dock {
-                        this.session_state
-                            .plugin_dock_sizes
-                            .insert(name.into(), dock.size() / px(1.));
-                    }
-                }
-                // Explorer width belongs directly to the horizontal center split.
-                if let Some(width) = layout.center.info.sizes().and_then(|sizes| sizes.first()) {
-                    this.session_state.explorer_width = *width / px(1.);
-                }
+                this.capture_dock_layout(cx);
                 this.persist_session();
             }
         });
@@ -334,6 +339,7 @@ impl EditorApp {
             editor_panel,
             completion_popup: Rc::new(editor::CompletionPopupState::default()),
             definition_popup_focus: editor::DefinitionPopupFocus::new(window, cx),
+            editor_text_drag: editor::TextDragState::default(),
             pointer_hover_generation: 0,
             pointer_hover_context: None,
             pointer_hover_symbol: None,
@@ -343,6 +349,8 @@ impl EditorApp {
             _editor_observer: editor_observer,
             tree_state,
             dock_area,
+            explorer_panel,
+            pending_dock_restore: session_state.dock_layout.is_some(),
             extensions,
             plugin_panels: HashMap::new(),
             extensions_window: None,
@@ -358,14 +366,15 @@ impl EditorApp {
             dialog_window: None,
             _dialog_closed_subscription: None,
             settings_section: app::SettingsSection::AppearanceAndBehavior,
-            hovered_tree_entry: None,
             explorer_edit: None,
             explorer_delete: None,
             explorer_menu: None,
             tabs: Vec::new(),
             active_path: None,
+            restoring_documents: true,
             status: t!("status.ready").to_string(),
             definition_notice: None,
+            notification: None,
             definition_request_id: 0,
             plugin_loads: PluginLoadEntry::initial(),
             plugin_loading_generation: 0,
@@ -378,6 +387,7 @@ impl EditorApp {
             _bounds_subscription: None,
             _activation_subscription: None,
         };
+        this.restore_dock_layout(window, cx);
         this.refresh_files(cx);
 
         let saved_tabs = this.session_state.open_tabs.clone();
@@ -399,12 +409,16 @@ impl EditorApp {
             }
         }
         if let Some(path) = initial_file {
+            // Explicit file requests can reveal their path after saved tabs finish restoring.
+            this.restoring_documents = false;
             this.open_file(path, window, cx);
         } else if !restored_any {
             if let Some(path) = this.default_file() {
                 this.open_file(path, window, cx);
             }
         }
+        // The automatic fallback document also preserves a previously saved collapsed tree.
+        this.restoring_documents = false;
 
         let focus = this.editor.focus_handle(cx);
         window.defer(cx, move |window, cx| focus.focus(window, cx));

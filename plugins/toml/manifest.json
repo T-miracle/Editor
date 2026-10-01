@@ -1,7 +1,7 @@
 {
-  "id": "me.toml",
+  "id": "toml",
   "name": "TOML",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "protocol": 1,
   "contributions": "plugin.toml",
   "permissions": [],
