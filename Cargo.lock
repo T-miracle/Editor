@@ -5496,6 +5496,7 @@ dependencies = [
 name = "plugin-protocol"
 version = "0.1.0"
 dependencies = [
+ "semver",
  "serde",
  "serde_json",
  "wit-bindgen 0.45.1",

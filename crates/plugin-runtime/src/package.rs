@@ -79,9 +79,10 @@ impl Package {
         );
         semver::Version::parse(&manifest.version)?;
         anyhow::ensure!(
-            matches!(manifest.protocol, 1..=6),
+            matches!(manifest.protocol, 1..=7),
             "Unsupported plugin protocol"
         );
+        super::capabilities::negotiate(&manifest)?;
         anyhow::ensure!(
             (1024..=32 * 1024 * 1024).contains(&manifest.storage_limit),
             "Invalid storage quota"
@@ -145,7 +146,8 @@ impl Package {
                     "clipboard",
                     "editor.commands"
                 ]
-                .contains(&permission.as_str()),
+                .contains(&permission.as_str())
+                    || (manifest.protocol == 7 && permission == "assets.read"),
                 "Unsupported capability {permission}"
             );
         }

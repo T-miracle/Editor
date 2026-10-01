@@ -1,4 +1,5 @@
 //! Sandboxed component execution and transactional local package lifecycle.
+mod capabilities;
 mod instance;
 mod manager;
 mod migration;

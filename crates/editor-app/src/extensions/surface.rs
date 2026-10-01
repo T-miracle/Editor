@@ -355,6 +355,7 @@ impl ExtensionPanel {
                     });
                     for permission in &permissions {
                         let explanation = match permission.as_str() {
+                            "assets.read" => "读取此插件安装包内的资源文件",
                             "process.pty" => {
                                 "启动本机程序：这些程序以当前用户权限运行，可访问本机文件与网络"
                             }

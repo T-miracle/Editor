@@ -1,4 +1,6 @@
 //! Generic runtime-plugin dock and manager. Feature behavior arrives from installed packages.
+#[cfg(test)]
+mod capability_tests;
 mod commands;
 pub(crate) mod contributions;
 mod images;

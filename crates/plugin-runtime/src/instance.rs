@@ -10,9 +10,12 @@ use wasmtime::{
     component::{Component, HasSelf, Linker},
 };
 use wasmtime_wasi::{ResourceTable, WasiCtx, WasiCtxView, WasiView};
+mod capability_calls;
 wasmtime::component::bindgen!({path:"../plugin-protocol/wit",world:"plugin",require_store_data_send:true});
 
 struct State {
+    /// None selects the temporary legacy transport, never a fallback for a new guest.
+    api: Option<api::Negotiated>,
     wasi: WasiCtx,
     table: ResourceTable,
     limits: StoreLimits,
@@ -37,6 +40,9 @@ impl WasiView for State {
 impl editor::plugin::host::Host for State {
     /// Deny both ungranted calls and side effects during update preparation.
     fn request(&mut self, payload: String) -> Result<String, String> {
+        if self.api.is_some() {
+            return self.capability_request(&payload);
+        }
         self.request_checked(&payload).map_err(|e| format!("{e:#}"))
     }
 }
@@ -306,6 +312,7 @@ mod tests {
         let outside = root.path().join("outside.txt");
         std::fs::write(&outside, "private").unwrap();
         let mut state = State {
+            api: None,
             wasi: WasiCtx::builder().build(),
             table: ResourceTable::new(),
             limits: StoreLimitsBuilder::new().build(),
@@ -447,6 +454,7 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         std::fs::write(root.path().join("settings.json"), "old").unwrap();
         let mut state = State {
+            api: None,
             wasi: WasiCtx::builder().build(),
             table: ResourceTable::new(),
             limits: StoreLimitsBuilder::new().build(),
@@ -479,6 +487,8 @@ mod tests {
 
 /// One isolated plugin has its own Store, WASI table, resource handles and fuel budget.
 pub struct Instance {
+    /// Host invocation IDs cannot be confused with stale completions after another call.
+    next_call: u64,
     protocol: u32,
     store: Store<State>,
     bindings: Plugin,
@@ -503,6 +513,7 @@ impl Instance {
         assets: PathBuf,
         snapshot: Option<Snapshot>,
     ) -> anyhow::Result<Self> {
+        let api = super::capabilities::negotiate(manifest)?;
         anyhow::ensure!(
             manifest.permissions.is_subset(grants),
             "Plugin needs additional permission consent"
@@ -514,6 +525,7 @@ impl Instance {
         Plugin::add_to_linker::<_, HasSelf<_>>(&mut linker, |state| state)?;
         // No preopened directories, environment inheritance or network access is granted to WASI.
         let state = State {
+            api,
             wasi: WasiCtx::builder().build(),
             table: ResourceTable::new(),
             limits: StoreLimitsBuilder::new()
@@ -535,6 +547,7 @@ impl Instance {
         store.set_fuel(100_000_000)?;
         let bindings = Plugin::instantiate(&mut store, &component, &linker)?;
         let mut instance = Self {
+            next_call: 1,
             protocol: manifest.protocol,
             store,
             bindings,
@@ -559,7 +572,10 @@ impl Instance {
             100_000_000
         };
         self.store.set_fuel(fuel)?;
-        let payload = serde_json::to_string(&message)?;
+        let Some((payload, invocation_id)) = self.encode_invocation(message)? else {
+            // A capability guest receives only events belonging to this implemented native interface.
+            return Ok(Reply::default());
+        };
         let result = self
             .bindings
             .call_dispatch(&mut self.store, &payload)?
@@ -568,7 +584,7 @@ impl Instance {
             result.len() <= 32 * 1024 * 1024,
             "Plugin reply quota exceeded"
         );
-        let reply: Reply = serde_json::from_str(&result)?;
+        let reply = self.decode_completion(&result, invocation_id)?;
         let mut panels = std::collections::BTreeSet::new();
         for scene in reply.scene.iter().chain(&reply.scenes) {
             anyhow::ensure!(

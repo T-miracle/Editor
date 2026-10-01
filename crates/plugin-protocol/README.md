@@ -1,5 +1,27 @@
 # 插件 SDK
 
+## 新能力协议开发切片
+
+协议传输标记 `protocol = 7` 选择 `api` 模块的类型化消息；它不是所有功能共用的接口版本。清单 `api.base` 使用基础协议 SemVer 范围，`api.required` / `api.optional` 分别声明能力 ID 与版本范围。当前基础 API 为 1.0.0，支持 `package.assets` 1.0.0 和 `ui.native` 1.0.0；插件包版本仍单独管理。必需接口缺失或版本不匹配在包检查及实例恢复时拒绝，可选接口不可用则不出现在 Prepare 的协商结果中。
+
+插件使用 `api::guest::dispatch` 接收类型化生命周期，并用 `api::guest::read_asset` 读取资源。SDK 自动生成非零请求 ID、编码消息和校验响应 ID。缺少方法、错误参数、未知操作、未协商能力、权限不足、非法路径与配额超限以 `Failure` 返回；真正无法解码或调用的组件传输错误仍走 WIT 错误。同步资源读取直接返回最终结果，不伪造“处理中”阶段。
+
+`package.assets` 的可用性不等于授权：清单还需声明并在安装时批准 `assets.read`。该操作只读取当前包版本内的资源，准备阶段也允许读取这些不可变资源；不能读工作区或其他插件目录。旧协议的隐式包资源读取规则只保留在旧传输分支。
+
+新 UI 输出使用 `api::View { panel, document }`，不要求插件填写画布字体、光标或字符网格字段。宿主检查 `ui.native` 是否已协商、面板是否已声明，再交给现有原生渲染器。原生通知保留面板作用域，只包含原生 UI、主题、命令、焦点和像素尺寸；旧画布/PTY 消息不会自动成为新基础协议的一部分。
+
+独立验证插件为 `capability-example`，不属于正式发行包。先构建开发版宿主，再运行 `scripts/build-capability-example.ps1`，通过宿主公开 `--plugin-cargo` 接口生成开发测试包。验证命令：
+
+```powershell
+cargo test -p plugin-runtime --test capability_packages
+cargo test -p plugin-runtime --test capability_packages -- --ignored
+cargo test -p editor-app --bin editor-app capability_package_consent -- --ignored
+```
+
+真实组件测试显式忽略默认运行，需要先生成测试包；不是跳过验收。开发期间协议 1–6 与新形式并存，以保持迁移批次之间可运行。旧包统一迁移和旧接口删除属于后续工单，当前不承诺永久兼容，也不发布中间双协议正式版本。
+
+## 迁移期间的旧接口
+
 原生界面协议与示例见 [UI.md](UI.md)。`plugin_protocol::ui` 提供布局、控件、主题角色、弹窗与事件，使用它的插件声明 `protocol = 2`；宿主仍兼容 protocol 1 画布插件。
 
 画布组合控件使用 `CanvasControls/SideTabs`；左右停靠使用 protocol 5 的 `SideTabs.position`，省略位置的旧包保持右侧停靠。编译提示由新版宿主内嵌的 SDK 自动提供，无需在插件项目复制接口文件。

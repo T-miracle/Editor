@@ -1,0 +1,14 @@
+[package]
+name = "capability-example-guest"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.95"
+license = "MIT"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+# Resolve the published contract through the editor's public --plugin-cargo entry point.
+plugin-protocol = { version = "=0.1.0", features = ["guest"] }
+serde_json = "1.0"

@@ -3,6 +3,8 @@
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 
+/// Capability-based API; legacy messages remain only during the staged migration.
+pub mod api;
 pub mod ui;
 
 /// Guest imports and exports use the WIT contract supplied by the building editor.
@@ -24,6 +26,9 @@ pub struct Manifest {
     pub name: String,
     pub version: String,
     pub protocol: u32,
+    /// Protocol 7 selects the capability transport; interface versions negotiate independently.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub api: Option<api::Requirements>,
     /// Executable plugins provide a WASM component; declarative packages use host lifecycle only.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub component: Option<String>,
