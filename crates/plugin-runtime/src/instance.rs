@@ -13,6 +13,7 @@ use wasmtime_wasi::{ResourceTable, WasiCtx, WasiCtxView, WasiView};
 mod capability_calls;
 mod document_events;
 mod editor_requests;
+mod process_calls;
 mod resource_roots;
 mod settings;
 use resource_roots::ResourceRoots;
@@ -31,6 +32,9 @@ struct State {
     limits: StoreLimits,
     permissions: BTreeSet<String>,
     processes: Processes,
+    /// Service definitions and process handles cannot be retargeted by guest request fields.
+    services: std::collections::BTreeMap<String, plugin_protocol::process::Service>,
+    process_handles: std::collections::BTreeMap<u64, (api::ResourceHandle, String)>,
     workspace: PathBuf,
     data: PathBuf,
     assets: PathBuf,
@@ -84,7 +88,10 @@ impl State {
                 cwd,
                 columns,
                 rows,
-            } => serde_json::json!(self.processes.spawn(program, args, cwd, columns, rows)?),
+            } => serde_json::json!(
+                self.processes
+                    .spawn(program, args, cwd, columns, rows, true)?
+            ),
             Request::Write { handle, bytes } => {
                 self.processes.write(handle, &bytes)?;
                 serde_json::Value::Null
@@ -332,6 +339,8 @@ mod tests {
             limits: StoreLimitsBuilder::new().build(),
             permissions: BTreeSet::new(),
             processes: Processes::default(),
+            services: Default::default(),
+            process_handles: Default::default(),
             workspace,
             data,
             assets,
@@ -478,6 +487,8 @@ mod tests {
             limits: StoreLimitsBuilder::new().build(),
             permissions: ["storage".into()].into(),
             processes: Processes::default(),
+            services: Default::default(),
+            process_handles: Default::default(),
             workspace: root.path().into(),
             data: root.path().into(),
             assets: root.path().into(),
@@ -567,6 +578,8 @@ impl Instance {
                 .build(),
             permissions: manifest.permissions.clone(),
             processes: Processes::default(),
+            services: manifest.services.clone(),
+            process_handles: Default::default(),
             workspace: PathBuf::from(&environment.workspace),
             data,
             assets,
@@ -742,6 +755,7 @@ impl Instance {
         self.scenes.clear();
         self.scene = None;
         self.store.data_mut().processes.clear();
+        self.store.data_mut().process_handles.clear();
         self.store.data_mut().active = false;
         self.store.data_mut().effects.clear();
     }
@@ -779,10 +793,12 @@ impl Instance {
     pub fn poll(&mut self) -> anyhow::Result<bool> {
         self.poll_editor_requests()?;
         self.poll_document_events()?;
-        let events = self.store.data_mut().processes.poll()?;
+        let events = self.store.data_mut().poll_processes()?;
         let changed = !events.is_empty();
         for event in events {
-            self.call(Message::Event(event))?;
+            if self.store.data_mut().accept_process_event(&event) {
+                self.call(Message::Event(event))?;
+            }
         }
         Ok(changed)
     }

@@ -10,6 +10,7 @@ pub(super) enum RootKind {
     Data,
     EditorRequest,
     Subscription,
+    Process(u64),
 }
 
 pub(super) struct ResourceRoots {
@@ -67,18 +68,24 @@ impl ResourceRoots {
             .ok_or_else(|| Failure::new(ErrorCode::InvalidHandle, "Unknown or released resource"))
     }
 
-    pub(super) fn open(&mut self, kind: RootKind) -> Result<Value, Failure> {
+    /// Preflight is safe on the serial instance worker and must precede native side effects.
+    pub(super) fn ensure_capacity(&self) -> Result<(), Failure> {
         if self.slots.len() >= 128 {
             return Err(Failure::new(
                 ErrorCode::LimitExceeded,
                 "Resource handle quota exceeded",
             ));
         }
-        let resource = self.next;
-        self.next = self
-            .next
+        self.next
             .checked_add(1)
             .ok_or_else(|| Failure::new(ErrorCode::LimitExceeded, "Resource IDs exhausted"))?;
+        Ok(())
+    }
+
+    pub(super) fn open(&mut self, kind: RootKind) -> Result<Value, Failure> {
+        self.ensure_capacity()?;
+        let resource = self.next;
+        self.next += 1;
         self.slots.insert(resource, kind);
         Ok(Value::Resource(ResourceHandle {
             instance: self.instance.clone(),
@@ -103,7 +110,7 @@ impl State {
             ));
         }
         let (capability, permission, root) = match kind {
-            RootKind::EditorRequest | RootKind::Subscription => {
+            RootKind::EditorRequest | RootKind::Subscription | RootKind::Process(_) => {
                 return Err(Failure::new(ErrorCode::InvalidHandle, "Not a file handle"));
             }
             RootKind::Workspace => {
@@ -229,7 +236,11 @@ impl State {
                 Ok(Value::Unit)
             }
             api::Operation::CloseResource { handle } => {
-                self.roots.resolve(&handle)?;
+                if let RootKind::Process(_) = self.roots.resolve(&handle)? {
+                    return self
+                        .process_request(plugin_protocol::process::Operation::Terminate { handle })
+                        .map(|_| Value::Unit);
+                }
                 self.subscriptions.remove(&handle.resource);
                 if let Some(request) = self.editor_requests.remove(&handle.resource) {
                     request.call.retire();
@@ -238,6 +249,7 @@ impl State {
                 Ok(Value::Unit)
             }
             api::Operation::ReadAsset { .. }
+            | api::Operation::Process { .. }
             | api::Operation::SubscribeDocuments
             | api::Operation::Editor { .. }
             | api::Operation::CancelRequest { .. } => {

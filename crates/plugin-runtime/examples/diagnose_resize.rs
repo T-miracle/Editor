@@ -65,6 +65,27 @@ fn main() -> anyhow::Result<()> {
         std::thread::sleep(Duration::from_millis(40));
     }
     let initial = prompt_rows(&manager, id);
+    // Failed startup diagnostics include the guest-rendered screen, not only matching prompt rows.
+    if initial.is_empty() {
+        let screen = manager.live[id]
+            .scene
+            .as_ref()
+            .unwrap()
+            .paint
+            .iter()
+            .filter_map(|paint| {
+                if let Paint::Text { text, .. } = paint {
+                    Some(text.as_str())
+                } else {
+                    None
+                }
+            })
+            .collect::<String>();
+        println!(
+            "startup screen: {screen:?}; process IDs: {:?}",
+            manager.live[id].process_ids()
+        );
+    }
     println!("initial prompt rows: {} {initial:?}", initial.len());
     anyhow::ensure!(
         initial.len() == 1,

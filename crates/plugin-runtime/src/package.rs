@@ -83,6 +83,20 @@ impl Package {
             "Unsupported plugin protocol"
         );
         super::capabilities::negotiate(&manifest)?;
+        // Service keys are authority scopes, and definitions never accept dynamic command templates.
+        anyhow::ensure!(manifest.services.len() <= 32, "Too many native services");
+        for (id, service) in &manifest.services {
+            anyhow::ensure!(
+                manifest.protocol == 7
+                    && !id.is_empty()
+                    && id.len() <= 100
+                    && id
+                        .bytes()
+                        .all(|b| b.is_ascii_alphanumeric() || b"._-".contains(&b))
+                    && service.valid(),
+                "Invalid native service declaration"
+            );
+        }
         // Reject malformed forms before installation, not when a settings window tries to render them.
         anyhow::ensure!(manifest.settings.len() <= 64, "Too many settings");
         anyhow::ensure!(
@@ -194,8 +208,17 @@ impl Package {
                 ]
                 .contains(&permission.as_str())
                     || (manifest.protocol == 7
-                        && ["assets.read", "editor.read", "editor.write", "ui.panels"]
-                            .contains(&permission.as_str())),
+                        && ([
+                            "assets.read",
+                            "editor.read",
+                            "editor.write",
+                            "ui.panels",
+                            "process.exec"
+                        ]
+                        .contains(&permission.as_str())
+                            || permission
+                                .strip_prefix("process.service.")
+                                .is_some_and(|id| manifest.services.contains_key(id)))),
                 "Unsupported capability {permission}"
             );
         }

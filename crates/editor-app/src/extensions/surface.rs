@@ -321,12 +321,14 @@ impl ExtensionPanel {
         };
         let source = package.source.clone();
         let permissions = package.manifest.permissions.clone();
+        let services = package.manifest.services.clone();
         let owner = cx.entity().downgrade();
         let install_owner = owner.clone();
         window.open_dialog(cx, move |dialog, _, cx| {
             let name = name.clone();
             let source = source.clone();
             let permissions = permissions.clone();
+            let services = services.clone();
             let install_package = package.clone();
             let install_owner = install_owner.clone();
             let cancel_owner = owner.clone();
@@ -359,6 +361,8 @@ impl ExtensionPanel {
                             "process.pty" => {
                                 "启动本机程序：这些程序以当前用户权限运行，可访问本机文件与网络"
                             }
+                            "process.exec" => "执行任意本机程序（含交互式终端）：以当前用户权限访问文件与网络，WASM 沙箱不限制这些程序",
+                            value if value.starts_with("process.service.") => "启动此包声明的固定本机服务：程序以当前用户权限运行，可访问本机文件与网络",
                             "workspace.read" => "读取当前工作区文件",
                             "clipboard" => "读写系统剪贴板",
                             "storage" => "保存插件私有配置与会话数据",
@@ -366,6 +370,11 @@ impl ExtensionPanel {
                             _ => permission,
                         };
                         details = details.child(format!("• {explanation}"));
+                        if let Some(service) = permission.strip_prefix("process.service.")
+                            .and_then(|id| services.get(id)) {
+                            // Show the approved executable and argument vector separately from prose.
+                            details = details.child(format!("  程序：{} · 参数：{:?}", service.program, service.args));
+                        }
                     }
                     details = details.child(if executable {
                         if action == "安装" {

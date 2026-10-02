@@ -9,6 +9,7 @@ mod manager;
 mod migration;
 mod package;
 mod process;
+mod toolchains;
 pub use instance::Instance;
 pub use manager::{Installed, Manager};
 pub use package::Package;

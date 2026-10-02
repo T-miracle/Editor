@@ -5,6 +5,7 @@ use std::collections::BTreeSet;
 
 /// Capability-based API; legacy messages remain only during the staged migration.
 pub mod api;
+pub mod process;
 pub mod settings;
 pub mod ui;
 
@@ -23,6 +24,9 @@ pub mod bindings {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Manifest {
+    /// Fixed native service definitions; each key requires its own installation grant.
+    #[serde(default)]
+    pub services: std::collections::BTreeMap<String, process::Service>,
     /// Plugin namespace only; these declarations cannot alter host trust, grants or editor preferences.
     #[serde(default)]
     pub settings: std::collections::BTreeMap<String, settings::Definition>,

@@ -1,6 +1,10 @@
 # Capability Example
 
-开发验证插件，演示独立能力版本、类型化文件及编辑器访问和原生文本界面。基础 API、package.assets、ui.native、workspace.files、storage.private、editor.documents、ui.panels、configuration 分别协商 1.x；不存在的可选接口会降级显示。0.4.0 默认每个工作区独立实例。
+开发验证插件，演示独立能力版本、类型化文件及编辑器访问和原生文本界面。基础 API、package.assets、ui.native、workspace.files、storage.private、editor.documents、ui.panels、configuration 分别协商 1.x；不存在的可选接口会降级显示。0.5.0 默认每个工作区独立实例。
+
+进程回归通过相同公开打包入口追加 `process` 协商与独立服务/执行权限，使用 `scope-probe`
+发送类型化操作。`process-events` 按序号查看有界事件记录，`close-on-output` 演示在首个
+输出回调中释放进程。普通示例包默认不申请原生执行权限。
 
 安装时需要批准 assets.read（读取包资源）、workspace.read（读取所属工作区）、storage（读写实例私有文件）、editor.read（选区和文档事件）、editor.write（保存已打开文档）与 ui.panels（自身面板显隐）。不申请进程、网络或剪贴板权限。菜单命令“检查类型化错误”验证未知操作、错误参数与路径越界的明确返回。
 

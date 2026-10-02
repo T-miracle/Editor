@@ -125,6 +125,9 @@ impl std::error::Error for Failure {}
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "method", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Operation {
+    Process {
+        operation: crate::process::Operation,
+    },
     SubscribeDocuments,
     CancelRequest {
         handle: ResourceHandle,
@@ -165,6 +168,7 @@ pub struct Request {
 /// Result variants carry structured values, never JSON hidden inside a string result.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum Value {
+    Process(crate::process::Update),
     Cancellation(CancellationEffect),
     Accepted(ResourceHandle),
     Asset { bytes: Vec<u8> },
@@ -199,6 +203,10 @@ pub enum Input {
 /// Native UI notifications contain no legacy canvas or character-grid fields.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum Notification {
+    Process {
+        handle: ResourceHandle,
+        update: crate::process::Update,
+    },
     Configuration {
         phase: crate::settings::Phase,
         values: crate::settings::Effective,

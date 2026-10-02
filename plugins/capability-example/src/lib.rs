@@ -8,6 +8,10 @@ use std::cell::RefCell;
 
 #[derive(Default)]
 struct State {
+    /// Bounded observable process history demonstrates stream ordering through the public SDK.
+    process_events: Vec<plugin_protocol::process::Update>,
+    /// Demonstrate cancellation from inside an output callback, including an already queued exit.
+    close_on_output: bool,
     /// Resolved configuration arrives before activation and carries source metadata for each field.
     configuration: plugin_protocol::settings::Effective,
     text: String,
@@ -39,6 +43,8 @@ impl State {
         match input {
             api::Input::Prepare { api, .. } => {
                 self.configuration.clear();
+                self.process_events.clear();
+                self.close_on_output = false;
                 self.workspace = None;
                 self.data = None;
                 self.task = None;
@@ -91,6 +97,37 @@ impl State {
                     }
                     Phase::Apply => self.configuration = values,
                 }
+            }
+            api::Input::Event {
+                event: api::Notification::Process { handle, update },
+                ..
+            } => {
+                if self.close_on_output
+                    && matches!(update, plugin_protocol::process::Update::Output { .. })
+                {
+                    api::guest::close_resource(handle)?;
+                }
+                if self.process_events.len() < 256 {
+                    self.process_events.push(update);
+                }
+            }
+            api::Input::Event {
+                event: api::Notification::Command { id, .. },
+                ..
+            } if id == "close-on-output" => {
+                self.close_on_output = true;
+            }
+            api::Input::Event {
+                event: api::Notification::Command { id, arguments },
+                ..
+            } if id == "process-events" => {
+                // Read one bounded event at a time; native text controls are not bulk byte storage.
+                let index = arguments
+                    .as_ref()
+                    .and_then(|value| value.as_u64())
+                    .unwrap_or(0) as usize;
+                self.text = serde_json::to_string(&self.process_events.get(index))
+                    .map_err(|error| Failure::new(ErrorCode::OperationFailed, error.to_string()))?;
             }
             api::Input::Event {
                 event: api::Notification::Command { id, .. },

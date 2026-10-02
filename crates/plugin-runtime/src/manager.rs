@@ -664,6 +664,7 @@ mod icon_tests {
         std::fs::write(icons.join("dark.svg"), dark).unwrap();
         let installed = Installed {
             manifest: Manifest {
+                services: Default::default(),
                 settings: Default::default(),
                 settings_hook: false,
                 id: "example".into(),
@@ -723,6 +724,7 @@ mod scope_tests {
         std::fs::create_dir_all(contribution.parent().unwrap()).unwrap();
         std::fs::write(contribution, "").unwrap();
         let manifest = Manifest {
+            services: Default::default(),
             settings: Default::default(),
             settings_hook: false,
             id: "example".into(),

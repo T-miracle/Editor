@@ -45,6 +45,7 @@ impl State {
                 "editor",
                 "cancel_request",
                 "subscribe_documents",
+                "process",
             ]
             .contains(&method)
             {
@@ -56,6 +57,7 @@ impl State {
             let request: api::Request = serde_json::from_value(value)
                 .map_err(|error| Failure::new(ErrorCode::InvalidRequest, error.to_string()))?;
             match request.operation {
+                api::Operation::Process { operation } => self.process_request(operation),
                 api::Operation::SubscribeDocuments => self.subscribe_documents(),
                 api::Operation::CancelRequest { handle, mode } => {
                     self.roots.resolve(&handle)?;
