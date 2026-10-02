@@ -5,6 +5,8 @@ mod commands;
 pub(crate) mod contributions;
 mod editor_requests;
 mod images;
+#[cfg(test)]
+mod language_tests;
 mod native_controls;
 #[cfg(test)]
 mod native_ui_tests;
@@ -164,6 +166,7 @@ impl ExtensionPanel {
         #[cfg(test)]
         let root = workspace.join(".runtime-plugin-test");
         // Installed declarations are available before restored editor tabs are opened.
+        crate::language::providers::configure(&root, &workspace);
         if trusted {
             if let Err(error) = contributions::refresh_for_workspace(&root, &workspace) {
                 tracing::warn!(%error, "installed plugin contributions unavailable");

@@ -1807,6 +1807,7 @@ dependencies = [
  "tracing",
  "tree-sitter",
  "url",
+ "zip",
 ]
 
 [[package]]

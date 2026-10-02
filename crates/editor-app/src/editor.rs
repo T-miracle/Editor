@@ -18,4 +18,4 @@ pub(crate) use text_drag::TextDragState;
 mod text_drag;
 mod view;
 
-pub(crate) use documents::{attach_language_server, detach_language_server};
+pub(crate) use documents::{attach_language_server, detach_language_server, language_for_path};

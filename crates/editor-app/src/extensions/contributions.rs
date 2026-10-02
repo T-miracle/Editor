@@ -41,6 +41,7 @@ pub fn refresh(root: &Path) -> anyhow::Result<()> {
 
 /// Restore contributions enabled only for the active workspace before tabs load.
 pub fn refresh_for_workspace(root: &Path, workspace: &Path) -> anyhow::Result<()> {
+    crate::language::providers::configure(root, workspace);
     let key = workspace.display().to_string();
     let installed = Manager::read_registry(root)?
         .into_values()
@@ -97,6 +98,21 @@ pub fn refresh_entries(root: &Path, installed: &[Installed]) {
         }
     }
     catalog.icon_rules = Arc::new(rules);
+    crate::language::providers::refresh(
+        root,
+        catalog
+            .plugins
+            .iter()
+            .map(|(id, entry)| {
+                (
+                    id.clone(),
+                    entry.root.clone(),
+                    entry.manifest.language_definitions.clone(),
+                    entry.manifest.highlighters.clone(),
+                )
+            })
+            .collect(),
+    );
     *CATALOG.write().unwrap() = Arc::new(catalog);
 }
 

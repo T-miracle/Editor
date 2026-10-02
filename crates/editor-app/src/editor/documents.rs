@@ -871,7 +871,14 @@ pub(crate) fn detach_language_server(editor: &Entity<EditorState>, cx: &mut Cont
     });
 }
 
-fn language_for_path(path: &Path) -> String {
+/// Resolve recognition consistently for opening, renaming and hot highlighter replacement.
+pub(crate) fn language_for_path(path: &Path) -> String {
+    if let Some(language) = crate::language::providers::language_for_path(path) {
+        return language;
+    }
+    if crate::language::providers::handles_path(path) {
+        return "text".into();
+    }
     // Installed plugin manifests own their extensions and language identities.
     if let Some(language) = language_plugins::language_for_path(path) {
         return language.id;

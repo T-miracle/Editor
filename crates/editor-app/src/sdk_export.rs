@@ -32,6 +32,10 @@ const SDK_FILES: &[(&str, &[u8])] = &[
     ),
     ("UI.md", include_bytes!("../../plugin-protocol/UI.md")),
     (
+        "LANGUAGES.md",
+        include_bytes!("../../plugin-protocol/LANGUAGES.md"),
+    ),
+    (
         "src/lib.rs",
         include_bytes!("../../plugin-protocol/src/lib.rs"),
     ),

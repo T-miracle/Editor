@@ -266,6 +266,39 @@ settings.title:
 settings.plugins:
   en: "Plugins"
   zh-CN: "插件设置"
+settings.languages:
+  en: "Language providers"
+  zh-CN: "语言提供者"
+settings.provider_scope_user:
+  en: "User default"
+  zh-CN: "用户全局"
+settings.provider_scope_project:
+  en: "This project"
+  zh-CN: "本项目"
+settings.providers_empty:
+  en: "No dynamic language providers are installed."
+  zh-CN: "尚未安装动态语言提供者。"
+settings.provider_recognition:
+  en: "Recognition"
+  zh-CN: "语言识别"
+settings.provider_highlight:
+  en: "Highlighting"
+  zh-CN: "语法高亮"
+settings.provider_missing:
+  en: "No provider available; using plain text."
+  zh-CN: "无可用提供者，已降级为纯文本。"
+settings.provider_choose:
+  en: "Multiple providers available; choose one to enable this capability."
+  zh-CN: "有多个候选，请选择一个以启用此能力。"
+settings.provider_source_automatic:
+  en: "Automatically selected; kept until unavailable."
+  zh-CN: "自动选择，持续保留至该提供者不可用。"
+settings.provider_source_user:
+  en: "Using the user choice."
+  zh-CN: "当前采用用户全局选择。"
+settings.provider_source_project:
+  en: "Using this project's choice."
+  zh-CN: "当前采用本项目选择。"
 settings.plugin_hint:
   en: "Apply confirms the selected scope and restarts only affected plugin instances. Reset removes that override."
   zh-CN: "应用即确认所选作用域，仅重启受影响的插件实例。重置将移除此作用域的覆盖值。"

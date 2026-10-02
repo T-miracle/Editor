@@ -4,9 +4,9 @@
 
 来源：[已确认规格](../plugin-api-platform.md)。测试边界已由用户确认。
 
-状态：总方案和 20 张工单已发布，GitHub 是正式议题跟踪器。工单 01–03 已提交推送（`1969094`、`bc3102f`、`c2ca98d`），GitHub #2–#4 已关闭。工单 04 已实现并通过测试及双轴审查，随本提交推送并关闭 GitHub #5。用户已授权连续完成剩余工单，每项通过验证后提交、推送、核对关闭再继续下一项。
+状态：总方案和 20 张工单已发布，GitHub 是正式议题跟踪器。工单 01–04 已提交推送（`1969094`、`bc3102f`、`c2ca98d`、`9f5a2a7`），GitHub #2–#5 已关闭。工单 05 已实现并通过测试及双轴审查，随本提交推送并关闭 GitHub #6。用户已授权连续完成剩余工单，每项通过验证后提交、推送、核对关闭再继续下一项。
 
-设计基线：[GitHub #1](https://github.com/T-miracle/Editor/issues/1)。当前交付：[工单 04 / GitHub #5](https://github.com/T-miracle/Editor/issues/5)；下一项为 [工单 05 / GitHub #6](https://github.com/T-miracle/Editor/issues/6)。验证记录见 [配置验证](../plugin-api-settings-verification.md)。
+设计基线：[GitHub #1](https://github.com/T-miracle/Editor/issues/1)。当前交付：[工单 05 / GitHub #6](https://github.com/T-miracle/Editor/issues/6)；下一项为 [工单 06 / GitHub #7](https://github.com/T-miracle/Editor/issues/7)。验证记录见 [语言验证](../plugin-api-language-verification.md)。
 
 ## GitHub 议题映射
 
@@ -165,7 +165,7 @@ flowchart TD
 
 ## 实施前沿
 
-工单 01–04 已实现；连续执行按编号推进，下一项是 **05（GitHub #6）**。设计基线 #1 不是待关闭的执行阻塞项。
+工单 01–05 已实现；连续执行按编号推进，下一项是 **06（GitHub #7）**。设计基线 #1 不是待关闭的执行阻塞项。
 
 - 03 完成后，04（配置）、06（进程）、10（组合 UI）、11（协作）满足各自的依赖门槛。
 - 07 完成后，08（依赖准备）和 12（故障恢复）可分别推进；14 还要等待组合 UI、协作与数据事务。

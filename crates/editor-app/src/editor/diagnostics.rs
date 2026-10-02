@@ -33,11 +33,16 @@ impl EditorApp {
             return;
         };
         let path = self.tabs[index].session.path().to_path_buf();
-        let language = language_plugins::language_for_path(&path)
-            .filter(|language| self.language_plugin_enabled(&language.id));
+        let language = if crate::language::providers::handles_path(&path) {
+            crate::language::providers::language_for_path(&path)
+        } else {
+            language_plugins::language_for_path(&path)
+                .filter(|language| self.language_plugin_enabled(&language.id))
+                .map(|language| language.id)
+        };
         let server = language
             .as_ref()
-            .and_then(|language| self.language_servers.get(&language.id))
+            .and_then(|language| self.language_servers.get(language))
             .cloned();
         let tab = &mut self.tabs[index];
         tab.diagnostics.task = None;
@@ -82,7 +87,7 @@ impl EditorApp {
             let syntax_text = text.clone();
             let diagnostics = cx
                 .background_executor()
-                .spawn(async move { parser.lock().unwrap().check(&language.id, &syntax_text) })
+                .spawn(async move { parser.lock().unwrap().check(&language, &syntax_text) })
                 .await;
             let _ = this.update(cx, |app, cx| {
                 app.apply_syntax_diagnostics(

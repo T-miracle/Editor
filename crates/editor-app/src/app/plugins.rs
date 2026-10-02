@@ -76,6 +76,7 @@ impl EditorApp {
         if !self.session_state.workspace_trusted {
             return;
         }
+        self.sync_dynamic_languages(cx);
         let generation = self.plugin_loading_generation;
         for plugin in self
             .plugin_loads
@@ -92,14 +93,26 @@ impl EditorApp {
             cx.spawn(async move |this, cx| {
                 let result = cx
                     .background_executor()
-                    .spawn(async move { language_plugins::load_bundled_plugin(plugin) })
+                    .spawn(async move { language_plugins::prepare_bundled_plugin(plugin) })
                     .await;
                 let _ = this.update_in(cx, |app, _, cx| {
                     if app.plugin_loading_generation != generation {
                         return;
                     }
                     let state = match result {
-                        Ok(()) => PluginLoadState::Enabled,
+                        Ok((grammar, query)) => {
+                            // A dynamic choice owns its language even while loading or failed.
+                            if !crate::language::providers::languages()
+                                .contains(plugin.language_id())
+                            {
+                                language_plugins::publish_dynamic(
+                                    plugin.language_id(),
+                                    grammar,
+                                    query,
+                                );
+                            }
+                            PluginLoadState::Enabled
+                        }
                         Err(error) => {
                             tracing::warn!(plugin = plugin.name(), %error, "plugin loading failed");
                             PluginLoadState::Error(format!("{error:#}"))
@@ -119,11 +132,17 @@ impl EditorApp {
         cx: &mut Context<Self>,
     ) {
         self.plugin_loading_generation = self.plugin_loading_generation.wrapping_add(1);
+        if !self.session_state.workspace_trusted {
+            self.sync_dynamic_languages(cx);
+        }
         let previous = std::mem::replace(&mut self.plugin_loads, PluginLoadEntry::initial());
+        let dynamic_languages = crate::language::providers::languages();
         for old in &previous {
             let plugin = old.plugin;
             if !self.plugin_loads.iter().any(|entry| entry.plugin == plugin) {
-                language_plugins::mask_language(plugin.language_id());
+                if !dynamic_languages.contains(plugin.language_id()) {
+                    language_plugins::mask_language(plugin.language_id());
+                }
                 self.language_servers.remove(plugin.language_id());
             }
         }
@@ -134,10 +153,21 @@ impl EditorApp {
             {
                 // Startup publication and unrelated scope changes must not restart indexing.
                 *entry = old.clone();
+                if self
+                    .dynamic_language_ids
+                    .contains(entry.plugin.language_id())
+                    && !dynamic_languages.contains(entry.plugin.language_id())
+                {
+                    // Removing a dynamic override restores the legacy package through fresh validation.
+                    entry.grammar_loaded = false;
+                    entry.state = PluginLoadState::Loading;
+                }
                 continue;
             }
             // A replaced package must validate its new grammar and start a new server.
-            language_plugins::mask_language(entry.plugin.language_id());
+            if !dynamic_languages.contains(entry.plugin.language_id()) {
+                language_plugins::mask_language(entry.plugin.language_id());
+            }
             self.language_servers.remove(entry.plugin.language_id());
         }
         let mut newly_created_servers = Vec::new();
@@ -342,6 +372,7 @@ impl EditorApp {
             .count();
         let runtime = self.extensions.read(cx);
         bundled
+            + self.dynamic_language_status(kind).len()
             + match kind {
                 PluginPopupKind::Loading => runtime.startup.len(),
                 PluginPopupKind::Error => runtime
@@ -444,7 +475,7 @@ impl EditorApp {
         };
         // Runtime plugin names and startup failures share the existing status popup.
         let runtime = self.extensions.read(cx);
-        let runtime_details: Vec<_> = match kind {
+        let mut runtime_details: Vec<_> = match kind {
             PluginPopupKind::Loading => runtime
                 .startup
                 .values()
@@ -462,6 +493,7 @@ impl EditorApp {
                 .collect(),
         };
         // GPUI measures the card before placing it above the clicked window point.
+        runtime_details.extend(self.dynamic_language_status(kind));
         gpui_base::Positioner::side(Bounds::new(position, size(px(1.), px(1.))))
             .placement(gpui_base::Placement::Top)
             .align(gpui_base::Align::End)

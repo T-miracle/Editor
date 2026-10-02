@@ -11,6 +11,7 @@ pub(crate) enum SettingsSection {
     Keymap,
     Editor,
     Plugins,
+    Languages,
 }
 
 impl SettingsSection {
@@ -21,6 +22,7 @@ impl SettingsSection {
             Self::Keymap => t!("settings.keymap").to_string(),
             Self::Editor => t!("settings.editor").to_string(),
             Self::Plugins => t!("settings.plugins").to_string(),
+            Self::Languages => t!("settings.languages").to_string(),
         }
     }
 
@@ -31,6 +33,7 @@ impl SettingsSection {
             Self::Keymap => "settings-nav-keymap",
             Self::Editor => "settings-nav-editor",
             Self::Plugins => "settings-nav-plugins",
+            Self::Languages => "settings-nav-languages",
         }
     }
 }
@@ -89,6 +92,7 @@ fn render_settings_content(
         SettingsSection::Keymap,
         SettingsSection::Editor,
         SettingsSection::Plugins,
+        SettingsSection::Languages,
     ]
     .into_iter()
     .map(|section| {
@@ -162,6 +166,7 @@ fn render_section(view: &Entity<EditorApp>, section: SettingsSection, cx: &mut A
         SettingsSection::AppearanceAndBehavior => render_appearance(view, cx),
         SettingsSection::Keymap => render_keymap(cx),
         SettingsSection::Editor => render_editor(view, cx),
+        SettingsSection::Languages => super::languages::render_settings(view, cx),
         SettingsSection::Plugins => {
             if view.read(cx).plugin_settings.is_none() {
                 let owner = view.read(cx).extensions.clone();

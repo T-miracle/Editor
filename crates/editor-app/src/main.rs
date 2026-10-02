@@ -167,6 +167,9 @@ struct EditorApp {
     notification: Option<Entity<ui::controls::Notification>>,
     definition_request_id: u64,
     plugin_loads: Vec<PluginLoadEntry>,
+    /// Runtime-defined languages are independent of the transitional bundled-language enum.
+    dynamic_languages: app::languages::DynamicLanguages,
+    dynamic_language_ids: std::collections::BTreeSet<String>,
     /// Rejects completion from a grammar task belonging to an older package version.
     plugin_loading_generation: u64,
     /// Apply package lifecycle changes on the next frame with access to the editor window.
@@ -392,6 +395,8 @@ impl EditorApp {
             notification: None,
             definition_request_id: 0,
             plugin_loads: PluginLoadEntry::initial(),
+            dynamic_languages: Default::default(),
+            dynamic_language_ids: Default::default(),
             plugin_loading_generation: 0,
             pending_contribution_sync: false,
             pending_editor_requests: Vec::new(),

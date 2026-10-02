@@ -2,7 +2,9 @@ use serde::{Deserialize, Serialize};
 use std::{collections::BTreeMap, path::PathBuf};
 use thiserror::Error;
 
+mod languages;
 mod theme_effects;
+pub use languages::{Highlighter, LanguageDefinition};
 pub use theme_effects::{ThemeWindow, ThemeWindowBackground};
 
 /// Read pre-rename identifiers without retaining their prefix in current manifests or UI state.
@@ -28,6 +30,11 @@ pub struct PluginManifest {
     pub plugin: PluginMetadata,
     #[serde(default)]
     pub languages: Vec<LanguageContribution>,
+    /// Independent recognition and highlighting contributions for the capability protocol.
+    #[serde(default)]
+    pub language_definitions: Vec<LanguageDefinition>,
+    #[serde(default)]
+    pub highlighters: Vec<Highlighter>,
     #[serde(default)]
     /// JSON file that maps plugin file types and names to icon assets.
     pub file_icons: Option<PathBuf>,
@@ -375,6 +382,7 @@ impl PluginManifest {
     }
 
     pub fn validate(&self) -> Result<(), ManifestError> {
+        languages::validate(self)?;
         if self.plugin.id.is_empty()
             || !self.plugin.id.bytes().all(|byte| {
                 byte.is_ascii_lowercase() || byte.is_ascii_digit() || matches!(byte, b'.' | b'-')

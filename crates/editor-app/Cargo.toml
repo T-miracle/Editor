@@ -37,3 +37,5 @@ notify.workspace = true
 
 [dev-dependencies]
 gpui-kit = { workspace = true, features = ["test-support"] }
+# Build independent declarative package fixtures through the public ZIP inspection boundary.
+zip = { version = "4", default-features = false, features = ["deflate"] }

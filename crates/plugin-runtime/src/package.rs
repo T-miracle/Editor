@@ -147,6 +147,19 @@ impl Package {
             validate_relative(path)?;
             let source = package_text(&files, path)?;
             let contributions = PluginManifest::parse(source)?;
+            if !contributions.language_definitions.is_empty()
+                || !contributions.highlighters.is_empty()
+            {
+                anyhow::ensure!(
+                    manifest.protocol == 7,
+                    "Dynamic languages require capability protocol"
+                );
+            }
+            for provider in &contributions.highlighters {
+                let grammar = package_bytes(&files, &provider.grammar.to_string_lossy())?;
+                anyhow::ensure!(grammar.starts_with(b"\0asm"), "Invalid grammar module");
+                package_text(&files, &provider.highlights.to_string_lossy())?;
+            }
             anyhow::ensure!(
                 plugin_schema::canonical_plugin_id(&contributions.plugin.id) == manifest.id,
                 "Contribution manifest identity differs from package identity"

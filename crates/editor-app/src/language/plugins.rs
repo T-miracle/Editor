@@ -15,6 +15,9 @@ use tree_sitter::{Parser, WasmStore, wasmtime::Engine};
 
 /// Finds the plugin contribution responsible for a source file's extension.
 pub fn language_for_path(path: &Path) -> Option<LanguageContribution> {
+    if super::providers::handles_path(path) {
+        return None;
+    }
     crate::extensions::contributions::language_for_path(path).map(|(_, language)| language)
 }
 
@@ -72,8 +75,10 @@ pub fn prepare_bundled_plugins() {
     }
 }
 
-/// Validate and register one installed grammar without delaying the initial window.
-pub fn load_bundled_plugin(plugin: BundledPlugin) -> anyhow::Result<()> {
+/// Prepare legacy grammar bytes without publishing before the owning UI generation is checked.
+pub(crate) fn prepare_bundled_plugin(
+    plugin: BundledPlugin,
+) -> anyhow::Result<(Arc<LoadedGrammar>, String)> {
     let root = crate::extensions::contributions::plugin_root(plugin.manifest_id())
         .ok_or_else(|| anyhow::anyhow!("{} plugin is not installed and enabled", plugin.name()))?;
     let source = fs::read_to_string(root.join("plugin.toml"))?;
@@ -90,8 +95,7 @@ pub fn load_bundled_plugin(plugin: BundledPlugin) -> anyhow::Result<()> {
             == Some(root.as_path()),
         "plugin changed while its grammar was loading"
     );
-    register_language_config(LanguageRegistry::singleton(), contribution, grammar, query);
-    Ok(())
+    Ok((grammar, query))
 }
 
 /// Remove a plugin parser immediately when its installed package is disabled or uninstalled.
@@ -182,10 +186,33 @@ fn register_language_config(
 }
 
 /// Owns the WASM store for as long as parsers can use its language handle.
-struct LoadedGrammar {
+pub(crate) struct LoadedGrammar {
     engine: Engine,
     language_id: String,
     bytes: Arc<[u8]>,
+}
+
+/// Validate bytes on a background worker without mutating the process-wide parser registry.
+pub(crate) fn prepare_dynamic(
+    provider: &super::providers::GrammarProvider,
+) -> anyhow::Result<(Arc<LoadedGrammar>, String)> {
+    let definition = &provider.declaration;
+    let mut contribution: LanguageContribution = serde_json::from_value(serde_json::json!({
+        "id": definition.grammar_name, "grammar": definition.grammar,
+        "highlights": definition.highlights, "tree_sitter_abi": definition.tree_sitter_abi
+    }))?;
+    // Loading uses the exported grammar name; publication uses the declared language identity.
+    contribution.extensions.clear();
+    load_plugin_language(&provider.root, &contribution)
+}
+
+/// Only the UI owner may publish a generation-checked successful load.
+pub(crate) fn publish_dynamic(language: &str, grammar: Arc<LoadedGrammar>, query: String) {
+    let registry = LanguageRegistry::singleton();
+    let mut config = GrammarConfig::plain(language.to_owned());
+    config.highlights = SharedString::from(query);
+    registry.register(language, &config);
+    registry.register_parser_factory(language, parser_factory(grammar));
 }
 
 /// Read and validate a grammar module and its highlight query from one plugin root.
