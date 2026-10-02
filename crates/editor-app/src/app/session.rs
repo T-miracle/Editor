@@ -14,6 +14,9 @@ mod tests;
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct SessionState {
     pub workspace: String,
+    /// Host-local authority; repository files and project plugin overrides cannot change it.
+    #[serde(default = "default_true")]
+    pub workspace_trusted: bool,
     pub window_width: f32,
     pub window_height: f32,
     pub explorer_width: f32,
@@ -50,6 +53,8 @@ impl SessionState {
     pub fn for_workspace(workspace: &Path) -> Self {
         Self {
             workspace: workspace.to_string_lossy().into_owned(),
+            // Preserve the editor's existing trust default; users can restrict a workspace locally.
+            workspace_trusted: true,
             window_width: 1280.,
             window_height: 820.,
             explorer_width: 280.,

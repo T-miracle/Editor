@@ -7,6 +7,8 @@ use std::{
     collections::{BTreeMap, BTreeSet},
     path::{Path, PathBuf},
 };
+pub(crate) mod scopes;
+use scopes::ParkedWorkspace;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Installed {
@@ -24,6 +26,13 @@ pub struct Installed {
     pub error: Option<String>,
 }
 impl Installed {
+    /// Project choices follow canonical workspace identity, including Windows extended paths.
+    pub fn project_enabled_in(&self, workspace: &str) -> bool {
+        let key = scopes::workspace_key(workspace);
+        self.project_enabled
+            .iter()
+            .any(|path| scopes::workspace_key(path) == key)
+    }
     /// Resolve only a declared SVG from this installed package version.
     pub fn panel_icon(&self, root: &Path, panel_id: &str, dark: bool) -> Option<Vec<u8>> {
         let panel = self
@@ -68,6 +77,10 @@ pub struct Manager {
     engine: Option<wasmtime::Engine>,
     pub installed: BTreeMap<String, Installed>,
     pub live: BTreeMap<String, Instance>,
+    /// Only the selected workspace is published; parked instances retain separate ownership.
+    parked: BTreeMap<String, ParkedWorkspace>,
+    trusted: bool,
+    workspace_open: bool,
 }
 impl Manager {
     /// Identify the workspace whose override is active in this runtime.
@@ -84,6 +97,14 @@ impl Manager {
         crate::migration::migrate_registry(root, installed)
     }
     pub fn open(root: PathBuf, environment: Environment) -> anyhow::Result<Self> {
+        Self::open_with_trust(root, environment, true)
+    }
+    /// Trust is a host decision, never sourced from a plugin manifest or project settings.
+    pub fn open_with_trust(
+        root: PathBuf,
+        environment: Environment,
+        trusted: bool,
+    ) -> anyhow::Result<Self> {
         std::fs::create_dir_all(&root)?;
         let installed = Self::read_registry(&root)?;
         let mut manager = Self {
@@ -93,12 +114,18 @@ impl Manager {
             engine: None,
             installed,
             live: BTreeMap::new(),
+            parked: BTreeMap::new(),
+            trusted,
+            workspace_open: true,
         };
         let ids: Vec<_> = manager
             .installed
             .iter()
             .filter(|(_, p)| {
-                p.enabled || p.project_enabled.contains(&manager.environment.workspace)
+                trusted
+                    && (p.enabled
+                        || (p.manifest.scope == api::InstanceScope::Workspace
+                            && p.project_enabled_in(&manager.environment.workspace)))
             })
             .map(|(id, p)| (id.clone(), p.enabled))
             .collect();
@@ -114,9 +141,19 @@ impl Manager {
         Ok(manager)
     }
     pub fn data_directory(&self, id: &str) -> PathBuf {
-        self.root.join("data").join(id)
+        self.installed
+            .get(id)
+            .map(|entry| self.instance_data_directory(&entry.manifest))
+            .unwrap_or_else(|| self.root.join("data").join(id))
     }
     fn snapshot_path(&self, id: &str) -> PathBuf {
+        if self
+            .installed
+            .get(id)
+            .is_some_and(|entry| entry.manifest.protocol == 7)
+        {
+            return self.data_directory(id).parent().unwrap().join("state.json");
+        }
         let workspace = format!(
             "{:x}",
             Sha256::digest(self.environment.workspace.as_bytes())
@@ -155,7 +192,24 @@ impl Manager {
     }
     /// Installation requires the caller's explicit grants; missing new permissions never inherit.
     pub fn install(&mut self, package: &Package, grants: BTreeSet<String>) -> anyhow::Result<()> {
+        anyhow::ensure!(
+            self.trusted && self.workspace_open,
+            "Workspace is restricted or closed"
+        );
+        anyhow::ensure!(
+            self.parked
+                .values()
+                .all(|scope| !scope.live.contains_key(&package.manifest.id)),
+            "Close other workspace instances before replacing this package"
+        );
         let id = package.manifest.id.clone();
+        // Changing ownership needs an explicit data migration, not an implicit update cutover.
+        anyhow::ensure!(
+            self.installed
+                .get(&id)
+                .is_none_or(|old| old.manifest.scope == package.manifest.scope),
+            "Changing instance scope requires reinstalling the package"
+        );
         anyhow::ensure!(
             package.manifest.permissions.is_subset(&grants),
             "Permission confirmation required"
@@ -179,7 +233,7 @@ impl Manager {
             &package.manifest,
             &grants,
             self.environment.clone(),
-            self.data_directory(&id),
+            self.instance_data_directory(&package.manifest),
             version,
             snapshot.clone(),
         )?;
@@ -226,12 +280,7 @@ impl Manager {
                     self.installed.insert(id.clone(), previous);
                     // Reuse the old compiled instance; a registry I/O failure must not prevent recovery.
                     if let Some(mut old) = old {
-                        let rollback = old
-                            .call(Message::Prepare {
-                                environment: self.environment.clone(),
-                                snapshot,
-                            })
-                            .and_then(|_| old.activate());
+                        let rollback = old.restart(self.environment.clone(), snapshot);
                         if let Err(rollback) = rollback {
                             return Err(anyhow::anyhow!(
                                 "Update failed: {error:#}; rollback failed: {rollback:#}"
@@ -297,9 +346,7 @@ impl Manager {
         previous: Option<&Installed>,
     ) -> anyhow::Result<()> {
         if let Some(previous) = previous.filter(|entry| !entry.enabled) {
-            let locally_enabled = previous
-                .project_enabled
-                .contains(&self.environment.workspace);
+            let locally_enabled = previous.project_enabled_in(&self.environment.workspace);
             self.disable(id)?;
             if locally_enabled {
                 self.set_project_enabled(id, true)?;
@@ -309,6 +356,10 @@ impl Manager {
     }
     /// Re-enable from the last committed version and plugin-owned snapshot.
     pub fn enable(&mut self, id: &str) -> anyhow::Result<()> {
+        anyhow::ensure!(
+            self.trusted && self.workspace_open,
+            "Workspace is restricted or closed"
+        );
         if self.live.contains_key(id) {
             if let Some(entry) = self.installed.get_mut(id) {
                 entry.enabled = true;
@@ -387,6 +438,12 @@ impl Manager {
     }
     /// UI confirmation occurs before calling this when process_count is nonzero.
     pub fn disable(&mut self, id: &str) -> anyhow::Result<()> {
+        let result = self.disable_current(id);
+        self.retire_parked_plugin(id);
+        result
+    }
+    /// Project overrides retire only their owner; global disable additionally retires parked owners.
+    fn disable_current(&mut self, id: &str) -> anyhow::Result<()> {
         let snapshot = self.live.get_mut(id).map(Instance::snapshot);
         let saved = match snapshot {
             Some(Ok(snapshot)) => self.save_snapshot(id, &snapshot),
@@ -405,11 +462,20 @@ impl Manager {
             .get_mut(id)
             .ok_or_else(|| anyhow::anyhow!("Unknown plugin"))?;
         entry.enabled = false;
-        entry.project_enabled.remove(&self.environment.workspace);
+        let key = scopes::workspace_key(&self.environment.workspace);
+        entry
+            .project_enabled
+            .retain(|path| scopes::workspace_key(path) != key);
         self.save_registry()
     }
     /// Override a globally disabled plugin for the current workspace only.
     pub fn set_project_enabled(&mut self, id: &str, enabled: bool) -> anyhow::Result<()> {
+        anyhow::ensure!(
+            self.installed
+                .get(id)
+                .is_some_and(|entry| entry.manifest.scope == api::InstanceScope::Workspace),
+            "Application instances do not have project overrides"
+        );
         let workspace = self.environment.workspace.clone();
         let globally_enabled = self
             .installed
@@ -423,7 +489,7 @@ impl Manager {
             entry.enabled = false;
             entry.project_enabled.insert(workspace);
         } else {
-            self.disable(id)?;
+            self.disable_current(id)?;
             self.installed
                 .get_mut(id)
                 .unwrap()
@@ -448,7 +514,7 @@ impl Manager {
             std::fs::remove_dir_all(resolved)?;
         }
         if delete_data {
-            let path = self.data_directory(id);
+            let path = self.root.join("data").join(id);
             if path.exists() {
                 let root = self.root.canonicalize()?;
                 let resolved = path.canonicalize()?;
@@ -539,6 +605,7 @@ impl Manager {
         Ok(())
     }
     pub fn poll(&mut self) {
+        self.poll_parked();
         for (id, instance) in &mut self.live {
             if let Err(error) = instance.poll() {
                 instance.stop();
@@ -598,6 +665,7 @@ mod icon_tests {
                 version: "1.0.0".into(),
                 protocol: 1,
                 api: None,
+                scope: api::InstanceScope::Workspace,
                 component: Some("example.wasm".into()),
                 contributions: None,
                 permissions: BTreeSet::new(),
@@ -654,6 +722,7 @@ mod scope_tests {
             version: "1.0.0".into(),
             protocol: 1,
             api: None,
+            scope: api::InstanceScope::Workspace,
             component: None,
             contributions: Some("plugin.toml".into()),
             permissions: BTreeSet::new(),
@@ -697,11 +766,18 @@ mod scope_tests {
         let persisted = Manager::read_registry(&root).unwrap();
         assert!(!persisted["example"].enabled);
         assert!(persisted["example"].project_enabled.contains("project-a"));
+        // Declarative packages stay useful without a guest, but project preferences cannot grant trust.
+        assert!(manager.engine.is_none() && manager.live.is_empty());
+        assert!(manager.published_entries()[0].enabled);
+        manager.set_workspace_trust(false).unwrap();
+        assert!(!manager.published_entries()[0].enabled);
+        assert!(manager.set_project_enabled("example", true).is_err());
+        assert!(manager.engine.is_none());
     }
 }
 impl Drop for Manager {
+    /// Checkpoint failures never prevent scope-wide resource retirement.
     fn drop(&mut self) {
-        let _ = self.checkpoint();
-        self.live.clear();
+        self.shutdown();
     }
 }

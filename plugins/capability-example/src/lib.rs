@@ -10,6 +10,9 @@ use std::cell::RefCell;
 struct State {
     text: String,
     optional_available: bool,
+    /// Handles remain bound to this instance across workspace selection changes.
+    workspace: Option<api::ResourceHandle>,
+    data: Option<api::ResourceHandle>,
 }
 thread_local! { static STATE: RefCell<State> = RefCell::new(State::default()); }
 struct Example;
@@ -29,6 +32,8 @@ impl State {
     fn handle(&mut self, input: api::Input) -> Result<api::Output, Failure> {
         match input {
             api::Input::Prepare { api, .. } => {
+                self.workspace = None;
+                self.data = None;
                 self.optional_available = api.capabilities.contains_key("example.future");
                 return Ok(api::Output::default());
             }
@@ -52,6 +57,44 @@ impl State {
             } if id == "check-errors" => {
                 self.check_errors()?;
                 self.text = "Typed errors and request IDs verified.".into();
+            }
+            api::Input::Event {
+                event: api::Notification::Command { id, arguments },
+                ..
+            } if id == "scope-write" || id == "scope-read" => {
+                if self.data.is_none() {
+                    self.data = Some(api::guest::open_data()?);
+                }
+                if self.workspace.is_none() {
+                    self.workspace = Some(api::guest::open_workspace()?);
+                }
+                let data = self.data.as_ref().unwrap();
+                if id == "scope-write" {
+                    let text = arguments
+                        .as_ref()
+                        .and_then(|args| args.get("text"))
+                        .and_then(|text| text.as_str())
+                        .unwrap_or_default();
+                    api::guest::write_file(data, "value.txt", text.as_bytes().to_vec())?;
+                }
+                let workspace =
+                    api::guest::read_file(self.workspace.as_ref().unwrap(), "source.txt")?;
+                let private = api::guest::read_file(data, "value.txt")?;
+                self.text = format!(
+                    "{}|{}",
+                    String::from_utf8_lossy(&workspace),
+                    String::from_utf8_lossy(&private)
+                );
+            }
+            api::Input::Event {
+                event: api::Notification::Command { id, arguments },
+                ..
+            } if id == "scope-probe" => {
+                // Return expected domain failures as data so the host can observe continued liveness.
+                let operation = serde_json::from_value(arguments.unwrap_or_default())
+                    .map_err(|error| Failure::new(ErrorCode::InvalidRequest, error.to_string()))?;
+                self.text = serde_json::to_string(&api::guest::request(operation))
+                    .map_err(|error| Failure::new(ErrorCode::OperationFailed, error.to_string()))?;
             }
             api::Input::Event { .. } => {}
         }

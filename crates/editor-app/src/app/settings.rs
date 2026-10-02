@@ -163,21 +163,31 @@ fn render_section(view: &Entity<EditorApp>, section: SettingsSection, cx: &mut A
 
 /// Renders the existing theme and file explorer controls under appearance.
 fn render_appearance(view: &Entity<EditorApp>, cx: &mut App) -> AnyElement {
-    let (dark, explorer_visible, reveal_on_tab_switch) = {
+    let (dark, explorer_visible, reveal_on_tab_switch, workspace_trusted) = {
         let settings = view.read(cx);
         (
             settings.dark_theme,
             settings.explorer_visible,
             settings.session_state.explorer_reveal_on_tab_switch,
+            settings.session_state.workspace_trusted,
         )
     };
     let light_view = view.clone();
     let dark_view = view.clone();
     let explorer_view = view.clone();
     let reveal_view = view.clone();
+    let trust_view = view.clone();
 
     v_flex()
         .gap_6()
+        .child(
+            Checkbox::new("settings-workspace-trust")
+                .label(t!("settings.workspace_trusted").to_string())
+                .checked(workspace_trusted)
+                .on_change(move |checked, _, cx| {
+                    trust_view.update(cx, |this, cx| this.set_workspace_trusted(*checked, cx));
+                }),
+        )
         .child(
             v_flex()
                 .gap_3()

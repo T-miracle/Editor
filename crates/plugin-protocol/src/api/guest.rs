@@ -13,6 +13,65 @@ pub fn read_asset(path: impl Into<String>) -> Result<Vec<u8>, Failure> {
     let path = path.into();
     // Reject obviously oversized paths before allocating their JSON representation.
     check_request_size(path.len())?;
+    match request(Operation::ReadAsset { path })? {
+        Value::Asset { bytes } => Ok(bytes),
+        _ => Err(wire_error("Unexpected asset result")),
+    }
+}
+
+/// Open only the caller's workspace; application-scoped guests have no implicit workspace.
+pub fn open_workspace() -> Result<ResourceHandle, Failure> {
+    match request(Operation::OpenWorkspace)? {
+        Value::Resource(handle) => Ok(handle),
+        _ => Err(wire_error("Unexpected workspace result")),
+    }
+}
+
+/// Open this instance scope's private files, distinct from user configuration and snapshots.
+pub fn open_data() -> Result<ResourceHandle, Failure> {
+    match request(Operation::OpenData)? {
+        Value::Resource(handle) => Ok(handle),
+        _ => Err(wire_error("Unexpected data result")),
+    }
+}
+
+/// Read a relative path under an owned workspace or private-data handle.
+pub fn read_file(handle: &ResourceHandle, path: impl Into<String>) -> Result<Vec<u8>, Failure> {
+    match request(Operation::ReadFile {
+        handle: handle.clone(),
+        path: path.into(),
+    })? {
+        Value::Bytes(bytes) => Ok(bytes),
+        _ => Err(wire_error("Unexpected file result")),
+    }
+}
+
+/// Writes are available only to private-data handles, never workspace handles.
+pub fn write_file(
+    handle: &ResourceHandle,
+    path: impl Into<String>,
+    bytes: Vec<u8>,
+) -> Result<(), Failure> {
+    match request(Operation::WriteFile {
+        handle: handle.clone(),
+        path: path.into(),
+        bytes,
+    })? {
+        Value::Unit => Ok(()),
+        _ => Err(wire_error("Unexpected write result")),
+    }
+}
+
+/// Explicit release invalidates the handle; instance retirement releases all remaining handles.
+pub fn close_resource(handle: ResourceHandle) -> Result<(), Failure> {
+    match request(Operation::CloseResource { handle })? {
+        Value::Unit => Ok(()),
+        _ => Err(wire_error("Unexpected release result")),
+    }
+}
+
+/// All typed capabilities share one bounded and correlated transport.
+pub fn request(operation: Operation) -> Result<Value, Failure> {
     let id = NEXT_ID.with(|next| {
         let id = next.get();
         let following = id
@@ -21,10 +80,7 @@ pub fn read_asset(path: impl Into<String>) -> Result<Vec<u8>, Failure> {
         next.set(following);
         Ok::<_, Failure>(id)
     })?;
-    let request = Request {
-        id,
-        operation: Operation::ReadAsset { path },
-    };
+    let request = Request { id, operation };
     let payload = serde_json::to_string(&request).map_err(wire_error)?;
     // Escaping and envelope fields also count toward the shared transport quota.
     check_request_size(payload.len())?;
@@ -36,8 +92,7 @@ pub fn read_asset(path: impl Into<String>) -> Result<Vec<u8>, Failure> {
             "Host response ID mismatch",
         ));
     }
-    let Value::Asset { bytes } = response.result?;
-    Ok(bytes)
+    response.result
 }
 
 /// Preserve the quota error instead of sending an envelope the host cannot correlate.

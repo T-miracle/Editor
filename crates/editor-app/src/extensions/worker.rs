@@ -14,6 +14,8 @@ pub(super) enum Work {
     Disable(String),
     /// Persist a per-workspace override without changing the global default.
     SetProjectEnabled(String, bool),
+    /// Only an explicit host-local choice can lift workspace restrictions.
+    SetTrust(bool),
     Uninstall(String, bool),
     Event(String, Event),
     /// Host-originated commands target a plugin directly, even while its panel is hidden.
@@ -93,17 +95,23 @@ pub(super) struct Published {
 pub(super) struct Worker {
     pub tx: mpsc::Sender<Work>,
     pub state: Arc<Mutex<Published>>,
+    /// UI publication is masked immediately, including results queued before revocation.
+    pub trusted: std::sync::atomic::AtomicBool,
     #[cfg(test)]
     pub recorded: Mutex<mpsc::Receiver<Work>>,
 }
 impl Worker {
     /// Publish enabled registry entries before the worker compiles any component.
-    fn initial_state(root: &std::path::Path, environment: &Environment) -> Published {
+    fn initial_state(
+        root: &std::path::Path,
+        environment: &Environment,
+        trusted: bool,
+    ) -> Published {
         let startup = Manager::read_registry(root)
             .unwrap_or_default()
             .into_iter()
             .filter_map(|(id, entry)| {
-                (entry.enabled || entry.project_enabled.contains(&environment.workspace))
+                (trusted && (entry.enabled || entry.project_enabled_in(&environment.workspace)))
                     .then_some((id, entry.manifest.name))
             })
             .collect();
@@ -132,21 +140,30 @@ impl Worker {
     }
     /// UI tests observe the real message seam without reading user state or launching processes.
     #[cfg(test)]
-    pub fn start(root: PathBuf, environment: Environment) -> Self {
+    pub fn start(root: PathBuf, environment: Environment, trusted: bool) -> Self {
         let (tx, rx) = mpsc::channel();
         Self {
             tx,
-            state: Arc::new(Mutex::new(Self::initial_state(&root, &environment))),
+            state: Arc::new(Mutex::new(Self::initial_state(
+                &root,
+                &environment,
+                trusted,
+            ))),
+            trusted: std::sync::atomic::AtomicBool::new(trusted),
             recorded: Mutex::new(rx),
         }
     }
     #[cfg(not(test))]
-    pub fn start(root: PathBuf, environment: Environment) -> Self {
+    pub fn start(root: PathBuf, environment: Environment, trusted: bool) -> Self {
         let (tx, rx) = mpsc::channel();
-        let state = Arc::new(Mutex::new(Self::initial_state(&root, &environment)));
+        let state = Arc::new(Mutex::new(Self::initial_state(
+            &root,
+            &environment,
+            trusted,
+        )));
         let output = state.clone();
         std::thread::spawn(move || {
-            let mut manager = match Manager::open(root, environment) {
+            let mut manager = match Manager::open_with_trust(root, environment, trusted) {
                 Ok(m) => m,
                 Err(e) => {
                     let mut published = output.lock().unwrap();
@@ -184,6 +201,7 @@ impl Worker {
                         manager.install(&package, package.manifest.permissions.clone())
                     }
                     Some(Work::Enable(id)) => manager.enable(&id),
+                    Some(Work::SetTrust(trusted)) => manager.set_workspace_trust(trusted),
                     Some(Work::Disable(id)) => manager.disable(&id),
                     Some(Work::SetProjectEnabled(id, enabled)) => {
                         manager.set_project_enabled(&id, enabled)
@@ -240,18 +258,7 @@ impl Worker {
                         *published.instance_epochs.entry(id).or_default() += 1;
                     }
                 }
-                published.entries = manager
-                    .installed
-                    .values()
-                    .map(|entry| {
-                        // Publish the effective state while preserving the global choice for controls.
-                        let mut visible = entry.clone();
-                        visible.global_enabled = Some(entry.enabled);
-                        visible.enabled =
-                            entry.enabled || entry.project_enabled.contains(manager.workspace());
-                        visible
-                    })
-                    .collect();
+                published.entries = manager.published_entries();
                 published.scenes = scenes;
                 published.images = images;
                 published.processes = processes;
@@ -260,7 +267,11 @@ impl Worker {
             }
             // Manager drop atomically saves plugin snapshots and closes owned process trees.
         });
-        Self { tx, state }
+        Self {
+            tx,
+            state,
+            trusted: std::sync::atomic::AtomicBool::new(trusted),
+        }
     }
 }
 impl LifecycleAction {

@@ -103,6 +103,28 @@ fn capability_package_consent_displays_native_text_and_uninstall_reclaims_panel(
         editor_cx.debug_bounds("plugin-ui-welcome-text").is_some(),
         "installed guest text is rendered natively"
     );
+    // Local host trust wins over a stale worker publication and persisted global enablement.
+    editor_cx.update(|window, cx| {
+        app.update(cx, |app, cx| app.set_workspace_trusted(false, cx));
+        window.draw(cx).clear(cx);
+    });
+    editor_cx.update(|window, cx| window.draw(cx).clear(cx));
+    assert!(editor_cx.debug_bounds("plugin-ui-welcome-text").is_none());
+    editor_cx.update(|_, cx| {
+        let owner = app.read(cx).extensions.read(cx);
+        assert!(owner.entries.iter().all(|entry| !entry.enabled));
+        assert!(
+            owner
+                .worker
+                .recorded
+                .lock()
+                .unwrap()
+                .try_iter()
+                .any(|work| matches!(work, Work::SetTrust(false)))
+        );
+    });
+    manager.set_workspace_trust(false).unwrap();
+    assert_eq!(manager.resource_count(), 0);
     manager.uninstall(&approved.manifest.id, true).unwrap();
     editor_cx.update(|window, cx| {
         app.read(cx).extensions.clone().update(cx, |owner, cx| {

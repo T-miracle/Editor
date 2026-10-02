@@ -6,6 +6,24 @@ use std::collections::BTreeMap;
 /// Maximum encoded host request size; SDKs reject oversized requests before transport.
 pub const MAX_REQUEST_BYTES: usize = 2 * 1024 * 1024;
 
+/// Workspace is the default lifetime; application guests never inherit a current project root.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum InstanceScope {
+    #[default]
+    Workspace,
+    Application,
+}
+
+/// Opaque host-issued identity binds every resource to one instance and logical scope.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ResourceHandle {
+    pub instance: String,
+    pub scope: String,
+    pub resource: u64,
+}
+
 /// Compatibility ranges describe API requirements, never the plugin package version.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -68,6 +86,7 @@ pub enum ErrorCode {
     CapabilityUnavailable,
     PermissionDenied,
     InvalidState,
+    InvalidHandle,
     InvalidPath,
     NotFound,
     LimitExceeded,
@@ -102,7 +121,23 @@ impl std::error::Error for Failure {}
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "method", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Operation {
-    ReadAsset { path: String },
+    ReadAsset {
+        path: String,
+    },
+    OpenWorkspace,
+    OpenData,
+    ReadFile {
+        handle: ResourceHandle,
+        path: String,
+    },
+    WriteFile {
+        handle: ResourceHandle,
+        path: String,
+        bytes: Vec<u8>,
+    },
+    CloseResource {
+        handle: ResourceHandle,
+    },
 }
 
 /// Nonzero IDs correlate synchronous responses and leave room for future asynchronous calls.
@@ -117,6 +152,9 @@ pub struct Request {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum Value {
     Asset { bytes: Vec<u8> },
+    Resource(ResourceHandle),
+    Bytes(Vec<u8>),
+    Unit,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

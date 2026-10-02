@@ -6,7 +6,7 @@ use semver::Version;
 pub(crate) fn negotiate(manifest: &Manifest) -> anyhow::Result<Option<api::Negotiated>> {
     if manifest.protocol != 7 {
         anyhow::ensure!(
-            manifest.api.is_none(),
+            manifest.api.is_none() && manifest.scope == api::InstanceScope::Workspace,
             "Capability requirements require protocol 7"
         );
         return Ok(None);
@@ -18,6 +18,8 @@ pub(crate) fn negotiate(manifest: &Manifest) -> anyhow::Result<Option<api::Negot
     let available = [
         ("package.assets".into(), Version::new(1, 0, 0)),
         ("ui.native".into(), Version::new(1, 0, 0)),
+        ("workspace.files".into(), Version::new(1, 0, 0)),
+        ("storage.private".into(), Version::new(1, 0, 0)),
     ]
     .into();
     Ok(Some(

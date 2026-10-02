@@ -304,6 +304,7 @@ impl EditorApp {
                 parent.clone(),
                 workspace.root().to_owned(),
                 extension_visibility.clone(),
+                session_state.workspace_trusted,
                 cx,
             )
         });

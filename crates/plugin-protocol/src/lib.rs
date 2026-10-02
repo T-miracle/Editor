@@ -29,6 +29,9 @@ pub struct Manifest {
     /// Protocol 7 selects the capability transport; interface versions negotiate independently.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub api: Option<api::Requirements>,
+    /// Execution ownership is independent of package-wide installation and enablement.
+    #[serde(default)]
+    pub scope: api::InstanceScope,
     /// Executable plugins provide a WASM component; declarative packages use host lifecycle only.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub component: Option<String>,

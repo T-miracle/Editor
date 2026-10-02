@@ -140,6 +140,7 @@ impl ExtensionPanel {
         parent: WeakEntity<EditorApp>,
         workspace: PathBuf,
         visible: Rc<Cell<bool>>,
+        trusted: bool,
         cx: &mut Context<Self>,
     ) -> Self {
         #[cfg(not(test))]
@@ -154,10 +155,14 @@ impl ExtensionPanel {
         #[cfg(test)]
         let root = workspace.join(".runtime-plugin-test");
         // Installed declarations are available before restored editor tabs are opened.
-        if let Err(error) = contributions::refresh_for_workspace(&root, &workspace) {
-            tracing::warn!(%error, "installed plugin contributions unavailable");
+        if trusted {
+            if let Err(error) = contributions::refresh_for_workspace(&root, &workspace) {
+                tracing::warn!(%error, "installed plugin contributions unavailable");
+            }
+        } else {
+            contributions::refresh_entries(&root, &[]);
         }
-        let worker = Arc::new(Worker::start(root.clone(), environment));
+        let worker = Arc::new(Worker::start(root.clone(), environment, trusted));
         // The initial registry snapshot is visible before the background worker starts WASM.
         let (startup, entries) = {
             let state = worker.state.lock().unwrap();
@@ -313,11 +318,40 @@ impl ExtensionPanel {
         }
     }
     /// Publish worker results and hand native editor/clipboard requests to the UI thread.
+    /// Apply host-local authority before accepting further worker scenes or contributions.
+    pub(crate) fn set_workspace_trusted(&mut self, trusted: bool, cx: &mut Context<Self>) {
+        if !trusted {
+            // Startup declarations can exist before the worker publishes any installed entries.
+            contributions::refresh_entries(&self.root, &[]);
+        }
+        self.worker
+            .trusted
+            .store(trusted, std::sync::atomic::Ordering::Release);
+        let _ = self.worker.tx.send(Work::SetTrust(trusted));
+        self.poll(cx);
+    }
+
     fn poll(&mut self, cx: &mut Context<Self>) {
         let mut changed = false;
         let mut contributions_changed = false;
         let effects = {
             let mut state = self.worker.state.lock().unwrap();
+            if !self
+                .worker
+                .trusted
+                .load(std::sync::atomic::Ordering::Acquire)
+            {
+                // An in-flight publication cannot resurrect resources after the user revokes trust.
+                for entry in &mut state.entries {
+                    entry.global_enabled.get_or_insert(entry.enabled);
+                    entry.enabled = false;
+                }
+                state.startup.clear();
+                state.scenes.clear();
+                state.images.clear();
+                state.effects.clear();
+                state.processes.clear();
+            }
             // Keep the clicked confirmation visible until its operation finishes successfully.
             if self.surface_id.is_none() && self.progress.is_some() && state.progress.is_none() {
                 if state.status.is_none() {

@@ -45,7 +45,7 @@ pub fn refresh_for_workspace(root: &Path, workspace: &Path) -> anyhow::Result<()
     let installed = Manager::read_registry(root)?
         .into_values()
         .map(|mut entry| {
-            entry.enabled |= entry.project_enabled.contains(&key);
+            entry.enabled |= entry.project_enabled_in(&key);
             entry
         })
         .collect::<Vec<_>>();

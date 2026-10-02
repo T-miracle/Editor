@@ -1,0 +1,251 @@
+//! Typed file handles carry immutable instance ownership and are revoked together on retirement.
+use super::*;
+use api::{ErrorCode, Failure, ResourceHandle, Value};
+use std::collections::BTreeMap;
+
+/// Slots describe authority, not user-supplied paths; the caller cannot retarget a root.
+#[derive(Clone, Copy)]
+enum RootKind {
+    Workspace,
+    Data,
+}
+
+pub(super) struct ResourceRoots {
+    instance: String,
+    scope: String,
+    next: u64,
+    slots: BTreeMap<u64, RootKind>,
+    pub(super) application: bool,
+    pub(super) retired: bool,
+    limit: usize,
+}
+
+impl ResourceRoots {
+    /// Random owner identities prevent persisted handles from becoming valid after a host restart.
+    pub(super) fn new(workspace: &str, application: bool, limit: usize) -> Self {
+        let instance = uuid::Uuid::new_v4().to_string();
+        Self {
+            instance,
+            scope: if application {
+                "application".into()
+            } else {
+                crate::manager::scopes::workspace_key(workspace)
+            },
+            next: 1,
+            slots: BTreeMap::new(),
+            application,
+            retired: false,
+            limit,
+        }
+    }
+
+    /// Clearing slots plus sealing the owner prevents old messages from reviving resources.
+    pub(super) fn retire(&mut self) {
+        self.retired = true;
+        self.slots.clear();
+    }
+    pub(super) fn len(&self) -> usize {
+        self.slots.len()
+    }
+    /// Rollback retains the declared quota while allocating a new owner identity.
+    pub(super) fn renewed(&self, workspace: &str) -> Self {
+        Self::new(workspace, self.application, self.limit)
+    }
+
+    fn resolve(&self, handle: &ResourceHandle) -> Result<RootKind, Failure> {
+        if self.retired || handle.instance != self.instance || handle.scope != self.scope {
+            return Err(Failure::new(
+                ErrorCode::InvalidHandle,
+                "Resource owner is no longer available",
+            ));
+        }
+        self.slots
+            .get(&handle.resource)
+            .copied()
+            .ok_or_else(|| Failure::new(ErrorCode::InvalidHandle, "Unknown or released resource"))
+    }
+
+    fn open(&mut self, kind: RootKind) -> Result<Value, Failure> {
+        if self.slots.len() >= 128 {
+            return Err(Failure::new(
+                ErrorCode::LimitExceeded,
+                "Resource handle quota exceeded",
+            ));
+        }
+        let resource = self.next;
+        self.next = self
+            .next
+            .checked_add(1)
+            .ok_or_else(|| Failure::new(ErrorCode::LimitExceeded, "Resource IDs exhausted"))?;
+        self.slots.insert(resource, kind);
+        Ok(Value::Resource(ResourceHandle {
+            instance: self.instance.clone(),
+            scope: self.scope.clone(),
+            resource,
+        }))
+    }
+}
+
+impl State {
+    /// Required negotiation and installation consent are checked on open and every subsequent use.
+    fn file_authority(&self, kind: RootKind, write: bool) -> Result<&Path, Failure> {
+        if !self.active || self.roots.retired {
+            return Err(Failure::new(
+                ErrorCode::InvalidState,
+                "Instance is not active",
+            ));
+        }
+        let (capability, permission, root) = match kind {
+            RootKind::Workspace => {
+                if write || self.roots.application || self.workspace.as_os_str().is_empty() {
+                    return Err(Failure::new(
+                        ErrorCode::PermissionDenied,
+                        "No workspace authority for this operation",
+                    ));
+                }
+                (
+                    "workspace.files",
+                    "workspace.read",
+                    self.workspace.as_path(),
+                )
+            }
+            RootKind::Data => ("storage.private", "storage", self.data.as_path()),
+        };
+        if !self
+            .api
+            .as_ref()
+            .is_some_and(|api| api.capabilities.contains_key(capability))
+        {
+            return Err(Failure::new(
+                ErrorCode::CapabilityUnavailable,
+                format!("{capability} was not negotiated"),
+            ));
+        }
+        if !self.permissions.contains(permission) {
+            return Err(Failure::new(
+                ErrorCode::PermissionDenied,
+                format!("{permission} permission required"),
+            ));
+        }
+        Ok(root)
+    }
+
+    /// Workspace paths are resolved only below the owner root, never a currently selected project.
+    pub(super) fn resource_request(&mut self, operation: api::Operation) -> Result<Value, Failure> {
+        match operation {
+            api::Operation::OpenWorkspace => {
+                self.file_authority(RootKind::Workspace, false)?;
+                self.roots.open(RootKind::Workspace)
+            }
+            api::Operation::OpenData => {
+                self.file_authority(RootKind::Data, false)?;
+                self.roots.open(RootKind::Data)
+            }
+            api::Operation::ReadFile { handle, path } => {
+                let kind = self.roots.resolve(&handle)?;
+                let root = self.file_authority(kind, false)?;
+                let path = safe_path(root, &path, false).map_err(path_failure)?;
+                if let Some(bytes) = self
+                    .staged_writes
+                    .as_ref()
+                    .and_then(|writes| writes.get(&path))
+                {
+                    return Ok(Value::Bytes(bytes.clone()));
+                }
+                use std::io::Read;
+                let file = std::fs::File::open(path).map_err(io_failure)?;
+                let mut bytes = Vec::new();
+                file.take(1024 * 1024 + 1)
+                    .read_to_end(&mut bytes)
+                    .map_err(io_failure)?;
+                if bytes.len() > 1024 * 1024 {
+                    return Err(Failure::new(
+                        ErrorCode::LimitExceeded,
+                        "File read quota exceeded",
+                    ));
+                }
+                Ok(Value::Bytes(bytes))
+            }
+            api::Operation::WriteFile {
+                handle,
+                path,
+                bytes,
+            } => {
+                let kind = self.roots.resolve(&handle)?;
+                let root = self
+                    .file_authority(kind, true)?
+                    .canonicalize()
+                    .map_err(io_failure)?;
+                let path = safe_path(&root, &path, false).map_err(path_failure)?;
+                // Private file creation is flat in this capability version; no recursive quota gaps.
+                if path.parent() != Some(root.as_path()) {
+                    return Err(Failure::new(
+                        ErrorCode::InvalidPath,
+                        "Private data files must be direct children",
+                    ));
+                }
+                let mut sizes = BTreeMap::new();
+                for entry in std::fs::read_dir(&root).map_err(io_failure)? {
+                    let entry = entry.map_err(io_failure)?;
+                    sizes.insert(entry.path(), entry.metadata().map_err(io_failure)?.len());
+                }
+                if let Some(writes) = &self.staged_writes {
+                    for (path, bytes) in writes {
+                        sizes.insert(path.clone(), bytes.len() as u64);
+                    }
+                }
+                sizes.insert(path.clone(), bytes.len() as u64);
+                if bytes.len() > 1024 * 1024
+                    || sizes.values().sum::<u64>() > self.roots.limit as u64
+                {
+                    return Err(Failure::new(
+                        ErrorCode::LimitExceeded,
+                        "Private data quota exceeded",
+                    ));
+                }
+                if let Some(writes) = &mut self.staged_writes {
+                    if writes.len() >= 64 && !writes.contains_key(&path) {
+                        return Err(Failure::new(
+                            ErrorCode::LimitExceeded,
+                            "Initialization write quota exceeded",
+                        ));
+                    }
+                    writes.insert(path, bytes);
+                } else {
+                    super::super::package::atomic_write(&path, &bytes).map_err(|error| {
+                        Failure::new(ErrorCode::OperationFailed, error.to_string())
+                    })?;
+                }
+                Ok(Value::Unit)
+            }
+            api::Operation::CloseResource { handle } => {
+                self.roots.resolve(&handle)?;
+                self.roots.slots.remove(&handle.resource);
+                Ok(Value::Unit)
+            }
+            api::Operation::ReadAsset { .. } => {
+                unreachable!("assets are handled before resource dispatch")
+            }
+        }
+    }
+}
+
+/// Preserve missing-file errors while keeping escaped roots and malformed paths distinguishable.
+fn path_failure(error: anyhow::Error) -> Failure {
+    if let Some(error) = error.downcast_ref::<std::io::Error>() {
+        if error.kind() == std::io::ErrorKind::NotFound {
+            return Failure::new(ErrorCode::NotFound, error.to_string());
+        }
+    }
+    Failure::new(ErrorCode::InvalidPath, error.to_string())
+}
+fn io_failure(error: std::io::Error) -> Failure {
+    Failure::new(
+        if error.kind() == std::io::ErrorKind::NotFound {
+            ErrorCode::NotFound
+        } else {
+            ErrorCode::OperationFailed
+        },
+        error.to_string(),
+    )
+}

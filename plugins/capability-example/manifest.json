@@ -1,16 +1,16 @@
 {
   "id": "capability-example",
   "name": "Capability Example",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "protocol": 7,
   "api": {
     "base": "^1",
-    "required": { "package.assets": "^1", "ui.native": "^1" },
+    "required": { "package.assets": "^1", "ui.native": "^1", "workspace.files": "^1", "storage.private": "^1" },
     "optional": { "example.future": "^9" }
   },
   "component": "capability-example.wasm",
-  "permissions": ["assets.read"],
+  "permissions": ["assets.read", "workspace.read", "storage"],
   "panels": [{ "id": "welcome", "title": "Capability Example", "position": "right" }],
-  "commands": [{ "id": "check-errors", "title": "检查类型化错误" }],
+  "commands": [{ "id": "check-errors", "title": "检查类型化错误" }, { "id": "scope-write", "title": "写入当前作用域" }, { "id": "scope-read", "title": "读取当前作用域" }, { "id": "scope-probe", "title": "检查作用域契约" }],
   "storage_limit": 4096
 }

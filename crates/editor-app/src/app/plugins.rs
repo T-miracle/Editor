@@ -49,16 +49,33 @@ pub(crate) enum PluginPopupKind {
 }
 
 impl EditorApp {
+    /// Persist authority outside the repository and immediately withdraw all workspace presentation.
+    pub(crate) fn set_workspace_trusted(&mut self, trusted: bool, cx: &mut Context<Self>) {
+        self.session_state.workspace_trusted = trusted;
+        self.persist_session();
+        self.extensions
+            .update(cx, |panel, cx| panel.set_workspace_trusted(trusted, cx));
+        // The editor window (not the settings dialog) owns dock and editor synchronization.
+        self.pending_contribution_sync = true;
+        self.refresh_dialog(cx);
+        cx.notify();
+    }
+
     /// A disabled language contribution must not start its external server.
     pub(crate) fn language_plugin_enabled(&self, language_id: &str) -> bool {
-        self.plugin_loads
-            .iter()
-            .find(|entry| entry.plugin.language_id() == language_id)
-            .is_some_and(|entry| entry.state != PluginLoadState::Disabled)
+        self.session_state.workspace_trusted
+            && self
+                .plugin_loads
+                .iter()
+                .find(|entry| entry.plugin.language_id() == language_id)
+                .is_some_and(|entry| entry.state != PluginLoadState::Disabled)
     }
 
     /// Run independent grammar validation off the UI thread and publish each result.
     pub(crate) fn start_plugin_loading(&mut self, cx: &mut Context<Self>) {
+        if !self.session_state.workspace_trusted {
+            return;
+        }
         let generation = self.plugin_loading_generation;
         for plugin in self
             .plugin_loads

@@ -296,6 +296,9 @@ settings.font_size_value:
 settings.layout:
   en: "Layout"
   zh-CN: "布局"
+settings.workspace_trusted:
+  en: "Trust this workspace and allow plugins to run"
+  zh-CN: "信任此工作区并允许插件运行"
 settings.file_explorer:
   en: "File explorer"
   zh-CN: "文件资源管理器"

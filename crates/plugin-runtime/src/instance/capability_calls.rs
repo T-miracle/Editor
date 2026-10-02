@@ -7,6 +7,12 @@ impl State {
     pub(super) fn capability_request(&mut self, payload: &str) -> Result<String, String> {
         let mut id = 0;
         let result = (|| {
+            if self.roots.retired {
+                return Err(Failure::new(
+                    ErrorCode::InvalidState,
+                    "Instance has been retired",
+                ));
+            }
             if payload.len() > api::MAX_REQUEST_BYTES {
                 return Err(Failure::new(
                     ErrorCode::LimitExceeded,
@@ -29,7 +35,16 @@ impl State {
                 .ok_or_else(|| {
                     Failure::new(ErrorCode::InvalidRequest, "Missing operation method")
                 })?;
-            if method != "read_asset" {
+            if ![
+                "read_asset",
+                "open_workspace",
+                "open_data",
+                "read_file",
+                "write_file",
+                "close_resource",
+            ]
+            .contains(&method)
+            {
                 return Err(Failure::new(
                     ErrorCode::UnsupportedOperation,
                     format!("Unknown operation: {method}"),
@@ -39,6 +54,7 @@ impl State {
                 .map_err(|error| Failure::new(ErrorCode::InvalidRequest, error.to_string()))?;
             match request.operation {
                 api::Operation::ReadAsset { path } => self.read_capability_asset(&path),
+                operation => self.resource_request(operation),
             }
         })();
         serde_json::to_string(&api::Response { id, result }).map_err(|error| error.to_string())

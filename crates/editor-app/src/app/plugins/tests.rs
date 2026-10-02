@@ -260,6 +260,39 @@ fn project_rust_registry(workspace: &Workspace) -> PathBuf {
     root
 }
 
+/// Trust can be revoked while declarations are restored but the worker has not published entries yet.
+#[gpui::test]
+fn restricting_startup_withdraws_declarations_before_worker_publication(cx: &mut TestAppContext) {
+    cx.update(|cx| {
+        gpui_kit::init(cx);
+        typography::init(cx);
+        apply_theme(builtin_theme(false), cx);
+    });
+    let directory = tempfile::tempdir().unwrap();
+    let workspace = Workspace::open(directory.path()).unwrap();
+    project_rust_registry(&workspace);
+    let slot = Rc::new(RefCell::new(None));
+    let capture = slot.clone();
+    let (_, cx) = cx.add_window_view(move |window, cx| {
+        let app = cx.new(|cx| EditorApp::new(workspace, None, window, cx));
+        *capture.borrow_mut() = Some(app.clone());
+        Root::new(app, window, cx)
+    });
+    let app = slot.borrow_mut().take().unwrap();
+    cx.update(|window, cx| {
+        app.update(cx, |app, cx| {
+            assert!(language_plugins::language_for_path(Path::new("main.rs")).is_some());
+            assert!(app.extensions.read(cx).entries.is_empty());
+            app.set_workspace_trusted(false, cx);
+            app.sync_runtime_contributions(window, cx);
+            assert!(language_plugins::language_for_path(Path::new("main.rs")).is_none());
+            assert!(app.plugin_loads.is_empty());
+            assert!(app.language_servers.is_empty());
+            assert!(!SessionState::load(app.workspace.root()).workspace_trusted);
+        })
+    });
+}
+
 /// Restored project overrides retain the server when the worker publishes the same package.
 #[gpui::test]
 fn project_only_rust_startup_survives_registry_refresh(cx: &mut TestAppContext) {

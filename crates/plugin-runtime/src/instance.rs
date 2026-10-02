@@ -11,11 +11,14 @@ use wasmtime::{
 };
 use wasmtime_wasi::{ResourceTable, WasiCtx, WasiCtxView, WasiView};
 mod capability_calls;
+mod resource_roots;
+use resource_roots::ResourceRoots;
 wasmtime::component::bindgen!({path:"../plugin-protocol/wit",world:"plugin",require_store_data_send:true});
 
 struct State {
     /// None selects the temporary legacy transport, never a fallback for a new guest.
     api: Option<api::Negotiated>,
+    roots: ResourceRoots,
     wasi: WasiCtx,
     table: ResourceTable,
     limits: StoreLimits,
@@ -313,6 +316,7 @@ mod tests {
         std::fs::write(&outside, "private").unwrap();
         let mut state = State {
             api: None,
+            roots: ResourceRoots::new("", false, 64 * 1024 * 1024),
             wasi: WasiCtx::builder().build(),
             table: ResourceTable::new(),
             limits: StoreLimitsBuilder::new().build(),
@@ -455,6 +459,7 @@ mod tests {
         std::fs::write(root.path().join("settings.json"), "old").unwrap();
         let mut state = State {
             api: None,
+            roots: ResourceRoots::new("", false, 64 * 1024 * 1024),
             wasi: WasiCtx::builder().build(),
             table: ResourceTable::new(),
             limits: StoreLimitsBuilder::new().build(),
@@ -508,12 +513,16 @@ impl Instance {
         bytes: &[u8],
         manifest: &Manifest,
         grants: &BTreeSet<String>,
-        environment: Environment,
+        mut environment: Environment,
         data: PathBuf,
         assets: PathBuf,
         snapshot: Option<Snapshot>,
     ) -> anyhow::Result<Self> {
         let api = super::capabilities::negotiate(manifest)?;
+        let application = manifest.scope == api::InstanceScope::Application;
+        if application {
+            environment.workspace.clear();
+        }
         anyhow::ensure!(
             manifest.permissions.is_subset(grants),
             "Plugin needs additional permission consent"
@@ -526,6 +535,7 @@ impl Instance {
         // No preopened directories, environment inheritance or network access is granted to WASI.
         let state = State {
             api,
+            roots: ResourceRoots::new(&environment.workspace, application, manifest.storage_limit),
             wasi: WasiCtx::builder().build(),
             table: ResourceTable::new(),
             limits: StoreLimitsBuilder::new()
@@ -563,7 +573,19 @@ impl Instance {
         Ok(instance)
     }
     /// Every call gets a finite instruction budget; a trap cannot unwind through the host.
-    pub fn call(&mut self, message: Message) -> anyhow::Result<Reply> {
+    pub fn call(&mut self, mut message: Message) -> anyhow::Result<Reply> {
+        anyhow::ensure!(
+            !self.store.data().roots.retired,
+            "Instance has been retired"
+        );
+        // Application owners receive appearance updates without inheriting a selected workspace.
+        if self.store.data().roots.application {
+            match &mut message {
+                Message::Prepare { environment, .. }
+                | Message::Event(Event::Theme(environment)) => environment.workspace.clear(),
+                _ => {}
+            }
+        }
         // Snapshot serialization may traverse the full configured scrollback, while input and
         // paint events stay on the smaller interactive budget. Both calls remain fuel-bounded.
         let fuel = if matches!(message, Message::Snapshot) {
@@ -688,12 +710,39 @@ impl Instance {
         Ok(())
     }
     pub fn stop(&mut self) {
+        self.store.data_mut().roots.retire();
+        self.scenes.clear();
+        self.scene = None;
         self.store.data_mut().processes.clear();
         self.store.data_mut().active = false;
         self.store.data_mut().effects.clear();
     }
     pub fn process_count(&self) -> usize {
         self.store.data().processes.len()
+    }
+    /// Observable ownership count includes native views and file/process resources.
+    pub fn resource_count(&self) -> usize {
+        self.store.data().roots.len() + self.scenes.len() + self.process_count()
+    }
+    /// Rollback is an explicit host transition with fresh ownership, never revival of old handles.
+    pub(crate) fn restart(
+        &mut self,
+        mut environment: Environment,
+        snapshot: Option<Snapshot>,
+    ) -> anyhow::Result<()> {
+        if self.store.data().roots.application {
+            environment.workspace.clear();
+        }
+        let roots = self.store.data().roots.renewed(&environment.workspace);
+        self.store.data_mut().roots = roots;
+        self.store.data_mut().staged_writes = Some(std::collections::BTreeMap::new());
+        self.call(Message::Prepare {
+            environment,
+            snapshot,
+        })?;
+        self.activate()?;
+        self.commit_data()?;
+        Ok(())
     }
     pub fn process_ids(&self) -> Vec<u32> {
         self.store.data().processes.ids()
