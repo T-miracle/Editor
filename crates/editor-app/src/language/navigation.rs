@@ -1,6 +1,10 @@
 //! Connects plugin languages to their declared language servers.
 
 mod diagnostics;
+mod documents;
+pub(crate) use documents::DocumentLease;
+mod service;
+mod startup;
 mod transport;
 
 use super::toolchains::resolve_server_executable;
@@ -12,157 +16,24 @@ use plugin_schema::{LanguageContribution, LspReadiness};
 use serde_json::{Value, json};
 use std::{
     collections::HashMap,
-    io::{BufWriter, Write as _},
     path::{Path, PathBuf},
-    process::{Child, ChildStdin, Command, Stdio},
+    process::{Child, Command, Stdio},
     str::FromStr,
     sync::{Arc, Mutex},
     time::{Duration, Instant},
 };
 
 #[cfg(test)]
-mod readiness_tests {
-    use super::*;
-
-    /// Exercise the terminal import from the full editor workspace without a local SDK.
-    #[test]
-    #[ignore = "requires local Rust Analyzer and the editor workspace dependencies"]
-    fn host_sdk_completes_terminal_from_editor_workspace() {
-        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
-        let manifest = plugin_schema::PluginManifest::parse(
-            &std::fs::read_to_string(root.join("plugins/rust/plugin.toml")).unwrap(),
-        )
-        .unwrap();
-        let server = LanguageServer::new(&root, manifest.languages[0].clone()).unwrap();
-        server.prepare_until_ready().unwrap();
-        let path = root.join("plugins/terminal/src/controls.rs");
-        let uri = file_uri(&path.canonicalize().unwrap()).unwrap();
-        for name in [
-            "Action",
-            "CanvasControls",
-            "MenuItem",
-            "PopupMenu",
-            "SideTab",
-            "SideTabs",
-            "UiEvent",
-        ] {
-            let prefix = &name[..3];
-            let source = format!(
-                "// Host protocol completion probe.\nuse plugin_protocol::ui::{{{prefix}}};\n"
-            );
-            let position = position_at_byte(&source, source.find(prefix).unwrap() + prefix.len());
-            let response = server.completions(uri.clone(), source, position).unwrap();
-            let items = match response {
-                CompletionResponse::Array(items) => items,
-                CompletionResponse::List(list) => list.items,
-            };
-            assert!(
-                items.iter().any(|item| item.label == name),
-                "missing {name}: {items:?}"
-            );
-        }
-        assert!(!root.join("plugins/terminal/sdk").exists());
-    }
-
-    /// Resolve completion and definition through the host cache for an excluded, SDK-free guest.
-    #[test]
-    #[ignore = "requires a local Rust Analyzer and Cargo toolchain"]
-    fn host_sdk_completes_nested_plugin_without_local_files() {
-        let root = tempfile::Builder::new()
-            .prefix("plugin SDK completion ")
-            .tempdir()
-            .unwrap();
-        let plugin = root.path().join("plugins/demo");
-        std::fs::create_dir_all(root.path().join("src")).unwrap();
-        std::fs::write(root.path().join("src/lib.rs"), "// Host fixture.\n").unwrap();
-        std::fs::write(
-            root.path().join("Cargo.toml"),
-            r#"[package]
-name = "sdk-host-fixture"
-version = "0.1.0"
-edition = "2024"
-[workspace]
-exclude = ["plugins/demo"]
-"#,
-        )
-        .unwrap();
-        std::fs::create_dir_all(plugin.join("src")).unwrap();
-        std::fs::write(plugin.join("manifest.json"), "{}").unwrap();
-        let manifest_source = r#"[package]
-name = "sdk-guest-fixture"
-version = "0.1.0"
-edition = "2024"
-[dependencies]
-plugin-protocol = { version = "=0.1.0", features = ["guest"] }
-"#;
-        std::fs::write(plugin.join("Cargo.toml"), manifest_source).unwrap();
-        let path = plugin.join("src/lib.rs");
-        let source = "// Host protocol import.\nuse plugin_protocol::ui::{Act};\n".to_owned();
-        std::fs::write(&path, &source).unwrap();
-        let repo = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
-        let manifest = plugin_schema::PluginManifest::parse(
-            &std::fs::read_to_string(repo.join("plugins/rust/plugin.toml")).unwrap(),
-        )
-        .unwrap();
-        let server = LanguageServer::new(root.path(), manifest.languages[0].clone()).unwrap();
-        server.prepare_until_ready().unwrap();
-        // Include the server's loaded-workspace report when diagnosing integration failures.
-        let analysis_status = server
-            .connection
-            .lock()
-            .unwrap()
-            .as_mut()
-            .unwrap()
-            .request("rust-analyzer/analyzerStatus", json!({}))
-            .unwrap();
-        let uri = file_uri(&path).unwrap();
-        let position = position_at_byte(&source, source.find("Act").unwrap() + 3);
-        let response = server
-            .completions(uri.clone(), source.clone(), position)
-            .unwrap();
-        let items = match response {
-            CompletionResponse::Array(items) => items,
-            CompletionResponse::List(list) => list.items,
-        };
-        assert!(
-            items.iter().any(|item| item.label == "Action"),
-            "missing Action: {items:?}; server status: {analysis_status}"
-        );
-        let source = source.replace("{Act}", "{Action}");
-        let definitions = server.definitions(uri, source, position).unwrap();
-        assert!(
-            definitions
-                .iter()
-                .any(|definition| definition.target_uri.as_str().contains("plugin-sdk/")),
-            "definition must point to host SDK: {definitions:?}"
-        );
-        assert_eq!(
-            std::fs::read_to_string(plugin.join("Cargo.toml")).unwrap(),
-            manifest_source
-        );
-        assert!(!plugin.join("sdk").exists());
-        assert!(!plugin.join(".cargo").exists());
-    }
-
-    /// Exercises the bundled plugin against the locally installed server and workspace.
-    #[test]
-    #[ignore = "run scripts/rust-readiness-smoke.ps1 with a local Rust language server"]
-    fn local_rust_server_readiness() {
-        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
-        let manifest = plugin_schema::PluginManifest::parse(
-            &std::fs::read_to_string(root.join("plugins/rust/plugin.toml")).unwrap(),
-        )
-        .unwrap();
-        let server = LanguageServer::new(&root, manifest.languages[0].clone()).unwrap();
-        server.prepare_until_ready().unwrap();
-    }
-}
+mod readiness_tests;
 
 /// Shares one language server and its document state across language tabs.
 pub struct LanguageServer {
+    documents: Mutex<HashMap<String, DocumentLease>>,
     root: PathBuf,
     root_uri: Uri,
     language: LanguageContribution,
+    service: Option<Arc<plugin_runtime::LanguageService>>,
+    retired: std::sync::atomic::AtomicBool,
     connection: Mutex<Option<LanguageServerConnection>>,
 }
 
@@ -173,24 +44,31 @@ impl LanguageServer {
         let root = root.canonicalize().ok()?;
         let root_uri = file_uri(&root)?;
         Some(Self {
+            documents: Default::default(),
             root,
             root_uri,
             language,
+            service: None,
+            retired: Default::default(),
             connection: Mutex::new(None),
         })
     }
 
     /// Starts and initializes a shared server before the first navigation request.
     pub fn prepare(&self) -> anyhow::Result<()> {
+        ensure!(self.is_active(), "LSP provider has been retired");
         let mut connection = self
             .connection
             .lock()
             .map_err(|_| anyhow!("language-server connection lock was poisoned"))?;
+        ensure!(self.is_active(), "LSP provider has been retired");
         if connection.is_none() {
             *connection = Some(LanguageServerConnection::start(
                 &self.root,
                 &self.root_uri,
                 &self.language,
+                self.service.as_ref(),
+                &self.retired,
             )?);
         }
         Ok(())
@@ -205,7 +83,23 @@ impl LanguageServer {
             .map_err(|_| anyhow!("language-server connection lock was poisoned"))?;
         let connection = connection
             .as_mut()
-            .expect("the server was just initialized");
+            .context("LSP provider has been retired")?;
+        if let Some(service) = &connection.service {
+            let Some(readiness) = &service.provider.readiness else {
+                return Ok(());
+            };
+            let deadline = Instant::now() + Duration::from_millis(readiness.timeout_ms.into());
+            while connection.ready != Some(true) {
+                let remaining = deadline.saturating_duration_since(Instant::now());
+                ensure!(!remaining.is_zero(), "language server readiness timed out");
+                let message = connection
+                    .output
+                    .recv_timeout(remaining)
+                    .context("wait for LSP readiness")??;
+                connection.handle_server_message(&message)?;
+            }
+            return Ok(());
+        }
         let Some(readiness) = connection.readiness.clone() else {
             return Ok(());
         };
@@ -230,9 +124,9 @@ impl LanguageServer {
     }
 
     /// Requests a definition after synchronizing the current document.
-    pub(super) fn definitions(
+    pub(super) fn definitions_for(
         &self,
-        document_uri: Uri,
+        document: DocumentLease,
         source: String,
         position: Position,
     ) -> anyhow::Result<Vec<LocationLink>> {
@@ -241,21 +135,29 @@ impl LanguageServer {
             .connection
             .lock()
             .map_err(|_| anyhow!("language-server connection lock was poisoned"))?;
+        connection
+            .as_mut()
+            .context("LSP provider has been retired")?
+            .bind_document(&document)?;
         let result = connection
             .as_mut()
-            .expect("the language server was just initialized")
-            .definitions(document_uri, source, position);
+            .context("LSP provider has been retired")?
+            .definitions(document.uri.clone(), source, position);
         if result.is_err() {
             // A later navigation request can start a fresh process after a server failure.
             *connection = None;
         }
+        ensure!(
+            self.is_active() && document.is_active(),
+            "LSP request owner has been retired"
+        );
         result
     }
 
     /// Shares the same document versions and connection with definition requests.
-    pub(super) fn completions(
+    pub(super) fn completions_for(
         &self,
-        document_uri: Uri,
+        document: DocumentLease,
         source: String,
         position: Position,
     ) -> anyhow::Result<CompletionResponse> {
@@ -264,21 +166,29 @@ impl LanguageServer {
             .connection
             .lock()
             .map_err(|_| anyhow!("language-server connection lock was poisoned"))?;
+        connection
+            .as_mut()
+            .context("LSP provider has been retired")?
+            .bind_document(&document)?;
         let result = connection
             .as_mut()
-            .expect("the language server was just initialized")
-            .completions(document_uri, source, position);
+            .context("LSP provider has been retired")?
+            .completions(document.uri.clone(), source, position);
         if result.is_err() {
             // A broken connection can be restarted by a later editor request.
             *connection = None;
         }
+        ensure!(
+            self.is_active() && document.is_active(),
+            "LSP request owner has been retired"
+        );
         result
     }
 
     /// Shares document versions with definitions and completions for hover details.
-    pub(super) fn hover(
+    pub(super) fn hover_for(
         &self,
-        document_uri: Uri,
+        document: DocumentLease,
         source: String,
         position: Position,
     ) -> anyhow::Result<Option<Hover>> {
@@ -287,14 +197,22 @@ impl LanguageServer {
             .connection
             .lock()
             .map_err(|_| anyhow!("language-server connection lock was poisoned"))?;
+        connection
+            .as_mut()
+            .context("LSP provider has been retired")?
+            .bind_document(&document)?;
         let result = connection
             .as_mut()
-            .expect("the language server was just initialized")
-            .hover(document_uri, source, position);
+            .context("LSP provider has been retired")?
+            .hover(document.uri.clone(), source, position);
         if result.is_err() {
             // A failed transport may be restarted by the next language request.
             *connection = None;
         }
+        ensure!(
+            self.is_active() && document.is_active(),
+            "LSP request owner has been retired"
+        );
         result
     }
 
@@ -312,15 +230,15 @@ impl LanguageServer {
 /// Adapts the editor's Go to Definition hook to an asynchronous plugin server.
 pub struct LanguageDefinitionProvider {
     server: Arc<LanguageServer>,
-    document_uri: Uri,
+    document: DocumentLease,
 }
 
 impl LanguageDefinitionProvider {
     /// Creates a provider for one source file and a shared project language server.
     pub fn new(path: &Path, server: Arc<LanguageServer>) -> Option<Self> {
         Some(Self {
+            document: server.open_document(file_uri(path)?),
             server,
-            document_uri: file_uri(path)?,
         })
     }
 }
@@ -338,13 +256,13 @@ impl DefinitionProvider for LanguageDefinitionProvider {
         let byte_offset = text.char_to_byte_idx(offset.min(text.len_chars()));
         let position = position_at_byte(&source, byte_offset);
         let server = self.server.clone();
-        let document_uri = self.document_uri.clone();
+        let document = self.document.clone();
 
         // A dedicated executor keeps process I/O and workspace indexing off the UI thread.
         cx.background_executor()
             .scheduler_executor()
             .spawn_dedicated(move |_| async move {
-                let result = server.definitions(document_uri, source, position);
+                let result = server.definitions_for(document, source, position);
                 if let Err(error) = &result {
                     tracing::warn!(%error, "language definition request failed");
                 }
@@ -355,8 +273,10 @@ impl DefinitionProvider for LanguageDefinitionProvider {
 
 /// Owns the language-server process and its framed JSON-RPC streams.
 struct LanguageServerConnection {
-    child: Child,
-    input: BufWriter<ChildStdin>,
+    documents: HashMap<String, DocumentLease>,
+    child: OwnedServer,
+    service: Option<Arc<plugin_runtime::LanguageService>>,
+    input: transport::Writer,
     output: transport::Messages,
     root_uri: String,
     language_id: String,
@@ -373,103 +293,6 @@ struct LanguageServerConnection {
 }
 
 impl LanguageServerConnection {
-    /// Starts the plugin's server and completes the LSP handshake.
-    fn start(root: &Path, root_uri: &Uri, language: &LanguageContribution) -> anyhow::Result<Self> {
-        let configuration = super::sdk::initialization_options(root, &language.id)?;
-        let executable = resolve_server_executable(language)?;
-        let mut child = Command::new(&executable)
-            .args(&language.lsp_args)
-            .current_dir(root)
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::null())
-            .spawn()
-            .with_context(|| format!("start language server {}", executable.display()))?;
-        let input = BufWriter::new(child.stdin.take().context("open language server stdin")?);
-        let stdout = child.stdout.take().context("open language server stdout")?;
-        let output = transport::reader(stdout).map_err(|error| {
-            // A failed reader must not leave a process running without an owner.
-            let _ = child.kill();
-            let _ = child.wait();
-            error
-        })?;
-        let mut connection = Self {
-            child,
-            input,
-            output,
-            root_uri: root_uri.as_str().to_owned(),
-            language_id: language.id.clone(),
-            next_id: 1,
-            diagnostics: diagnostics::DiagnosticsStore::default(),
-            save_notifications: None,
-            pull_diagnostics: false,
-            readiness: language.lsp_readiness.clone(),
-            ready: None,
-            configuration,
-        };
-
-        let root_uri = root_uri.as_str();
-        // Experimental capability names are data supplied by the language plugin.
-        let mut experimental = serde_json::Map::new();
-        if let Some(readiness) = &language.lsp_readiness {
-            experimental.insert(readiness.client_capability.clone(), Value::Bool(true));
-        }
-        let initialized = connection.request(
-            "initialize",
-            json!({
-                "processId": std::process::id(),
-                "rootUri": root_uri,
-                // Match rootUri even for servers that still consult deprecated rootPath.
-                "rootPath": url::Url::parse(root_uri)?.to_file_path().ok(),
-                "workspaceFolders": [{ "uri": root_uri, "name": "workspace" }],
-                "initializationOptions": connection.configuration,
-                "capabilities": {
-                    "general": { "positionEncodings": ["utf-16"] },
-                    "workspace": { "workspaceFolders": true },
-                    "textDocument": {
-                        "diagnostic": { "dynamicRegistration": false, "relatedDocumentSupport": false },
-                        "synchronization": { "didSave": true },
-                        "publishDiagnostics": {
-                            "versionSupport": true,
-                            "relatedInformation": true,
-                            "tagSupport": { "valueSet": [1, 2] },
-                            "codeDescriptionSupport": true
-                        },
-                        "definition": { "linkSupport": true },
-                        "completion": {
-                            "completionItem": { "snippetSupport": false }
-                        },
-                        "hover": { "contentFormat": ["markdown", "plaintext"] }
-                    },
-                    "experimental": experimental
-                },
-                "clientInfo": { "name": "Me Editor", "version": env!("CARGO_PKG_VERSION") }
-            }),
-        )?;
-        // Only send optional save notifications when the server requests them.
-        connection.pull_diagnostics = initialized["capabilities"]["diagnosticProvider"].is_object()
-            || initialized["capabilities"]["diagnosticProvider"] == Value::Bool(true);
-        connection.save_notifications = match &initialized["capabilities"]["textDocumentSync"]["save"]
-        {
-            Value::Bool(true) => Some(false),
-            Value::Object(options) => Some(
-                options
-                    .get("includeText")
-                    .and_then(Value::as_bool)
-                    .unwrap_or(false),
-            ),
-            _ => None,
-        };
-        ensure!(
-            initialized["capabilities"]["positionEncoding"]
-                .as_str()
-                .is_none_or(|encoding| encoding == "utf-16"),
-            "language server selected an unsupported position encoding"
-        );
-        connection.notify("initialized", json!({ "capabilities": {} }))?;
-        Ok(connection)
-    }
-
     /// Opens or replaces a document snapshot, then returns all locations from the server.
     fn definitions(
         &mut self,
@@ -552,7 +375,11 @@ impl LanguageServerConnection {
         let Some(version) = self.diagnostics.next_version(&uri_text, &source) else {
             return Ok(uri_text);
         };
-        if version == 1 {
+        ensure!(
+            version < i32::MAX,
+            "LSP document version exhausted; restart service"
+        );
+        if !self.diagnostics.is_open(&uri_text) {
             self.notify("textDocument/didOpen", json!({
                 "textDocument": { "uri": uri_text, "languageId": self.language_id, "version": version, "text": source }
             }))?;
@@ -572,22 +399,36 @@ impl LanguageServerConnection {
 
     /// Wait for the matching response while preserving every diagnostic push.
     fn request(&mut self, method: &str, params: Value) -> anyhow::Result<Value> {
+        ensure!(
+            self.service
+                .as_ref()
+                .is_none_or(|service| service.is_active()),
+            "LSP provider has been retired"
+        );
         let id = self.next_id;
         self.next_id += 1;
+        let deadline = Instant::now() + Duration::from_secs(30);
         self.write_message(
             json!({ "jsonrpc": "2.0", "id": id, "method": method, "params": params }),
         )?;
-        let deadline = Instant::now() + Duration::from_secs(30);
         loop {
             let remaining = deadline.saturating_duration_since(Instant::now());
-            ensure!(
-                !remaining.is_zero(),
-                "language server {method} request timed out"
-            );
-            let message = self
-                .output
-                .recv_timeout(remaining)
-                .context("wait for language server response")??;
+            if remaining.is_zero() {
+                let _ = self.input.enqueue(
+                    json!({"jsonrpc":"2.0","method":"$/cancelRequest","params":{"id":id}}),
+                );
+                anyhow::bail!("language server {method} request timed out");
+            }
+            let message = match self.output.recv_timeout(remaining) {
+                Ok(message) => message?,
+                Err(error) => {
+                    // Stop waiting is explicit JSON-RPC cancellation, never a claim of server rollback.
+                    let _ = self.input.enqueue(
+                        json!({"jsonrpc":"2.0","method":"$/cancelRequest","params":{"id":id}}),
+                    );
+                    return Err(error).context(format!("wait for language server {method}"));
+                }
+            };
             self.handle_server_message(&message)?;
             // Client and server IDs are independent; only a response satisfies this request.
             if message.get("method").is_none()
@@ -596,6 +437,12 @@ impl LanguageServerConnection {
                 if let Some(error) = message.get("error") {
                     anyhow::bail!("language server {method} request failed: {error}");
                 }
+                ensure!(
+                    self.service
+                        .as_ref()
+                        .is_none_or(|service| service.is_active()),
+                    "LSP provider has been retired"
+                );
                 return Ok(message.get("result").cloned().unwrap_or(Value::Null));
             }
         }
@@ -608,13 +455,7 @@ impl LanguageServerConnection {
 
     /// Writes a UTF-8 JSON-RPC payload using the LSP Content-Length framing.
     fn write_message(&mut self, message: Value) -> anyhow::Result<()> {
-        let payload = serde_json::to_vec(&message).context("serialize LSP message")?;
-        write!(self.input, "Content-Length: {}\r\n\r\n", payload.len())
-            .context("write LSP message header")?;
-        self.input
-            .write_all(&payload)
-            .context("write LSP message body")?;
-        self.input.flush().context("flush LSP message")
+        self.input.send(message, Duration::from_secs(30))
     }
 }
 
@@ -626,8 +467,29 @@ fn definition_is_empty(response: &Value) -> bool {
 impl Drop for LanguageServerConnection {
     fn drop(&mut self) {
         // Closing the editor session must not leave its language-server process behind.
-        let _ = self.child.kill();
-        let _ = self.child.wait();
+        self.child.stop();
+    }
+}
+
+/// The compatibility transport disappears with legacy language packages; new services have runtime owners.
+enum OwnedServer {
+    Legacy(Child),
+    Service(plugin_runtime::ServiceProcess),
+}
+impl OwnedServer {
+    fn stop(&mut self) {
+        match self {
+            Self::Legacy(child) => {
+                let _ = child.kill();
+                let _ = child.wait();
+            }
+            Self::Service(child) => child.stop(),
+        }
+    }
+}
+impl Drop for OwnedServer {
+    fn drop(&mut self) {
+        self.stop();
     }
 }
 

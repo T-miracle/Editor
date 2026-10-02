@@ -48,10 +48,16 @@ impl Manager {
     }
     /// Count resources across logical workspaces and the application owner for shutdown diagnostics.
     pub fn resource_count(&self) -> usize {
-        self.live
+        self.language_services
             .values()
-            .map(Instance::resource_count)
+            .filter_map(|item| item.service.as_ref().ok())
+            .map(|service| service.process_count())
             .sum::<usize>()
+            + self
+                .live
+                .values()
+                .map(Instance::resource_count)
+                .sum::<usize>()
             + self
                 .parked
                 .values()
@@ -107,6 +113,8 @@ impl Manager {
             live.insert(id.clone(), self.live.remove(&id).unwrap());
         }
         if self.workspace_open {
+            // Host protocol transports are recreated when this window selects another workspace.
+            self.language_services.clear();
             self.parked.insert(
                 old_key,
                 ParkedWorkspace {
@@ -181,6 +189,9 @@ impl Manager {
     pub fn close_workspace(&mut self, workspace: &str) -> anyhow::Result<()> {
         let key = workspace_key(workspace);
         let current = workspace_key(&self.environment.workspace) == key;
+        if current {
+            self.language_services.clear();
+        }
         let (environment, mut live) = if current {
             self.workspace_open = false;
             let ids = self

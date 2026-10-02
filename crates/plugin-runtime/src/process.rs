@@ -55,7 +55,7 @@ impl Drop for Process {
     }
 }
 #[cfg(windows)]
-struct Job(windows_sys::Win32::Foundation::HANDLE);
+pub(crate) struct Job(windows_sys::Win32::Foundation::HANDLE);
 #[cfg(windows)]
 unsafe impl Send for Job {}
 #[cfg(windows)]
@@ -98,7 +98,7 @@ impl Job {
             Ok(job)
         }
     }
-    fn terminate(&self) {
+    pub(crate) fn terminate(&self) {
         unsafe {
             windows_sys::Win32::System::JobObjects::TerminateJobObject(self.0, 1);
         }
@@ -320,37 +320,12 @@ impl Processes {
         args: &[String],
         cwd: &std::path::Path,
     ) -> anyhow::Result<u64> {
-        use std::process::{Command, Stdio};
         anyhow::ensure!(self.items.len() < 32, "Plugin process quota exceeded");
-        let mut command = Command::new(program);
-        command
-            .args(args)
-            .current_dir(cwd)
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped());
-        // The child cannot execute any code until it belongs to the host's kill-on-close job.
-        #[cfg(windows)]
-        {
-            use std::os::windows::process::CommandExt;
-            command.creation_flags(
-                windows_sys::Win32::System::Threading::CREATE_SUSPENDED
-                    | windows_sys::Win32::System::Threading::CREATE_NO_WINDOW,
-            );
-        }
-        let mut child = command.spawn()?;
-        #[cfg(windows)]
-        let job = match Job::new(&child).and_then(|job| {
-            resume(&child)?;
-            Ok(job)
-        }) {
-            Ok(job) => job,
-            Err(error) => {
-                let _ = child.kill();
-                let _ = child.wait();
-                return Err(error);
-            }
-        };
+        let Spawned {
+            mut child,
+            #[cfg(windows)]
+            job,
+        } = spawn_piped(program, args, cwd)?;
         let reader = child.stdout.take().expect("piped stdout");
         let errors = child.stderr.take().expect("piped stderr");
         let mut writer = child.stdin.take().expect("piped stdin");
@@ -382,6 +357,53 @@ impl Processes {
         );
         Ok(self.next)
     }
+}
+
+/// Both guest processes and host protocols use the same atomic process-tree ownership boundary.
+pub(crate) struct Spawned {
+    pub(crate) child: std::process::Child,
+    #[cfg(windows)]
+    pub(crate) job: Job,
+}
+pub(crate) fn spawn_piped(
+    program: &std::path::Path,
+    args: &[String],
+    cwd: &std::path::Path,
+) -> anyhow::Result<Spawned> {
+    use std::process::{Command, Stdio};
+    let mut command = Command::new(program);
+    command
+        .args(args)
+        .current_dir(cwd)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        command.creation_flags(
+            windows_sys::Win32::System::Threading::CREATE_SUSPENDED
+                | windows_sys::Win32::System::Threading::CREATE_NO_WINDOW,
+        );
+    }
+    let mut child = command.spawn()?;
+    #[cfg(windows)]
+    let job = match Job::new(&child).and_then(|job| {
+        resume(&child)?;
+        Ok(job)
+    }) {
+        Ok(job) => job,
+        Err(error) => {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(error);
+        }
+    };
+    Ok(Spawned {
+        child,
+        #[cfg(windows)]
+        job,
+    })
 }
 
 /// Resume only after successful job assignment; failure leaves the child suspended for cleanup.

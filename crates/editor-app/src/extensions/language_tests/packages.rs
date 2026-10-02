@@ -3,7 +3,7 @@ use super::*;
 use std::io::{Cursor, Write};
 
 /// The language identity is unfamiliar to the host; only the grammar export name is reused.
-pub(super) fn language_package(id: &str) -> Package {
+pub(in crate::extensions) fn language_package(id: &str) -> Package {
     let source = format!(
         r#"[plugin]
 id = "{id}"
@@ -69,7 +69,7 @@ fn duplicate_language_selectors_are_rejected_before_installation() {
 }
 
 /// Reinspection keeps fixture changes within the actual package validation boundary.
-pub(super) fn repack(files: BTreeMap<String, Vec<u8>>) -> anyhow::Result<Package> {
+pub(in crate::extensions) fn repack(files: BTreeMap<String, Vec<u8>>) -> anyhow::Result<Package> {
     let mut zip = zip::ZipWriter::new(Cursor::new(Vec::new()));
     for (name, bytes) in files {
         zip.start_file(name, zip::write::SimpleFileOptions::default())?;

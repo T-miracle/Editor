@@ -231,6 +231,8 @@ impl Manager {
             };
             instances.insert(id.into(), instance);
         }
+        // Compute effective plans before retiring transports: unrelated settings must not restart them.
+        self.language_services();
         Ok(())
     }
 

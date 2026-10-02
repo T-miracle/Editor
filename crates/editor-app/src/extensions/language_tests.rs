@@ -1,7 +1,7 @@
 //! Real resource packages must change an already-open editor through the installed contribution path.
 use super::*;
 use gpui_kit::{TestAppContext, gpui};
-mod packages;
+pub(super) mod packages;
 use packages::{language_package, legacy_rust_package, repack};
 
 /// A delayed legacy load must not overwrite a dynamic choice using the same public language ID.

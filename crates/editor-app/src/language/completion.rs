@@ -1,18 +1,18 @@
 //! Adapts plugin LSP completion results to the editor's built-in suggestion menu.
 
-use super::navigation::{LanguageServer, file_uri, position_at_byte};
+use super::navigation::{DocumentLease, LanguageServer, file_uri, position_at_byte};
 use anyhow::Result;
 use gpui_base::input::{CompletionProvider, Rope};
 use gpui_kit::gpui::{App, Task, Window};
 use lsp_types::{
-    CompletionContext, CompletionResponse, CompletionTextEdit, Position, Range, TextEdit, Uri,
+    CompletionContext, CompletionResponse, CompletionTextEdit, Position, Range, TextEdit,
 };
 use std::{ops, path::Path, sync::Arc};
 
 /// Supplies suggestions from the plugin server for one editor document.
 pub struct LanguageCompletionProvider {
     server: Arc<LanguageServer>,
-    document_uri: Uri,
+    document: DocumentLease,
     triggers: Vec<String>,
     whitespace_suffixes: Vec<String>,
 }
@@ -21,7 +21,7 @@ impl LanguageCompletionProvider {
     /// Keeps language-specific punctuation in the plugin manifest.
     pub fn new(path: &Path, server: Arc<LanguageServer>) -> Option<Self> {
         Some(Self {
-            document_uri: file_uri(path)?,
+            document: server.open_document(file_uri(path)?),
             triggers: server.completion_triggers().to_vec(),
             whitespace_suffixes: server.completion_after_whitespace().to_vec(),
             server,
@@ -52,12 +52,12 @@ impl CompletionProvider for LanguageCompletionProvider {
         let prefix = identifier_prefix(&source, byte_offset);
         let start = position_at_byte(&source, byte_offset - prefix.len());
         let server = self.server.clone();
-        let document_uri = self.document_uri.clone();
+        let document = self.document.clone();
         cx.background_executor()
             .scheduler_executor()
             .spawn_dedicated(move |_| async move {
                 let result = server
-                    .completions(document_uri, source, position)
+                    .completions_for(document, source, position)
                     .map(|response| rank_completions(response, &prefix, start, position));
                 if let Err(error) = &result {
                     tracing::warn!(%error, "language completion request failed");

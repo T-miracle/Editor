@@ -5,6 +5,7 @@ use std::collections::BTreeSet;
 
 /// Capability-based API; legacy messages remain only during the staged migration.
 pub mod api;
+pub mod language;
 pub mod process;
 pub mod settings;
 pub mod ui;
@@ -24,6 +25,9 @@ pub mod bindings {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Manifest {
+    /// Standard LSP bindings consume native service declarations without requiring a lifecycle component.
+    #[serde(default)]
+    pub language_servers: Vec<language::Provider>,
     /// Fixed native service definitions; each key requires its own installation grant.
     #[serde(default)]
     pub services: std::collections::BTreeMap<String, process::Service>,
@@ -365,6 +369,8 @@ pub enum Event {
 }
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct Reply {
+    #[serde(default)]
+    pub language_service: Option<language::Proposal>,
     /// Migration adapter only; new guests expose this through api::Output.
     #[serde(default)]
     pub configuration: Option<settings::Proposal>,

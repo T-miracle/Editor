@@ -85,6 +85,7 @@ pub(super) struct OperationProgress {
 }
 #[derive(Default)]
 pub(super) struct Published {
+    pub language_services: BTreeMap<String, Result<Arc<plugin_runtime::LanguageService>, String>>,
     pub configurations: BTreeMap<String, Result<settings::Effective, String>>,
     pub configuration_result: Option<(u64, Result<(), String>)>,
     pub configuration_revision: u64,
@@ -301,7 +302,26 @@ impl Worker {
                         )
                     })
                     .collect::<BTreeMap<_, _>>();
+                let language_services = manager.language_services();
+                for service in language_services
+                    .values()
+                    .filter_map(|service| service.as_ref().ok())
+                {
+                    *processes.entry(service.owner.clone()).or_default() += service.process_count();
+                }
                 let mut published = output.lock().unwrap();
+                let services_changed = language_services.len() != published.language_services.len()
+                    || language_services.iter().any(|(key, value)| {
+                        match (value, published.language_services.get(key)) {
+                            (Ok(current), Some(Ok(old))) => !Arc::ptr_eq(current, old),
+                            (Err(current), Some(Err(old))) => current != old,
+                            _ => true,
+                        }
+                    });
+                if services_changed {
+                    published.language_services = language_services;
+                    published.configuration_revision += 1;
+                }
                 if published.configurations != configurations {
                     published.configurations = configurations;
                     published.configuration_revision += 1;

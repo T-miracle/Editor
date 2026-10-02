@@ -51,7 +51,9 @@ pub(crate) fn render_settings(view: &Entity<EditorApp>, cx: &App) -> AnyElement 
         } else {
             t!("settings.provider_choose").to_string()
         };
-        let role = if row.key.starts_with("highlight:") {
+        let role = if row.key.starts_with("lsp:") {
+            "LSP".into()
+        } else if row.key.starts_with("highlight:") {
             t!("settings.provider_highlight")
         } else {
             t!("settings.provider_recognition")
@@ -160,6 +162,7 @@ fn select(
 
 impl EditorApp {
     pub(crate) fn sync_dynamic_languages(&mut self, cx: &mut Context<Self>) {
+        self.sync_dynamic_language_servers(cx);
         self.dynamic_languages.generation += 1;
         let generation = self.dynamic_languages.generation;
         let selected = providers::grammars();

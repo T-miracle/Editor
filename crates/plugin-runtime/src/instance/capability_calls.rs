@@ -56,6 +56,21 @@ impl State {
             }
             let request: api::Request = serde_json::from_value(value)
                 .map_err(|error| Failure::new(ErrorCode::InvalidRequest, error.to_string()))?;
+            // Discovery may read granted roots but cannot create side effects or subscriptions.
+            if self.language_hook
+                && !matches!(
+                    &request.operation,
+                    api::Operation::ReadAsset { .. }
+                        | api::Operation::OpenWorkspace { .. }
+                        | api::Operation::OpenData { .. }
+                        | api::Operation::ReadFile { .. }
+                )
+            {
+                return Err(Failure::new(
+                    ErrorCode::InvalidState,
+                    "LSP discovery is read-only",
+                ));
+            }
             match request.operation {
                 api::Operation::Process { operation } => self.process_request(operation),
                 api::Operation::SubscribeDocuments => self.subscribe_documents(),
@@ -185,6 +200,14 @@ impl Instance {
         let completion: api::Completion = serde_json::from_str(payload)?;
         anyhow::ensure!(completion.id == id, "Plugin completion ID mismatch");
         let output = completion.result?;
+        // Reject forbidden hook output before the common call path publishes any view or snapshot.
+        anyhow::ensure!(
+            !self.store.data().language_hook
+                || (output.views.is_empty()
+                    && output.snapshot.is_none()
+                    && output.configuration.is_none()),
+            "LSP hook can return only a language proposal"
+        );
         let api = self
             .store
             .data()
@@ -197,6 +220,7 @@ impl Instance {
         );
         anyhow::ensure!(output.views.len() <= 8, "Too many native views");
         Ok(Reply {
+            language_service: output.language_service,
             configuration: output.configuration,
             snapshot: output.snapshot,
             scenes: output

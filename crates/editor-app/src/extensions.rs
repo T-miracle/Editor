@@ -7,6 +7,8 @@ mod editor_requests;
 mod images;
 #[cfg(test)]
 mod language_tests;
+#[cfg(test)]
+pub(crate) mod lsp_tests;
 mod native_controls;
 #[cfg(test)]
 mod native_ui_tests;
@@ -112,6 +114,19 @@ pub struct ExtensionPanel {
     _focus_events: Vec<Subscription>,
 }
 impl ExtensionPanel {
+    /// Protocol preparation runs on the worker; UI consumers receive only immutable approved leases.
+    pub(crate) fn language_services(
+        &self,
+    ) -> BTreeMap<String, Result<Arc<plugin_runtime::LanguageService>, String>> {
+        if !self
+            .worker
+            .trusted
+            .load(std::sync::atomic::Ordering::Acquire)
+        {
+            return BTreeMap::new();
+        }
+        self.worker.state.lock().unwrap().language_services.clone()
+    }
     /// Discover shipped ZIPs for the local market tab and inspect their manifests once.
     fn load_market_packages(&mut self) {
         let exe = std::env::current_exe()
@@ -353,6 +368,7 @@ impl ExtensionPanel {
             if self.configuration_revision != state.configuration_revision {
                 self.configuration_revision = state.configuration_revision;
                 changed = true;
+                contributions_changed = true;
             }
             if !self
                 .worker
@@ -407,7 +423,7 @@ impl ExtensionPanel {
                 || self.startup != state.startup
                 || self.progress != state.progress;
             if self.surface_id.is_none() {
-                contributions_changed = self.entries.len() != state.entries.len()
+                contributions_changed |= self.entries.len() != state.entries.len()
                     || self.entries.iter().zip(&state.entries).any(|(old, new)| {
                         old.manifest.id != new.manifest.id
                             || old.enabled != new.enabled

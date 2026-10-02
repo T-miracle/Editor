@@ -1,6 +1,6 @@
 //! Connects the editor's hover popover to a plugin language server.
 
-use super::navigation::{LanguageServer, file_uri, position_at_byte};
+use super::navigation::{DocumentLease, LanguageServer, file_uri, position_at_byte};
 use anyhow::Result;
 use gpui_base::input::{HoverProvider, Rope};
 use gpui_kit::gpui::{App, Task, Window};
@@ -33,7 +33,7 @@ struct CachedHover {
 /// Fetches symbol information for one document through its shared LSP session.
 pub struct LanguageHoverProvider {
     server: Arc<LanguageServer>,
-    document_uri: Uri,
+    document: DocumentLease,
     cache: Arc<Mutex<HoverCache>>,
 }
 
@@ -41,8 +41,8 @@ impl LanguageHoverProvider {
     /// Uses the same file URI as navigation and completion requests.
     pub fn new(path: &Path, server: Arc<LanguageServer>) -> Option<Self> {
         Some(Self {
+            document: server.open_document(file_uri(path)?),
             server,
-            document_uri: file_uri(path)?,
             cache: Arc::new(Mutex::new(HoverCache::default())),
         })
     }
@@ -56,6 +56,9 @@ impl HoverProvider for LanguageHoverProvider {
         _window: &mut Window,
         cx: &mut App,
     ) -> Task<Result<Option<Hover>>> {
+        if !self.server.is_active() || !self.document.is_active() {
+            return Task::ready(Err(anyhow::anyhow!("LSP document owner has been retired")));
+        }
         // Mouse hit testing returns caret boundaries; query inside the symbol instead.
         let Some((symbol_start, symbol_end)) = symbol_at(text, offset) else {
             return Task::ready(Ok(None));
@@ -92,7 +95,7 @@ impl HoverProvider for LanguageHoverProvider {
 
         if start_request {
             let server = self.server.clone();
-            let document_uri = self.document_uri.clone();
+            let document = self.document.clone();
             let cache = self.cache.clone();
             let result_for_worker = shared_result.clone();
             // This task outlives individual mouse-move waiters, which GPUI replaces on movement.
@@ -103,7 +106,7 @@ impl HoverProvider for LanguageHoverProvider {
                     cx.background_executor()
                         .scheduler_executor()
                         .spawn_dedicated(move |_| async move {
-                            fetch_hover(server, document_uri, source, position, symbol_range)
+                            fetch_hover(server, document, source, position, symbol_range)
                         })
                         .await
                 } else {
@@ -125,6 +128,8 @@ impl HoverProvider for LanguageHoverProvider {
             .detach();
         }
 
+        let document = self.document.clone();
+        let server = self.server.clone();
         cx.spawn(async move |cx| {
             // Presentation timing belongs to the pointer caller; keyboard requests
             // can consume cached or completed documentation without a hover delay.
@@ -134,6 +139,10 @@ impl HoverProvider for LanguageHoverProvider {
                     .expect("hover result lock poisoned")
                     .clone()
                 {
+                    anyhow::ensure!(
+                        document.is_active() && server.is_active(),
+                        "LSP document owner has been retired"
+                    );
                     return result.map_err(anyhow::Error::msg);
                 }
                 // Poll only the shared result; cancellation of this waiter leaves the LSP work alive.
@@ -148,22 +157,22 @@ impl HoverProvider for LanguageHoverProvider {
 /// Fetch documentation and a bounded definition excerpt for one stable symbol position.
 fn fetch_hover(
     server: Arc<LanguageServer>,
-    document_uri: Uri,
+    document: DocumentLease,
     source: String,
     position: lsp_types::Position,
     symbol_range: lsp_types::Range,
 ) -> Result<Option<Hover>> {
-    let result = server.hover(document_uri.clone(), source.clone(), position);
+    let result = server.hover_for(document.clone(), source.clone(), position);
     if let Err(error) = &result {
         tracing::warn!(%error, "language hover request failed");
     }
     let hover = result?;
     // Definition previews complement the LSP signature and documentation.
     let preview = server
-        .definitions(document_uri.clone(), source.clone(), position)
+        .definitions_for(document.clone(), source.clone(), position)
         .ok()
         .and_then(|locations| locations.into_iter().next())
-        .and_then(|location| definition_preview(&document_uri, &source, location));
+        .and_then(|location| definition_preview(&document.uri, &source, location));
     let mut details = combine_details(hover, preview);
     if let Some(details) = &mut details
         && details.range.is_none()

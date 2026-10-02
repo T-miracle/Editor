@@ -112,6 +112,16 @@ pub fn refresh_entries(root: &Path, installed: &[Installed]) {
                 )
             })
             .collect(),
+        installed
+            .iter()
+            .filter(|entry| entry.enabled && entry.error.is_none())
+            .map(|entry| {
+                (
+                    entry.manifest.id.clone(),
+                    entry.manifest.language_servers.clone(),
+                )
+            })
+            .collect(),
     );
     *CATALOG.write().unwrap() = Arc::new(catalog);
 }

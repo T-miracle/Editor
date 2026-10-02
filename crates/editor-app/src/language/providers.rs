@@ -25,6 +25,7 @@ struct Registry {
     error: Option<String>,
     recognizers: BTreeMap<String, Vec<(String, LanguageDefinition)>>,
     highlighters: BTreeMap<String, Vec<GrammarProvider>>,
+    language_servers: BTreeMap<String, Vec<String>>,
     /// Retain a valid selected provider when another package joins the candidate set.
     selected: BTreeMap<String, String>,
 }
@@ -34,8 +35,20 @@ static REGISTRY: LazyLock<RwLock<Registry>> = LazyLock::new(|| RwLock::new(Regis
 pub(crate) fn refresh(
     root: &Path,
     entries: Vec<(String, PathBuf, Vec<LanguageDefinition>, Vec<Highlighter>)>,
+    services: Vec<(
+        String,
+        Vec<plugin_runtime::plugin_protocol::language::Provider>,
+    )>,
 ) {
     let mut next = Registry::default();
+    for (owner, providers) in services {
+        for provider in providers {
+            next.language_servers
+                .entry(provider.language)
+                .or_default()
+                .push(format!("{owner}/{}", provider.id));
+        }
+    }
     for (owner, root, definitions, highlighters) in entries {
         for definition in definitions {
             for key in definition
@@ -118,6 +131,9 @@ impl Registry {
     /// Selection keys separate file recognition from the language's highlight provider.
     fn candidates(&self) -> BTreeMap<String, Vec<String>> {
         let mut rows = BTreeMap::new();
+        for (language, providers) in &self.language_servers {
+            rows.insert(format!("lsp:{language}"), providers.clone());
+        }
         for (key, definitions) in &self.recognizers {
             rows.insert(
                 format!("recognition:{key}"),
@@ -307,6 +323,21 @@ pub(crate) fn grammars() -> Vec<GrammarProvider> {
             list.iter()
                 .find(|p| format!("{}/{}", p.owner, p.declaration.id) == *selected)
                 .cloned()
+        })
+        .collect()
+}
+
+/// LSP selection shares preference precedence but never depends on the highlighter provider.
+pub(crate) fn language_servers() -> BTreeMap<String, Option<String>> {
+    let registry = REGISTRY.read().unwrap();
+    registry
+        .language_servers
+        .keys()
+        .map(|language| {
+            (
+                language.clone(),
+                registry.selected.get(&format!("lsp:{language}")).cloned(),
+            )
         })
         .collect()
 }

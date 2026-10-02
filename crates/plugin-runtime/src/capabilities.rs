@@ -24,6 +24,7 @@ pub(crate) fn negotiate(manifest: &Manifest) -> anyhow::Result<Option<api::Negot
         ("configuration".into(), Version::new(1, 0, 0)),
         ("ui.panels".into(), Version::new(1, 0, 0)),
         ("process".into(), Version::new(1, 0, 0)),
+        ("language.lsp".into(), Version::new(1, 0, 0)),
     ]
     .into();
     Ok(Some(

@@ -2,6 +2,27 @@
 
 use super::*;
 
+/// A delayed push from a closed document must not match the next lifetime of its URI.
+#[test]
+fn reopened_document_rejects_old_lifetime_diagnostics() {
+    let uri: Uri = "file:///unknown.novel".parse().unwrap();
+    let mut store = DiagnosticsStore::default();
+    store.synchronized(uri.as_str().into(), "old".into(), 1);
+    store.close(uri.as_str());
+    let version = store.next_version(uri.as_str(), "new").unwrap();
+    assert!(version > 1);
+    store.synchronized(uri.as_str().into(), "new".into(), version);
+    store.publish(PublishDiagnosticsParams::new(
+        uri,
+        vec![Diagnostic::new_simple(
+            lsp_types::Range::default(),
+            "stale".into(),
+        )],
+        Some(1),
+    ));
+    assert!(store.snapshot("file:///unknown.novel", "new").is_none());
+}
+
 /// A delayed publication must not overwrite a newer version or another document.
 #[test]
 fn diagnostic_versions_and_empty_publications() {

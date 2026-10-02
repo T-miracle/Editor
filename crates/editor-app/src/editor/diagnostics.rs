@@ -66,6 +66,10 @@ impl EditorApp {
             return;
         };
         let parser = tab.diagnostics.parser.clone();
+        // Capture the UI-owned lifetime before any debounce or executor hop can outlive the tab.
+        let document = server.as_ref().and_then(|server| {
+            language_navigation::file_uri(&path).map(|uri| server.open_document(uri))
+        });
         tab.diagnostics.task = Some(cx.spawn(async move |this, cx| {
             cx.background_executor()
                 .timer(Duration::from_millis(180))
@@ -99,21 +103,21 @@ impl EditorApp {
                     cx,
                 );
             });
-            let (Some(server), Some(uri)) = (server, language_navigation::file_uri(&path)) else {
+            let (Some(server), Some(document)) = (server, document) else {
                 return;
             };
             loop {
                 let worker = server.clone();
-                let uri = uri.clone();
+                let document = document.clone();
                 let source = source.clone();
                 // Server startup and its serialized connection may wait; keep that
                 // blocking work off both the UI and the shared parsing executor.
                 let result = cx
                     .background_executor()
                     .scheduler_executor()
-                    .spawn_dedicated(
-                        move |_| async move { worker.diagnostics(uri, source.as_str()) },
-                    )
+                    .spawn_dedicated(move |_| async move {
+                        worker.diagnostics_for(document, source.as_str())
+                    })
                     .await;
                 let diagnostics = match result {
                     Ok(diagnostics) => diagnostics
@@ -240,20 +244,23 @@ impl EditorApp {
         source: String,
         cx: &mut Context<Self>,
     ) {
-        let Some(language) = language_plugins::language_for_path(path) else {
-            return;
-        };
+        let language = editor::language_for_path(path);
         let (Some(server), Some(uri)) = (
-            self.language_servers.get(&language.id).cloned(),
+            self.language_servers.get(&language).cloned(),
             language_navigation::file_uri(path),
         ) else {
+            return;
+        };
+        let Some(document) = server.document(&uri) else {
             return;
         };
         cx.spawn(async move |_, cx| {
             let result = cx
                 .background_executor()
                 .scheduler_executor()
-                .spawn_dedicated(move |_| async move { server.document_saved(uri, source) })
+                .spawn_dedicated(
+                    move |_| async move { server.document_saved_for(document, source) },
+                )
                 .await;
             if let Err(error) = result {
                 tracing::warn!(%error, "language server save notification failed");

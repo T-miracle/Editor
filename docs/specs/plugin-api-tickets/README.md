@@ -4,9 +4,9 @@
 
 来源：[已确认规格](../plugin-api-platform.md)。测试边界已由用户确认。
 
-状态：总方案和 20 张工单已发布，GitHub 是正式议题跟踪器。工单 01–05 已提交推送（`1969094`、`bc3102f`、`c2ca98d`、`9f5a2a7`、`762cc00`），GitHub #2–#6 已关闭。工单 06 已实现并通过测试及双轴审查，随本提交推送并关闭 GitHub #7。用户已授权连续完成剩余工单，每项通过验证后提交、推送、核对关闭再继续下一项。
+状态：总方案和 20 张工单已发布，GitHub 是正式议题跟踪器。工单 01–06 已提交推送（`1969094`、`bc3102f`、`c2ca98d`、`9f5a2a7`、`762cc00`、`891651f`），GitHub #2–#7 已关闭。工单 07 已实现并通过测试及双轴审查，随本提交推送并关闭 GitHub #8。用户已授权连续完成剩余工单，每项通过验证后提交、推送、核对关闭再继续下一项。
 
-设计基线：[GitHub #1](https://github.com/T-miracle/Editor/issues/1)。当前交付：[工单 06 / GitHub #7](https://github.com/T-miracle/Editor/issues/7)；下一项为 [工单 07 / GitHub #8](https://github.com/T-miracle/Editor/issues/8)。验证记录见 [进程能力验证](../plugin-api-process-verification.md)。
+设计基线：[GitHub #1](https://github.com/T-miracle/Editor/issues/1)。当前交付：[工单 07 / GitHub #8](https://github.com/T-miracle/Editor/issues/8)；下一项为 [工单 08 / GitHub #9](https://github.com/T-miracle/Editor/issues/9)。验证记录见 [通用 LSP 验证](../plugin-api-lsp-verification.md)。
 
 ## GitHub 议题映射
 

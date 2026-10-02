@@ -7,6 +7,56 @@ use std::{
     io::{Cursor, Read, Write},
     path::Path,
 };
+
+/// LSP declarations carry exactly the native service authority that the host will exercise.
+fn validate_language_services(manifest: &Manifest) -> anyhow::Result<()> {
+    use plugin_protocol::{api::InstanceScope, settings::SettingType};
+    let mut ids = std::collections::BTreeSet::new();
+    anyhow::ensure!(
+        manifest.language_servers.len() <= 64,
+        "Too many LSP providers"
+    );
+    for provider in &manifest.language_servers {
+        anyhow::ensure!(
+            manifest.protocol == 7
+                && manifest.scope == InstanceScope::Workspace
+                && manifest
+                    .api
+                    .as_ref()
+                    .is_some_and(|api| api.required.contains_key("language.lsp")
+                        && api.required.contains_key("process"))
+                && provider.valid()
+                && ids.insert(&provider.id),
+            "Invalid LSP provider declaration"
+        );
+        anyhow::ensure!(
+            !provider.hook || manifest.component.is_some(),
+            "LSP hooks require WASM"
+        );
+        for service in std::iter::once(&provider.service).chain(&provider.alternatives) {
+            anyhow::ensure!(
+                manifest.services.contains_key(service)
+                    && manifest
+                        .permissions
+                        .contains(&format!("process.service.{service}")),
+                "LSP service must be declared and granted"
+            );
+        }
+        if let Some(key) = &provider.executable_setting {
+            anyhow::ensure!(
+                manifest
+                    .settings
+                    .get(key)
+                    .is_some_and(|definition| matches!(
+                        definition.value_type,
+                        SettingType::String { .. }
+                    )),
+                "LSP executable setting must declare a string"
+            );
+        }
+    }
+    Ok(())
+}
 #[derive(Clone)]
 pub struct Package {
     pub manifest: Manifest,
@@ -83,6 +133,7 @@ impl Package {
             "Unsupported plugin protocol"
         );
         super::capabilities::negotiate(&manifest)?;
+        validate_language_services(&manifest)?;
         // Service keys are authority scopes, and definitions never accept dynamic command templates.
         anyhow::ensure!(manifest.services.len() <= 32, "Too many native services");
         for (id, service) in &manifest.services {
@@ -152,7 +203,16 @@ impl Package {
             anyhow::ensure!(
                 manifest.panels.is_empty()
                     && manifest.commands.is_empty()
-                    && manifest.permissions.is_empty(),
+                    && manifest.permissions.iter().all(|permission| {
+                        permission
+                            .strip_prefix("process.service.")
+                            .is_some_and(|service| {
+                                manifest.language_servers.iter().any(|provider| {
+                                    provider.service == service
+                                        || provider.alternatives.iter().any(|id| id == service)
+                                })
+                            })
+                    }),
                 "Declarative packages cannot request executable capabilities"
             );
         }
@@ -354,7 +414,7 @@ fn validate_file_icons(files: &BTreeMap<String, Vec<u8>>, path: &Path) -> anyhow
     }
     Ok(())
 }
-fn validate_relative(name: &str) -> anyhow::Result<()> {
+pub(crate) fn validate_relative(name: &str) -> anyhow::Result<()> {
     anyhow::ensure!(
         !name.is_empty()
             && !name.contains(['\\', ':'])

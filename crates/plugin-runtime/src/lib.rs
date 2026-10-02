@@ -5,6 +5,8 @@ mod editor_requests;
 pub use document_events::DocumentEvents;
 pub use editor_requests::EditorRequest;
 mod instance;
+mod language_service;
+pub use language_service::{LanguageService, ServiceProcess};
 mod manager;
 mod migration;
 mod package;

@@ -173,6 +173,12 @@ impl EditorApp {
         let mut newly_created_servers = Vec::new();
         for tab in &self.tabs {
             let path = tab.session.path();
+            // The independently chosen service owns this language even when recognition is legacy.
+            if crate::language::providers::language_servers()
+                .contains_key(&editor::language_for_path(path))
+            {
+                continue;
+            }
             let Some(contribution) = language_plugins::language_for_path(path) else {
                 // Match the previously loaded language so aliases such as .htm and
                 // exact filenames reset without disturbing unrelated built-in grammars.

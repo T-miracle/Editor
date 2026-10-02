@@ -39,6 +39,8 @@ struct State {
     data: PathBuf,
     assets: PathBuf,
     active: bool,
+    /// A bounded discovery invocation can read granted resources without launching native work.
+    language_hook: bool,
     effects: Vec<Request>,
     /// Initialization writes commit only with the version switch; failed activation cannot edit old settings.
     staged_writes: Option<std::collections::BTreeMap<PathBuf, Vec<u8>>>,
@@ -345,6 +347,7 @@ mod tests {
             data,
             assets,
             active: true,
+            language_hook: false,
             effects: vec![],
             staged_writes: None,
         };
@@ -493,6 +496,7 @@ mod tests {
             data: root.path().into(),
             assets: root.path().into(),
             active: true,
+            language_hook: false,
             effects: vec![],
             staged_writes: Some(Default::default()),
         };
@@ -584,6 +588,7 @@ impl Instance {
             data,
             assets,
             active: false,
+            language_hook: false,
             effects: vec![],
             staged_writes: Some(Default::default()),
         };

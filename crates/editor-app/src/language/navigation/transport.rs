@@ -3,12 +3,56 @@
 use anyhow::{Context as _, ensure};
 use serde_json::Value;
 use std::{
-    io::{BufRead, BufReader},
+    io::{BufRead, BufReader, Read, Write},
     process::ChildStdout,
     sync::mpsc,
 };
 
 pub(super) type Messages = mpsc::Receiver<anyhow::Result<Value>>;
+
+/// Native writes can block on an unresponsive child, so a bounded writer owns the pipe off the request thread.
+pub(super) struct Writer(mpsc::SyncSender<(Vec<u8>, mpsc::SyncSender<std::io::Result<()>>)>);
+impl Writer {
+    pub(super) fn new(mut input: std::process::ChildStdin) -> Self {
+        let (sender, receiver) =
+            mpsc::sync_channel::<(Vec<u8>, mpsc::SyncSender<std::io::Result<()>>)>(1);
+        std::thread::spawn(move || {
+            while let Ok((bytes, reply)) = receiver.recv() {
+                let result = input.write_all(&bytes).and_then(|_| input.flush());
+                let failed = result.is_err();
+                let _ = reply.send(result);
+                if failed {
+                    break;
+                }
+            }
+        });
+        Self(sender)
+    }
+    pub(super) fn send(&self, message: Value, timeout: std::time::Duration) -> anyhow::Result<()> {
+        self.enqueue(message)?
+            .recv_timeout(timeout)
+            .context("wait for LSP pipe write")??;
+        Ok(())
+    }
+    /// Cancellation never extends an expired request deadline while a native pipe is blocked.
+    pub(super) fn enqueue(
+        &self,
+        message: Value,
+    ) -> anyhow::Result<mpsc::Receiver<std::io::Result<()>>> {
+        let payload = serde_json::to_vec(&message)?;
+        ensure!(
+            payload.len() <= 32 * 1024 * 1024,
+            "LSP output frame exceeds quota"
+        );
+        let mut frame = format!("Content-Length: {}\r\n\r\n", payload.len()).into_bytes();
+        frame.extend(payload);
+        let (reply, completion) = mpsc::sync_channel(1);
+        self.0
+            .try_send((frame, reply))
+            .map_err(|error| anyhow::anyhow!("LSP writer unavailable: {error}"))?;
+        Ok(completion)
+    }
+}
 
 /// One bounded reader queue keeps server output flowing while the editor is idle.
 pub(super) fn reader(stdout: ChildStdout) -> anyhow::Result<Messages> {
@@ -35,7 +79,11 @@ fn read_frame(output: &mut impl BufRead) -> anyhow::Result<Value> {
     let mut header_bytes = 0;
     loop {
         let mut header = String::new();
-        let read = output.read_line(&mut header).context("read LSP header")?;
+        let read = output
+            .by_ref()
+            .take((8193 - header_bytes) as u64)
+            .read_line(&mut header)
+            .context("read LSP header")?;
         ensure!(read > 0, "language server closed its output");
         header_bytes += read;
         ensure!(
@@ -66,6 +114,13 @@ fn read_frame(output: &mut impl BufRead) -> anyhow::Result<Value> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    /// A server cannot allocate an unbounded String by withholding a header newline.
+    #[test]
+    fn oversized_unterminated_header_is_bounded() {
+        let mut input = std::io::Cursor::new(vec![b'x'; 50_000]);
+        assert!(read_frame(&mut input).is_err());
+        assert!(input.position() <= 8193);
+    }
 
     /// Diagnostic pushes and responses can share a stream without consuming each other's bytes.
     #[test]

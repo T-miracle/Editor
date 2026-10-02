@@ -7,6 +7,8 @@ use lsp_types::{Diagnostic, PublishDiagnosticsParams};
 #[derive(Default)]
 pub(super) struct DiagnosticsStore {
     documents: HashMap<String, Document>,
+    /// Versions never repeat within a connection, including closing and reopening the same URI.
+    last_version: i32,
 }
 
 struct Document {
@@ -17,17 +19,21 @@ struct Document {
 }
 
 impl DiagnosticsStore {
+    /// Closing drops snapshots so a reopened URI starts a fresh document lifetime.
+    pub(super) fn close(&mut self, uri: &str) {
+        self.documents.remove(&document_key(uri));
+    }
     /// Repeated requests for unchanged text must not invalidate diagnostics or restart analysis.
     pub(super) fn next_version(&self, uri: &str, source: &str) -> Option<i32> {
         match self.documents.get(&document_key(uri)) {
             Some(document) if document.source == source => None,
-            Some(document) => Some(document.version + 1),
-            None => Some(1),
+            _ => Some(self.last_version.saturating_add(1)),
         }
     }
 
     /// Install only after didOpen/didChange was successfully written to the server.
     pub(super) fn synchronized(&mut self, uri: String, source: String, version: i32) {
+        self.last_version = self.last_version.max(version);
         self.documents.insert(
             document_key(&uri),
             Document {
@@ -36,6 +42,9 @@ impl DiagnosticsStore {
                 diagnostics: None,
             },
         );
+    }
+    pub(super) fn is_open(&self, uri: &str) -> bool {
+        self.documents.contains_key(&document_key(uri))
     }
 
     /// Reject a delayed push for a prior version; an empty publication is meaningful.
@@ -86,9 +95,9 @@ fn document_key(uri: &str) -> String {
 
 impl LanguageServer {
     /// Synchronize live text and drain unsolicited diagnostics without waiting for a hover.
-    pub(crate) fn diagnostics(
+    pub(crate) fn diagnostics_for(
         &self,
-        uri: Uri,
+        document: DocumentLease,
         source: &str,
     ) -> anyhow::Result<Option<Vec<Diagnostic>>> {
         self.prepare()?;
@@ -96,10 +105,16 @@ impl LanguageServer {
             .connection
             .lock()
             .map_err(|_| anyhow!("language-server connection lock was poisoned"))?;
+        // A retired document is an ownership failure, not a broken transport for the other open tabs.
+        connection
+            .as_mut()
+            .context("language server is unavailable")?
+            .bind_document(&document)?;
         let result = (|| {
             let connection = connection
                 .as_mut()
                 .context("language server is unavailable")?;
+            let uri = document.uri.clone();
             // Idle polling must not copy large unchanged documents every 400 ms.
             let uri_text = if connection
                 .diagnostics
@@ -131,11 +146,19 @@ impl LanguageServer {
         if result.is_err() {
             *connection = None;
         }
+        ensure!(
+            self.is_active() && document.is_active(),
+            "LSP request owner has been retired"
+        );
         result
     }
 
     /// Saving triggers compiler-backed diagnostics when the server advertises didSave support.
-    pub(crate) fn document_saved(&self, uri: Uri, source: String) -> anyhow::Result<()> {
+    pub(crate) fn document_saved_for(
+        &self,
+        document: DocumentLease,
+        source: String,
+    ) -> anyhow::Result<()> {
         self.prepare()?;
         let mut connection = self
             .connection
@@ -144,7 +167,8 @@ impl LanguageServer {
         let connection = connection
             .as_mut()
             .context("language server is unavailable")?;
-        let uri_text = connection.sync_document(uri, source.clone())?;
+        connection.bind_document(&document)?;
+        let uri_text = connection.sync_document(document.uri, source.clone())?;
         if let Some(include_text) = connection.save_notifications {
             let mut params = json!({ "textDocument": { "uri": uri_text } });
             if include_text {
@@ -176,7 +200,12 @@ impl LanguageServerConnection {
         if message.get("method").and_then(Value::as_str) == Some("textDocument/publishDiagnostics")
         {
             match serde_json::from_value::<PublishDiagnosticsParams>(message["params"].clone()) {
-                Ok(params) => self.diagnostics.publish(params),
+                Ok(params) => {
+                    // Unversioned pushes cannot prove freshness; generic services use versioned push or pull.
+                    if self.service.is_none() || params.version.is_some() {
+                        self.diagnostics.publish(params);
+                    }
+                }
                 Err(error) => {
                     tracing::warn!(%error, "invalid language diagnostic notification");
                 }
@@ -190,6 +219,16 @@ impl LanguageServerConnection {
                 .get("params")
                 .and_then(|params| params.get(&readiness.ready_field))
                 .and_then(Value::as_bool);
+        }
+        if let Some(readiness) = self
+            .service
+            .as_ref()
+            .and_then(|service| service.provider.readiness.as_ref())
+            && message.get("method").and_then(Value::as_str)
+                == Some(readiness.notification.as_str())
+        {
+            self.ready =
+                Some(message["params"].pointer(&readiness.pointer) == Some(&readiness.expected));
         }
         if let (Some(id), Some(method)) = (
             message.get("id"),
@@ -208,6 +247,16 @@ impl LanguageServerConnection {
                             items
                                 .iter()
                                 .map(|item| {
+                                    if let Some(service) = &self.service {
+                                        return item
+                                            .get("section")
+                                            .and_then(Value::as_str)
+                                            .and_then(|section| {
+                                                service.provider.configuration.get(section)
+                                            })
+                                            .cloned()
+                                            .unwrap_or(Value::Null);
+                                    }
                                     super::super::sdk::configuration_section(
                                         &self.configuration,
                                         item.get("section").and_then(Value::as_str),

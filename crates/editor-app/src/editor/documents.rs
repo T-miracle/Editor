@@ -86,6 +86,7 @@ impl EditorApp {
                     continue;
                 }
                 let previous = self.tabs[index].session.path().to_path_buf();
+                self.close_language_document(&previous, cx);
                 self.tabs[index].session.rename(target.clone());
                 self.tabs[index].capability_revision =
                     self.tabs[index].capability_revision.saturating_add(1);
@@ -100,10 +101,7 @@ impl EditorApp {
             for (editor, path) in renamed_editors {
                 // A moved document's language providers must send the new file URI.
                 detach_language_server(&editor, cx);
-                if let Some(contribution) = language_plugins::language_for_path(&path)
-                    .filter(|contribution| self.language_plugin_enabled(&contribution.id))
-                    && let Some(server) = self.language_servers.get(&contribution.id)
-                {
+                if let Some(server) = self.language_servers.get(&language_for_path(&path)) {
                     attach_language_server(
                         &editor,
                         &path,
@@ -270,21 +268,27 @@ impl EditorApp {
                 let language = language_for_path(opened.session.path());
                 let mut newly_created_server = None;
                 // Plugin manifests supply the language server for every matching source file.
-                let server = language_plugins::language_for_path(opened.session.path())
-                    .filter(|contribution| self.language_plugin_enabled(&contribution.id))
-                    .filter(|contribution| contribution.lsp_command.is_some())
-                    .and_then(|contribution| {
-                        if let Some(server) = self.language_servers.get(&contribution.id) {
-                            return Some(server.clone());
-                        }
-                        let server = Arc::new(language_navigation::LanguageServer::new(
-                            self.workspace.root(),
-                            contribution.clone(),
-                        )?);
-                        self.language_servers
-                            .insert(contribution.id.clone(), server.clone());
-                        newly_created_server = Some(server.clone());
-                        Some(server)
+                let server = self
+                    .language_servers
+                    .get(&language_for_path(opened.session.path()))
+                    .cloned()
+                    .or_else(|| {
+                        language_plugins::language_for_path(opened.session.path())
+                            .filter(|contribution| self.language_plugin_enabled(&contribution.id))
+                            .filter(|contribution| contribution.lsp_command.is_some())
+                            .and_then(|contribution| {
+                                if let Some(server) = self.language_servers.get(&contribution.id) {
+                                    return Some(server.clone());
+                                }
+                                let server = Arc::new(language_navigation::LanguageServer::new(
+                                    self.workspace.root(),
+                                    contribution.clone(),
+                                )?);
+                                self.language_servers
+                                    .insert(contribution.id.clone(), server.clone());
+                                newly_created_server = Some(server.clone());
+                                Some(server)
+                            })
                     });
                 let document_path = opened.session.path().to_path_buf();
                 let contents = opened.contents;
@@ -602,6 +606,7 @@ impl EditorApp {
         }
 
         let was_active = self.active_path.as_ref() == Some(&path);
+        self.close_language_document(&path, cx);
         self.tabs.remove(index);
         self.sync_watched_documents();
         if !was_active {

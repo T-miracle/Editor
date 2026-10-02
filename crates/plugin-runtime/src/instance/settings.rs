@@ -3,6 +3,30 @@ use super::*;
 use plugin_protocol::settings::{Effective, EffectiveValue, Phase, Source};
 
 impl Instance {
+    /// Discovery is bounded by the normal fuel/deadline and cannot mutate files, processes or UI.
+    pub(crate) fn prepare_language(
+        &mut self,
+        context: language::Context,
+    ) -> anyhow::Result<language::Proposal> {
+        let checkpoint = self.store.data().roots.checkpoint();
+        self.store.data_mut().language_hook = true;
+        let reply = self.call(Message::Event(Event::Capability(
+            api::Notification::LanguageService(context),
+        )));
+        self.store.data_mut().language_hook = false;
+        self.store.data_mut().roots.release_since(checkpoint);
+        let reply = reply?;
+        anyhow::ensure!(
+            reply.scene.is_none()
+                && reply.scenes.is_empty()
+                && reply.snapshot.is_none()
+                && reply.configuration.is_none(),
+            "LSP hook can return only a language proposal"
+        );
+        reply
+            .language_service
+            .ok_or_else(|| anyhow::anyhow!("LSP hook returned no proposal"))
+    }
     /// Resolve discoveries on an isolated candidate before any active instance or saved config is changed.
     pub(crate) fn configure_settings(
         &mut self,

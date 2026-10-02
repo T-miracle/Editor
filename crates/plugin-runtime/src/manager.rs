@@ -7,6 +7,7 @@ use std::{
     collections::{BTreeMap, BTreeSet},
     path::{Path, PathBuf},
 };
+mod language;
 pub(crate) mod scopes;
 mod settings;
 use scopes::ParkedWorkspace;
@@ -82,6 +83,7 @@ pub struct Manager {
     parked: BTreeMap<String, ParkedWorkspace>,
     trusted: bool,
     workspace_open: bool,
+    language_services: BTreeMap<String, language::Prepared>,
 }
 impl Manager {
     /// Identify the workspace whose override is active in this runtime.
@@ -118,6 +120,7 @@ impl Manager {
             parked: BTreeMap::new(),
             trusted,
             workspace_open: true,
+            language_services: BTreeMap::new(),
         };
         let ids: Vec<_> = manager
             .installed
@@ -347,6 +350,7 @@ impl Manager {
         id: &str,
         previous: Option<&Installed>,
     ) -> anyhow::Result<()> {
+        self.retire_language_services(id);
         if let Some(previous) = previous.filter(|entry| !entry.enabled) {
             let locally_enabled = previous.project_enabled_in(&self.environment.workspace);
             self.disable(id)?;
@@ -447,6 +451,7 @@ impl Manager {
     }
     /// Project overrides retire only their owner; global disable additionally retires parked owners.
     fn disable_current(&mut self, id: &str) -> anyhow::Result<()> {
+        self.retire_language_services(id);
         let snapshot = self.live.get_mut(id).map(Instance::snapshot);
         let saved = match snapshot {
             Some(Ok(snapshot)) => self.save_snapshot(id, &snapshot),
@@ -664,6 +669,7 @@ mod icon_tests {
         std::fs::write(icons.join("dark.svg"), dark).unwrap();
         let installed = Installed {
             manifest: Manifest {
+                language_servers: Default::default(),
                 services: Default::default(),
                 settings: Default::default(),
                 settings_hook: false,
@@ -724,6 +730,7 @@ mod scope_tests {
         std::fs::create_dir_all(contribution.parent().unwrap()).unwrap();
         std::fs::write(contribution, "").unwrap();
         let manifest = Manifest {
+            language_servers: Default::default(),
             services: Default::default(),
             settings: Default::default(),
             settings_hook: false,

@@ -41,6 +41,51 @@ impl State {
     /// Preparation is side-effect free; missing optional functionality selects a visible fallback.
     fn handle(&mut self, input: api::Input) -> Result<api::Output, Failure> {
         match input {
+            api::Input::Event {
+                event: api::Notification::LanguageService(context),
+                ..
+            } => {
+                // The SDK guest supplies opaque initialization data without host language branches.
+                let label = context
+                    .settings
+                    .get("label")
+                    .map(|value| value.value.clone())
+                    .unwrap_or_default();
+                if label == "emit-ui" {
+                    // Negative fixture: the host must reject this before touching the current panel.
+                    return Ok(api::Output {
+                        views: vec![api::View {
+                            panel: "welcome".into(),
+                            document: ui::Document::new(ui::Node::text(
+                                "forbidden",
+                                "forbidden hook view",
+                            )),
+                        }],
+                        language_service: Some(Default::default()),
+                        ..Default::default()
+                    });
+                }
+                let dynamic = label == "dynamic-start";
+                let candidate = context.candidates.values().next().unwrap();
+                let mut args = candidate.args.clone();
+                args.push("--hook-selected".into());
+                return Ok(api::Output {
+                    language_service: Some(plugin_protocol::language::Proposal {
+                        program: dynamic.then(|| candidate.program.clone()),
+                        args: dynamic.then_some(args),
+                        project_root: (label == "escaped-project").then(|| "../outside".into()),
+                        initialization_options: Some(
+                            serde_json::json!({"sdkHook":true,"label":label}),
+                        ),
+                        configuration: Some(std::collections::BTreeMap::from([(
+                            "fixture.analysis".into(),
+                            serde_json::json!({"enabled":true}),
+                        )])),
+                        ..Default::default()
+                    }),
+                    ..Default::default()
+                });
+            }
             api::Input::Prepare { api, .. } => {
                 self.configuration.clear();
                 self.process_events.clear();

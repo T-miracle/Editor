@@ -203,6 +203,8 @@ pub enum Input {
 /// Native UI notifications contain no legacy canvas or character-grid fields.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum Notification {
+    /// Prepare one host-managed LSP; the reply supplies data, never a process handle.
+    LanguageService(crate::language::Context),
     Process {
         handle: ResourceHandle,
         update: crate::process::Update,
@@ -330,6 +332,8 @@ pub struct View {
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Output {
+    #[serde(default)]
+    pub language_service: Option<crate::language::Proposal>,
     #[serde(default)]
     pub configuration: Option<crate::settings::Proposal>,
     #[serde(default)]

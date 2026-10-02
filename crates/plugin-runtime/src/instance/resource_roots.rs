@@ -24,6 +24,13 @@ pub(super) struct ResourceRoots {
 }
 
 impl ResourceRoots {
+    /// Hook-local file handles cannot escape the discovery invocation or consume permanent quota.
+    pub(super) fn checkpoint(&self) -> u64 {
+        self.next
+    }
+    pub(super) fn release_since(&mut self, checkpoint: u64) {
+        self.slots.retain(|id, _| *id < checkpoint);
+    }
     /// Random owner identities prevent persisted handles from becoming valid after a host restart.
     pub(super) fn new(workspace: &str, application: bool, limit: usize) -> Self {
         let instance = uuid::Uuid::new_v4().to_string();
