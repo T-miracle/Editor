@@ -13,7 +13,11 @@ mod preview;
 mod preview_tests;
 #[cfg(test)]
 mod request_tests;
+mod settings;
+#[cfg(test)]
+mod settings_tests;
 mod surface;
+pub(crate) use settings::SettingsView;
 #[cfg(test)]
 mod tests;
 mod worker;
@@ -46,6 +50,8 @@ struct Editing {
     _subscriptions: Vec<Subscription>,
 }
 pub struct ExtensionPanel {
+    /// Form observers redraw only when configuration publication changes.
+    configuration_revision: u64,
     parent: WeakEntity<EditorApp>,
     visible: Rc<Cell<bool>>,
     workspace: PathBuf,
@@ -217,6 +223,7 @@ impl ExtensionPanel {
             committed_edit: None,
             scroll,
             manager_open: false,
+            configuration_revision: 0,
             commands_open: false,
             command_popup: None,
             pending: None,
@@ -298,6 +305,7 @@ impl ExtensionPanel {
             committed_edit: None,
             scroll: surface::PluginScroll::new(worker.tx.clone()),
             manager_open: false,
+            configuration_revision: 0,
             commands_open: false,
             command_popup: None,
             pending: None,
@@ -339,6 +347,10 @@ impl ExtensionPanel {
         let mut contributions_changed = false;
         let (effects, editor_requests) = {
             let mut state = self.worker.state.lock().unwrap();
+            if self.configuration_revision != state.configuration_revision {
+                self.configuration_revision = state.configuration_revision;
+                changed = true;
+            }
             if !self
                 .worker
                 .trusted

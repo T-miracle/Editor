@@ -195,6 +195,7 @@ impl Instance {
         );
         anyhow::ensure!(output.views.len() <= 8, "Too many native views");
         Ok(Reply {
+            configuration: output.configuration,
             snapshot: output.snapshot,
             scenes: output
                 .views

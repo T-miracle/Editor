@@ -1,6 +1,6 @@
 # Capability Example
 
-开发验证插件，演示独立能力版本、类型化文件及编辑器访问和原生文本界面。基础 API、package.assets、ui.native、workspace.files、storage.private、editor.documents、ui.panels 分别协商 1.x；不存在的可选接口会降级显示。0.3.0 默认每个工作区独立实例。
+开发验证插件，演示独立能力版本、类型化文件及编辑器访问和原生文本界面。基础 API、package.assets、ui.native、workspace.files、storage.private、editor.documents、ui.panels、configuration 分别协商 1.x；不存在的可选接口会降级显示。0.4.0 默认每个工作区独立实例。
 
 安装时需要批准 assets.read（读取包资源）、workspace.read（读取所属工作区）、storage（读写实例私有文件）、editor.read（选区和文档事件）、editor.write（保存已打开文档）与 ui.panels（自身面板显隐）。不申请进程、网络或剪贴板权限。菜单命令“检查类型化错误”验证未知操作、错误参数与路径越界的明确返回。
 
@@ -21,3 +21,11 @@ SDK 提供 open_workspace、open_data、read_file、write_file、close_resource�
 `api::guest::EditorTask::start` 接受类型化 EditorOperation 和截止时间，`update` 自动关联通知并过滤其他任务、终态后的结果。示例只保存最新 UI 意图的 EditorTask，因此旧请求不能覆盖新请求结果。界面分别显示 Accepted、Progress、Completed 或 Cancelled；保存后台准备后才尝试提交，即时操作可能直接完成。
 
 每实例最多 32 个未结请求、8 个订阅；每个文档队列最多 64 个待处理实体，按实体合并为最新版本并公平分批投递。跨批次保留最多 1024 个实体的版本水位；容量耗尽以 LimitExceeded 终止订阅，需重新订阅。通知是版本提示而非完整文本增量日志，不承诺重放订阅前的变化。最终请求结果保留至投递或实例退出，不作为可丢弃进度处理。停用、卸载或撤销信任统一撤销实例资源；已停用 guest 不再接收回调。
+
+## 声明式配置
+
+编辑器“设置 → 插件设置”根据清单生成 enabled（布尔）、label（文本）、count（1–20 的整数，仅用户级）、style（枚举）的原生表单。选择用户全局或本项目后点击应用才写入；重置移除所选层级覆盖。每项显示当前生效来源。配置顺序为已确认项目值 → 用户值 → 自动发现 → 默认值；项目不能写宿主信任、授权或主题等设置。
+
+示例钩子在 Validate 阶段提供 label 的自动发现值 `Discovered label`；显式 label 为 `invalid` 时拒绝应用，保留之前实例和配置。显式有效值不会被发现值替换。Apply 阶段把最终配置送入候选实例，激活后显示 enabled 的实际值。清单声明 `restart_instance`，修改仅替换受影响的实例，不重启编辑器。全局更改也更新其他已打开逻辑工作区，但保留其项目覆盖。
+
+禁用插件时修改配置只执行受限的准备/校验，不激活插件；启用后采用已保存值。普通卸载保留配置，选择删除数据时删除配置。该示例仍通过公开 SDK 构建，不访问宿主业务源码。

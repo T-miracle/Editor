@@ -8,6 +8,14 @@ use std::{
 };
 
 pub(super) enum Work {
+    /// Only a confirmed host form can modify user/project configuration.
+    SetSetting {
+        request: u64,
+        plugin: String,
+        scope: settings::Scope,
+        key: String,
+        value: Option<serde_json::Value>,
+    },
     Inspect(PathBuf),
     Install(Package),
     Enable(String),
@@ -77,6 +85,9 @@ pub(super) struct OperationProgress {
 }
 #[derive(Default)]
 pub(super) struct Published {
+    pub configurations: BTreeMap<String, Result<settings::Effective, String>>,
+    pub configuration_result: Option<(u64, Result<(), String>)>,
+    pub configuration_revision: u64,
     /// UI document ingress is bounded independently of the worker's command channel.
     pub document_events: plugin_runtime::DocumentEvents,
     /// Bounded typed work has a completion gate that survives queue transfer and rejects stale callbacks.
@@ -187,11 +198,31 @@ impl Worker {
                 let lifecycle = work.as_ref().and_then(Work::lifecycle);
                 // A successful replacement needs a fresh surface Resize event.
                 let restarted_plugin = match work.as_ref() {
+                    Some(Work::SetSetting { plugin, .. }) => Some(plugin.clone()),
                     Some(Work::Install(package)) => Some(package.manifest.id.clone()),
                     Some(Work::Enable(id)) => Some(id.clone()),
                     _ => None,
                 };
                 let result = match work {
+                    Some(Work::SetSetting {
+                        request,
+                        plugin,
+                        scope,
+                        key,
+                        value,
+                    }) => {
+                        let result = manager.update_setting(&plugin, scope, &key, value);
+                        let mut published = output.lock().unwrap();
+                        published.configuration_result = Some((
+                            request,
+                            result
+                                .as_ref()
+                                .map(|_| ())
+                                .map_err(|error| format!("{error:#}")),
+                        ));
+                        published.configuration_revision += 1;
+                        result
+                    }
                     Some(Work::Shutdown(ack)) => {
                         drop(manager);
                         if let Some(ack) = ack {
@@ -258,7 +289,23 @@ impl Worker {
                 }
                 // Vector parsing and rendering stay on this worker, outside the shared-state lock.
                 let images = vectors.prepare(&scenes);
+                let configurations = manager
+                    .installed
+                    .keys()
+                    .map(|id| {
+                        (
+                            id.clone(),
+                            manager
+                                .effective_settings(id)
+                                .map_err(|error| format!("{error:#}")),
+                        )
+                    })
+                    .collect::<BTreeMap<_, _>>();
                 let mut published = output.lock().unwrap();
+                if published.configurations != configurations {
+                    published.configurations = configurations;
+                    published.configuration_revision += 1;
+                }
                 published
                     .editor_requests
                     .retain(|(_, request)| !request.status().is_terminal());

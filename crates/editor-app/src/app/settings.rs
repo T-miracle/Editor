@@ -10,6 +10,7 @@ pub(crate) enum SettingsSection {
     AppearanceAndBehavior,
     Keymap,
     Editor,
+    Plugins,
 }
 
 impl SettingsSection {
@@ -19,6 +20,7 @@ impl SettingsSection {
             Self::AppearanceAndBehavior => t!("settings.appearance_and_behavior").to_string(),
             Self::Keymap => t!("settings.keymap").to_string(),
             Self::Editor => t!("settings.editor").to_string(),
+            Self::Plugins => t!("settings.plugins").to_string(),
         }
     }
 
@@ -28,6 +30,7 @@ impl SettingsSection {
             Self::AppearanceAndBehavior => "settings-nav-appearance",
             Self::Keymap => "settings-nav-keymap",
             Self::Editor => "settings-nav-editor",
+            Self::Plugins => "settings-nav-plugins",
         }
     }
 }
@@ -85,6 +88,7 @@ fn render_settings_content(
         SettingsSection::AppearanceAndBehavior,
         SettingsSection::Keymap,
         SettingsSection::Editor,
+        SettingsSection::Plugins,
     ]
     .into_iter()
     .map(|section| {
@@ -158,6 +162,19 @@ fn render_section(view: &Entity<EditorApp>, section: SettingsSection, cx: &mut A
         SettingsSection::AppearanceAndBehavior => render_appearance(view, cx),
         SettingsSection::Keymap => render_keymap(cx),
         SettingsSection::Editor => render_editor(view, cx),
+        SettingsSection::Plugins => {
+            if view.read(cx).plugin_settings.is_none() {
+                let owner = view.read(cx).extensions.clone();
+                let form = cx.new(|cx| extensions::SettingsView::new(owner, cx));
+                view.update(cx, |app, _| app.plugin_settings = Some(form));
+            }
+            view.read(cx)
+                .plugin_settings
+                .as_ref()
+                .unwrap()
+                .clone()
+                .into_any_element()
+        }
     }
 }
 

@@ -14,6 +14,7 @@ mod capability_calls;
 mod document_events;
 mod editor_requests;
 mod resource_roots;
+mod settings;
 use resource_roots::ResourceRoots;
 wasmtime::component::bindgen!({path:"../plugin-protocol/wit",world:"plugin",require_store_data_send:true});
 
@@ -504,6 +505,8 @@ mod tests {
 
 /// One isolated plugin has its own Store, WASI table, resource handles and fuel budget.
 pub struct Instance {
+    /// Configuration belongs to the same owner as its runtime resources, not the currently selected workspace.
+    pub(crate) configuration: plugin_protocol::settings::Effective,
     /// Host invocation IDs cannot be confused with stale completions after another call.
     next_call: u64,
     protocol: u32,
@@ -576,6 +579,7 @@ impl Instance {
         store.set_fuel(100_000_000)?;
         let bindings = Plugin::instantiate(&mut store, &component, &linker)?;
         let mut instance = Self {
+            configuration: Default::default(),
             next_call: 1,
             protocol: manifest.protocol,
             store,
@@ -764,6 +768,7 @@ impl Instance {
             environment,
             snapshot,
         })?;
+        self.reapply_settings()?;
         self.activate()?;
         self.commit_data()?;
         Ok(())

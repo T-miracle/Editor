@@ -5,6 +5,7 @@ use std::collections::BTreeSet;
 
 /// Capability-based API; legacy messages remain only during the staged migration.
 pub mod api;
+pub mod settings;
 pub mod ui;
 
 /// Guest imports and exports use the WIT contract supplied by the building editor.
@@ -22,6 +23,12 @@ pub mod bindings {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Manifest {
+    /// Plugin namespace only; these declarations cannot alter host trust, grants or editor preferences.
+    #[serde(default)]
+    pub settings: std::collections::BTreeMap<String, settings::Definition>,
+    /// Opt in to a bounded, preparation-only validation/discovery callback.
+    #[serde(default)]
+    pub settings_hook: bool,
     pub id: String,
     pub name: String,
     pub version: String,
@@ -354,6 +361,9 @@ pub enum Event {
 }
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct Reply {
+    /// Migration adapter only; new guests expose this through api::Output.
+    #[serde(default)]
+    pub configuration: Option<settings::Proposal>,
     pub scene: Option<Scene>,
     #[serde(default)]
     pub scenes: Vec<Scene>,

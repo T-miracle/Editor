@@ -2,7 +2,7 @@
 use super::*;
 
 pub(super) struct ParkedWorkspace {
-    environment: Environment,
+    pub(super) environment: Environment,
     trusted: bool,
     pub(super) live: BTreeMap<String, Instance>,
 }
@@ -64,7 +64,11 @@ impl Manager {
         self.data_directory_for(manifest, &self.environment)
     }
 
-    fn data_directory_for(&self, manifest: &Manifest, environment: &Environment) -> PathBuf {
+    pub(super) fn data_directory_for(
+        &self,
+        manifest: &Manifest,
+        environment: &Environment,
+    ) -> PathBuf {
         let root = self.root.join("data").join(&manifest.id);
         if manifest.protocol != 7 {
             return root;

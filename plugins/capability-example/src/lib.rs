@@ -8,6 +8,8 @@ use std::cell::RefCell;
 
 #[derive(Default)]
 struct State {
+    /// Resolved configuration arrives before activation and carries source metadata for each field.
+    configuration: plugin_protocol::settings::Effective,
     text: String,
     optional_available: bool,
     /// Handles remain bound to this instance across workspace selection changes.
@@ -36,6 +38,7 @@ impl State {
     fn handle(&mut self, input: api::Input) -> Result<api::Output, Failure> {
         match input {
             api::Input::Prepare { api, .. } => {
+                self.configuration.clear();
                 self.workspace = None;
                 self.data = None;
                 self.task = None;
@@ -51,12 +54,43 @@ impl State {
                     self.text
                         .push_str("Optional feature unavailable; native fallback active.");
                 }
+                if let Some(enabled) = self.configuration.get("enabled") {
+                    self.text.push_str(&format!(" enabled={}", enabled.value));
+                }
             }
             api::Input::Snapshot => {
                 return Ok(api::Output {
                     snapshot: Some(plugin_protocol::Snapshot::default()),
                     ..Default::default()
                 });
+            }
+            api::Input::Event {
+                event: api::Notification::Configuration { phase, values },
+                ..
+            } => {
+                use plugin_protocol::settings::{Phase, Proposal, Source};
+                match phase {
+                    Phase::Validate => {
+                        let mut proposal = Proposal::default();
+                        if values.get("label").is_some_and(|value| {
+                            matches!(value.source, Source::User | Source::Project)
+                                && value.value == "invalid"
+                        }) {
+                            proposal.errors.insert(
+                                "label".into(),
+                                "This label is not accepted by the plugin".into(),
+                            );
+                        }
+                        proposal
+                            .discovered
+                            .insert("label".into(), serde_json::json!("Discovered label"));
+                        return Ok(api::Output {
+                            configuration: Some(proposal),
+                            ..Default::default()
+                        });
+                    }
+                    Phase::Apply => self.configuration = values,
+                }
             }
             api::Input::Event {
                 event: api::Notification::Command { id, .. },

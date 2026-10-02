@@ -263,6 +263,60 @@ plugins.error_list:
 settings.title:
   en: "Settings"
   zh-CN: "设置"
+settings.plugins:
+  en: "Plugins"
+  zh-CN: "插件设置"
+settings.plugin_hint:
+  en: "Apply confirms the selected scope and restarts only affected plugin instances. Reset removes that override."
+  zh-CN: "应用即确认所选作用域，仅重启受影响的插件实例。重置将移除此作用域的覆盖值。"
+settings.plugin_user:
+  en: "User"
+  zh-CN: "用户全局"
+settings.plugin_project:
+  en: "This project"
+  zh-CN: "本项目"
+settings.plugin_user_only:
+  en: "User only"
+  zh-CN: "仅用户全局"
+settings.plugin_apply:
+  en: "Apply"
+  zh-CN: "应用"
+settings.plugin_reset:
+  en: "Reset override"
+  zh-CN: "重置覆盖"
+settings.plugin_source_default:
+  en: "Source: declared default"
+  zh-CN: "来源：声明默认值"
+settings.plugin_source_discovered:
+  en: "Source: automatic discovery"
+  zh-CN: "来源：自动发现"
+settings.plugin_source_user:
+  en: "Source: user configuration"
+  zh-CN: "来源：用户全局"
+settings.plugin_source_project:
+  en: "Source: confirmed project configuration"
+  zh-CN: "来源：已确认项目配置"
+settings.plugin_invalid_integer:
+  en: "Enter a valid integer."
+  zh-CN: "请输入有效整数。"
+settings.plugin_invalid_value:
+  en: "The value does not meet this setting's constraints."
+  zh-CN: "输入值不符合此设置的约束。"
+settings.plugin_applying:
+  en: "Validating and applying…"
+  zh-CN: "正在校验并应用…"
+settings.plugin_applied:
+  en: "Configuration applied."
+  zh-CN: "配置已生效。"
+settings.plugin_worker_unavailable:
+  en: "The plugin worker is unavailable."
+  zh-CN: "插件后台服务不可用。"
+settings.plugin_restricted:
+  en: "Configuration changes are unavailable in a restricted workspace."
+  zh-CN: "受限工作区不可修改插件配置。"
+settings.plugin_empty:
+  en: "No installed plugin declares settings."
+  zh-CN: "尚无已安装插件声明设置。"
 settings.appearance_and_behavior:
   en: "Appearance & Behavior"
   zh-CN: "外观与行为"

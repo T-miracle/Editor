@@ -199,6 +199,10 @@ pub enum Input {
 /// Native UI notifications contain no legacy canvas or character-grid fields.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum Notification {
+    Configuration {
+        phase: crate::settings::Phase,
+        values: crate::settings::Effective,
+    },
     Document {
         subscription: ResourceHandle,
         change: DocumentChange,
@@ -318,6 +322,8 @@ pub struct View {
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Output {
+    #[serde(default)]
+    pub configuration: Option<crate::settings::Proposal>,
     #[serde(default)]
     pub views: Vec<View>,
     pub snapshot: Option<crate::Snapshot>,

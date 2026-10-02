@@ -20,7 +20,15 @@ cargo test -p editor-app --bin editor-app capability_package_consent -- --ignore
 
 真实组件测试显式忽略默认运行，需要先生成测试包；不是跳过验收。开发期间协议 1–6 与新形式并存，以保持迁移批次之间可运行。旧包统一迁移和旧接口删除属于后续工单，当前不承诺永久兼容，也不发布中间双协议正式版本。
 
-## 迁移期间的旧接口
+## configuration 1.0
+
+协议 7 清单的 `settings` 以插件内部键声明 `title`、`value_type`、`default`、`scope` 和 `apply`。类型为 boolean、string（max_length）、integer（min/max）、enum（choices）；作用域为 user 或 project，后者允许明确确认的项目覆盖。此版本的生效方式为 `restart_instance`。最多 64 个字段、字符串最多 4096 字节、枚举最多 32 个不重复选项；无效默认值在包检查时拒绝。可执行包需声明必需能力 `configuration: ^1`。
+
+可选 `settings_hook: true` 接收 `Notification::Configuration { phase: Validate, values }`，通过 `Output.configuration: Proposal` 返回 discovered 和 errors。钩子在候选实例的准备阶段运行，继承有限指令与内存预算，不能获取活动实例资源或授权；读取已获权限的包资源仍可用。发现值只填充未显式设置的项，任何错误使应用失败。随后 Apply 阶段收到带 Source 的最终值，供 Activate 使用；此阶段失败也不替换旧实例。配置被限制在插件命名空间，访客不能经配置获得权限或修改宿主用户设置。
+
+用户设置独立于访客私有文件，已确认项目值保存在宿主管理的工作区记录，不自动信任仓库文件。热应用、初始化与再次打开工作区使用相同解析路径。应用失败保留先前配置和运行实例；成功只替换相关实例并撤销其旧资源。
+
+## 迁移期间的旧接口（协议 1–6）
 
 原生界面协议与示例见 [UI.md](UI.md)。`plugin_protocol::ui` 提供布局、控件、主题角色、弹窗与事件，使用它的插件声明 `protocol = 2`；宿主仍兼容 protocol 1 画布插件。
 

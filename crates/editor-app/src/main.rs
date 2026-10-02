@@ -150,6 +150,8 @@ struct EditorApp {
     _dialog_closed_subscription: Option<Subscription>,
     /// Remembers the selected settings category while the dialog is reopened.
     settings_section: app::SettingsSection,
+    /// Preserve unsaved plugin form drafts while switching settings categories.
+    plugin_settings: Option<Entity<extensions::SettingsView>>,
     /// Temporary name field for create and rename commands in the explorer.
     explorer_edit: Option<ExplorerEdit>,
     /// A path is removed only after the delete preview is explicitly confirmed.
@@ -378,6 +380,7 @@ impl EditorApp {
             dialog_window: None,
             _dialog_closed_subscription: None,
             settings_section: app::SettingsSection::AppearanceAndBehavior,
+            plugin_settings: None,
             explorer_edit: None,
             explorer_delete: None,
             explorer_menu: None,

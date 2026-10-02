@@ -83,6 +83,39 @@ impl Package {
             "Unsupported plugin protocol"
         );
         super::capabilities::negotiate(&manifest)?;
+        // Reject malformed forms before installation, not when a settings window tries to render them.
+        anyhow::ensure!(manifest.settings.len() <= 64, "Too many settings");
+        anyhow::ensure!(
+            manifest
+                .settings
+                .iter()
+                .all(|(key, definition)| !key.is_empty()
+                    && key.len() <= 64
+                    && key
+                        .bytes()
+                        .all(|byte| byte.is_ascii_alphanumeric() || b"._-".contains(&byte))
+                    && definition.valid()),
+            "Invalid settings declaration"
+        );
+        if !manifest.settings.is_empty() || manifest.settings_hook {
+            anyhow::ensure!(
+                manifest.protocol == 7,
+                "Settings require the capability protocol"
+            );
+            anyhow::ensure!(
+                !manifest.settings_hook || manifest.component.is_some(),
+                "Settings hooks require WASM"
+            );
+            if manifest.component.is_some() {
+                anyhow::ensure!(
+                    manifest
+                        .api
+                        .as_ref()
+                        .is_some_and(|api| api.required.contains_key("configuration")),
+                    "Settings require configuration capability"
+                );
+            }
+        }
         anyhow::ensure!(
             (1024..=32 * 1024 * 1024).contains(&manifest.storage_limit),
             "Invalid storage quota"

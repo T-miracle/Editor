@@ -8,6 +8,7 @@ use std::{
     path::{Path, PathBuf},
 };
 pub(crate) mod scopes;
+mod settings;
 use scopes::ParkedWorkspace;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -237,6 +238,7 @@ impl Manager {
             version,
             snapshot.clone(),
         )?;
+        self.configure_saved_settings(&mut next, &package.manifest)?;
         if let Some(snapshot) = &snapshot {
             self.save_snapshot(&id, snapshot)?;
         }
@@ -424,6 +426,7 @@ impl Manager {
             self.root.join("packages").join(id).join(&entry.digest),
             self.load_snapshot(id)?,
         )?;
+        self.configure_saved_settings(&mut instance, &entry.manifest)?;
         instance.activate()?;
         let originals = instance.commit_data()?;
         self.installed.get_mut(id).unwrap().enabled = true;
@@ -514,6 +517,7 @@ impl Manager {
             std::fs::remove_dir_all(resolved)?;
         }
         if delete_data {
+            self.remove_saved_settings(id)?;
             let path = self.root.join("data").join(id);
             if path.exists() {
                 let root = self.root.canonicalize()?;
@@ -660,6 +664,8 @@ mod icon_tests {
         std::fs::write(icons.join("dark.svg"), dark).unwrap();
         let installed = Installed {
             manifest: Manifest {
+                settings: Default::default(),
+                settings_hook: false,
                 id: "example".into(),
                 name: "Example".into(),
                 version: "1.0.0".into(),
@@ -717,6 +723,8 @@ mod scope_tests {
         std::fs::create_dir_all(contribution.parent().unwrap()).unwrap();
         std::fs::write(contribution, "").unwrap();
         let manifest = Manifest {
+            settings: Default::default(),
+            settings_hook: false,
             id: "example".into(),
             name: "Example".into(),
             version: "1.0.0".into(),

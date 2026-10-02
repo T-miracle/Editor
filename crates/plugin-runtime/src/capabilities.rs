@@ -21,6 +21,7 @@ pub(crate) fn negotiate(manifest: &Manifest) -> anyhow::Result<Option<api::Negot
         ("workspace.files".into(), Version::new(1, 0, 0)),
         ("storage.private".into(), Version::new(1, 0, 0)),
         ("editor.documents".into(), Version::new(1, 0, 0)),
+        ("configuration".into(), Version::new(1, 0, 0)),
         ("ui.panels".into(), Version::new(1, 0, 0)),
     ]
     .into();

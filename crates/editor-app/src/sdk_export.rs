@@ -7,6 +7,10 @@ use std::process::Command;
 
 const SDK_FILES: &[(&str, &[u8])] = &[
     (
+        "src/settings.rs",
+        include_bytes!("../../plugin-protocol/src/settings.rs"),
+    ),
+    (
         "src/api.rs",
         include_bytes!("../../plugin-protocol/src/api.rs"),
     ),
