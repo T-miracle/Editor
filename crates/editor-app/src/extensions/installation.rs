@@ -155,6 +155,9 @@ impl ExtensionPanel {
         {
             return;
         }
+        if state.service_states.get(key) == Some(&message) {
+            return;
+        }
         state.service_states.insert(key.into(), message);
         let text = state
             .service_states

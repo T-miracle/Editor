@@ -27,6 +27,7 @@ pub(super) enum Work {
     Inspect(PathBuf),
     Install(Package),
     Enable(String),
+    Restart(String),
     Disable(String),
     /// Persist a per-workspace override without changing the global default.
     SetProjectEnabled(String, bool),
@@ -46,6 +47,11 @@ impl Work {
     /// Identify the operation whose button should show loading while queued or running.
     fn lifecycle(&self) -> Option<OperationProgress> {
         match self {
+            Self::Restart(id) => Some(OperationProgress {
+                id: id.clone(),
+                action: LifecycleAction::Restart,
+                delete_data: None,
+            }),
             Self::Inspect(path) => Some(OperationProgress {
                 id: path.display().to_string(),
                 action: LifecycleAction::Inspect,
@@ -78,6 +84,7 @@ impl Work {
 /// The operation type maps directly to the loading button in plugin management.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum LifecycleAction {
+    Restart,
     Inspect,
     Install,
     Enable,
@@ -102,6 +109,7 @@ pub(super) struct InstallationProgress {
 }
 #[derive(Default)]
 pub(super) struct Published {
+    pub diagnostics: BTreeMap<String, Vec<plugin_runtime::faults::Diagnostic>>,
     pub plugin_service_choices: Vec<service::Choice>,
     pub installation: Option<InstallationProgress>,
     pub install_control: Option<plugin_runtime::InstallControl>,
@@ -261,6 +269,7 @@ impl Worker {
                     Some(Work::SetSetting { plugin, .. }) => Some(plugin.clone()),
                     Some(Work::Install(package)) => Some(package.manifest.id.clone()),
                     Some(Work::Enable(id)) => Some(id.clone()),
+                    Some(Work::Restart(id)) => Some(id.clone()),
                     _ => None,
                 };
                 let result = match work {
@@ -330,6 +339,7 @@ impl Worker {
                         )
                     }
                     Some(Work::Enable(id)) => manager.enable(&id),
+                    Some(Work::Restart(id)) => manager.restart_plugin(&id),
                     Some(Work::SetTrust(trusted)) => manager.set_workspace_trust(trusted),
                     Some(Work::Disable(id)) => manager.disable(&id),
                     Some(Work::SetProjectEnabled(id, enabled)) => {
@@ -504,6 +514,11 @@ impl Worker {
                     }
                 }
                 published.entries = manager.published_entries();
+                published.diagnostics = manager
+                    .installed
+                    .keys()
+                    .map(|id| (id.clone(), manager.diagnostics(id)))
+                    .collect();
                 published.scenes = scenes;
                 published.images = images;
                 published.processes = processes;
@@ -523,6 +538,7 @@ impl LifecycleAction {
     /// Keep error labels aligned with the action shown by the loading button.
     fn label(self) -> &'static str {
         match self {
+            Self::Restart => "重启插件",
             Self::Inspect => "检查插件包",
             Self::Install => "安装 / 更新",
             Self::Enable => "启用",

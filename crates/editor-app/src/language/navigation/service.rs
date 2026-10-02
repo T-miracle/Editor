@@ -22,6 +22,9 @@ impl LanguageServer {
             completion_after_whitespace: service.provider.completion_after_whitespace.clone(),
         };
         Some(Self {
+            recovery: Default::default(),
+            attempt: Mutex::new(()),
+            started: Instant::now(),
             documents: Default::default(),
             root: service.root.clone(),
             root_uri,

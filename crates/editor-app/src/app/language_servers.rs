@@ -4,6 +4,20 @@ impl EditorApp {
     pub(crate) fn sync_dynamic_language_servers(&mut self, cx: &mut Context<Self>) {
         let selected = crate::language::providers::language_servers();
         let available = self.extensions.read(cx).language_services();
+        // Worker publications also carry ongoing transport failures, not only the initial handshake result.
+        for server in self.language_servers.values() {
+            if let Some(message) = server.recovery_status() {
+                for (key, plan) in &available {
+                    if let Ok(plan) = plan
+                        && server.uses_service(plan)
+                    {
+                        self.extensions.update(cx, |panel, cx| {
+                            panel.language_service_status(key, plan, message.clone(), cx)
+                        });
+                    }
+                }
+            }
+        }
         let mut changed = false;
         self.language_servers.retain(|language, server| {
             let keep = if server.is_dynamic() {

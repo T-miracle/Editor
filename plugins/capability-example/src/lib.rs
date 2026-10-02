@@ -49,6 +49,22 @@ impl State {
     fn handle(&mut self, input: api::Input) -> Result<api::Output, Failure> {
         match input {
             api::Input::Event {
+                event: api::Notification::Command { id, .. },
+                ..
+            } if id == "fault-spin" => {
+                // An intentional CPU-bound fixture must be interrupted by the host, not cooperative guest code.
+                loop {
+                    std::hint::black_box(1u64.wrapping_add(1));
+                }
+            }
+            api::Input::Event {
+                event: api::Notification::Command { id, .. },
+                ..
+            } if id == "fault-memory" => {
+                // Allocation exceeds the documented host memory budget while a healthy peer remains independent.
+                std::hint::black_box(vec![0u8; 300 * 1024 * 1024]);
+            }
+            api::Input::Event {
                 event:
                     api::Notification::Service(plugin_protocol::service::Notification::Invoke(call)),
                 ..

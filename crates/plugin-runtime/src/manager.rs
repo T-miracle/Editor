@@ -10,6 +10,7 @@ use std::{
 mod dependencies;
 mod language;
 mod plugin_services;
+mod recovery;
 pub(crate) mod scopes;
 mod settings;
 mod ui_events;
@@ -77,6 +78,7 @@ impl Installed {
 }
 /// Run this module on a worker thread; native rendering reads only published scenes.
 pub struct Manager {
+    diagnostic_history: BTreeMap<String, Vec<crate::faults::Diagnostic>>,
     plugin_services: crate::plugin_services::Shared,
     root: PathBuf,
     environment: Environment,
@@ -115,6 +117,7 @@ impl Manager {
         std::fs::create_dir_all(&root)?;
         let installed = Self::read_registry(&root)?;
         let mut manager = Self {
+            diagnostic_history: BTreeMap::new(),
             plugin_services: std::sync::Arc::new(std::sync::Mutex::new(
                 crate::plugin_services::Broker::new(plugin_services::read_preferences(&root)?),
             )),
@@ -621,7 +624,12 @@ impl Manager {
     }
     /// Periodic and shutdown checkpoints use atomic files, leaving last good data on failure.
     pub fn checkpoint(&mut self) -> anyhow::Result<()> {
-        let ids: Vec<_> = self.live.keys().cloned().collect();
+        let ids: Vec<_> = self
+            .live
+            .iter()
+            .filter(|(_, instance)| instance.service_provider().is_some())
+            .map(|(id, _)| id.clone())
+            .collect();
         let mut failures = vec![];
         for id in ids {
             match self

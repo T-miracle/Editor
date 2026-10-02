@@ -964,6 +964,9 @@ impl ExtensionPanel {
                             }),
                     ),
             );
+            if selected_entry.is_some() {
+                detail = detail.child(self.recovery_controls(&id, busy, cx));
+            }
             if self.status.is_none() {
                 let readme = self
                     .manager_market

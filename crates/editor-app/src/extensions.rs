@@ -22,6 +22,9 @@ mod native_ui_tests;
 mod preview;
 #[cfg(test)]
 mod preview_tests;
+mod recovery;
+#[cfg(test)]
+mod recovery_tests;
 #[cfg(test)]
 mod request_tests;
 #[cfg(test)]

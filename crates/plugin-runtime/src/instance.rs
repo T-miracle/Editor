@@ -6,7 +6,7 @@ use std::{
     path::{Path, PathBuf},
 };
 use wasmtime::{
-    Engine, Store, StoreLimits, StoreLimitsBuilder,
+    Engine, Store,
     component::{Component, HasSelf, Linker},
 };
 use wasmtime_wasi::{ResourceTable, WasiCtx, WasiCtxView, WasiView};
@@ -31,7 +31,7 @@ struct State {
     subscriptions: std::collections::BTreeMap<u64, crate::document_events::Subscription>,
     wasi: WasiCtx,
     table: ResourceTable,
-    limits: StoreLimits,
+    limits: crate::faults::MemoryBudget,
     permissions: BTreeSet<String>,
     processes: Processes,
     /// Service definitions and process handles cannot be retargeted by guest request fields.
@@ -343,7 +343,7 @@ mod tests {
             subscriptions: Default::default(),
             wasi: WasiCtx::builder().build(),
             table: ResourceTable::new(),
-            limits: StoreLimitsBuilder::new().build(),
+            limits: Default::default(),
             permissions: BTreeSet::new(),
             processes: Processes::default(),
             services: Default::default(),
@@ -494,7 +494,7 @@ mod tests {
             subscriptions: Default::default(),
             wasi: WasiCtx::builder().build(),
             table: ResourceTable::new(),
-            limits: StoreLimitsBuilder::new().build(),
+            limits: Default::default(),
             permissions: ["storage".into()].into(),
             processes: Processes::default(),
             services: Default::default(),
@@ -528,6 +528,7 @@ mod tests {
 
 /// One isolated plugin has its own Store, WASI table, resource handles and fuel budget.
 pub struct Instance {
+    pub(crate) diagnostics: Vec<crate::faults::Diagnostic>,
     /// UI preview publication is tied to the latest authorized input for each declared surface.
     pub(crate) preview_sources: std::collections::BTreeMap<String, Option<api::DocumentVersion>>,
     /// Configuration belongs to the same owner as its runtime resources, not the currently selected workspace.
@@ -545,8 +546,25 @@ pub struct Instance {
 impl Instance {
     pub fn engine() -> anyhow::Result<Engine> {
         let mut config = wasmtime::Config::new();
-        config.wasm_component_model(true).consume_fuel(true);
-        Ok(Engine::new(&config)?)
+        config
+            .wasm_component_model(true)
+            .consume_fuel(true)
+            .epoch_interruption(true);
+        let engine = Engine::new(&config)?;
+        let weak = engine.weak();
+        // A weak engine reference lets the shared watchdog terminate after the manager is dropped.
+        std::thread::Builder::new()
+            .name("plugin-epoch-clock".into())
+            .spawn(move || {
+                loop {
+                    std::thread::sleep(std::time::Duration::from_millis(
+                        crate::faults::EPOCH_TICK_MS,
+                    ));
+                    let Some(engine) = weak.upgrade() else { break };
+                    engine.increment_epoch();
+                }
+            })?;
+        Ok(engine)
     }
     pub fn prepare(
         engine: &Engine,
@@ -590,11 +608,7 @@ impl Instance {
                 .collect(),
             wasi: WasiCtx::builder().build(),
             table: ResourceTable::new(),
-            limits: StoreLimitsBuilder::new()
-                .memory_size(256 * 1024 * 1024)
-                .instances(32)
-                .tables(32)
-                .build(),
+            limits: Default::default(),
             permissions: manifest.permissions.clone(),
             processes: Processes::default(),
             services: manifest.services.clone(),
@@ -614,8 +628,10 @@ impl Instance {
         let mut store = Store::new(engine, state);
         store.limiter(|s| &mut s.limits);
         store.set_fuel(100_000_000)?;
+        store.set_epoch_deadline(crate::faults::CALL_DEADLINE_MS / crate::faults::EPOCH_TICK_MS);
         let bindings = Plugin::instantiate(&mut store, &component, &linker)?;
         let mut instance = Self {
+            diagnostics: Vec::new(),
             preview_sources: Default::default(),
             configuration: Default::default(),
             next_call: 1,
@@ -634,7 +650,61 @@ impl Instance {
         Ok(instance)
     }
     /// Every call gets a finite instruction budget; a trap cannot unwind through the host.
-    pub fn call(&mut self, mut message: Message) -> anyhow::Result<Reply> {
+    pub fn call(&mut self, message: Message) -> anyhow::Result<Reply> {
+        anyhow::ensure!(
+            !self.store.data().roots.retired,
+            "Plugin is paused; restart this instance"
+        );
+        let operation = crate::faults::operation(&message);
+        let result = self.call_inner(message);
+        if let Err(error) = &result {
+            let principal = &self.store.data().plugin_services.principal;
+            let budget = error.downcast_ref::<wasmtime::Trap>().is_some_and(|trap| {
+                matches!(trap, wasmtime::Trap::OutOfFuel | wasmtime::Trap::Interrupt)
+            });
+            let message: String = format!(
+                "{}: {error:#}",
+                if budget {
+                    "WASM execution budget exceeded"
+                } else {
+                    "WASM operation failed"
+                }
+            )
+            .chars()
+            .take(4096)
+            .collect();
+            self.error = Some(format!(
+                "{} [{}] {operation}: {message}",
+                principal.plugin, principal.scope
+            ));
+            self.diagnostics.push(crate::faults::Diagnostic {
+                plugin: principal.plugin.clone(),
+                scope: principal.scope.clone(),
+                operation,
+                message,
+            });
+            if self.diagnostics.len() > 32 {
+                self.diagnostics.remove(0);
+            }
+            if error.downcast_ref::<api::Failure>().is_none() {
+                self.stop();
+            }
+        }
+        result.map_err(|error| {
+            let principal = &self.store.data().plugin_services.principal;
+            let operation = self
+                .diagnostics
+                .last()
+                .map(|report| report.operation.as_str())
+                .unwrap_or("call");
+            error.context(format!(
+                "plugin={} scope={} operation={operation}",
+                principal.plugin, principal.scope
+            ))
+        })
+    }
+    /// Validation and publication share the same budgeted call; a failing result never partially publishes UI.
+    fn call_inner(&mut self, mut message: Message) -> anyhow::Result<Reply> {
         anyhow::ensure!(
             !self.store.data().roots.retired,
             "Instance has been retired"
@@ -650,11 +720,18 @@ impl Instance {
         // Snapshot serialization may traverse the full configured scrollback, while input and
         // paint events stay on the smaller interactive budget. Both calls remain fuel-bounded.
         let fuel = if matches!(message, Message::Snapshot) {
-            1_000_000_000
+            crate::faults::SNAPSHOT_FUEL
         } else {
-            100_000_000
+            crate::faults::CALL_FUEL
         };
         self.store.set_fuel(fuel)?;
+        let timeout = if matches!(message, Message::Snapshot) {
+            crate::faults::SNAPSHOT_DEADLINE_MS
+        } else {
+            crate::faults::CALL_DEADLINE_MS
+        };
+        self.store
+            .set_epoch_deadline(timeout / crate::faults::EPOCH_TICK_MS);
         let Some((payload, invocation_id)) = self.encode_invocation(message)? else {
             // A capability guest receives only events belonging to this implemented native interface.
             return Ok(Reply::default());

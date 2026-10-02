@@ -119,7 +119,21 @@ fn retiring_provider_cancels_request_and_rejects_waiting_startup() {
         .lines()
         .filter(|line| line.contains("\"method\":\"initialize\""))
         .count();
-    assert!(replacement.diagnostics_for(old_document, "stale").is_err());
+    assert!(
+        replacement
+            .diagnostics_for(old_document.clone(), "stale")
+            .is_err()
+    );
+    // Late saves are document-lifetime failures, never transport failures or retry-budget consumption.
+    let recovery_before = replacement.recovery_status();
+    for _ in 0..3 {
+        assert!(
+            replacement
+                .document_saved_for(old_document.clone(), "stale save".into())
+                .is_err()
+        );
+    }
+    assert_eq!(replacement.recovery_status(), recovery_before);
     assert_eq!(
         replacement
             .definitions_for(reopened, "new".into(), Position::default())

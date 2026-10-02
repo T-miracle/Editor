@@ -52,6 +52,15 @@ fn main() {
         let method = message["method"].as_str().unwrap_or("");
         let id = &message["id"];
         let params = &message["params"];
+        // Recreating the marker after a healthy handshake also exercises a short-lived reconnect.
+        let args = std::env::args().collect::<Vec<_>>();
+        if !method.is_empty()
+            && args
+                .windows(2)
+                .any(|pair| pair[0] == "--crash-marker" && std::path::Path::new(&pair[1]).exists())
+        {
+            std::process::exit(19);
+        }
         let result = match method {
             "initialize" => {
                 json!({"capabilities":{"completionProvider":{},"definitionProvider":true,"textDocumentSync":{"openClose":true,"change":1,"save":true}}})

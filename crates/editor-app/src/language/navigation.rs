@@ -3,6 +3,7 @@
 mod diagnostics;
 mod documents;
 pub(crate) use documents::DocumentLease;
+mod recovery;
 mod service;
 mod startup;
 mod transport;
@@ -28,6 +29,9 @@ mod readiness_tests;
 
 /// Shares one language server and its document state across language tabs.
 pub struct LanguageServer {
+    recovery: Mutex<recovery::Recovery>,
+    attempt: Mutex<()>,
+    started: Instant,
     documents: Mutex<HashMap<String, DocumentLease>>,
     root: PathBuf,
     root_uri: Uri,
@@ -44,6 +48,9 @@ impl LanguageServer {
         let root = root.canonicalize().ok()?;
         let root_uri = file_uri(&root)?;
         Some(Self {
+            recovery: Default::default(),
+            attempt: Mutex::new(()),
+            started: Instant::now(),
             documents: Default::default(),
             root,
             root_uri,
@@ -55,7 +62,7 @@ impl LanguageServer {
     }
 
     /// Starts and initializes a shared server before the first navigation request.
-    pub fn prepare(&self) -> anyhow::Result<()> {
+    fn prepare_once(&self) -> anyhow::Result<()> {
         ensure!(self.is_active(), "LSP provider has been retired");
         let mut connection = self
             .connection
@@ -75,8 +82,8 @@ impl LanguageServer {
     }
 
     /// Waits for a plugin-declared readiness signal after the LSP handshake.
-    pub fn prepare_until_ready(&self) -> anyhow::Result<()> {
-        self.prepare()?;
+    fn prepare_ready_once(&self) -> anyhow::Result<()> {
+        self.prepare_once()?;
         let mut connection = self
             .connection
             .lock()
@@ -143,10 +150,7 @@ impl LanguageServer {
             .as_mut()
             .context("LSP provider has been retired")?
             .definitions(document.uri.clone(), source, position);
-        if result.is_err() {
-            // A later navigation request can start a fresh process after a server failure.
-            *connection = None;
-        }
+        self.connection_failed("definition", &result, &mut connection);
         ensure!(
             self.is_active() && document.is_active(),
             "LSP request owner has been retired"
@@ -174,10 +178,7 @@ impl LanguageServer {
             .as_mut()
             .context("LSP provider has been retired")?
             .completions(document.uri.clone(), source, position);
-        if result.is_err() {
-            // A broken connection can be restarted by a later editor request.
-            *connection = None;
-        }
+        self.connection_failed("completion", &result, &mut connection);
         ensure!(
             self.is_active() && document.is_active(),
             "LSP request owner has been retired"
@@ -205,10 +206,7 @@ impl LanguageServer {
             .as_mut()
             .context("LSP provider has been retired")?
             .hover(document.uri.clone(), source, position);
-        if result.is_err() {
-            // A failed transport may be restarted by the next language request.
-            *connection = None;
-        }
+        self.connection_failed("hover", &result, &mut connection);
         ensure!(
             self.is_active() && document.is_active(),
             "LSP request owner has been retired"

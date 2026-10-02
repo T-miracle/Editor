@@ -4,6 +4,7 @@ mod dependencies;
 pub use dependencies::{InstallControl, InstallStage, InstallerPrompt};
 mod document_events;
 mod editor_requests;
+pub mod faults;
 mod request_state;
 pub use document_events::DocumentEvents;
 pub use editor_requests::EditorRequest;

@@ -143,9 +143,7 @@ impl LanguageServer {
                 Ok(pushed)
             }
         })();
-        if result.is_err() {
-            *connection = None;
-        }
+        self.connection_failed("diagnostics", &result, &mut connection);
         ensure!(
             self.is_active() && document.is_active(),
             "LSP request owner has been retired"
@@ -164,19 +162,27 @@ impl LanguageServer {
             .connection
             .lock()
             .map_err(|_| anyhow!("language-server connection lock was poisoned"))?;
-        let connection = connection
+        // An obsolete save belongs to a closed document; it must not consume the server's failure budget.
+        connection
             .as_mut()
-            .context("language server is unavailable")?;
-        connection.bind_document(&document)?;
-        let uri_text = connection.sync_document(document.uri, source.clone())?;
-        if let Some(include_text) = connection.save_notifications {
-            let mut params = json!({ "textDocument": { "uri": uri_text } });
-            if include_text {
-                params["text"] = Value::String(source);
+            .context("language server is unavailable")?
+            .bind_document(&document)?;
+        let result = (|| {
+            let connection = connection
+                .as_mut()
+                .context("language server is unavailable")?;
+            let uri_text = connection.sync_document(document.uri, source.clone())?;
+            if let Some(include_text) = connection.save_notifications {
+                let mut params = json!({ "textDocument": { "uri": uri_text } });
+                if include_text {
+                    params["text"] = Value::String(source);
+                }
+                connection.notify("textDocument/didSave", params)?;
             }
-            connection.notify("textDocument/didSave", params)?;
-        }
-        Ok(())
+            Ok(())
+        })();
+        self.connection_failed("didSave", &result, &mut connection);
+        result
     }
 }
 
