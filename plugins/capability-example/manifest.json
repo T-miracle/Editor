@@ -1,7 +1,7 @@
 {
   "id": "capability-example",
   "name": "Capability Example",
-  "version": "0.8.0",
+  "version": "0.9.0",
   "settings_hook": true,
   "settings": {
     "enabled": { "title": "启用示例功能", "value_type": { "kind": "boolean" }, "default": true, "scope": "project", "apply": "restart_instance" },
@@ -19,6 +19,9 @@
   "permissions": ["assets.read", "workspace.read", "storage", "editor.read", "editor.write", "ui.panels"],
   "panels": [{ "id": "welcome", "title": "Capability Example", "position": "right" }],
   "commands": [
+    { "id": "service-open", "title": "发现示例服务" },
+    { "id": "service-call", "title": "调用示例服务" },
+    { "id": "service-cancel", "title": "取消示例调用" },
     { "id": "ui-layout", "title": "切换示例布局" },
     { "id": "check-errors", "title": "检查类型化错误" },
     { "id": "scope-write", "title": "写入当前作用域" },

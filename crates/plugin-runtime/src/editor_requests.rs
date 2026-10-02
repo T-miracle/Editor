@@ -1,12 +1,10 @@
-//! Owned asynchronous calls cross the worker/UI boundary without exposing WASM stores to the UI.
-use plugin_protocol::api::{CancelMode, CancellationEffect};
+//! Owned editor operations use the common completion gate across worker and native UI threads.
+use crate::request_state::Completion;
 use plugin_protocol::api::{
-    EditorOperation, EditorValue, ErrorCode, Failure, RequestUpdate, ResourceHandle,
+    CancelMode, CancellationEffect, EditorOperation, EditorValue, ErrorCode, Failure,
+    RequestUpdate, ResourceHandle,
 };
-use std::{
-    sync::{Arc, Mutex},
-    time::{Duration, Instant},
-};
+use std::time::Instant;
 
 /// Clones share one completion gate; dropping an instance seals every outstanding call.
 #[derive(Clone)]
@@ -14,24 +12,24 @@ pub struct EditorRequest {
     handle: ResourceHandle,
     operation: EditorOperation,
     workspace: String,
-    state: Arc<Mutex<(u64, RequestUpdate, bool)>>,
-    deadline: Instant,
+    completion: Completion<EditorValue>,
 }
-
 impl EditorRequest {
-    /// Only the runtime can create a call after checking permission and ownership.
+    /// Construction follows authority checks in the instance; only typed owned data crosses threads.
     pub(crate) fn new(
         handle: ResourceHandle,
         operation: EditorOperation,
         workspace: String,
         timeout_ms: u32,
+        context: Option<&crate::plugin_services::Context>,
     ) -> Self {
+        let mut completion = Completion::new(timeout_ms);
+        completion.lifetimes = context.map_or_else(Vec::new, |context| context.lifetimes.clone());
         Self {
             handle,
             operation,
             workspace,
-            state: Arc::new(Mutex::new((0, RequestUpdate::Accepted, false))),
-            deadline: Instant::now() + Duration::from_millis(timeout_ms.into()),
+            completion,
         }
     }
     pub fn handle(&self) -> &ResourceHandle {
@@ -43,82 +41,37 @@ impl EditorRequest {
     pub fn workspace(&self) -> &str {
         &self.workspace
     }
-    /// Claim queued work exactly once, so repeated publication cannot duplicate side effects.
     pub fn begin(&self) -> bool {
-        self.expire(Instant::now());
-        let mut state = self.state.lock().unwrap();
-        if !matches!(state.1, RequestUpdate::Accepted) {
-            return false;
-        }
-        state.0 += 1;
-        state.1 = RequestUpdate::Progress {
-            message: "Executing".into(),
-        };
-        true
+        self.completion.begin()
     }
-    /// Late completions cannot replace a terminal failure or an earlier successful result.
     pub fn finish(&self, result: Result<EditorValue, Failure>) {
-        self.expire(Instant::now());
-        let mut state = self.state.lock().unwrap();
-        if state.1.is_terminal() {
-            return;
-        }
-        state.0 += 1;
-        state.1 = RequestUpdate::Completed { result };
+        self.completion.finish(result);
     }
-    /// Terminal state remains observable to in-flight host work after instance teardown.
     pub fn status(&self) -> RequestUpdate {
-        self.state.lock().unwrap().1.clone()
+        self.completion.status()
     }
     pub(crate) fn update(&self) -> (u64, RequestUpdate) {
-        self.expire(Instant::now());
-        let state = self.state.lock().unwrap();
-        (state.0, state.1.clone())
+        self.completion.update()
     }
     pub(crate) fn retire(&self) {
-        let _ = self.cancel(CancelMode::TryTerminate, ErrorCode::Cancelled);
+        self.completion.retire();
     }
-    /// The host calls this immediately before an irreversible side effect, after cancellable preparation.
     pub fn enter_side_effect(&self) -> bool {
-        self.expire(Instant::now());
-        let mut state = self.state.lock().unwrap();
-        if !matches!(state.1, RequestUpdate::Progress { .. }) {
-            return false;
-        }
-        state.2 = true;
-        true
+        self.completion.enter_side_effect()
     }
-    /// Explicit host ticks allow bounded queue deadlines without a timer per guest request.
     pub fn expire(&self, now: Instant) {
-        if now >= self.deadline {
-            let _ = self.cancel(CancelMode::TryTerminate, ErrorCode::TimedOut);
-        }
+        self.completion.expire(now);
     }
     pub(crate) fn cancel(
         &self,
-        _mode: CancelMode,
+        mode: CancelMode,
         reason: ErrorCode,
     ) -> Result<CancellationEffect, Failure> {
-        let mut state = self.state.lock().unwrap();
-        if state.1.is_terminal() {
-            return Err(Failure::new(
-                ErrorCode::InvalidState,
-                "Request already completed",
-            ));
-        }
-        // Current editor operations cannot interrupt an atomic filesystem commit; try-terminate reports that limit honestly.
-        let effect = if state.2 {
-            CancellationEffect::WaitingStopped
-        } else {
-            CancellationEffect::NotExecuted
-        };
-        state.0 += 1;
-        state.1 = RequestUpdate::Cancelled { reason, effect };
-        Ok(effect)
+        self.completion.cancel(mode, reason)
     }
 }
-
 pub(crate) struct PendingRequest {
+    pub context: Option<crate::plugin_services::Context>,
     pub call: EditorRequest,
     pub sent: bool,
     pub reported: u64,

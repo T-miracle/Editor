@@ -66,10 +66,12 @@ impl State {
             operation,
             self.workspace.display().to_string(),
             timeout_ms,
+            self.plugin_services.context.as_ref(),
         );
         self.editor_requests.insert(
             handle.resource,
             PendingRequest {
+                context: self.plugin_services.context.clone(),
                 call,
                 sent: false,
                 reported: 0,
@@ -108,10 +110,15 @@ impl Instance {
                     return None;
                 }
                 pending.reported = version;
-                Some((*slot, pending.call.handle().clone(), update))
+                Some((
+                    *slot,
+                    pending.call.handle().clone(),
+                    update,
+                    pending.context.clone(),
+                ))
             })
             .collect::<Vec<_>>();
-        for (slot, handle, update) in updates {
+        for (slot, handle, update, context) in updates {
             // A preceding guest callback may explicitly release another request in this batch.
             if !self.store.data().editor_requests.contains_key(&slot) {
                 continue;
@@ -119,11 +126,16 @@ impl Instance {
             if update.is_terminal() {
                 self.store.data_mut().editor_requests.remove(&slot);
                 self.store.data_mut().roots.remove(&handle);
+                self.store
+                    .data_mut()
+                    .plugin_services
+                    .resources
+                    .remove(&handle.resource);
             }
-            self.call(Message::Event(Event::Capability(Notification::Request {
-                handle,
-                update,
-            })))?;
+            self.call_with_service_context(
+                context,
+                Message::Event(Event::Capability(Notification::Request { handle, update })),
+            )?;
         }
         Ok(())
     }

@@ -125,6 +125,9 @@ impl std::error::Error for Failure {}
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "method", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Operation {
+    Service {
+        operation: crate::service::Operation,
+    },
     Process {
         operation: crate::process::Operation,
     },
@@ -203,6 +206,7 @@ pub enum Input {
 /// Native UI notifications contain no legacy canvas or character-grid fields.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum Notification {
+    Service(crate::service::Notification),
     /// An authorized preview receives the current unsaved text with the open-document identity/version.
     Preview {
         document: Option<DocumentVersion>,
@@ -290,13 +294,13 @@ pub enum EditorValue {
 
 /// Progress is replaceable; final results are retained until delivered to the owning instance.
 #[derive(Clone, Debug, Serialize, Deserialize)]
-pub enum RequestUpdate {
+pub enum RequestUpdate<T = EditorValue> {
     Accepted,
     Progress {
         message: String,
     },
     Completed {
-        result: Result<EditorValue, Failure>,
+        result: Result<T, Failure>,
     },
     Cancelled {
         reason: ErrorCode,
@@ -320,7 +324,7 @@ pub enum CancellationEffect {
     WaitingStopped,
 }
 
-impl RequestUpdate {
+impl<T> RequestUpdate<T> {
     /// Terminal states are immutable, including after timeout or instance shutdown.
     pub fn is_terminal(&self) -> bool {
         matches!(self, Self::Completed { .. } | Self::Cancelled { .. })
@@ -337,6 +341,9 @@ pub struct View {
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Output {
+    /// Only a service invocation may return this contract-validated result.
+    #[serde(default)]
+    pub service_reply: Option<Result<serde_json::Value, Failure>>,
     #[serde(default)]
     pub language_service: Option<crate::language::Proposal>,
     #[serde(default)]

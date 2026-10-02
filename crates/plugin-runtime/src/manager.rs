@@ -9,6 +9,7 @@ use std::{
 };
 mod dependencies;
 mod language;
+mod plugin_services;
 pub(crate) mod scopes;
 mod settings;
 mod ui_events;
@@ -76,6 +77,7 @@ impl Installed {
 }
 /// Run this module on a worker thread; native rendering reads only published scenes.
 pub struct Manager {
+    plugin_services: crate::plugin_services::Shared,
     root: PathBuf,
     environment: Environment,
     engine: Option<wasmtime::Engine>,
@@ -113,6 +115,9 @@ impl Manager {
         std::fs::create_dir_all(&root)?;
         let installed = Self::read_registry(&root)?;
         let mut manager = Self {
+            plugin_services: std::sync::Arc::new(std::sync::Mutex::new(
+                crate::plugin_services::Broker::new(plugin_services::read_preferences(&root)?),
+            )),
             root,
             environment,
             // Resource-only packages need no Wasmtime engine during startup.
@@ -135,13 +140,7 @@ impl Manager {
             })
             .map(|(id, p)| (id.clone(), p.enabled))
             .collect();
-        for (id, global_enabled) in ids {
-            if let Err(error) = manager.enable(&id) {
-                manager.installed.get_mut(&id).unwrap().error = Some(format!("{error:#}"));
-            }
-            // Runtime activation must not silently rewrite a disabled global default.
-            manager.installed.get_mut(&id).unwrap().enabled = global_enabled;
-        }
+        manager.activate_saved_plugins(ids);
         // Startup activation may temporarily persist an enabled value; restore global defaults.
         manager.save_registry()?;
         Ok(manager)
@@ -255,6 +254,8 @@ impl Manager {
             snapshot.clone(),
         )?;
         self.configure_saved_settings(&mut next, &package.manifest)?;
+        self.refresh_services();
+        next.connect_services(self.plugin_services.clone())?;
         self.prepare_dependencies(package, Some(&mut next), control)?;
         if let Some(snapshot) = &snapshot {
             self.save_snapshot(&id, snapshot)?;
@@ -450,6 +451,8 @@ impl Manager {
             self.load_snapshot(id)?,
         )?;
         self.configure_saved_settings(&mut instance, &entry.manifest)?;
+        self.refresh_services();
+        instance.connect_services(self.plugin_services.clone())?;
         instance.activate()?;
         let originals = instance.commit_data()?;
         self.installed.get_mut(id).unwrap().enabled = true;
@@ -466,6 +469,7 @@ impl Manager {
     pub fn disable(&mut self, id: &str) -> anyhow::Result<()> {
         let result = self.disable_current(id);
         self.retire_parked_plugin(id);
+        self.refresh_services();
         result
     }
     /// Project overrides retire only their owner; global disable additionally retires parked owners.
@@ -604,6 +608,7 @@ impl Manager {
         )
     }
     pub fn poll(&mut self) {
+        self.route_services();
         self.poll_parked();
         for (id, instance) in &mut self.live {
             if let Err(error) = instance.poll() {
@@ -659,6 +664,7 @@ mod icon_tests {
         std::fs::write(icons.join("dark.svg"), dark).unwrap();
         let installed = Installed {
             manifest: Manifest {
+                plugin_services: Default::default(),
                 language_servers: Default::default(),
                 services: Default::default(),
                 settings: Default::default(),
@@ -720,6 +726,7 @@ mod scope_tests {
         std::fs::create_dir_all(contribution.parent().unwrap()).unwrap();
         std::fs::write(contribution, "").unwrap();
         let manifest = Manifest {
+            plugin_services: Default::default(),
             language_servers: Default::default(),
             services: Default::default(),
             settings: Default::default(),

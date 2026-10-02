@@ -3,6 +3,13 @@ use super::*;
 use crate::ui::controls::{Checkbox, SegmentedTabs};
 use protocol::settings::{Definition, EffectiveValue, Scope, SettingType, Source};
 use std::collections::BTreeSet;
+mod services;
+
+/// Settings and provider choices share one correlation namespace in the published result slot.
+fn next_request() -> u64 {
+    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+    NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+}
 
 /// Drafts are UI state only; the worker remains the sole owner of validated persistent configuration.
 struct Draft {
@@ -13,6 +20,7 @@ struct Draft {
 }
 
 pub(crate) struct SettingsView {
+    service_scopes: BTreeMap<String, Scope>,
     owner: Entity<ExtensionPanel>,
     drafts: BTreeMap<String, Draft>,
     pending: Option<u64>,
@@ -26,6 +34,7 @@ impl SettingsView {
     pub(crate) fn new(owner: Entity<ExtensionPanel>, cx: &mut Context<Self>) -> Self {
         let subscription = cx.observe(&owner, |_, _, cx| cx.notify());
         Self {
+            service_scopes: Default::default(),
             owner,
             drafts: Default::default(),
             pending: None,
@@ -74,8 +83,7 @@ impl SettingsView {
             }
             Some(value)
         };
-        static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
-        let request = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let request = next_request();
         let result = self.owner.read(cx).worker.tx.send(Work::SetSetting {
             request,
             plugin,
@@ -295,11 +303,12 @@ impl Render for SettingsView {
             .worker
             .trusted
             .load(std::sync::atomic::Ordering::Acquire);
-        let (configurations, result) = {
+        let (configurations, result, services) = {
             let state = owner.worker.state.lock().unwrap();
             (
                 state.configurations.clone(),
                 state.configuration_result.clone(),
+                state.plugin_service_choices.clone(),
             )
         };
         if let Some((request, result)) =
@@ -314,6 +323,9 @@ impl Render for SettingsView {
             });
         }
         let mut rows = Vec::new();
+        for service in services {
+            rows.push(self.service_row(service, disabled || self.pending.is_some(), cx));
+        }
         let mut retained = BTreeSet::new();
         for entry in entries {
             if entry.manifest.settings.is_empty() {

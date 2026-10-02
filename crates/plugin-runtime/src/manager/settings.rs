@@ -205,6 +205,7 @@ impl Manager {
                 )?;
                 instance.configure_settings(manifest, values)?;
                 if active {
+                    instance.connect_services(self.plugin_services.clone())?;
                     instance.activate()?;
                 }
                 candidates.push((owner, instance, active));

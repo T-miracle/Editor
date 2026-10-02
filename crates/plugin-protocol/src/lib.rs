@@ -8,6 +8,7 @@ pub mod api;
 pub mod dependencies;
 pub mod language;
 pub mod process;
+pub mod service;
 pub mod settings;
 pub mod ui;
 
@@ -26,6 +27,9 @@ pub mod bindings {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Manifest {
+    /// Versioned plugin-to-plugin contracts, separate from native executable declarations.
+    #[serde(default)]
+    pub plugin_services: service::Declarations,
     /// Standard LSP bindings consume native service declarations without requiring a lifecycle component.
     #[serde(default)]
     pub language_servers: Vec<language::Provider>,
@@ -370,6 +374,9 @@ pub enum Event {
 }
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct Reply {
+    /// Temporary adapter for the capability protocol's validated service result.
+    #[serde(default)]
+    pub service_reply: Option<Result<serde_json::Value, api::Failure>>,
     #[serde(default)]
     pub language_service: Option<language::Proposal>,
     /// Migration adapter only; new guests expose this through api::Output.

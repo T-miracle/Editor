@@ -89,6 +89,7 @@ impl State {
                 let _ = self.processes.close(id);
                 self.process_handles.remove(&id);
                 self.process_dependencies.remove(&id);
+                self.plugin_services.resources.remove(&handle.resource);
                 self.roots.remove(&handle);
                 // Termination is synchronous ownership release; it does not undo native side effects.
                 Ok(Value::Process(Update::Terminated))

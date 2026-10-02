@@ -8,6 +8,14 @@ use std::{
 };
 
 pub(super) enum Work {
+    /// Provider choices are explicit host actions, never executable project configuration.
+    SetServiceProvider {
+        request: u64,
+        owner: api::InstanceScope,
+        scope: settings::Scope,
+        contract: String,
+        provider: Option<String>,
+    },
     /// Only a confirmed host form can modify user/project configuration.
     SetSetting {
         request: u64,
@@ -94,6 +102,7 @@ pub(super) struct InstallationProgress {
 }
 #[derive(Default)]
 pub(super) struct Published {
+    pub plugin_service_choices: Vec<service::Choice>,
     pub installation: Option<InstallationProgress>,
     pub install_control: Option<plugin_runtime::InstallControl>,
     pub service_states: BTreeMap<String, String>,
@@ -255,6 +264,30 @@ impl Worker {
                     _ => None,
                 };
                 let result = match work {
+                    Some(Work::SetServiceProvider {
+                        request,
+                        owner,
+                        scope,
+                        contract,
+                        provider,
+                    }) => {
+                        let result = manager.set_service_provider(
+                            owner,
+                            scope,
+                            &contract,
+                            provider.as_deref(),
+                        );
+                        let mut published = output.lock().unwrap();
+                        published.configuration_result = Some((
+                            request,
+                            result
+                                .as_ref()
+                                .map(|_| ())
+                                .map_err(|error| format!("{error:#}")),
+                        ));
+                        published.configuration_revision += 1;
+                        result
+                    }
                     Some(Work::SetSetting {
                         request,
                         plugin,
@@ -369,7 +402,12 @@ impl Worker {
                 {
                     *processes.entry(service.owner.clone()).or_default() += service.process_count();
                 }
+                let plugin_service_choices = manager.service_choices();
                 let mut published = output.lock().unwrap();
+                if published.plugin_service_choices != plugin_service_choices {
+                    published.plugin_service_choices = plugin_service_choices;
+                    published.configuration_revision += 1;
+                }
                 let services_changed = language_services.len() != published.language_services.len()
                     || language_services.iter().any(|(key, value)| {
                         match (value, published.language_services.get(key)) {

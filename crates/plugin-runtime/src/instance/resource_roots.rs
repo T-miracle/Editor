@@ -9,6 +9,8 @@ pub(super) enum RootKind {
     Workspace,
     Data,
     EditorRequest,
+    ServiceReference,
+    ServiceRequest,
     Subscription,
     Process(u64),
 }
@@ -24,6 +26,19 @@ pub(super) struct ResourceRoots {
 }
 
 impl ResourceRoots {
+    /// Expose immutable ownership metadata, never a caller-controlled target instance.
+    pub(super) fn principal(
+        &self,
+        plugin: &str,
+        permissions: &BTreeSet<String>,
+    ) -> plugin_protocol::service::Caller {
+        plugin_protocol::service::Caller {
+            plugin: plugin.into(),
+            instance: self.instance.clone(),
+            scope: self.scope.clone(),
+            permissions: permissions.clone(),
+        }
+    }
     /// Hook-local file handles cannot escape the discovery invocation or consume permanent quota.
     pub(super) fn checkpoint(&self) -> u64 {
         self.next
@@ -117,7 +132,11 @@ impl State {
             ));
         }
         let (capability, permission, root) = match kind {
-            RootKind::EditorRequest | RootKind::Subscription | RootKind::Process(_) => {
+            RootKind::EditorRequest
+            | RootKind::ServiceReference
+            | RootKind::ServiceRequest
+            | RootKind::Subscription
+            | RootKind::Process(_) => {
                 return Err(Failure::new(ErrorCode::InvalidHandle, "Not a file handle"));
             }
             RootKind::Workspace => {
@@ -243,12 +262,18 @@ impl State {
                 Ok(Value::Unit)
             }
             api::Operation::CloseResource { handle } => {
+                self.roots.resolve(&handle)?;
+                self.plugin_services.resources.remove(&handle.resource);
                 if let RootKind::Process(_) = self.roots.resolve(&handle)? {
                     return self
                         .process_request(plugin_protocol::process::Operation::Terminate { handle })
                         .map(|_| Value::Unit);
                 }
                 self.subscriptions.remove(&handle.resource);
+                self.plugin_services.references.remove(&handle.resource);
+                if let Some(request) = self.plugin_services.pending.remove(&handle.resource) {
+                    request.call.completion.retire();
+                }
                 if let Some(request) = self.editor_requests.remove(&handle.resource) {
                     request.call.retire();
                 }
@@ -256,6 +281,7 @@ impl State {
                 Ok(Value::Unit)
             }
             api::Operation::ReadAsset { .. }
+            | api::Operation::Service { .. }
             | api::Operation::Process { .. }
             | api::Operation::SubscribeDocuments
             | api::Operation::Editor { .. }

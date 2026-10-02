@@ -302,6 +302,15 @@ settings.provider_source_project:
 settings.plugin_hint:
   en: "Apply confirms the selected scope and restarts only affected plugin instances. Reset removes that override."
   zh-CN: "应用即确认所选作用域，仅重启受影响的插件实例。重置将移除此作用域的覆盖值。"
+settings.service_provider:
+  en: "Service provider"
+  zh-CN: "服务提供者"
+settings.service_auto:
+  en: "Automatic (one match)"
+  zh-CN: "自动（仅一个匹配）"
+settings.service_hint:
+  en: "Choose a provider when several are available. Selection applies immediately to new service references."
+  zh-CN: "有多个提供者时请选择一个；选择立即应用于之后建立的服务连接。"
 settings.plugin_user:
   en: "User"
   zh-CN: "用户全局"

@@ -6,9 +6,11 @@ use plugin_protocol::{
 };
 use std::cell::RefCell;
 mod composition;
+mod service_demo;
 
 #[derive(Default)]
 struct State {
+    service_client: service_demo::Client,
     /// Bounded observable process history demonstrates stream ordering through the public SDK.
     process_events: Vec<plugin_protocol::process::Update>,
     /// Demonstrate cancellation from inside an output callback, including an already queued exit.
@@ -46,6 +48,33 @@ impl State {
     /// Preparation is side-effect free; missing optional functionality selects a visible fallback.
     fn handle(&mut self, input: api::Input) -> Result<api::Output, Failure> {
         match input {
+            api::Input::Event {
+                event:
+                    api::Notification::Service(plugin_protocol::service::Notification::Invoke(call)),
+                ..
+            } => {
+                return Ok(api::Output {
+                    service_reply: Some(self.service_client.provide(call)),
+                    ..Default::default()
+                });
+            }
+            api::Input::Event {
+                event: api::Notification::Service(event),
+                ..
+            } => {
+                if let Some(text) = self.service_client.update(&event) {
+                    self.text = text;
+                }
+            }
+            api::Input::Event {
+                event: api::Notification::Command { id, arguments },
+                ..
+            } if id.starts_with("service-") => {
+                self.text = self
+                    .service_client
+                    .command(&id, arguments)
+                    .unwrap_or_else(|error| format!("{error}"));
+            }
             api::Input::Event {
                 event: api::Notification::LanguageService(context),
                 ..
@@ -116,6 +145,7 @@ impl State {
             }
             api::Input::Prepare { api, .. } => {
                 self.configuration.clear();
+                self.service_client = Default::default();
                 self.process_events.clear();
                 self.close_on_output = false;
                 self.workspace = None;
@@ -282,6 +312,9 @@ impl State {
                 event: event @ api::Notification::Request { .. },
                 ..
             } => {
+                if let Some(text) = self.service_client.editor_update(&event) {
+                    self.text = text;
+                }
                 if let Some(update) = self.task.as_mut().and_then(|task| task.update(&event)) {
                     if let api::RequestUpdate::Completed {
                         result: Ok(api::EditorValue::Selection { document, .. }),

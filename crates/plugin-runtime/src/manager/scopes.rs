@@ -169,15 +169,7 @@ impl Manager {
             })
             .map(|(id, entry)| (id.clone(), entry.enabled))
             .collect::<Vec<_>>();
-        for (id, enabled) in entries {
-            if self.live.contains_key(&id) {
-                continue;
-            }
-            if let Err(error) = self.enable(&id) {
-                self.installed.get_mut(&id).unwrap().error = Some(format!("{error:#}"));
-            }
-            self.installed.get_mut(&id).unwrap().enabled = enabled;
-        }
+        self.activate_saved_plugins(entries);
         if let Err(error) = self.save_registry() {
             for entry in self.installed.values_mut() {
                 entry.error = Some(format!("{error:#}"));

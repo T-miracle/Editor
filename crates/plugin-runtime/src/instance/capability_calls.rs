@@ -46,6 +46,7 @@ impl State {
                 "cancel_request",
                 "subscribe_documents",
                 "process",
+                "service",
             ]
             .contains(&method)
             {
@@ -71,11 +72,20 @@ impl State {
                     "LSP discovery is read-only",
                 ));
             }
-            match request.operation {
+            self.check_service_authority(&request.operation)?;
+            let result = match request.operation {
+                api::Operation::Service { operation } => self.service_request(operation),
                 api::Operation::Process { operation } => self.process_request(operation),
                 api::Operation::SubscribeDocuments => self.subscribe_documents(),
                 api::Operation::CancelRequest { handle, mode } => {
                     self.roots.resolve(&handle)?;
+                    if let Some(request) = self.plugin_services.pending.get(&handle.resource) {
+                        return request
+                            .call
+                            .completion
+                            .cancel(mode, ErrorCode::Cancelled)
+                            .map(api::Value::Cancellation);
+                    }
                     self.editor_requests
                         .get(&handle.resource)
                         .ok_or_else(|| {
@@ -91,7 +101,18 @@ impl State {
                     timeout_ms,
                 } => self.editor_request(operation, timeout_ms),
                 operation => self.resource_request(operation),
+            };
+            // Record all delegated allocations at the common boundary, including file and request handles.
+            if let (
+                Ok(api::Value::Resource(handle) | api::Value::Accepted(handle)),
+                Some(context),
+            ) = (&result, &self.plugin_services.context)
+            {
+                self.plugin_services
+                    .resources
+                    .insert(handle.resource, (handle.clone(), context.clone()));
             }
+            result
         })();
         serde_json::to_string(&api::Response { id, result }).map_err(|error| error.to_string())
     }
@@ -200,6 +221,10 @@ impl Instance {
         let completion: api::Completion = serde_json::from_str(payload)?;
         anyhow::ensure!(completion.id == id, "Plugin completion ID mismatch");
         let output = completion.result?;
+        anyhow::ensure!(
+            output.service_reply.is_none() || self.store.data().plugin_services.invoking,
+            "Service results require an owning invocation"
+        );
         // Reject forbidden hook output before the common call path publishes any view or snapshot.
         anyhow::ensure!(
             !self.store.data().language_hook
@@ -259,6 +284,7 @@ impl Instance {
             }
         }
         Ok(Reply {
+            service_reply: output.service_reply,
             language_service: output.language_service,
             configuration: output.configuration,
             snapshot: output.snapshot,

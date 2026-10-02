@@ -3,6 +3,7 @@ use super::*;
 
 impl Manager {
     pub fn event(&mut self, id: &str, event: Event) -> anyhow::Result<()> {
+        self.refresh_services();
         // Never deliver document text to a guest without the same editor permission as native reads.
         let mut inner = &event;
         let mut surfaces = Vec::new();

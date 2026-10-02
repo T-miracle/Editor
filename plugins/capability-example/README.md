@@ -1,5 +1,10 @@
 # Capability Example
 
+0.9.0 增加公共服务契约验收：`service-open`、`service-call`、`service-cancel` 通过 SDK
+发现、调用和取消服务。验收打包器仅修改声明与标签资源，即可构造消费者和可互换提供者；
+默认示例包不申请服务调用权限。提供者示范参数/结果校验、来源权限、循环拒绝、显式资源释放
+和异步授权延续，接口详见宿主 SDK 的 `SERVICES.md`。
+
 0.8.0 提供组合 UI 示例：把 `label` 显式设置为 `composable-ui`，即可使用原生按钮和输入框操作 SVG 画布。`ui.canvas` 是可选能力，普通文本界面不需要它；示例不启用字符网格。`composed-ui.json` 通过公开打包脚本随 WASM 一起携带。`ui-layout` 命令接受 `form`、`canvas`、`combined`，示范同一通用布局树的三种用法。预览验收包声明编辑区面板，使用带版本的内存文档通知，回传 `Document.source`；不读取磁盘来替代未保存内容。
 
 开发验证插件，演示独立能力版本、类型化文件及编辑器访问和原生文本界面。基础 API、package.assets、ui.native、workspace.files、storage.private、editor.documents、ui.panels、configuration 分别协商 1.x；不存在的可选接口会降级显示。0.5.0 默认每个工作区独立实例。

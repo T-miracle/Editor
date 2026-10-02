@@ -13,6 +13,7 @@ use wasmtime_wasi::{ResourceTable, WasiCtx, WasiCtxView, WasiView};
 mod capability_calls;
 mod document_events;
 mod editor_requests;
+mod plugin_services;
 mod process_calls;
 mod resource_roots;
 mod settings;
@@ -20,6 +21,7 @@ use resource_roots::ResourceRoots;
 wasmtime::component::bindgen!({path:"../plugin-protocol/wit",world:"plugin",require_store_data_send:true});
 
 struct State {
+    plugin_services: plugin_services::Services,
     /// None selects the temporary legacy transport, never a fallback for a new guest.
     api: Option<api::Negotiated>,
     roots: ResourceRoots,
@@ -333,6 +335,7 @@ mod tests {
         let outside = root.path().join("outside.txt");
         std::fs::write(&outside, "private").unwrap();
         let mut state = State {
+            plugin_services: Default::default(),
             api: None,
             roots: ResourceRoots::new("", false, 64 * 1024 * 1024),
             editor_requests: Default::default(),
@@ -483,6 +486,7 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         std::fs::write(root.path().join("settings.json"), "old").unwrap();
         let mut state = State {
+            plugin_services: Default::default(),
             api: None,
             roots: ResourceRoots::new("", false, 64 * 1024 * 1024),
             editor_requests: Default::default(),
@@ -555,6 +559,10 @@ impl Instance {
         snapshot: Option<Snapshot>,
     ) -> anyhow::Result<Self> {
         let api = super::capabilities::negotiate(manifest)?;
+        manifest
+            .plugin_services
+            .validate()
+            .map_err(anyhow::Error::msg)?;
         let application = manifest.scope == api::InstanceScope::Application;
         if application {
             environment.workspace.clear();
@@ -569,7 +577,8 @@ impl Instance {
         wasmtime_wasi::p2::add_to_linker_sync(&mut linker)?;
         Plugin::add_to_linker::<_, HasSelf<_>>(&mut linker, |state| state)?;
         // No preopened directories, environment inheritance or network access is granted to WASI.
-        let state = State {
+        let mut state = State {
+            plugin_services: Default::default(),
             api,
             roots: ResourceRoots::new(&environment.workspace, application, manifest.storage_limit),
             editor_requests: Default::default(),
@@ -599,6 +608,9 @@ impl Instance {
             effects: vec![],
             staged_writes: Some(Default::default()),
         };
+        state.plugin_services.principal =
+            state.roots.principal(&manifest.id, &manifest.permissions);
+        state.plugin_services.declarations = manifest.plugin_services.clone();
         let mut store = Store::new(engine, state);
         store.limiter(|s| &mut s.limits);
         store.set_fuel(100_000_000)?;
@@ -759,6 +771,7 @@ impl Instance {
         Ok(())
     }
     pub fn stop(&mut self) {
+        self.store.data_mut().plugin_services.clear();
         self.preview_sources.clear();
         self.store.data_mut().subscriptions.clear();
         for request in self.store.data_mut().editor_requests.values() {
@@ -792,6 +805,14 @@ impl Instance {
         }
         let roots = self.store.data().roots.renewed(&environment.workspace);
         self.store.data_mut().roots = roots;
+        let principal = self.store.data().roots.principal(
+            &self.store.data().plugin_services.principal.plugin,
+            &self.store.data().permissions,
+        );
+        self.store.data_mut().plugin_services.principal = principal;
+        // A restarted owner cannot revive authority captured by an earlier incarnation.
+        self.store.data_mut().plugin_services.alive =
+            std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true));
         self.store.data_mut().staged_writes = Some(std::collections::BTreeMap::new());
         self.call(Message::Prepare {
             environment,
@@ -806,13 +827,44 @@ impl Instance {
         self.store.data().processes.ids()
     }
     pub fn poll(&mut self) -> anyhow::Result<bool> {
+        self.retire_service_sources();
+        self.poll_service_requests()?;
         self.poll_editor_requests()?;
         self.poll_document_events()?;
         let events = self.store.data_mut().poll_processes()?;
         let changed = !events.is_empty();
         for event in events {
+            // Exit removes its slot, but the last callback still inherits the originating service authority.
+            let context =
+                if let Event::Capability(api::Notification::Process { handle, .. }) = &event {
+                    self.store
+                        .data()
+                        .plugin_services
+                        .resources
+                        .get(&handle.resource)
+                        .map(|(_, context)| context.clone())
+                } else {
+                    None
+                };
             if self.store.data_mut().accept_process_event(&event) {
-                self.call(Message::Event(event))?;
+                let finished = if let Event::Capability(api::Notification::Process {
+                    handle,
+                    update: process::Update::Exited { .. },
+                }) = &event
+                {
+                    Some(handle.resource)
+                } else {
+                    None
+                };
+                let result = self.call_with_service_context(context, Message::Event(event));
+                if let Some(slot) = finished {
+                    self.store
+                        .data_mut()
+                        .plugin_services
+                        .resources
+                        .remove(&slot);
+                }
+                result?;
             }
         }
         Ok(changed)

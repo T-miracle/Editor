@@ -134,6 +134,46 @@ impl Package {
         );
         super::capabilities::negotiate(&manifest)?;
         validate_language_services(&manifest)?;
+        manifest
+            .plugin_services
+            .validate()
+            .map_err(anyhow::Error::msg)?;
+        if !manifest.plugin_services.provides.is_empty()
+            || !manifest.plugin_services.requires.is_empty()
+        {
+            anyhow::ensure!(
+                manifest.protocol == 7
+                    && manifest.component.is_some()
+                    && manifest
+                        .api
+                        .as_ref()
+                        .is_some_and(|api| api.required.contains_key("plugin.services")),
+                "Plugin service declarations require a component and plugin.services capability"
+            );
+            anyhow::ensure!(
+                manifest.plugin_services.requires.is_empty()
+                    || manifest.permissions.contains("services.call"),
+                "Service consumers require services.call permission"
+            );
+            for method in manifest
+                .plugin_services
+                .provides
+                .values()
+                .flat_map(|c| c.methods.values())
+                .chain(
+                    manifest
+                        .plugin_services
+                        .requires
+                        .values()
+                        .flat_map(|c| c.methods.values()),
+                )
+            {
+                anyhow::ensure!(
+                    method.permissions.is_subset(&manifest.permissions),
+                    "Service method authority must be explicitly requested in the package"
+                );
+            }
+        }
         if manifest.permissions.contains("dependencies.install") {
             anyhow::ensure!(
                 manifest.permissions.contains("dependencies.prepare"),
@@ -316,6 +356,7 @@ impl Package {
                             "editor.read",
                             "editor.write",
                             "ui.panels",
+                            "services.call",
                             "process.exec",
                             "dependencies.prepare",
                             "dependencies.install"

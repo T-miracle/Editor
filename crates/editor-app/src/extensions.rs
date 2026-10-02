@@ -24,6 +24,8 @@ mod preview;
 mod preview_tests;
 #[cfg(test)]
 mod request_tests;
+#[cfg(test)]
+mod service_tests;
 mod settings;
 #[cfg(test)]
 mod settings_tests;
