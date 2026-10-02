@@ -18,7 +18,13 @@ impl EditorApp {
             .entries
             .iter()
             .filter(|entry| {
-                entry.enabled && entry.error.is_none() && entry.grants.contains("editor.commands")
+                entry.enabled
+                    && entry.error.is_none()
+                    && entry.grants.contains(if entry.manifest.protocol == 7 {
+                        "editor.read"
+                    } else {
+                        "editor.commands"
+                    })
             })
             .flat_map(|entry| {
                 entry.manifest.panels.iter().filter_map(|descriptor| {
@@ -47,6 +53,7 @@ impl EditorApp {
             panel.update(cx, |panel, _| {
                 if panel.editor_preview {
                     panel.preview_document = None;
+                    panel.preview_version = None;
                 }
             });
         }
@@ -55,6 +62,9 @@ impl EditorApp {
     /// Publish unsaved text once per document revision, and clear a surface when its file changes.
     pub(crate) fn sync_editor_previews(&self, cx: &mut Context<Self>) {
         let selected = self.active_editor_preview(cx);
+        let version = self
+            .active_tab_index()
+            .and_then(|index| self.plugin_document_version(index).ok());
         let context = self.active_tab_index().map(|index| {
             (
                 self.tabs[index].session.path().to_path_buf(),
@@ -67,19 +77,61 @@ impl EditorApp {
             }
             let active = selected.as_ref().is_some_and(|selected| selected == panel);
             panel.update(cx, |panel, cx| {
-                if active && panel.preview_document != context {
+                let capability = panel.entries.iter().any(|entry| {
+                    Some(&entry.manifest.id) == panel.active.as_ref()
+                        && entry.manifest.protocol == 7
+                });
+                if active
+                    && (panel.preview_document != context
+                        || (capability && panel.preview_version != version))
+                {
                     if let Some((path, _)) = &context {
-                        panel.send(PluginEvent::Document {
-                            path: Some(path.to_string_lossy().into_owned()),
-                            text: self.editor.read(cx).text().to_string(),
-                        });
+                        let text = self.editor.read(cx).text().to_string();
+                        if capability {
+                            // No source token means the document is outside this workspace's authority.
+                            let Some(version) = &version else {
+                                panel.preview_version = None;
+                                panel.preview_document = context.clone();
+                                panel.native_ui = None;
+                                panel.send(PluginEvent::Capability(
+                                    protocol::api::Notification::Preview {
+                                        document: None,
+                                        text: String::new(),
+                                    },
+                                ));
+                                return;
+                            };
+                            panel.send(PluginEvent::Capability(
+                                protocol::api::Notification::Preview {
+                                    document: Some(version.clone()),
+                                    text,
+                                },
+                            ));
+                            panel.preview_version = Some(version.clone());
+                        } else {
+                            panel.send(PluginEvent::Document {
+                                path: Some(path.to_string_lossy().into_owned()),
+                                text,
+                            });
+                        }
                         panel.preview_document = context.clone();
                     }
                 } else if !active && panel.preview_document.take().is_some() {
-                    panel.send(PluginEvent::Document {
-                        path: None,
-                        text: String::new(),
-                    });
+                    if capability {
+                        panel.send(PluginEvent::Capability(
+                            protocol::api::Notification::Preview {
+                                document: None,
+                                text: String::new(),
+                            },
+                        ));
+                    } else {
+                        panel.send(PluginEvent::Document {
+                            path: None,
+                            text: String::new(),
+                        });
+                    }
+                    panel.preview_version = None;
+                    panel.native_ui = None;
                 }
             });
         }

@@ -112,6 +112,7 @@ impl PluginView {
         let id = node.id.clone();
         let native_id = SharedString::from(format!("plugin-ui-{}", node.id));
         let content = match &node.kind {
+            Kind::Canvas(_) => self.canvases[&node.id].clone().into_any_element(),
             Kind::Column { children } | Kind::Row { children } => {
                 let children: Vec<_> = children
                     .iter()

@@ -5,6 +5,7 @@ use plugin_protocol::{
     ui,
 };
 use std::cell::RefCell;
+mod composition;
 
 #[derive(Default)]
 struct State {
@@ -23,6 +24,10 @@ struct State {
     task: Option<api::guest::EditorTask>,
     document: Option<api::DocumentVersion>,
     subscription: Option<api::ResourceHandle>,
+    /// Preview versions are echoed independently of command results or the panel's own UI revision.
+    preview: Option<api::DocumentVersion>,
+    /// The example's composition state is owned entirely by the guest.
+    ui_demo: Option<composition::Demo>,
 }
 thread_local! { static STATE: RefCell<State> = RefCell::new(State::default()); }
 struct Example;
@@ -118,6 +123,8 @@ impl State {
                 self.task = None;
                 self.document = None;
                 self.subscription = None;
+                self.preview = None;
+                self.ui_demo = None;
                 self.optional_available = api.capabilities.contains_key("example.future");
                 return Ok(api::Output::default());
             }
@@ -235,6 +242,19 @@ impl State {
             api::Input::Event {
                 event: api::Notification::Command { id, arguments },
                 ..
+            } if id == "ui-layout" => {
+                if let Some(demo) = &mut self.ui_demo {
+                    demo.layout(
+                        arguments
+                            .as_ref()
+                            .and_then(|args| args.as_str())
+                            .unwrap_or("combined"),
+                    );
+                }
+            }
+            api::Input::Event {
+                event: api::Notification::Command { id, arguments },
+                ..
             } if id == "scope-probe" => {
                 // Return expected domain failures as data so the host can observe continued liveness.
                 let operation = serde_json::from_value(arguments.unwrap_or_default())
@@ -286,12 +306,52 @@ impl State {
                 }
                 self.text = format!("{event:?}");
             }
+            api::Input::Event {
+                event: api::Notification::Theme(environment),
+                ..
+            } => {
+                if let Some(demo) = &mut self.ui_demo {
+                    demo.theme(&environment);
+                }
+            }
+            api::Input::Event {
+                event: api::Notification::Ui(event),
+                ..
+            } => {
+                if let Some(demo) = &mut self.ui_demo {
+                    demo.event(&event);
+                }
+            }
+            api::Input::Event {
+                event: api::Notification::Preview { document, text },
+                ..
+            } => {
+                if let Some(demo) = &mut self.ui_demo {
+                    demo.preview(document.clone(), &text);
+                }
+                self.preview = document;
+                self.text = text;
+            }
             api::Input::Event { .. } => {}
         }
+        // The independently built fixture reads a portable tree asset; the host never interprets its label.
+        let mut document = if self
+            .configuration
+            .get("label")
+            .is_some_and(|value| value.value == "composable-ui")
+        {
+            if self.ui_demo.is_none() {
+                self.ui_demo = Some(composition::Demo::load()?);
+            }
+            self.ui_demo.as_ref().unwrap().document()
+        } else {
+            ui::Document::new(ui::Node::text("welcome-text", self.text.clone()))
+        };
+        document.source = self.preview.clone();
         Ok(api::Output {
             views: vec![api::View {
                 panel: "welcome".into(),
-                document: ui::Document::new(ui::Node::text("welcome-text", self.text.clone())),
+                document,
             }],
             ..Default::default()
         })

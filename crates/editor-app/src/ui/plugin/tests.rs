@@ -13,6 +13,246 @@ fn init(cx: &mut TestAppContext) {
     });
 }
 
+/// A keyed disabled canvas must receive its first grid measurement when activated at the same size.
+#[gpui::test]
+fn enabling_canvas_delivers_current_dimensions_without_a_resize(cx: &mut TestAppContext) {
+    use plugin_runtime::plugin_protocol::ui::{Canvas, CanvasEvent};
+    init(cx);
+    let events = Rc::new(RefCell::new(vec![]));
+    let output = events.clone();
+    let slot = Rc::new(RefCell::new(None));
+    let capture = slot.clone();
+    let document = Document::new(
+        Node::new(
+            "canvas",
+            Kind::Canvas(Canvas {
+                grid: true,
+                ..Default::default()
+            }),
+        )
+        .grow(),
+    );
+    let mut disabled = document.clone();
+    disabled.root.disabled = true;
+    let (_, cx) = cx.add_window_view(move |window, cx| {
+        let view = cx.new(|cx| {
+            PluginView::new(
+                "test".into(),
+                disabled,
+                Environment::default(),
+                move |event, _| output.borrow_mut().push(event),
+                window,
+                cx,
+            )
+        });
+        *capture.borrow_mut() = Some(view.clone());
+        Root::new(view, window, cx)
+    });
+    let view = slot.borrow_mut().take().unwrap();
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+    cx.run_until_parked();
+    assert!(events.borrow().is_empty());
+    cx.update(|window, cx| {
+        view.update(cx, |view, cx| {
+            view.update_document(document.revision(1), Environment::default(), window, cx)
+        })
+    });
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+    cx.run_until_parked();
+    assert!(events.borrow().iter().any(|event|matches!(event.action, Action::Canvas(CanvasEvent::Resize {width,height,grid:Some(_),..}) if width>0. && height>0.)));
+}
+
+/// A drag belongs to the node where it began, including release outside that node's hit box.
+#[gpui::test]
+fn canvas_pointer_capture_keeps_foreign_drags_out_and_delivers_external_release(
+    cx: &mut TestAppContext,
+) {
+    use gpui_kit::{MouseButton, point, px};
+    use plugin_runtime::plugin_protocol::ui::{Canvas, CanvasEvent, PointerPhase};
+    init(cx);
+    let events = Rc::new(RefCell::new(vec![]));
+    let output = events.clone();
+    let slot = Rc::new(RefCell::new(None));
+    let capture = slot.clone();
+    let (_, cx) = cx.add_window_view(move |window, cx| {
+        let document = Document::new(Node::column(
+            "root",
+            vec![
+                Node::input("input", Input::default()).height(40.),
+                Node::new("canvas", Kind::Canvas(Canvas::default())).height(200.),
+            ],
+        ));
+        let view = cx.new(|cx| {
+            PluginView::new(
+                "test".into(),
+                document,
+                Environment::default(),
+                move |event, _| output.borrow_mut().push(event),
+                window,
+                cx,
+            )
+        });
+        *capture.borrow_mut() = Some(view.clone());
+        Root::new(view, window, cx)
+    });
+    let view = slot.borrow_mut().take().unwrap();
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+    cx.run_until_parked();
+    let canvas = cx.debug_bounds("plugin-ui-canvas").unwrap().center();
+    let input = cx.debug_bounds("plugin-ui-input").unwrap();
+    let outside = point(input.left() + px(15.), input.center().y);
+    events.borrow_mut().clear();
+    cx.simulate_mouse_down(outside, MouseButton::Left, Default::default());
+    cx.simulate_mouse_move(canvas, Some(MouseButton::Left), Default::default());
+    cx.simulate_mouse_up(canvas, MouseButton::Left, Default::default());
+    cx.run_until_parked();
+    assert!(
+        !events
+            .borrow()
+            .iter()
+            .any(|event| matches!(event.action, Action::Canvas(CanvasEvent::Pointer { .. })))
+    );
+    for (button, index) in [
+        (MouseButton::Left, 0),
+        (MouseButton::Middle, 1),
+        (MouseButton::Right, 2),
+    ] {
+        events.borrow_mut().clear();
+        cx.simulate_mouse_down(canvas, button, Default::default());
+        cx.run_until_parked();
+        // A non-keyboard image canvas still owns its pointer gesture across guest repaints.
+        cx.update(|window, cx| {
+            view.update(cx, |view, cx| {
+                let mut document = view.document.clone();
+                document.revision += 1;
+                view.update_document(document, Environment::default(), window, cx);
+            })
+        });
+        cx.update(|window, cx| window.draw(cx).clear(cx));
+        cx.simulate_mouse_move(outside, Some(button), Default::default());
+        cx.simulate_mouse_up(outside, button, Default::default());
+        cx.run_until_parked();
+        let phases: Vec<_> = events
+            .borrow()
+            .iter()
+            .filter_map(|event| match &event.action {
+                Action::Canvas(CanvasEvent::Pointer { phase, button, .. }) if *button == index => {
+                    Some(phase.clone())
+                }
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            phases,
+            [PointerPhase::Down, PointerPhase::Move, PointerPhase::Up]
+        );
+    }
+}
+
+/// IME composition stays local until commit and uses UTF-16 selections without corrupting emoji.
+#[gpui::test]
+fn canvas_ime_preserves_marked_text_across_theme_changes_and_commits_once(cx: &mut TestAppContext) {
+    use gpui_kit::EntityInputHandler;
+    use plugin_runtime::plugin_protocol::ui::{Canvas, CanvasEvent};
+    init(cx);
+    let events = Rc::new(RefCell::new(vec![]));
+    let output = events.clone();
+    let slot = Rc::new(RefCell::new(None));
+    let capture = slot.clone();
+    let document = Document::new(
+        Node::new(
+            "drawing",
+            Kind::Canvas(Canvas {
+                focusable: true,
+                ..Default::default()
+            }),
+        )
+        .grow(),
+    )
+    .revision(8);
+    let initial = document.clone();
+    let (_, cx) = cx.add_window_view(move |window, cx| {
+        let view = cx.new(|cx| {
+            PluginView::new(
+                "test".into(),
+                initial,
+                Environment::default(),
+                move |event, _| output.borrow_mut().push(event),
+                window,
+                cx,
+            )
+        });
+        *capture.borrow_mut() = Some(view.clone());
+        Root::new(view, window, cx)
+    });
+    let view = slot.borrow_mut().take().unwrap();
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+    let drawing = cx.update(|_, cx| view.read(cx).canvases["drawing"].clone());
+    cx.update(|window, cx| {
+        drawing.update(cx, |drawing, cx| {
+            drawing.replace_and_mark_text_in_range(None, "中😀文", Some(1..3), window, cx);
+            assert_eq!(drawing.marked_text_range(window, cx), Some(0..4));
+            assert_eq!(
+                drawing
+                    .selected_text_range(false, window, cx)
+                    .unwrap()
+                    .range,
+                1..3
+            );
+            let mut adjusted = None;
+            assert_eq!(
+                drawing.text_for_range(2..3, &mut adjusted, window, cx),
+                Some("😀".into())
+            );
+            assert_eq!(adjusted, Some(1..3));
+        })
+    });
+    cx.run_until_parked();
+    assert!(
+        !events
+            .borrow()
+            .iter()
+            .any(|event| matches!(event.action, Action::Canvas(CanvasEvent::Text { .. })))
+    );
+    cx.update(|window, cx| {
+        view.update(cx, |view, cx| {
+            view.update_document(
+                document,
+                Environment {
+                    foreground: 0xf0f0f0,
+                    ui_font: plugin_runtime::plugin_protocol::FontStyle {
+                        size_px: Some(20.),
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                },
+                window,
+                cx,
+            )
+        });
+        assert_eq!(
+            view.read(cx).canvases["drawing"].entity_id(),
+            drawing.entity_id()
+        );
+        drawing.update(cx, |drawing, cx| {
+            assert_eq!(drawing.marked_text_range(window, cx), Some(0..4));
+            assert_eq!(drawing.font.size_px, Some(20.));
+            drawing.replace_text_in_range(Some(1..3), "空格 ", window, cx);
+            assert_eq!(drawing.marked_text_range(window, cx), None);
+        });
+    });
+    cx.run_until_parked();
+    let text: Vec<_> = events
+        .borrow()
+        .iter()
+        .filter_map(|event| match &event.action {
+            Action::Canvas(CanvasEvent::Text { text }) => Some(text.clone()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(text, ["中空格 文"]);
+}
+
 fn fixture() -> Document {
     Document::new(
         Node::column(

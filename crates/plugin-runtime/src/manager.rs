@@ -11,6 +11,7 @@ mod dependencies;
 mod language;
 pub(crate) mod scopes;
 mod settings;
+mod ui_events;
 use scopes::ParkedWorkspace;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -601,45 +602,6 @@ impl Manager {
                 arguments: (!arguments.is_null()).then_some(arguments),
             },
         )
-    }
-    pub fn event(&mut self, id: &str, event: Event) -> anyhow::Result<()> {
-        // Never deliver document text to a guest without the same editor permission as native reads.
-        let mut inner = &event;
-        let mut surfaces = Vec::new();
-        while let Event::Surface { panel, event } = inner {
-            surfaces.push(panel);
-            inner = event;
-        }
-        if matches!(inner, Event::Document { .. }) {
-            anyhow::ensure!(
-                surfaces.len() == 1,
-                "Document events must be scoped to one editor preview surface"
-            );
-            let entry = self
-                .installed
-                .get(id)
-                .ok_or_else(|| anyhow::anyhow!("Unknown plugin"))?;
-            anyhow::ensure!(
-                entry.manifest.protocol >= 6
-                    && entry.grants.contains("editor.commands")
-                    && entry.manifest.panels.iter().any(|descriptor| {
-                        descriptor.id == *surfaces[0] && descriptor.position == "editor"
-                    }),
-                "Document previews require a declared surface and editor.commands grant"
-            );
-        }
-        let instance = self
-            .live
-            .get_mut(id)
-            .ok_or_else(|| anyhow::anyhow!("Plugin is disabled"))?;
-        if let Err(error) = instance.call(Message::Event(event)) {
-            instance.stop();
-            if let Some(entry) = self.installed.get_mut(id) {
-                entry.error = Some(format!("{error:#}"));
-            }
-            return Err(error);
-        }
-        Ok(())
     }
     pub fn poll(&mut self) {
         self.poll_parked();

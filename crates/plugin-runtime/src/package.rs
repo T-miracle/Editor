@@ -348,7 +348,15 @@ impl Package {
             anyhow::ensure!(
                 if panel.position == "editor" {
                     manifest.protocol >= 6
-                        && manifest.permissions.contains("editor.commands")
+                        && if manifest.protocol == 7 {
+                            manifest.permissions.contains("editor.read")
+                                && manifest.scope == plugin_protocol::api::InstanceScope::Workspace
+                                && manifest.api.as_ref().is_some_and(|api| {
+                                    api.required.contains_key("editor.documents")
+                                })
+                        } else {
+                            manifest.permissions.contains("editor.commands")
+                        }
                         && !panel.file_extensions.is_empty()
                         && panel.file_extensions.len() <= 32
                         && panel.file_extensions.iter().all(|extension| {
@@ -362,7 +370,7 @@ impl Package {
                 } else {
                     panel.file_extensions.is_empty()
                 },
-                "Editor previews require protocol 6, editor.commands, and valid file extensions"
+                "Editor previews require document read authority and valid file extensions"
             );
             // Panel artwork must come from this package and remain small enough for native UI.
             for icon in [&panel.icon_light, &panel.icon_dark].into_iter().flatten() {

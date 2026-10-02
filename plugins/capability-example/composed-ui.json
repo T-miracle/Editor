@@ -1,0 +1,23 @@
+{
+  "version": 1,
+  "revision": 1,
+  "root": {
+    "id": "root",
+    "layout": { "grow": true, "padding": 12, "gap": 8 },
+    "kind": {
+      "type": "column",
+      "children": [
+        { "id": "zoom", "kind": { "type": "button", "label": "放大" } },
+        { "id": "caption", "kind": { "type": "input", "value": "", "placeholder": "输入画布标题" } },
+        { "id": "viewport", "layout": { "grow": true }, "kind": {
+          "type": "canvas", "focusable": true,
+          "paint": [{ "Svg": {
+            "rect": { "x": 0, "y": 0, "w": 160, "h": 100 },
+            "clip": { "x": 0, "y": 0, "w": 800, "h": 600 },
+            "source": "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"160\" height=\"100\"><rect x=\"8\" y=\"8\" width=\"144\" height=\"84\" rx=\"16\" fill=\"#74b3ec\"/></svg>"
+          }}]
+        }}
+      ]
+    }
+  }
+}

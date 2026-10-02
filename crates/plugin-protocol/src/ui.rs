@@ -1,4 +1,5 @@
 //! Portable native UI: plugins own state, while the host owns layout, input and theme.
+//! Protocol 7 composes canvases with native controls through independently negotiated capabilities.
 //! Documents require protocol 2; canvas controls use protocol 4, selectable dock edges protocol 5.
 //! Editor-local file previews and color vector painting use protocol 6 in the canvas messages.
 //! No GPUI objects cross this interface.
@@ -7,6 +8,9 @@ use serde::{Deserialize, Serialize};
 
 mod controls;
 pub use controls::*;
+mod canvas;
+pub use canvas::*;
+mod events;
 
 #[cfg(test)]
 mod tests;
@@ -17,6 +21,9 @@ pub const VERSION: u32 = 1;
 /// Replace a panel's complete view atomically. Revision is echoed in user events.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Document {
+    /// Preview replies echo their input version; regular panels leave it absent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source: Option<crate::api::DocumentVersion>,
     pub version: u32,
     pub revision: u64,
     pub root: Node,
@@ -28,6 +35,7 @@ pub struct Document {
 impl Document {
     pub fn new(root: Node) -> Self {
         Self {
+            source: None,
             version: VERSION,
             revision: 0,
             root,
@@ -110,6 +118,8 @@ pub struct Layout {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum Kind {
+    /// Any position in the same layout tree can hold a drawing surface; it has no implicit grid.
+    Canvas(Canvas),
     Column {
         children: Vec<Node>,
     },
@@ -213,6 +223,7 @@ pub struct UiEvent {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", content = "value", rename_all = "snake_case")]
 pub enum Action {
+    Canvas(CanvasEvent),
     Click,
     Change(String),
     Submit(String),
@@ -319,6 +330,7 @@ impl Node {
             return &self.role;
         }
         match &self.kind {
+            Kind::Canvas(_) => "canvas",
             Kind::Column { .. } | Kind::Row { .. } => "container",
             Kind::Scroll { .. } => "scroll",
             Kind::Text { .. } => "text",

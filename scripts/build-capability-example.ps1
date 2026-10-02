@@ -17,6 +17,7 @@ try {
         'manifest.json' = 'plugins/capability-example/manifest.json'
         'README.md' = 'plugins/capability-example/README.md'
         'welcome.txt' = 'plugins/capability-example/welcome.txt'
+        'composed-ui.json' = 'plugins/capability-example/composed-ui.json'
         'capability-example.wasm' = 'target/wasm32-wasip2/release/capability_example_guest.wasm'
     }
     $stream = [IO.File]::Create($destination)

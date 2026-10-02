@@ -1,5 +1,17 @@
 # 插件原生界面协议 v1
 
+## 可组合布局（清单 protocol 7）
+
+新插件协商 `ui.native ^1`，通过 `api::Output.views` 返回 `ui::Document`。`Column`、`Row`、`Scroll`、`Tabs` 可在任意位置嵌套标准组件和 `Kind::Canvas`，没有终端专属槽位。画布另需 `ui.canvas ^1`，字符网格仅在协商 `ui.grid ^1` 并设置 `Canvas.grid=true` 时出现。UI 能力不授予文件、文档或进程权限。
+
+`Canvas.paint` 使用通用 `Paint::Fill/Text/Svg`；SVG 由后台受限渲染器绘制，禁止环境中的文件与网络读取。每份文档最多 2048 个节点、32000 个绘制操作、16 个 SVG，序列化后最多 2 MiB。无效布局在发布之前拒绝。原生文字采用宿主字体；插件通过 `Notification::Theme` 更新自己的绘图颜色、字号，尺寸变化通过画布节点的 `CanvasEvent::Resize` 热更新。
+
+每个 `UiEvent` 包含当前文档 revision 和节点 ID。宿主先验证活动节点、模态范围与事件类型；过期版本返回 `StaleRevision`，不存在或禁用节点返回 `InvalidHandle`，事件类型不匹配返回 `InvalidRequest`。这些被拒绝的宿主回调不会使插件崩溃。稳定节点 ID 保留输入框焦点与组合输入。交互画布须显式设置 `focusable=true`，IME 的未提交文本保留在宿主，提交后通过 `CanvasEvent::Text` 发给该画布；相邻输入框独立处理自己的输入。鼠标按钮编号为左 0、中 1、右 2，坐标相对画布节点。
+
+编辑区预览声明 `position:"editor"` 和 `file_extensions`，使用工作区实例，申请 `editor.read` 并协商 `editor.documents ^1`。宿主发送 `Notification::Preview { document, text }`，其中 `DocumentVersion` 指向内存文档，`text` 包括未保存修改。插件必须在 `ui::Document.source` 原样返回版本；过期预览不会替换新文档。`document:None` 与空文本表示撤销当前预览。普通面板 `source` 留空。隐藏或卸载后销毁原生事件目标并移除其布局空间。
+
+独立 SDK 示例见 `plugins/capability-example/src/composition.rs` 与同目录 `composed-ui.json`；将示例的 `label` 配置为 `composable-ui` 可展示组合界面，`ui-layout` 命令参数 `form/canvas/combined` 切换三种布局。以下 protocol 2–6 文档仅适用于迁移期间的旧协议。
+
 ## 编辑区预览与彩色 SVG 绘制（清单 protocol 6）
 
 面板使用 `position: "editor"` 与非空 `file_extensions`（扩展名不含点，大小写不敏感）。需要在清单中申请并获得 `editor.commands`。宿主选择当前文件匹配的可见预览，将原生编辑器和插件面板放入可拖动的左右分栏；预览不加入外部停靠树。多个插件匹配时按插件／面板 ID 排序选择首个。

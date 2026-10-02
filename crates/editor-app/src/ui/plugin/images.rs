@@ -11,17 +11,19 @@ use std::{
 
 /// The image bounds describe the visible raster; the SVG may extend beyond them after zooming.
 #[derive(Clone)]
-pub(super) struct VectorImage {
+pub(crate) struct VectorImage {
     pub rect: Rect,
     pub image: Arc<RenderImage>,
 }
 
 /// Every image slot corresponds to one drawing operation in the same immutable scene.
-pub(super) type SceneImages = BTreeMap<String, Arc<Vec<Option<VectorImage>>>>;
+pub(crate) type SceneImages = BTreeMap<String, Arc<Vec<Option<VectorImage>>>>;
 
 /// Font discovery and parsing are cached while the worker owns the currently published scenes.
 #[derive(Default)]
-pub(super) struct VectorRenderer {
+pub(crate) struct VectorRenderer {
+    /// Derived canvas surfaces retain their identities while the owning native document stays unchanged.
+    nested: BTreeMap<String, (Arc<Scene>, Arc<Scene>)>,
     scenes: BTreeMap<String, (Arc<Scene>, Arc<Vec<Option<VectorImage>>>)>,
     trees: BTreeMap<[u8; 32], Arc<usvg::Tree>>,
     fonts: Option<Arc<usvg::fontdb::Database>>,
@@ -30,6 +32,41 @@ pub(super) struct VectorRenderer {
 impl VectorRenderer {
     /// Repaint only changed scene vectors, retaining native image IDs across idle worker polls.
     pub fn prepare(&mut self, scenes: &BTreeMap<String, Arc<Scene>>) -> SceneImages {
+        let mut surfaces = scenes.clone();
+        let mut nested_keys = BTreeSet::new();
+        for (key, scene) in scenes {
+            if let Some(document) = &scene.ui {
+                let mut visit = |node: &plugin_runtime::plugin_protocol::ui::Node| {
+                    if let plugin_runtime::plugin_protocol::ui::Kind::Canvas(drawing) = &node.kind {
+                        let key = format!("{key}/canvas/{}", node.id);
+                        nested_keys.insert(key.clone());
+                        if self
+                            .nested
+                            .get(&key)
+                            .is_none_or(|(owner, _)| !Arc::ptr_eq(owner, scene))
+                        {
+                            self.nested.insert(
+                                key.clone(),
+                                (
+                                    scene.clone(),
+                                    Arc::new(Scene {
+                                        paint: drawing.paint.clone(),
+                                        ..Default::default()
+                                    }),
+                                ),
+                            );
+                        }
+                        surfaces.insert(key.clone(), self.nested[&key].1.clone());
+                    }
+                };
+                document.root.visit(&mut visit);
+                if let Some(dialog) = &document.dialog {
+                    dialog.content.visit(&mut visit);
+                }
+            }
+        }
+        self.nested.retain(|key, _| nested_keys.contains(key));
+        let scenes = &surfaces;
         self.scenes.retain(|key, _| scenes.contains_key(key));
         let mut used = BTreeSet::new();
         for (key, scene) in scenes {

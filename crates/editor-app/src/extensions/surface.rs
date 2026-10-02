@@ -1117,12 +1117,16 @@ impl Render for ExtensionPanel {
                 let tx = self.worker.tx.clone();
                 let plugin = self.active.clone().unwrap();
                 let panel = self.surface_id.clone().unwrap();
+                let visible = self.visible.clone();
                 self.native_ui = Some(cx.new(|cx| {
                     crate::ui::plugin::PluginView::new(
                         plugin.clone(),
                         document,
                         environment,
                         move |event, _| {
+                            if !visible.get() {
+                                return;
+                            }
                             let _ = tx.send(Work::Event(
                                 plugin.clone(),
                                 PluginEvent::Surface {
@@ -1136,6 +1140,15 @@ impl Render for ExtensionPanel {
                     )
                 }));
             }
+            let key = format!(
+                "{}/{}",
+                self.active.as_deref().unwrap_or_default(),
+                self.surface_id.as_deref().unwrap_or_default()
+            );
+            self.native_ui
+                .as_ref()
+                .unwrap()
+                .update(cx, |view, cx| view.update_images(&key, &self.images, cx));
             return div()
                 .size_full()
                 .key_context("PluginSurface")

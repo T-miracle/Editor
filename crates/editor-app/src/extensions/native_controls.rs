@@ -2,6 +2,15 @@
 use super::*;
 use crate::ui::controls::menu::{MenuStyle, PopupMenu};
 impl ExtensionPanel {
+    /// Release native focus/IME targets with the hidden surface, while the guest keeps its own view state.
+    pub(super) fn hide(&mut self) {
+        self.visible.set(false);
+        self.native_ui = None;
+        self.canvas_controls = None;
+        self.editing = None;
+        self.command_popup = None;
+        self.composition.clear();
+    }
     pub(super) fn command_popup(
         &mut self,
         window: &mut Window,

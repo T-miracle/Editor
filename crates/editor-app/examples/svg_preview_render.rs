@@ -1,6 +1,6 @@
 //! Validate the real WASM drawing output with the same native vector renderer as the editor.
 
-#[path = "../src/extensions/images.rs"]
+#[path = "../src/ui/plugin/images.rs"]
 mod images;
 
 use plugin_runtime::{

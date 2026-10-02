@@ -4,9 +4,9 @@
 
 来源：[已确认规格](../plugin-api-platform.md)。测试边界已由用户确认。
 
-状态：总方案和 20 张工单已发布，GitHub 是正式议题跟踪器。工单 01–08 已提交推送（`1969094`、`bc3102f`、`c2ca98d`、`9f5a2a7`、`762cc00`、`891651f`、`8bf4790`、`556c061`），GitHub #2–#9 已关闭。工单 09 已实现并通过测试及双轴审查，随本提交推送并关闭 GitHub #10。用户已授权连续完成剩余工单，每项通过验证后提交、推送、核对关闭再继续下一项。
+状态：总方案和 20 张工单已发布，GitHub 是正式议题跟踪器。工单 01–09 已提交推送（`1969094`、`bc3102f`、`c2ca98d`、`9f5a2a7`、`762cc00`、`891651f`、`8bf4790`、`556c061`、`5273c78`），GitHub #2–#10 已关闭。工单 10 已实现并通过测试及双轴审查，随本提交推送并关闭 GitHub #11。用户已授权连续完成剩余工单，每项通过验证后提交、推送、核对关闭再继续下一项。
 
-设计基线：[GitHub #1](https://github.com/T-miracle/Editor/issues/1)。当前交付：[工单 09 / GitHub #10](https://github.com/T-miracle/Editor/issues/10)；下一项为 [工单 10 / GitHub #11](https://github.com/T-miracle/Editor/issues/11)。验证记录见 [原生安装验证](../plugin-api-installers-verification.md)。
+设计基线：[GitHub #1](https://github.com/T-miracle/Editor/issues/1)。当前交付：[工单 10 / GitHub #11](https://github.com/T-miracle/Editor/issues/11)；下一项为 [工单 11 / GitHub #12](https://github.com/T-miracle/Editor/issues/12)。验证记录见 [组合 UI 验证](../plugin-api-composable-ui-verification.md)。
 
 ## GitHub 议题映射
 

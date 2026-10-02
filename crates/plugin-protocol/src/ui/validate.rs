@@ -10,6 +10,8 @@ pub(super) fn document(document: &Document) -> Result<(), String> {
         ids: BTreeSet::new(),
         count: 0,
         bytes: 0,
+        drawings: 0,
+        vectors: 0,
     };
     validator.node(&document.root, 0)?;
     if let Some(dialog) = &document.dialog {
@@ -17,6 +19,13 @@ pub(super) fn document(document: &Document) -> Result<(), String> {
         validator.text(&dialog.title)?;
         dimension(dialog.width, 240., 1200.)?;
         validator.node(&dialog.content, 0)?;
+    }
+    if serde_json::to_vec(document)
+        .map_err(|error| error.to_string())?
+        .len()
+        > 2 * 1024 * 1024
+    {
+        return Err("UI document encoding quota exceeded".into());
     }
     Ok(())
 }
@@ -33,6 +42,8 @@ struct Validator {
     ids: BTreeSet<String>,
     count: usize,
     bytes: usize,
+    drawings: usize,
+    vectors: usize,
 }
 impl Validator {
     fn budget(&mut self, count: usize) -> Result<(), String> {
@@ -81,6 +92,26 @@ impl Validator {
         dimension(layout.gap, 0., 256.)?;
         dimension(layout.padding, 0., 256.)?;
         match &node.kind {
+            Kind::Canvas(canvas) => {
+                canvas.validate()?;
+                // Drawings count toward this whole document, preventing many small canvases bypassing quotas.
+                self.drawings += canvas.paint.len();
+                if self.drawings > 32_000 {
+                    return Err("UI drawing quota exceeded".into());
+                }
+                for paint in &canvas.paint {
+                    match paint {
+                        crate::Paint::Text { text, .. } => self.text(text)?,
+                        crate::Paint::Svg { .. } => {
+                            self.vectors += 1;
+                            if self.vectors > 16 {
+                                return Err("UI vector quota exceeded".into());
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+            }
             Kind::Column { children } | Kind::Row { children } => {
                 for child in children {
                     self.node(child, depth + 1)?;

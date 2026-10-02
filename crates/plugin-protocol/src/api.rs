@@ -203,6 +203,11 @@ pub enum Input {
 /// Native UI notifications contain no legacy canvas or character-grid fields.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum Notification {
+    /// An authorized preview receives the current unsaved text with the open-document identity/version.
+    Preview {
+        document: Option<DocumentVersion>,
+        text: String,
+    },
     /// Prepare one host-managed LSP; the reply supplies data, never a process handle.
     LanguageService(crate::language::Context),
     Process {

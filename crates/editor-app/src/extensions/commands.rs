@@ -55,7 +55,7 @@ impl EditorApp {
             return;
         };
         panel.update(cx, |panel, cx| {
-            panel.visible.set(false);
+            panel.hide();
             cx.notify();
         });
         self.session_state

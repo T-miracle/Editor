@@ -219,6 +219,45 @@ impl Instance {
             "ui.native was not negotiated"
         );
         anyhow::ensure!(output.views.len() <= 8, "Too many native views");
+        for view in &output.views {
+            // Validate structure before walking or allocating native controls, preserving a typed failure.
+            view.document
+                .validate()
+                .map_err(|message| Failure::new(ErrorCode::InvalidRequest, message))?;
+            if view.document.source.as_ref()
+                != self
+                    .preview_sources
+                    .get(&view.panel)
+                    .and_then(Option::as_ref)
+            {
+                return Err(Failure::new(
+                    ErrorCode::StaleRevision,
+                    "Preview source version does not match its current input",
+                )
+                .into());
+            }
+            let mut canvas = false;
+            let mut grid = false;
+            let mut visit = |node: &ui::Node| {
+                if let ui::Kind::Canvas(value) = &node.kind {
+                    canvas = true;
+                    grid |= value.grid;
+                }
+            };
+            view.document.root.visit(&mut visit);
+            if let Some(dialog) = &view.document.dialog {
+                dialog.content.visit(&mut visit);
+            }
+            for (required, capability) in [(canvas, "ui.canvas"), (grid, "ui.grid")] {
+                if required && !api.capabilities.contains_key(capability) {
+                    return Err(api::Failure::new(
+                        api::ErrorCode::CapabilityUnavailable,
+                        format!("{capability} was not negotiated"),
+                    )
+                    .into());
+                }
+            }
+        }
         Ok(Reply {
             language_service: output.language_service,
             configuration: output.configuration,

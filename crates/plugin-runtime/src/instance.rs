@@ -524,6 +524,8 @@ mod tests {
 
 /// One isolated plugin has its own Store, WASI table, resource handles and fuel budget.
 pub struct Instance {
+    /// UI preview publication is tied to the latest authorized input for each declared surface.
+    pub(crate) preview_sources: std::collections::BTreeMap<String, Option<api::DocumentVersion>>,
     /// Configuration belongs to the same owner as its runtime resources, not the currently selected workspace.
     pub(crate) configuration: plugin_protocol::settings::Effective,
     /// Host invocation IDs cannot be confused with stale completions after another call.
@@ -602,6 +604,7 @@ impl Instance {
         store.set_fuel(100_000_000)?;
         let bindings = Plugin::instantiate(&mut store, &component, &linker)?;
         let mut instance = Self {
+            preview_sources: Default::default(),
             configuration: Default::default(),
             next_call: 1,
             protocol: manifest.protocol,
@@ -756,6 +759,7 @@ impl Instance {
         Ok(())
     }
     pub fn stop(&mut self) {
+        self.preview_sources.clear();
         self.store.data_mut().subscriptions.clear();
         for request in self.store.data_mut().editor_requests.values() {
             request.call.retire();

@@ -2,11 +2,13 @@
 #[cfg(test)]
 mod capability_tests;
 mod commands;
+#[cfg(test)]
+mod composable_tests;
 pub(crate) mod contributions;
 #[cfg(test)]
 mod dependency_tests;
 mod editor_requests;
-mod images;
+use crate::ui::plugin::images;
 mod installation;
 #[cfg(test)]
 mod installer_tests;
@@ -77,6 +79,8 @@ pub struct ExtensionPanel {
     editor_preview: bool,
     /// The editor's revision token avoids copying unchanged documents on every shell repaint.
     preview_document: Option<(PathBuf, u64)>,
+    /// New previews echo the open-document token so old drawing results cannot replace a newer file.
+    preview_version: Option<protocol::api::DocumentVersion>,
     panel_title: String,
     /// Cache package-owned artwork so repainting does not read from disk.
     panel_icons: [Option<Vec<u8>>; 2],
@@ -239,6 +243,7 @@ impl ExtensionPanel {
             surface_id: None,
             editor_preview: false,
             preview_document: None,
+            preview_version: None,
             panel_title: "插件管理".into(),
             panel_icons: [None, None],
             panel_icon_digest: None,
@@ -323,6 +328,7 @@ impl ExtensionPanel {
             surface_id: Some(panel.id),
             editor_preview: panel.position == "editor",
             preview_document: None,
+            preview_version: None,
             panel_title: panel.title,
             panel_icons,
             panel_icon_digest,
@@ -455,6 +461,7 @@ impl ExtensionPanel {
                     self.instance_epoch = epoch;
                     self.last_size = (0., 0., 0., 0.);
                     self.preview_document = None;
+                    self.preview_version = None;
                     self.native_ui = None;
                     self.canvas_controls = None;
                     self.command_popup = None;
@@ -685,6 +692,13 @@ impl ExtensionPanel {
                     "{id}/{}",
                     self.surface_id.as_deref().unwrap_or_default()
                 ))
+            })
+            .filter(|scene| {
+                !self.editor_preview
+                    || scene
+                        .ui
+                        .as_ref()
+                        .is_none_or(|document| document.source == self.preview_version)
             })
             .cloned()
     }
@@ -965,7 +979,7 @@ impl DockPanel for ExtensionPanel {
                                     .as_ref()
                                     .zip(this.surface_id.as_ref())
                                     .map(|(id, surface)| format!("{id}/{surface}"));
-                                this.visible.set(false);
+                                this.hide();
                                 let _ = this.parent.update(cx, |app, cx| {
                                     // Hiding from the title bar is a saved visibility choice too.
                                     if let Some(key) = panel_key {
@@ -1065,7 +1079,7 @@ impl EditorApp {
                             if visible {
                                 panel.show(window, cx);
                             } else {
-                                panel.visible.set(false);
+                                panel.hide();
                             }
                             cx.notify();
                         });

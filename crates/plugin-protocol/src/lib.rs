@@ -197,7 +197,7 @@ impl Rect {
 }
 
 /// A declarative drawing list; text is shaped by the native host text system.
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum Paint {
     /// Protocol 6 draws a full-color vector above preceding operations, preserving transparency.
     /// The explicit clip bounds raster allocation when the image is zoomed beyond its viewport.

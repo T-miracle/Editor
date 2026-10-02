@@ -1,5 +1,7 @@
 # Capability Example
 
+0.8.0 提供组合 UI 示例：把 `label` 显式设置为 `composable-ui`，即可使用原生按钮和输入框操作 SVG 画布。`ui.canvas` 是可选能力，普通文本界面不需要它；示例不启用字符网格。`composed-ui.json` 通过公开打包脚本随 WASM 一起携带。`ui-layout` 命令接受 `form`、`canvas`、`combined`，示范同一通用布局树的三种用法。预览验收包声明编辑区面板，使用带版本的内存文档通知，回传 `Document.source`；不读取磁盘来替代未保存内容。
+
 开发验证插件，演示独立能力版本、类型化文件及编辑器访问和原生文本界面。基础 API、package.assets、ui.native、workspace.files、storage.private、editor.documents、ui.panels、configuration 分别协商 1.x；不存在的可选接口会降级显示。0.5.0 默认每个工作区独立实例。
 
 进程回归通过相同公开打包入口追加 `process` 协商与独立服务/执行权限，使用 `scope-probe`

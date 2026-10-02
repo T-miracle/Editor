@@ -1,5 +1,7 @@
 //! Native plugin view lifecycle. GPUI entities stay here; guests receive typed events only.
+mod canvas;
 pub(crate) mod controls;
+pub(crate) mod images;
 mod render;
 #[cfg(test)]
 mod tests;
@@ -35,12 +37,34 @@ pub(crate) struct PluginView {
     sink: EventSink,
     inputs: BTreeMap<String, NativeInput>,
     scrolls: BTreeMap<String, ScrollHandle>,
+    canvases: BTreeMap<String, Entity<canvas::CanvasView>>,
     dialog_focus: FocusHandle,
     previous_focus: Option<FocusHandle>,
     dismissed_dialog: Option<String>,
 }
 
 impl PluginView {
+    /// Image decoding belongs to the worker; native children only borrow the matching immutable raster.
+    pub(crate) fn update_images(
+        &self,
+        panel_key: &str,
+        images: &images::SceneImages,
+        cx: &mut Context<Self>,
+    ) {
+        for (id, canvas) in &self.canvases {
+            let images = images.get(&format!("{panel_key}/canvas/{id}")).cloned();
+            canvas.update(cx, |view, cx| {
+                if match (&view.images, &images) {
+                    (Some(old), Some(new)) => !std::sync::Arc::ptr_eq(old, new),
+                    (None, None) => false,
+                    _ => true,
+                } {
+                    view.images = images;
+                    cx.notify();
+                }
+            });
+        }
+    }
     pub(crate) fn new(
         plugin: String,
         document: Document,
@@ -56,6 +80,7 @@ impl PluginView {
             sink: Rc::new(sink),
             inputs: BTreeMap::new(),
             scrolls: BTreeMap::new(),
+            canvases: BTreeMap::new(),
             dialog_focus: cx.focus_handle(),
             previous_focus: None,
             dismissed_dialog: None,
@@ -121,7 +146,68 @@ impl PluginView {
             .map(|n| n.id.clone())
             .collect();
         self.scrolls.retain(|id, _| scroll_ids.contains(id));
+        let canvas_ids: BTreeSet<_> = nodes
+            .iter()
+            .filter(|node| matches!(node.kind, Kind::Canvas(_)))
+            .map(|node| node.id.clone())
+            .collect();
+        self.canvases.retain(|id, _| canvas_ids.contains(id));
         for node in nodes {
+            if let Kind::Canvas(drawing) = &node.kind {
+                if !self.canvases.contains_key(&node.id) {
+                    let owner = cx.entity().downgrade();
+                    let id = node.id.clone();
+                    let view = cx.new(|cx| {
+                        let canvas = cx.entity().downgrade();
+                        canvas::CanvasView::new(
+                            drawing.clone(),
+                            move |event, revision, cx| {
+                                let owner = owner.clone();
+                                let id = id.clone();
+                                let canvas = canvas.clone();
+                                let measurement = matches!(
+                                    event,
+                                    plugin_runtime::plugin_protocol::ui::CanvasEvent::Resize { .. }
+                                );
+                                cx.defer(move |cx| {
+                                    let accepted = owner.update(cx, |this, cx| {
+                                        this.emit_version(&id, revision, Action::Canvas(event), cx)
+                                    });
+                                    if measurement && !matches!(accepted, Ok(true)) {
+                                        let _ = canvas.update(cx, |view, cx| {
+                                            view.invalidate_measurement();
+                                            cx.notify();
+                                        });
+                                    }
+                                });
+                            },
+                            window,
+                            cx,
+                        )
+                    });
+                    self.canvases.insert(node.id.clone(), view);
+                }
+                let active = self.document.active_node(&node.id).is_some();
+                let font =
+                    self.environment
+                        .font_style(&self.plugin, node.theme_role(), drawing.grid);
+                self.canvases[&node.id].update(cx, |view, cx| {
+                    view.drawing = drawing.clone();
+                    view.font = font;
+                    if active && !view.enabled {
+                        view.invalidate_measurement();
+                    }
+                    view.enabled = active;
+                    view.foreground = self.environment.foreground;
+                    if !active {
+                        view.deactivate();
+                    } else if !drawing.focusable {
+                        view.cancel_composition();
+                    }
+                    view.revision = self.document.revision;
+                    cx.notify();
+                });
+            }
             if let Kind::Scroll { .. } = &node.kind {
                 self.scrolls.entry(node.id.clone()).or_default();
             }
@@ -186,44 +272,34 @@ impl PluginView {
 
     /// Old elements cannot activate removed/disabled controls or controls behind a modal.
     fn emit(&mut self, id: &str, action: Action, cx: &mut Context<Self>) {
-        let accepted = match &action {
-            Action::Dismiss => {
-                self.document.dialog.as_ref().is_some_and(|d| d.id == id)
-                    && self.dismissed_dialog.as_deref() != Some(id)
-            }
-            _ => self
-                .document
-                .active_node(id)
-                .is_some_and(|node| match (&node.kind, &action) {
-                    (Kind::Button { .. }, Action::Click)
-                    | (Kind::Checkbox { .. }, Action::Toggle(_)) => true,
-                    (Kind::Input(_), Action::Change(value) | Action::Submit(value)) => {
-                        value.len() <= 65536
-                    }
-                    (Kind::Choice { options, .. }, Action::Select(id)) => {
-                        options.iter().any(|o| &o.id == id && !o.disabled)
-                    }
-                    (Kind::Tabs { tabs, .. }, Action::Select(id)) => {
-                        tabs.iter().any(|t| &t.id == id)
-                    }
-                    _ => false,
-                }),
+        self.emit_version(id, self.document.revision, action, cx);
+    }
+
+    /// Deferred canvas measurements retain the revision at emission instead of borrowing a newer tree.
+    fn emit_version(
+        &mut self,
+        id: &str,
+        revision: u64,
+        action: Action,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let event = UiEvent {
+            revision,
+            node: id.into(),
+            action,
         };
-        if !accepted {
-            return;
+        if self.document.validate_event(&event).is_err()
+            || (matches!(event.action, Action::Dismiss)
+                && self.dismissed_dialog.as_deref() == Some(id))
+        {
+            return false;
         }
-        if matches!(action, Action::Dismiss) {
+        if matches!(event.action, Action::Dismiss) {
             self.dismissed_dialog = Some(id.into());
             cx.notify();
         }
-        (self.sink)(
-            UiEvent {
-                revision: self.document.revision,
-                node: id.into(),
-                action,
-            },
-            cx,
-        );
+        (self.sink)(event, cx);
+        true
     }
 }
 

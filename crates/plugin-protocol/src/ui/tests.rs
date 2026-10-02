@@ -151,3 +151,63 @@ fn serde_preserves_edit_revisions_and_event_payloads() {
         event
     );
 }
+
+/// Per-document vector quotas cannot be bypassed by spreading drawings across multiple canvases.
+#[test]
+fn canvas_geometry_and_aggregate_resource_limits_are_validated() {
+    let vector = crate::Paint::Svg {
+        rect: crate::Rect {
+            x: 0.,
+            y: 0.,
+            w: 100.,
+            h: 100.,
+        },
+        clip: crate::Rect {
+            x: 0.,
+            y: 0.,
+            w: 100.,
+            h: 100.,
+        },
+        source: "<svg/>".into(),
+    };
+    let nodes = (0..17)
+        .map(|index| {
+            Node::new(
+                format!("canvas{index}"),
+                Kind::Canvas(Canvas {
+                    paint: vec![vector.clone()],
+                    ..Default::default()
+                }),
+            )
+        })
+        .collect();
+    assert!(
+        Document::new(Node::column("root", nodes))
+            .validate()
+            .unwrap_err()
+            .contains("vector quota")
+    );
+    let invalid = Document::new(Node::new(
+        "invalid",
+        Kind::Canvas(Canvas {
+            caret: Some(crate::Rect {
+                x: f32::NAN,
+                ..Default::default()
+            }),
+            ..Default::default()
+        }),
+    ));
+    assert!(invalid.validate().is_err());
+    let drawing = Document::new(Node::new("drawing", Kind::Canvas(Canvas::default())));
+    let event = UiEvent {
+        revision: 0,
+        node: "drawing".into(),
+        action: Action::Canvas(CanvasEvent::Text {
+            text: "no focus".into(),
+        }),
+    };
+    assert_eq!(
+        drawing.validate_event(&event).unwrap_err().code,
+        crate::api::ErrorCode::InvalidRequest
+    );
+}
