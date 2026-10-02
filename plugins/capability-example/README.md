@@ -1,11 +1,23 @@
 # Capability Example
 
-开发验证插件，演示独立能力版本、类型化文件访问和原生文本界面。基础 API、package.assets、ui.native、workspace.files、storage.private 分别协商 1.x；不存在的可选接口会降级显示。0.2.0 默认每个工作区独立实例。
+开发验证插件，演示独立能力版本、类型化文件及编辑器访问和原生文本界面。基础 API、package.assets、ui.native、workspace.files、storage.private、editor.documents、ui.panels 分别协商 1.x；不存在的可选接口会降级显示。0.3.0 默认每个工作区独立实例。
 
-安装时需要批准 assets.read（读取包资源）、workspace.read（读取所属工作区）与 storage（读写实例私有文件）。不申请进程、网络或剪贴板权限。菜单命令“检查类型化错误”验证未知操作、错误参数与路径越界的明确返回。
+安装时需要批准 assets.read（读取包资源）、workspace.read（读取所属工作区）、storage（读写实例私有文件）、editor.read（选区和文档事件）、editor.write（保存已打开文档）与 ui.panels（自身面板显隐）。不申请进程、网络或剪贴板权限。菜单命令“检查类型化错误”验证未知操作、错误参数与路径越界的明确返回。
 
 scope-write / scope-read 将工作区的 source.txt 与私有 value.txt 一起显示；scope-probe 接收公开 Operation JSON，并将 SDK 的类型化结果显示为文本。诊断命令验证跨实例句柄拒绝、应用级实例不具有工作区权限，以及显式释放后的句柄失效。
 
 SDK 提供 open_workspace、open_data、read_file、write_file、close_resource；句柄由宿主签发，不应持久化。workspace.files 1.0 只读，storage.private 1.0 支持私有根目录直接子文件的原子写入，每文件最多 1 MiB，累计受清单 storage_limit 约束。用户设置、其他工作区数据及宿主快照均不在可读根目录内。
 
 通过宿主公开的 --plugin-cargo 入口构建，不使用宿主业务源码路径。开发打包脚本为 build-capability-example.ps1；输出仅用于新平台迁移验证，不纳入正式发行包。
+
+## 编辑器请求与事件
+
+- “读取选区及文档版本”显示选中文字并保存文档标识；“保存已读取版本的文档”仅保存该打开实体的相同版本。编辑、重命名、关闭后旧版本失败，不会跟随当前焦点保存其他文档。磁盘冲突须由用户解决。
+- “读取活动目录”返回工作区相对目录；无活动文档时返回空字符串，代表工作区根目录。
+- “隐藏自身面板”回收停靠空间；可从编辑器插件命令菜单重新“显示自身面板”。插件不能指定其他包的面板。
+- “订阅文档变化”显示版本通知，“释放文档订阅”停止投递。溢出显式显示失败，用户再次点击订阅即可恢复。
+- “取消当前请求”显示实际结果。尚未进入提交阶段时为 NotExecuted；原子提交开始后只能 WaitingStopped，不承诺撤回写入。StopWaiting 和 TryTerminate 在这些原子操作中有相同边界；后者不意味着保证终止。准备阶段可能生成临时文件和历史快照，取消不会清除已有历史快照。
+
+`api::guest::EditorTask::start` 接受类型化 EditorOperation 和截止时间，`update` 自动关联通知并过滤其他任务、终态后的结果。示例只保存最新 UI 意图的 EditorTask，因此旧请求不能覆盖新请求结果。界面分别显示 Accepted、Progress、Completed 或 Cancelled；保存后台准备后才尝试提交，即时操作可能直接完成。
+
+每实例最多 32 个未结请求、8 个订阅；每个文档队列最多 64 个待处理实体，按实体合并为最新版本并公平分批投递。跨批次保留最多 1024 个实体的版本水位；容量耗尽以 LimitExceeded 终止订阅，需重新订阅。通知是版本提示而非完整文本增量日志，不承诺重放订阅前的变化。最终请求结果保留至投递或实例退出，不作为可丢弃进度处理。停用、卸载或撤销信任统一撤销实例资源；已停用 guest 不再接收回调。

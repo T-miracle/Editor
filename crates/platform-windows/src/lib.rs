@@ -8,6 +8,9 @@ use std::{
 use tempfile::NamedTempFile;
 use thiserror::Error;
 
+mod staged;
+pub use staged::PreparedFileStore;
+
 #[derive(Debug, Default, Clone, Copy)]
 pub struct NativeFileStore;
 

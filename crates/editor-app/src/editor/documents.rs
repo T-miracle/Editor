@@ -87,6 +87,8 @@ impl EditorApp {
                 }
                 let previous = self.tabs[index].session.path().to_path_buf();
                 self.tabs[index].session.rename(target.clone());
+                self.tabs[index].capability_revision =
+                    self.tabs[index].capability_revision.saturating_add(1);
                 renamed_editors.push((self.tabs[index].editor.clone(), target.clone()));
                 if self.active_path.as_ref() == Some(&previous) {
                     self.active_path = Some(target);
@@ -152,6 +154,8 @@ impl EditorApp {
                     tab.editor
                         .update(cx, |editor, cx| editor.set_value(contents, window, cx));
                     tab.suppress_change = false;
+                    // Silent disk reloads still invalidate plugin snapshots and notify subscriptions.
+                    tab.capability_revision = tab.capability_revision.saturating_add(1);
                     tab.disk_digest = digest;
                     // set_value is silent and keeps the clean revision, so refresh its preview explicitly.
                     preview_reloaded |= self.active_path.as_ref() == Some(&path);
@@ -345,6 +349,7 @@ impl EditorApp {
                                 tab.editor.entity_id() == changed_editor.entity_id()
                             }) {
                                 let tab = &mut this.tabs[index];
+                                tab.capability_revision = tab.capability_revision.saturating_add(1);
                                 if tab.suppress_change {
                                     return;
                                 }
@@ -367,6 +372,7 @@ impl EditorApp {
                     }
                 });
                 self.tabs.push(OpenTab {
+                    capability_revision: 0,
                     session: opened.session,
                     editor,
                     disk_digest,
@@ -664,6 +670,12 @@ impl EditorApp {
             cx.notify();
             return;
         };
+        if self.plugin_saves.contains(self.tabs[index].session.path()) {
+            // Serialize user and plugin saves so a delayed plugin snapshot cannot overwrite a newer save.
+            self.status = "此文档正在保存，请稍候".into();
+            cx.notify();
+            return;
+        }
         if !self.tabs[index].session.is_dirty() && self.tabs[index].disk_state != DiskState::Deleted
         {
             self.status = t!("status.no_changes_to_save").to_string();

@@ -77,6 +77,10 @@ pub(super) struct OperationProgress {
 }
 #[derive(Default)]
 pub(super) struct Published {
+    /// UI document ingress is bounded independently of the worker's command channel.
+    pub document_events: plugin_runtime::DocumentEvents,
+    /// Bounded typed work has a completion gate that survives queue transfer and rejects stale callbacks.
+    pub editor_requests: Vec<(String, plugin_runtime::EditorRequest)>,
     pub entries: Vec<Installed>,
     pub startup: BTreeMap<String, String>,
     pub scenes: BTreeMap<String, Arc<Scene>>,
@@ -215,11 +219,26 @@ impl Worker {
                     }) => manager.invoke_command(&plugin, &command, arguments),
                     None => Ok(()),
                 };
+                match output.lock().unwrap().document_events.take_batch(64) {
+                    Ok(changes) => {
+                        for change in changes {
+                            manager.document_changed(change);
+                        }
+                    }
+                    Err(error) => manager.document_events_failed(error),
+                }
                 manager.poll();
                 let mut effects = vec![];
                 let mut scenes = BTreeMap::new();
                 let mut processes = BTreeMap::new();
+                let mut editor_requests = Vec::new();
                 for (id, instance) in &mut manager.live {
+                    editor_requests.extend(
+                        instance
+                            .take_editor_requests()
+                            .into_iter()
+                            .map(|request| (id.clone(), request)),
+                    );
                     for (panel, scene) in &instance.scenes {
                         scenes.insert(format!("{id}/{panel}"), scene.clone());
                     }
@@ -240,6 +259,19 @@ impl Worker {
                 // Vector parsing and rendering stay on this worker, outside the shared-state lock.
                 let images = vectors.prepare(&scenes);
                 let mut published = output.lock().unwrap();
+                published
+                    .editor_requests
+                    .retain(|(_, request)| !request.status().is_terminal());
+                for request in editor_requests {
+                    if published.editor_requests.len() < 256 {
+                        published.editor_requests.push(request);
+                    } else {
+                        request.1.finish(Err(api::Failure::new(
+                            api::ErrorCode::LimitExceeded,
+                            "Editor publication queue is full",
+                        )));
+                    }
+                }
                 let replacement_succeeded = result.is_ok();
                 // Startup loading ends only after Manager::open has restored every enabled plugin.
                 published.startup.clear();

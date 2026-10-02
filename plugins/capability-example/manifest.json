@@ -1,16 +1,29 @@
 {
   "id": "capability-example",
   "name": "Capability Example",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "protocol": 7,
   "api": {
     "base": "^1",
-    "required": { "package.assets": "^1", "ui.native": "^1", "workspace.files": "^1", "storage.private": "^1" },
+    "required": { "package.assets": "^1", "ui.native": "^1", "workspace.files": "^1", "storage.private": "^1", "editor.documents": "^1", "ui.panels": "^1" },
     "optional": { "example.future": "^9" }
   },
   "component": "capability-example.wasm",
-  "permissions": ["assets.read", "workspace.read", "storage"],
+  "permissions": ["assets.read", "workspace.read", "storage", "editor.read", "editor.write", "ui.panels"],
   "panels": [{ "id": "welcome", "title": "Capability Example", "position": "right" }],
-  "commands": [{ "id": "check-errors", "title": "检查类型化错误" }, { "id": "scope-write", "title": "写入当前作用域" }, { "id": "scope-read", "title": "读取当前作用域" }, { "id": "scope-probe", "title": "检查作用域契约" }],
+  "commands": [
+    { "id": "check-errors", "title": "检查类型化错误" },
+    { "id": "scope-write", "title": "写入当前作用域" },
+    { "id": "scope-read", "title": "读取当前作用域" },
+    { "id": "scope-probe", "title": "检查作用域契约" },
+    { "id": "read-selection", "title": "读取选区及文档版本" },
+    { "id": "active-directory", "title": "读取活动目录" },
+    { "id": "save-document", "title": "保存已读取版本的文档" },
+    { "id": "hide-panel", "title": "隐藏自身面板" },
+    { "id": "show-panel", "title": "显示自身面板" },
+    { "id": "cancel-request", "title": "取消当前请求" },
+    { "id": "subscribe-documents", "title": "订阅文档变化" },
+    { "id": "unsubscribe-documents", "title": "释放文档订阅" }
+  ],
   "storage_limit": 4096
 }

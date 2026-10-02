@@ -4,9 +4,9 @@
 
 来源：[已确认规格](../plugin-api-platform.md)。测试边界已由用户确认。
 
-状态：拆分粒度、阻塞关系与 GitHub 发布位置已确认；总方案和 20 张工单已发布，发布时全部使用 `ready-for-agent` 标签，并读回验证 21 个开放议题与 28 条原生阻塞关系。工单 01 已提交推送（`1969094`），GitHub #2 已关闭。工单 02 已实现并通过测试与双轴审查，随本提交推送并关闭 GitHub #3；其余工单未开始。GitHub 是正式议题跟踪器。
+状态：拆分粒度、阻塞关系与 GitHub 发布位置已确认；总方案和 20 张工单已发布，发布时全部使用 `ready-for-agent` 标签，并读回验证 21 个开放议题与 28 条原生阻塞关系。工单 01、02 已提交推送（`1969094`、`bc3102f`），GitHub #2、#3 已关闭。工单 03 已实现并通过双轴审查，随本提交推送并关闭 GitHub #4；其余工单未开始。GitHub 是正式议题跟踪器。
 
-设计基线：[GitHub #1](https://github.com/T-miracle/Editor/issues/1)。当前执行：[工单 02 / GitHub #3](https://github.com/T-miracle/Editor/issues/3)；完成后下一实施前沿为 [工单 03 / GitHub #4](https://github.com/T-miracle/Editor/issues/4)。
+设计基线：[GitHub #1](https://github.com/T-miracle/Editor/issues/1)。当前执行：[工单 03 / GitHub #4](https://github.com/T-miracle/Editor/issues/4)；完成后按编号下一项为 [工单 04 / GitHub #5](https://github.com/T-miracle/Editor/issues/5)。#7、#11、#12 的直接阻塞也同时解除，均未自动开始。
 
 ## GitHub 议题映射
 

@@ -3,6 +3,7 @@
 mod capability_tests;
 mod commands;
 pub(crate) mod contributions;
+mod editor_requests;
 mod images;
 mod native_controls;
 #[cfg(test)]
@@ -10,6 +11,8 @@ mod native_ui_tests;
 mod preview;
 #[cfg(test)]
 mod preview_tests;
+#[cfg(test)]
+mod request_tests;
 mod surface;
 #[cfg(test)]
 mod tests;
@@ -334,7 +337,7 @@ impl ExtensionPanel {
     fn poll(&mut self, cx: &mut Context<Self>) {
         let mut changed = false;
         let mut contributions_changed = false;
-        let effects = {
+        let (effects, editor_requests) = {
             let mut state = self.worker.state.lock().unwrap();
             if !self
                 .worker
@@ -351,6 +354,13 @@ impl ExtensionPanel {
                 state.images.clear();
                 state.effects.clear();
                 state.processes.clear();
+                state.document_events = Default::default();
+                for (_, request) in state.editor_requests.drain(..) {
+                    request.finish(Err(protocol::api::Failure::new(
+                        protocol::api::ErrorCode::PermissionDenied,
+                        "Workspace restricted",
+                    )));
+                }
             }
             // Keep the clicked confirmation visible until its operation finishes successfully.
             if self.surface_id.is_none() && self.progress.is_some() && state.progress.is_none() {
@@ -451,11 +461,32 @@ impl ExtensionPanel {
                 }
             }
             if self.surface_id.is_none() {
-                std::mem::take(&mut state.effects)
+                (
+                    std::mem::take(&mut state.effects),
+                    std::mem::take(&mut state.editor_requests),
+                )
             } else {
-                vec![]
+                (vec![], vec![])
             }
         };
+        if !editor_requests.is_empty() {
+            let parent = self.parent.clone();
+            cx.defer(move |cx| {
+                let _ = parent.update(cx, |app, cx| {
+                    for request in editor_requests {
+                        if app.pending_editor_requests.len() < 256 {
+                            app.pending_editor_requests.push(request);
+                        } else {
+                            request.1.finish(Err(protocol::api::Failure::new(
+                                protocol::api::ErrorCode::LimitExceeded,
+                                "Editor queue is full",
+                            )));
+                        }
+                    }
+                    cx.notify();
+                });
+            });
+        }
         if contributions_changed {
             contributions::refresh_entries(&self.root, &self.entries);
             let parent = self.parent.clone();

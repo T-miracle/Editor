@@ -282,6 +282,8 @@ pub enum Message {
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum Event {
+    /// Host-only bridge for independently versioned capability notifications during migration.
+    Capability(api::Notification),
     /// Protocol 6 supplies the active in-memory document to a permission-checked editor preview.
     /// A missing path clears the previous document when its file no longer matches the panel.
     Document {

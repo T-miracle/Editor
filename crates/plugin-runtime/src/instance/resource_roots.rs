@@ -5,9 +5,11 @@ use std::collections::BTreeMap;
 
 /// Slots describe authority, not user-supplied paths; the caller cannot retarget a root.
 #[derive(Clone, Copy)]
-enum RootKind {
+pub(super) enum RootKind {
     Workspace,
     Data,
+    EditorRequest,
+    Subscription,
 }
 
 pub(super) struct ResourceRoots {
@@ -52,7 +54,7 @@ impl ResourceRoots {
         Self::new(workspace, self.application, self.limit)
     }
 
-    fn resolve(&self, handle: &ResourceHandle) -> Result<RootKind, Failure> {
+    pub(super) fn resolve(&self, handle: &ResourceHandle) -> Result<RootKind, Failure> {
         if self.retired || handle.instance != self.instance || handle.scope != self.scope {
             return Err(Failure::new(
                 ErrorCode::InvalidHandle,
@@ -65,7 +67,7 @@ impl ResourceRoots {
             .ok_or_else(|| Failure::new(ErrorCode::InvalidHandle, "Unknown or released resource"))
     }
 
-    fn open(&mut self, kind: RootKind) -> Result<Value, Failure> {
+    pub(super) fn open(&mut self, kind: RootKind) -> Result<Value, Failure> {
         if self.slots.len() >= 128 {
             return Err(Failure::new(
                 ErrorCode::LimitExceeded,
@@ -84,6 +86,11 @@ impl ResourceRoots {
             resource,
         }))
     }
+
+    /// Ownership is checked before callers remove the slot and its associated resource.
+    pub(super) fn remove(&mut self, handle: &ResourceHandle) {
+        self.slots.remove(&handle.resource);
+    }
 }
 
 impl State {
@@ -96,6 +103,9 @@ impl State {
             ));
         }
         let (capability, permission, root) = match kind {
+            RootKind::EditorRequest | RootKind::Subscription => {
+                return Err(Failure::new(ErrorCode::InvalidHandle, "Not a file handle"));
+            }
             RootKind::Workspace => {
                 if write || self.roots.application || self.workspace.as_os_str().is_empty() {
                     return Err(Failure::new(
@@ -220,10 +230,17 @@ impl State {
             }
             api::Operation::CloseResource { handle } => {
                 self.roots.resolve(&handle)?;
+                self.subscriptions.remove(&handle.resource);
+                if let Some(request) = self.editor_requests.remove(&handle.resource) {
+                    request.call.retire();
+                }
                 self.roots.slots.remove(&handle.resource);
                 Ok(Value::Unit)
             }
-            api::Operation::ReadAsset { .. } => {
+            api::Operation::ReadAsset { .. }
+            | api::Operation::SubscribeDocuments
+            | api::Operation::Editor { .. }
+            | api::Operation::CancelRequest { .. } => {
                 unreachable!("assets are handled before resource dispatch")
             }
         }

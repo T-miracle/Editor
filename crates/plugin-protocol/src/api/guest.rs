@@ -70,7 +70,26 @@ pub fn close_resource(handle: ResourceHandle) -> Result<(), Failure> {
     }
 }
 
+/// Close the returned resource to release its bounded latest-version stream.
+pub fn subscribe_documents() -> Result<ResourceHandle, Failure> {
+    match request(Operation::SubscribeDocuments)? {
+        Value::Resource(handle) => Ok(handle),
+        _ => Err(wire_error("Expected document subscription")),
+    }
+}
+
 /// All typed capabilities share one bounded and correlated transport.
+pub fn editor(operation: EditorOperation, timeout_ms: u32) -> Result<ResourceHandle, Failure> {
+    match request(Operation::Editor {
+        operation,
+        timeout_ms,
+    })? {
+        Value::Accepted(handle) => Ok(handle),
+        _ => Err(wire_error("Expected request acceptance")),
+    }
+}
+
+/// Correlation IDs are transport details; callers receive typed values or failures.
 pub fn request(operation: Operation) -> Result<Value, Failure> {
     let id = NEXT_ID.with(|next| {
         let id = next.get();
@@ -93,6 +112,54 @@ pub fn request(operation: Operation) -> Result<Value, Failure> {
         ));
     }
     response.result
+}
+
+/// Cancellation reports whether side effects may already have started; it never promises rollback.
+pub fn cancel_request(
+    handle: &ResourceHandle,
+    mode: CancelMode,
+) -> Result<CancellationEffect, Failure> {
+    match request(Operation::CancelRequest {
+        handle: handle.clone(),
+        mode,
+    })? {
+        Value::Cancellation(effect) => Ok(effect),
+        _ => Err(wire_error("Expected cancellation outcome")),
+    }
+}
+
+/// Own the correlation state for one UI intent; replacing the task makes older completions irrelevant.
+pub struct EditorTask {
+    handle: ResourceHandle,
+    terminal: bool,
+}
+impl EditorTask {
+    /// Start a typed operation without exposing transport request IDs to plugin authors.
+    pub fn start(operation: EditorOperation, timeout_ms: u32) -> Result<Self, Failure> {
+        editor(operation, timeout_ms).map(Self::from_accepted)
+    }
+    /// Adapt an already accepted request when using the lower-level typed transport.
+    pub fn from_accepted(handle: ResourceHandle) -> Self {
+        Self {
+            handle,
+            terminal: false,
+        }
+    }
+    /// Ignore unrelated and post-terminal updates, including results from a replaced UI intent.
+    pub fn update(&mut self, notification: &Notification) -> Option<RequestUpdate> {
+        let Notification::Request { handle, update } = notification else {
+            return None;
+        };
+        if self.terminal || *handle != self.handle {
+            return None;
+        }
+        self.terminal = update.is_terminal();
+        Some(update.clone())
+    }
+    /// The host reports whether execution was prevented or only result waiting stopped.
+    pub fn cancel(&self, mode: CancelMode) -> Result<CancellationEffect, Failure> {
+        cancel_request(&self.handle, mode)
+    }
 }
 
 /// Preserve the quota error instead of sending an envelope the host cannot correlate.

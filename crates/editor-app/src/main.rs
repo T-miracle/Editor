@@ -169,6 +169,12 @@ struct EditorApp {
     plugin_loading_generation: u64,
     /// Apply package lifecycle changes on the next frame with access to the editor window.
     pending_contribution_sync: bool,
+    /// Requests are routed through the editor window; immutable save snapshots run off the UI thread.
+    pending_editor_requests: Vec<(String, plugin_runtime::EditorRequest)>,
+    plugin_saves: std::collections::BTreeSet<PathBuf>,
+    /// Last published open identities allow versioned close notifications without retaining document text.
+    plugin_documents:
+        std::collections::BTreeMap<String, plugin_runtime::plugin_protocol::api::DocumentVersion>,
     plugin_popup: Option<(PluginPopupKind, Point<Pixels>)>,
     dark_theme: bool,
     session_state: SessionState,
@@ -186,6 +192,8 @@ struct DefinitionNotice {
 }
 
 struct OpenTab {
+    /// Unlike the dirty revision, this also advances on disk reloads and other programmatic changes.
+    capability_revision: u64,
     session: DocumentSession,
     editor: Entity<EditorState>,
     /// Hash of the last disk text, avoiding a second full copy of every open document.
@@ -383,6 +391,9 @@ impl EditorApp {
             plugin_loads: PluginLoadEntry::initial(),
             plugin_loading_generation: 0,
             pending_contribution_sync: false,
+            pending_editor_requests: Vec::new(),
+            plugin_saves: Default::default(),
+            plugin_documents: Default::default(),
             plugin_popup: None,
             dark_theme: false,
             session_state,

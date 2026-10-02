@@ -1,5 +1,9 @@
 //! Sandboxed component execution and transactional local package lifecycle.
 mod capabilities;
+mod document_events;
+mod editor_requests;
+pub use document_events::DocumentEvents;
+pub use editor_requests::EditorRequest;
 mod instance;
 mod manager;
 mod migration;

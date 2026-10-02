@@ -331,6 +331,10 @@ impl Render for EditorApp {
         }
         // Open plugin-owned settings through the normal editor document path.
         self.sync_plugin_panels(window, cx);
+        self.sync_plugin_documents(cx);
+        for (plugin, request) in std::mem::take(&mut self.pending_editor_requests) {
+            self.perform_editor_request(&plugin, request, window, cx);
+        }
         if let Some(path) = self.pending_plugin_file.take() {
             self.open_file(path, window, cx);
         }

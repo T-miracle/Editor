@@ -147,7 +147,9 @@ impl Package {
                     "editor.commands"
                 ]
                 .contains(&permission.as_str())
-                    || (manifest.protocol == 7 && permission == "assets.read"),
+                    || (manifest.protocol == 7
+                        && ["assets.read", "editor.read", "editor.write", "ui.panels"]
+                            .contains(&permission.as_str())),
                 "Unsupported capability {permission}"
             );
         }

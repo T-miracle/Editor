@@ -16,6 +16,20 @@ pub(crate) fn workspace_key(workspace: &str) -> String {
 }
 
 impl Manager {
+    /// Only the selected trusted workspace can publish document events to its owners.
+    pub fn document_changed(&mut self, change: api::DocumentChange) {
+        if self.trusted && self.workspace_open {
+            for instance in self.live.values_mut() {
+                instance.document_changed(change.clone());
+            }
+        }
+    }
+    /// Source overflow is propagated as a terminal error, not a deceptively complete partial stream.
+    pub fn document_events_failed(&mut self, error: api::Failure) {
+        for instance in self.live.values_mut() {
+            instance.document_events_failed(error.clone());
+        }
+    }
     /// Effective publication is separate from persisted user preferences and cannot grant trust.
     pub fn published_entries(&self) -> Vec<Installed> {
         self.installed

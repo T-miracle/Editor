@@ -81,6 +81,10 @@ impl Requirements {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ErrorCode {
+    Cancelled,
+    TimedOut,
+    StaleRevision,
+    Conflict,
     InvalidRequest,
     UnsupportedOperation,
     CapabilityUnavailable,
@@ -121,6 +125,16 @@ impl std::error::Error for Failure {}
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "method", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Operation {
+    SubscribeDocuments,
+    CancelRequest {
+        handle: ResourceHandle,
+        mode: CancelMode,
+    },
+    /// Editor calls are accepted on the worker and completed on the owning editor thread.
+    Editor {
+        operation: EditorOperation,
+        timeout_ms: u32,
+    },
     ReadAsset {
         path: String,
     },
@@ -151,6 +165,8 @@ pub struct Request {
 /// Result variants carry structured values, never JSON hidden inside a string result.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum Value {
+    Cancellation(CancellationEffect),
+    Accepted(ResourceHandle),
     Asset { bytes: Vec<u8> },
     Resource(ResourceHandle),
     Bytes(Vec<u8>),
@@ -183,6 +199,18 @@ pub enum Input {
 /// Native UI notifications contain no legacy canvas or character-grid fields.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum Notification {
+    Document {
+        subscription: ResourceHandle,
+        change: DocumentChange,
+    },
+    SubscriptionFailed {
+        subscription: ResourceHandle,
+        error: Failure,
+    },
+    Request {
+        handle: ResourceHandle,
+        update: RequestUpdate,
+    },
     Ui(crate::ui::UiEvent),
     Theme(crate::Environment),
     Command {
@@ -194,6 +222,90 @@ pub enum Notification {
         width: f32,
         height: f32,
     },
+}
+
+/// An open-document identity plus a revision prevents delayed work from targeting a reopened file.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DocumentVersion {
+    pub id: String,
+    pub path: String,
+    pub revision: u64,
+}
+
+/// Notifications carry versions, not text deltas; intermediate revisions may be coalesced safely.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct DocumentChange {
+    pub document: DocumentVersion,
+    pub closed: bool,
+}
+
+/// These operations are capability contracts; no plugin-specific command parser participates.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum EditorOperation {
+    ReadSelection,
+    ActiveDirectory,
+    SaveDocument { document: DocumentVersion },
+    SetPanelVisibility { panel: String, visible: bool },
+}
+
+/// Values describe the actual document and revision observed or saved, rather than an acknowledgement.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub enum EditorValue {
+    Selection {
+        document: DocumentVersion,
+        text: String,
+    },
+    Directory {
+        path: String,
+    },
+    Saved {
+        document: DocumentVersion,
+    },
+    PanelVisibility {
+        panel: String,
+        visible: bool,
+    },
+}
+
+/// Progress is replaceable; final results are retained until delivered to the owning instance.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub enum RequestUpdate {
+    Accepted,
+    Progress {
+        message: String,
+    },
+    Completed {
+        result: Result<EditorValue, Failure>,
+    },
+    Cancelled {
+        reason: ErrorCode,
+        effect: CancellationEffect,
+    },
+}
+
+/// Best effort may stop only waiting once an atomic save has entered its irreversible section.
+#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CancelMode {
+    StopWaiting,
+    TryTerminate,
+}
+
+/// Cancellation is never a claim that a completed filesystem side effect was rolled back.
+#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CancellationEffect {
+    NotExecuted,
+    WaitingStopped,
+}
+
+impl RequestUpdate {
+    /// Terminal states are immutable, including after timeout or instance shutdown.
+    pub fn is_terminal(&self) -> bool {
+        matches!(self, Self::Completed { .. } | Self::Cancelled { .. })
+    }
 }
 
 /// A native view is separate from canvas and character-grid data.

@@ -42,6 +42,9 @@ impl State {
                 "read_file",
                 "write_file",
                 "close_resource",
+                "editor",
+                "cancel_request",
+                "subscribe_documents",
             ]
             .contains(&method)
             {
@@ -53,7 +56,23 @@ impl State {
             let request: api::Request = serde_json::from_value(value)
                 .map_err(|error| Failure::new(ErrorCode::InvalidRequest, error.to_string()))?;
             match request.operation {
+                api::Operation::SubscribeDocuments => self.subscribe_documents(),
+                api::Operation::CancelRequest { handle, mode } => {
+                    self.roots.resolve(&handle)?;
+                    self.editor_requests
+                        .get(&handle.resource)
+                        .ok_or_else(|| {
+                            Failure::new(ErrorCode::InvalidHandle, "Not an outstanding request")
+                        })?
+                        .call
+                        .cancel(mode, ErrorCode::Cancelled)
+                        .map(api::Value::Cancellation)
+                }
                 api::Operation::ReadAsset { path } => self.read_capability_asset(&path),
+                api::Operation::Editor {
+                    operation,
+                    timeout_ms,
+                } => self.editor_request(operation, timeout_ms),
                 operation => self.resource_request(operation),
             }
         })();
@@ -194,6 +213,7 @@ impl Instance {
 /// Translate the migration-era editor routing seam into native-only public notifications.
 fn native_notification(event: Event, panel: Option<String>) -> Option<api::Input> {
     let event = match event {
+        Event::Capability(notification) => notification,
         Event::Surface { panel, event } => return native_notification(*event, Some(panel)),
         Event::Ui(event) => api::Notification::Ui(event),
         Event::Theme(environment) => api::Notification::Theme(environment),

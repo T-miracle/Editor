@@ -13,6 +13,10 @@ struct State {
     /// Handles remain bound to this instance across workspace selection changes.
     workspace: Option<api::ResourceHandle>,
     data: Option<api::ResourceHandle>,
+    /// Only the latest user intent may replace request output in this view.
+    task: Option<api::guest::EditorTask>,
+    document: Option<api::DocumentVersion>,
+    subscription: Option<api::ResourceHandle>,
 }
 thread_local! { static STATE: RefCell<State> = RefCell::new(State::default()); }
 struct Example;
@@ -34,6 +38,9 @@ impl State {
             api::Input::Prepare { api, .. } => {
                 self.workspace = None;
                 self.data = None;
+                self.task = None;
+                self.document = None;
+                self.subscription = None;
                 self.optional_available = api.capabilities.contains_key("example.future");
                 return Ok(api::Output::default());
             }
@@ -93,8 +100,52 @@ impl State {
                 // Return expected domain failures as data so the host can observe continued liveness.
                 let operation = serde_json::from_value(arguments.unwrap_or_default())
                     .map_err(|error| Failure::new(ErrorCode::InvalidRequest, error.to_string()))?;
-                self.text = serde_json::to_string(&api::guest::request(operation))
+                if matches!(operation, api::Operation::Editor { .. }) {
+                    self.task = None;
+                }
+                let result = api::guest::request(operation);
+                if let Ok(api::Value::Accepted(handle)) = &result {
+                    self.task = Some(api::guest::EditorTask::from_accepted(handle.clone()));
+                }
+                self.text = serde_json::to_string(&result)
                     .map_err(|error| Failure::new(ErrorCode::OperationFailed, error.to_string()))?;
+            }
+            api::Input::Event {
+                event: api::Notification::Command { id, .. },
+                ..
+            } => {
+                // Domain failures remain visible in the panel instead of trapping the WASM instance.
+                if let Err(error) = self.editor_command(&id) {
+                    self.text = format!("{error:?}");
+                }
+            }
+            api::Input::Event {
+                event: event @ api::Notification::Request { .. },
+                ..
+            } => {
+                if let Some(update) = self.task.as_mut().and_then(|task| task.update(&event)) {
+                    if let api::RequestUpdate::Completed {
+                        result: Ok(api::EditorValue::Selection { document, .. }),
+                    } = &update
+                    {
+                        self.document = Some(document.clone());
+                    }
+                    self.text = format!("{update:?}");
+                }
+            }
+            api::Input::Event {
+                event:
+                    event @ (api::Notification::Document { .. }
+                    | api::Notification::SubscriptionFailed { .. }),
+                ..
+            } => {
+                // Overflow destroys the host subscription; the next explicit subscribe must create a new one.
+                if let api::Notification::SubscriptionFailed { subscription, .. } = &event {
+                    if self.subscription.as_ref() == Some(subscription) {
+                        self.subscription = None;
+                    }
+                }
+                self.text = format!("{event:?}");
             }
             api::Input::Event { .. } => {}
         }
@@ -105,6 +156,62 @@ impl State {
             }],
             ..Default::default()
         })
+    }
+
+    /// These commands use only the published SDK; saving requires the version returned by selection.
+    fn editor_command(&mut self, id: &str) -> Result<(), Failure> {
+        use api::EditorOperation as Op;
+        // Even a rejected new intent supersedes old output; its failure must not be replaced by late success.
+        if matches!(
+            id,
+            "read-selection" | "active-directory" | "save-document" | "hide-panel" | "show-panel"
+        ) {
+            self.task = None;
+        }
+        let operation = match id {
+            "read-selection" => Op::ReadSelection,
+            "active-directory" => Op::ActiveDirectory,
+            "save-document" => Op::SaveDocument {
+                document: self.document.clone().ok_or_else(|| {
+                    Failure::new(
+                        ErrorCode::InvalidState,
+                        "Read selection first to capture a document version",
+                    )
+                })?,
+            },
+            "hide-panel" | "show-panel" => Op::SetPanelVisibility {
+                panel: "welcome".into(),
+                visible: id == "show-panel",
+            },
+            "cancel-request" => {
+                self.text = format!(
+                    "{:?}",
+                    self.task
+                        .as_ref()
+                        .ok_or_else(|| Failure::new(ErrorCode::NotFound, "No pending task"))?
+                        .cancel(api::CancelMode::TryTerminate)?
+                );
+                return Ok(());
+            }
+            "subscribe-documents" => {
+                if self.subscription.is_none() {
+                    self.subscription = Some(api::guest::subscribe_documents()?);
+                }
+                self.text = "Document subscription active".into();
+                return Ok(());
+            }
+            "unsubscribe-documents" => {
+                if let Some(handle) = self.subscription.take() {
+                    api::guest::close_resource(handle)?;
+                }
+                self.text = "Document subscription released".into();
+                return Ok(());
+            }
+            _ => return Ok(()),
+        };
+        self.task = Some(api::guest::EditorTask::start(operation, 30_000)?);
+        self.text = "Accepted: waiting for editor".into();
+        Ok(())
     }
 
     /// An explicit diagnostic command demonstrates malformed/unknown requests without SDK internals.

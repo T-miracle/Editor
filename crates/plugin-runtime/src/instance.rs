@@ -11,6 +11,8 @@ use wasmtime::{
 };
 use wasmtime_wasi::{ResourceTable, WasiCtx, WasiCtxView, WasiView};
 mod capability_calls;
+mod document_events;
+mod editor_requests;
 mod resource_roots;
 use resource_roots::ResourceRoots;
 wasmtime::component::bindgen!({path:"../plugin-protocol/wit",world:"plugin",require_store_data_send:true});
@@ -19,6 +21,10 @@ struct State {
     /// None selects the temporary legacy transport, never a fallback for a new guest.
     api: Option<api::Negotiated>,
     roots: ResourceRoots,
+    /// Slots and pending completions are owned by this exact WASM instance.
+    editor_requests: std::collections::BTreeMap<u64, crate::editor_requests::PendingRequest>,
+    declared_panels: BTreeSet<String>,
+    subscriptions: std::collections::BTreeMap<u64, crate::document_events::Subscription>,
     wasi: WasiCtx,
     table: ResourceTable,
     limits: StoreLimits,
@@ -317,6 +323,9 @@ mod tests {
         let mut state = State {
             api: None,
             roots: ResourceRoots::new("", false, 64 * 1024 * 1024),
+            editor_requests: Default::default(),
+            declared_panels: Default::default(),
+            subscriptions: Default::default(),
             wasi: WasiCtx::builder().build(),
             table: ResourceTable::new(),
             limits: StoreLimitsBuilder::new().build(),
@@ -460,6 +469,9 @@ mod tests {
         let mut state = State {
             api: None,
             roots: ResourceRoots::new("", false, 64 * 1024 * 1024),
+            editor_requests: Default::default(),
+            declared_panels: Default::default(),
+            subscriptions: Default::default(),
             wasi: WasiCtx::builder().build(),
             table: ResourceTable::new(),
             limits: StoreLimitsBuilder::new().build(),
@@ -536,6 +548,13 @@ impl Instance {
         let state = State {
             api,
             roots: ResourceRoots::new(&environment.workspace, application, manifest.storage_limit),
+            editor_requests: Default::default(),
+            subscriptions: Default::default(),
+            declared_panels: manifest
+                .panels
+                .iter()
+                .map(|panel| panel.id.clone())
+                .collect(),
             wasi: WasiCtx::builder().build(),
             table: ResourceTable::new(),
             limits: StoreLimitsBuilder::new()
@@ -710,6 +729,11 @@ impl Instance {
         Ok(())
     }
     pub fn stop(&mut self) {
+        self.store.data_mut().subscriptions.clear();
+        for request in self.store.data_mut().editor_requests.values() {
+            request.call.retire();
+        }
+        self.store.data_mut().editor_requests.clear();
         self.store.data_mut().roots.retire();
         self.scenes.clear();
         self.scene = None;
@@ -748,6 +772,8 @@ impl Instance {
         self.store.data().processes.ids()
     }
     pub fn poll(&mut self) -> anyhow::Result<bool> {
+        self.poll_editor_requests()?;
+        self.poll_document_events()?;
         let events = self.store.data_mut().processes.poll()?;
         let changed = !events.is_empty();
         for event in events {
