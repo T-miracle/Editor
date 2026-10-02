@@ -14,7 +14,9 @@ use std::{
 };
 mod cache;
 mod download;
+mod installer;
 pub(crate) use cache::{cached, collect, lock, prepare};
+pub use installer::InstallerPrompt;
 
 /// Progress reports preparation honestly; only the protocol client can report language-service readiness.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -23,6 +25,8 @@ pub enum InstallStage {
     Downloading(String),
     Verifying(String),
     Extracting(String),
+    AwaitingAuthorization(u64),
+    Installing(String),
     Prepared,
 }
 
@@ -31,6 +35,8 @@ pub enum InstallStage {
 pub struct InstallControl {
     cancelled: Arc<AtomicBool>,
     report: Arc<dyn Fn(InstallStage) + Send + Sync>,
+    prompts: bool,
+    approval: Arc<std::sync::Mutex<installer::Approval>>,
 }
 impl Default for InstallControl {
     fn default() -> Self {
@@ -42,6 +48,8 @@ impl InstallControl {
         Self {
             cancelled: Arc::new(AtomicBool::new(false)),
             report: Arc::new(report),
+            prompts: false,
+            approval: Default::default(),
         }
     }
     pub fn cancel(&self) {
@@ -121,6 +129,18 @@ pub(crate) fn validate(plan: &Plan) -> anyhow::Result<Vec<&Artifact>> {
         if let Format::File { path } = &artifact.format {
             crate::package::validate_relative(path)?;
         }
+        if let Some(installer) = &artifact.installer {
+            crate::package::validate_relative(&installer.program)?;
+            crate::package::validate_relative(&installer.target)?;
+            anyhow::ensure!(
+                !installer.purpose.trim().is_empty() && installer.purpose.len() <= 2048,
+                "Installer purpose required"
+            );
+            anyhow::ensure!(
+                installer.args.len() <= 128 && installer.args.iter().all(|arg| !arg.contains('\0')),
+                "Invalid installer arguments"
+            );
+        }
     }
     let (id, path) = plan
         .executable
@@ -161,7 +181,7 @@ fn visit<'a>(
 
 /// Content and extraction identity share the cache; source location does not prevent offline reuse.
 fn key(artifact: &Artifact) -> String {
-    format!(
+    let extracted = format!(
         "{:x}",
         Sha256::digest(
             serde_json::to_vec(&(
@@ -172,7 +192,15 @@ fn key(artifact: &Artifact) -> String {
             ))
             .unwrap()
         )
-    )
+    );
+    // Preserve existing download-only identities while keeping distinct approved installers isolated.
+    match &artifact.installer {
+        None => extracted,
+        Some(installer) => format!(
+            "{:x}",
+            Sha256::digest(serde_json::to_vec(&(extracted, installer)).unwrap())
+        ),
+    }
 }
 
 /// Bound actual bytes as well as metadata; a forged size cannot consume unbounded disk or memory.

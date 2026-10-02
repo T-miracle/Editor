@@ -134,6 +134,12 @@ impl Package {
         );
         super::capabilities::negotiate(&manifest)?;
         validate_language_services(&manifest)?;
+        if manifest.permissions.contains("dependencies.install") {
+            anyhow::ensure!(
+                manifest.permissions.contains("dependencies.prepare"),
+                "Installer permission requires dependency preparation"
+            );
+        }
         if manifest.permissions.contains("dependencies.prepare") {
             anyhow::ensure!(
                 manifest.protocol == 7
@@ -152,6 +158,11 @@ impl Package {
                 );
                 crate::dependencies::validate(plan)?;
                 for artifact in &plan.artifacts {
+                    anyhow::ensure!(
+                        artifact.installer.is_none()
+                            || manifest.permissions.contains("dependencies.install"),
+                        "Installer permission required"
+                    );
                     if let plugin_protocol::dependencies::Source::Package { path } =
                         &artifact.source
                     {
@@ -230,7 +241,10 @@ impl Package {
                 manifest.panels.is_empty()
                     && manifest.commands.is_empty()
                     && manifest.permissions.iter().all(|permission| {
-                        if permission == "dependencies.prepare" {
+                        if matches!(
+                            permission.as_str(),
+                            "dependencies.prepare" | "dependencies.install"
+                        ) {
                             return true;
                         }
                         permission
@@ -303,7 +317,8 @@ impl Package {
                             "editor.write",
                             "ui.panels",
                             "process.exec",
-                            "dependencies.prepare"
+                            "dependencies.prepare",
+                            "dependencies.install"
                         ]
                         .contains(&permission.as_str())
                             || permission

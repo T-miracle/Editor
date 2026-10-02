@@ -88,6 +88,7 @@ pub(crate) fn prepare(
         }
         std::fs::create_dir_all(target.parent().unwrap())?;
         let staging = tempfile::tempdir_in(target.parent().unwrap())?;
+        super::installer::authorize_sdk(artifact, staging.path(), control)?;
         let archive = tempfile::NamedTempFile::new_in(root.join("dependencies"))?;
         let mut file = archive.reopen()?;
         read_source(artifact, assets, &mut file, control)?;
@@ -101,6 +102,19 @@ pub(crate) fn prepare(
             artifact.id
         );
         extract(artifact, archive.path(), staging.path(), control)?;
+        if let Some(step) = &artifact.installer {
+            super::installer::run(step, staging.path(), control)?;
+        }
+        // A successful installer must actually produce this plan's service before it becomes reusable.
+        let (executable_id, executable_path) = plan.executable.split_once('/').unwrap();
+        if executable_id == artifact.id {
+            let executable = staging.path().join(executable_path).canonicalize()?;
+            anyhow::ensure!(
+                executable.starts_with(staging.path().canonicalize()?),
+                "Installed executable escaped dependency"
+            );
+            crate::toolchains::resolve(&executable.to_string_lossy())?;
+        }
         std::fs::write(staging.path().join(".complete"), b"verified")?;
         control.check()?;
         std::fs::rename(staging.path(), target)?;

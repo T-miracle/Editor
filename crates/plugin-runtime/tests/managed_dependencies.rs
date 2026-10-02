@@ -62,6 +62,55 @@ fn bundled_service_is_prepared_in_a_private_cache() {
     assert_eq!(std::env::var_os("PATH"), before);
 }
 
+/// Granting preparation and native service startup does not authorize an installer, including updates.
+#[test]
+fn native_installer_requires_separate_permission_and_concrete_consent() {
+    let temp = tempfile::tempdir().unwrap();
+    let mut manager = Manager::open(
+        temp.path().join("plugins"),
+        Environment {
+            workspace: temp.path().display().to_string(),
+            ..Environment::default()
+        },
+    )
+    .unwrap();
+    let original = package(json!({"kind":"package","path":"tool.exe"}), b"original").unwrap();
+    manager
+        .install(&original, original.manifest.permissions.clone())
+        .unwrap();
+    let candidate = package_with(
+        json!({"kind":"package","path":"tool.exe"}),
+        b"installer",
+        |manifest| {
+            manifest["permissions"]
+                .as_array_mut()
+                .unwrap()
+                .push(json!("dependencies.install"));
+            manifest["services"]["analysis"]["installation"]["artifacts"][0]["installer"] = json!({
+                "program":"tool.exe", "args":["${target}"], "target":"installed",
+                "purpose":"Prepare the private analysis executable", "kind":"service"
+            });
+        },
+    )
+    .unwrap();
+    let error = manager
+        .install(&candidate, original.manifest.permissions.clone())
+        .unwrap_err();
+    assert!(
+        error.to_string().to_lowercase().contains("permission"),
+        "{error}"
+    );
+    let error = manager
+        .install(&candidate, candidate.manifest.permissions.clone())
+        .unwrap_err();
+    assert!(error.to_string().contains("authorization"), "{error}");
+    assert_eq!(
+        manager.installed["private-analysis"].digest,
+        original.digest
+    );
+    assert!(manager.language_services()["private-analysis/analysis"].is_ok());
+}
+
 /// A local HTTP fixture exercises actual download, then the same immutable version works offline.
 #[test]
 fn downloaded_service_is_verified_and_reused_offline() {

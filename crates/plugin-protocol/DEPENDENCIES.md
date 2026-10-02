@@ -56,13 +56,14 @@ configuration independently of dependency resolution.
 Additional runtime artifacts remain in private version directories. An argument
 starting `${dependency:runtime}/bin/entry` resolves to that artifact's validated
 path; ordinary arguments remain literal. Pass argv arrays, never shell templates.
-Nothing modifies global PATH or installs into a system package directory.
+Data-only preparation never modifies global PATH or installs into a system package directory.
 
 Preparation is part of explicit installation/reinstallation. Enable and ordinary
 configuration changes read caches only; a changed hook plan not already cached
 reports that installation must be retried. Matching verified cache entries are
 reused offline. The cache key covers version, platform, checksum and extraction
-format. OS shared locks pin active service/process files. Immutable receipts
+format and any installer definition. Download-only cache identities remain compatible.
+OS shared locks pin active service/process files. Immutable receipts
 accumulate resolved plans for retained package versions, including alternate
 workspace/configuration plans, until uninstall removes installation pins.
 Garbage collection skips receipt pins and active leases from other windows.
@@ -76,3 +77,56 @@ verification, unpacking and plugin installation. LSP startup and readiness are
 reported separately by the actual protocol client; installed does not mean ready.
 
 HTTP behavior follows the [ureq configuration contract](https://docs.rs/ureq/3.4.2/ureq/config/struct.ConfigBuilder.html).
+
+## Authorized native installation
+
+An artifact may add an `installer` and the package must separately declare and
+receive `dependencies.install`. Neither `dependencies.prepare`, fixed service
+startup, nor `process.exec` grants this authority. WASM-returned plans face the
+same checks as static plans. A new permission on update requires fresh consent;
+refusal or failed preparation leaves the previous version available.
+
+```json
+{
+  "program": "setup.exe",
+  "args": ["--output", "${target}", "--source", "${source}"],
+  "target": "installed",
+  "purpose": "Prepare the private analysis service",
+  "kind": "service"
+}
+```
+
+`program` and `target` are non-escaping paths relative to this artifact. The native
+program comes from its verified bytes; no implicit shell or ambient program lookup
+is used. Only whole `${target}` and `${source}` arguments expand. The executable
+in the enclosing plan points at the produced service, for example
+`server/installed/server.exe`. The installer must produce relocatable output:
+staging is renamed into the immutable version directory after completion.
+
+The host displays the actual program, argv, private target and purpose, and awaits
+one-use authorization before execution. Set `kind` to `project_sdk` for compilers
+or large project SDKs: their source is not read or downloaded until the user
+actively selects preparation. After verification a second prompt authorizes the
+concrete native execution. Existing complete cache entries need no re-execution.
+SDK classification is a package declaration, not an inferred security sandbox.
+
+Native programs retain the current user's OS file and network authority. A private
+target is **not** an OS sandbox. Cancellation terminates managed processes and
+cleans staging, but cannot undo external effects already performed by a program.
+Windows execution waits for the entire owned job to become empty before cleaning
+or publishing; Windows is the currently verified native platform.
+
+The headless `Manager::install` path fails closed when concrete authorization is
+needed. Interactive hosts create `InstallControl::with_installer_prompts`, poll
+`installer_prompt`, and call `approve_installer(id, include_project_sdk)` only in
+response to the user's displayed choice. Permission grants still pass through
+`install_with_control`; a prompt is not a substitute for them. Stale or duplicate
+approvals are rejected, and SDK opt-in is scoped to that request. Cancel the token
+to refuse or close the prompt. Consent expires after 15 minutes; native execution
+has a 10-minute deadline. Reinstallation is the explicit retry operation.
+
+Installers are noninteractive (stdin is closed); stdout/stderr are drained without
+unbounded buffering. Nonzero exit, cancellation, timeout, or missing/escaping
+service output prevents the completion marker and cache publication. Successful
+installation still uses the ordinary LSP readiness protocol, not installer exit,
+to report a ready language service.

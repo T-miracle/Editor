@@ -9,6 +9,8 @@ mod editor_requests;
 mod images;
 mod installation;
 #[cfg(test)]
+mod installer_tests;
+#[cfg(test)]
 mod language_tests;
 #[cfg(test)]
 pub(crate) mod lsp_tests;

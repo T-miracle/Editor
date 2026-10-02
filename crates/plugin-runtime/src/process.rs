@@ -103,6 +103,36 @@ impl Job {
             windows_sys::Win32::System::JobObjects::TerminateJobObject(self.0, 1);
         }
     }
+    /// Native installers must stop every descendant before their staging directory can be published/deleted.
+    pub(crate) fn terminate_and_wait(&self) -> anyhow::Result<()> {
+        use windows_sys::Win32::System::JobObjects::*;
+        self.terminate();
+        let deadline = Instant::now() + Duration::from_secs(10);
+        loop {
+            let mut accounting: JOBOBJECT_BASIC_ACCOUNTING_INFORMATION =
+                unsafe { std::mem::zeroed() };
+            anyhow::ensure!(
+                unsafe {
+                    QueryInformationJobObject(
+                        self.0,
+                        JobObjectBasicAccountingInformation,
+                        &mut accounting as *mut _ as _,
+                        std::mem::size_of_val(&accounting) as u32,
+                        std::ptr::null_mut(),
+                    )
+                } != 0,
+                "Cannot observe installer process tree"
+            );
+            if accounting.ActiveProcesses == 0 {
+                return Ok(());
+            }
+            anyhow::ensure!(
+                Instant::now() < deadline,
+                "Installer process tree termination timed out"
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    }
 }
 #[cfg(windows)]
 impl Drop for Job {

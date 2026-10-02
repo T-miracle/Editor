@@ -42,6 +42,7 @@ impl Manager {
                 .iter()
                 .any(|provider| provider.service == *id || provider.alternatives.contains(id));
             if !used_by_lsp && let Some(plan) = &service.installation {
+                check_installer_permission(plan, manifest)?;
                 prepared.push(crate::dependencies::prepare(
                     &self.root, &assets, plan, control,
                 )?);
@@ -109,6 +110,7 @@ impl Manager {
                 .as_ref()
                 .or(service.installation.as_ref());
             if let Some(plan) = plan {
+                check_installer_permission(plan, manifest)?;
                 anyhow::ensure!(
                     manifest.permissions.contains("dependencies.prepare"),
                     "Dependency preparation permission required"
@@ -130,4 +132,19 @@ impl Manager {
         atomic_write(&receipt, &serde_json::to_vec(&plans)?)?;
         control.stage(InstallStage::Prepared)
     }
+}
+
+/// Hook-produced plans face the same permission gate as static declarations before any native step.
+fn check_installer_permission(
+    plan: &plugin_protocol::dependencies::Plan,
+    manifest: &Manifest,
+) -> anyhow::Result<()> {
+    anyhow::ensure!(
+        plan.artifacts
+            .iter()
+            .all(|artifact| artifact.installer.is_none())
+            || manifest.permissions.contains("dependencies.install"),
+        "Installer permission required"
+    );
+    Ok(())
 }

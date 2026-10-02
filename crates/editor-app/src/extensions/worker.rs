@@ -171,22 +171,29 @@ impl Worker {
                 installed: false,
             });
             let output = Arc::downgrade(&self.state);
-            state.install_control = Some(plugin_runtime::InstallControl::new(move |stage| {
-                if let Some(output) = output.upgrade() {
-                    let mut state = output.lock().unwrap();
-                    if let Some(report) = &mut state.installation {
-                        use plugin_runtime::InstallStage::*;
-                        report.cancellable = stage != Prepared;
-                        report.message = match stage {
-                            Preparing => "正在准备依赖…".into(),
-                            Downloading(id) => format!("正在下载 / 读取依赖：{id}"),
-                            Verifying(id) => format!("正在验证 SHA-256：{id}"),
-                            Extracting(id) => format!("正在解包依赖：{id}"),
-                            Prepared => "依赖已准备，正在安装插件…".into(),
-                        };
+            state.install_control = Some(
+                plugin_runtime::InstallControl::new(move |stage| {
+                    if let Some(output) = output.upgrade() {
+                        let mut state = output.lock().unwrap();
+                        if let Some(report) = &mut state.installation {
+                            use plugin_runtime::InstallStage::*;
+                            report.cancellable = stage != Prepared;
+                            report.message = match stage {
+                                Preparing => "正在准备依赖…".into(),
+                                Downloading(id) => format!("正在下载 / 读取依赖：{id}"),
+                                Verifying(id) => format!("正在验证 SHA-256：{id}"),
+                                Extracting(id) => format!("正在解包依赖：{id}"),
+                                AwaitingAuthorization(id) => {
+                                    format!("原生安装步骤 {id} 正在等待额外授权。")
+                                }
+                                Installing(purpose) => format!("正在执行安装步骤：{purpose}"),
+                                Prepared => "依赖已准备，正在安装插件…".into(),
+                            };
+                        }
                     }
-                }
-            }));
+                })
+                .with_installer_prompts(),
+            );
         }
         state.progress = Some(progress);
         state.status = None;

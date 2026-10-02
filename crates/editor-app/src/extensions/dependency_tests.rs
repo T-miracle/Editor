@@ -60,6 +60,17 @@ fn restricting_workspace_cancels_queued_dependency_preparation(cx: &mut TestAppC
 #[gpui::test]
 #[ignore = "build capability-example SDK guest and lsp_fixture executable first"]
 fn wasm_dependency_plan_downloads_verifies_unpacks_and_starts_lsp(cx: &mut TestAppContext) {
+    run_dependency_install(cx, false);
+}
+
+#[gpui::test]
+#[ignore = "build current capability-example SDK guest, lsp_fixture and installer_fixture first"]
+fn wasm_installer_plan_requires_consent_then_starts_private_lsp(cx: &mut TestAppContext) {
+    run_dependency_install(cx, true);
+}
+
+/// Both data-only and native preparation must reach the same real LSP/document publication boundary.
+fn run_dependency_install(cx: &mut TestAppContext, native_install: bool) {
     cx.update(|cx| {
         gpui_kit::init(cx);
         typography::init(cx);
@@ -74,6 +85,12 @@ fn wasm_dependency_plan_downloads_verifies_unpacks_and_starts_lsp(cx: &mut TestA
     zip.start_file("server.exe", zip::write::SimpleFileOptions::default())
         .unwrap();
     zip.write_all(&std::fs::read(&exe).unwrap()).unwrap();
+    if native_install {
+        zip.start_file("installer.exe", zip::write::SimpleFileOptions::default())
+            .unwrap();
+        zip.write_all(&std::fs::read(exe.with_file_name("installer_fixture.exe")).unwrap())
+            .unwrap();
+    }
     let archive = zip.finish().unwrap().into_inner();
     let checksum = format!("{:x}", Sha256::digest(&archive));
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
@@ -100,6 +117,12 @@ fn wasm_dependency_plan_downloads_verifies_unpacks_and_starts_lsp(cx: &mut TestA
         .push(json!("dependencies.prepare"));
     manifest["settings"]["label"]["default"] = json!("managed-dependency");
     manifest["settings_hook"] = json!(false);
+    if native_install {
+        manifest["permissions"]
+            .as_array_mut()
+            .unwrap()
+            .push(json!("dependencies.install"));
+    }
     manifest["services"]["analysis"]["program"] = json!("missing-global-program");
     manifest["language_servers"]
         .as_array_mut()
@@ -109,11 +132,22 @@ fn wasm_dependency_plan_downloads_verifies_unpacks_and_starts_lsp(cx: &mut TestA
         "manifest.json".into(),
         serde_json::to_vec(&manifest).unwrap(),
     );
-    files.insert("dependency-plan.json".into(),serde_json::to_vec(&json!({
+    let mut plan = json!({
         "executable":"server/server.exe", "artifacts":[{"id":"server","version":"1.0.0",
         "platform":format!("{}-{}",std::env::consts::OS,std::env::consts::ARCH),"sha256":checksum,
         "source":{"kind":"url","url":url},"format":{"kind":"zip"}}]
-    })).unwrap());
+    });
+    let marker = directory.path().join("installer-ran.txt");
+    if native_install {
+        plan["executable"] = json!("server/installed/tool.exe");
+        plan["artifacts"][0]["installer"] = json!({"program":"installer.exe",
+            "args":["${target}",marker,"install-lsp","${source}"],"target":"installed",
+            "purpose":"Install the private analysis service","kind":"service"});
+    }
+    files.insert(
+        "dependency-plan.json".into(),
+        serde_json::to_vec(&plan).unwrap(),
+    );
     let package = super::language_tests::packages::repack(files).unwrap();
     let path = directory.path().join("before-install.novel");
     std::fs::write(&path, "unsaved = false\n").unwrap();
@@ -139,9 +173,30 @@ fn wasm_dependency_plan_downloads_verifies_unpacks_and_starts_lsp(cx: &mut TestA
     cx.simulate_input("draft");
     let language = super::language_tests::packages::language_package("managed-recognition");
     manager.install(&language, Default::default()).unwrap();
+    let control = plugin_runtime::InstallControl::default().with_installer_prompts();
+    let ui = control.clone();
+    let marker_check = marker.clone();
+    let consent = native_install.then(|| {
+        std::thread::spawn(move || {
+            let deadline = std::time::Instant::now() + Duration::from_secs(30);
+            loop {
+                if let Some(prompt) = ui.installer_prompt() {
+                    assert!(!marker_check.exists());
+                    assert!(ui.approve_installer(prompt.id, false));
+                    break;
+                }
+                assert!(std::time::Instant::now() < deadline);
+                std::thread::sleep(Duration::from_millis(20));
+            }
+        })
+    });
     manager
-        .install(&package, package.manifest.permissions.clone())
+        .install_with_control(&package, package.manifest.permissions.clone(), &control)
         .unwrap();
+    if let Some(consent) = consent {
+        consent.join().unwrap();
+        assert!(marker.exists());
+    }
     download.join().unwrap();
     super::lsp_tests::publish(&app, &mut manager, cx);
     let server = cx.update(|_, cx| app.read(cx).language_servers["novel"].clone());
