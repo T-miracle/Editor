@@ -1,5 +1,7 @@
 //! Sandboxed component execution and transactional local package lifecycle.
 mod capabilities;
+mod dependencies;
+pub use dependencies::{InstallControl, InstallStage};
 mod document_events;
 mod editor_requests;
 pub use document_events::DocumentEvents;

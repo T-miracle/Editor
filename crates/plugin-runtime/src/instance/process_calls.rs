@@ -51,7 +51,15 @@ impl State {
                 transport,
             } => {
                 self.process_authority("process.exec")?;
-                self.start_process(Service { program, args }, transport, "process.exec".into())
+                self.start_process(
+                    Service {
+                        program,
+                        args,
+                        installation: None,
+                    },
+                    transport,
+                    "process.exec".into(),
+                )
             }
             Operation::Write { handle, bytes } => {
                 let id = self.process_id(&handle)?;
@@ -80,6 +88,7 @@ impl State {
                 // A natural exit may already be queued; explicit close still retires pending delivery.
                 let _ = self.processes.close(id);
                 self.process_handles.remove(&id);
+                self.process_dependencies.remove(&id);
                 self.roots.remove(&handle);
                 // Termination is synchronous ownership release; it does not undo native side effects.
                 Ok(Value::Process(Update::Terminated))
@@ -123,17 +132,43 @@ impl State {
         }
         // No guest callback or await occurs between this reservation check and handle allocation.
         self.roots.ensure_capacity()?;
-        let program = crate::toolchains::resolve(&command.program).map_err(process_failure)?;
+        let prepared = command
+            .installation
+            .as_ref()
+            .map(|plan| {
+                anyhow::ensure!(
+                    self.permissions.contains("dependencies.prepare"),
+                    "Dependency permission required"
+                );
+                let root = self
+                    .assets
+                    .ancestors()
+                    .nth(3)
+                    .ok_or_else(|| anyhow::anyhow!("Missing managed package root"))?;
+                crate::dependencies::cached(root, plan)
+            })
+            .transpose()
+            .map_err(process_failure)?;
+        let program = if let Some(prepared) = &prepared {
+            prepared.program.clone()
+        } else {
+            crate::toolchains::resolve(&command.program).map_err(process_failure)?
+        };
+        let args = if let Some(prepared) = &prepared {
+            prepared.args(&command.args).map_err(process_failure)?
+        } else {
+            command.args
+        };
         let cwd = if self.roots.application || self.workspace.as_os_str().is_empty() {
             &self.data
         } else {
             &self.workspace
         };
         let id = match transport {
-            Transport::Stdio => self.processes.spawn_stdio(&program, &command.args, cwd),
+            Transport::Stdio => self.processes.spawn_stdio(&program, &args, cwd),
             Transport::Pty { columns, rows } => self.processes.spawn(
                 program.display().to_string(),
-                command.args,
+                args,
                 cwd.display().to_string(),
                 columns,
                 rows,
@@ -149,6 +184,9 @@ impl State {
             }
         };
         if let Value::Resource(handle) = &value {
+            if let Some(prepared) = prepared {
+                self.process_dependencies.insert(id, prepared.locks);
+            }
             self.process_handles
                 .insert(id, (handle.clone(), permission));
         }
@@ -181,6 +219,7 @@ impl State {
             return false;
         };
         if matches!(update, Update::Exited { .. }) {
+            self.process_dependencies.remove(&id);
             self.process_handles.remove(&id);
             self.roots.remove(handle);
         }

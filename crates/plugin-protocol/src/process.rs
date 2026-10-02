@@ -8,6 +8,9 @@ pub struct Service {
     pub program: String,
     #[serde(default)]
     pub args: Vec<String>,
+    /// Approved dependency preparation supplies the private executable instead of searching PATH.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub installation: Option<crate::dependencies::Plan>,
 }
 
 impl Service {

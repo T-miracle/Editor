@@ -18,6 +18,7 @@ zip = { version = "4", default-features = false, features = ["deflate"] }
 sha2 = "0.10"
 uuid = { version = "1", features = ["v4"] }
 tempfile.workspace = true
+ureq = { version = "3.4", default-features = false, features = ["rustls"] }
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_System_JobObjects", "Win32_System_Threading", "Win32_Security", "Win32_System_Console", "Win32_System_Pipes"] }

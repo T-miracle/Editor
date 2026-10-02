@@ -110,7 +110,7 @@ impl ResourceRoots {
 impl State {
     /// Required negotiation and installation consent are checked on open and every subsequent use.
     fn file_authority(&self, kind: RootKind, write: bool) -> Result<&Path, Failure> {
-        if !self.active || self.roots.retired {
+        if (!self.active && !(self.language_hook && !write)) || self.roots.retired {
             return Err(Failure::new(
                 ErrorCode::InvalidState,
                 "Instance is not active",

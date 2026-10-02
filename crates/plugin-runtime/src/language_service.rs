@@ -15,6 +15,8 @@ pub struct LanguageService {
     pub(crate) program: PathBuf,
     pub(crate) args: Vec<String>,
     state: Mutex<Lease>,
+    /// Active plans pin files even if another workspace removes the package's installation record.
+    pub(crate) dependencies: Vec<Arc<std::fs::File>>,
 }
 #[derive(Default)]
 struct Lease {
@@ -56,6 +58,7 @@ impl LanguageService {
             program,
             args,
             state: Mutex::new(Lease::default()),
+            dependencies: vec![],
         }
     }
     /// This lock serializes launch against revocation; no child can escape the retirement boundary.

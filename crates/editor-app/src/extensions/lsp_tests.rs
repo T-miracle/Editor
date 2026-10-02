@@ -29,7 +29,7 @@ pub(crate) fn package(exe: &Path, log: &Path) -> Package {
 }
 
 /// Publish the production worker's prepared plans together with its registry snapshot.
-fn publish(
+pub(super) fn publish(
     app: &Entity<EditorApp>,
     manager: &mut plugin_runtime::Manager,
     cx: &mut gpui_kit::VisualTestContext,

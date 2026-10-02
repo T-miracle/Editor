@@ -109,6 +109,13 @@ impl Manager {
             .get(proposal.service.as_ref().unwrap_or(&provider.service))
             .ok_or_else(|| anyhow::anyhow!("LSP hook selected an undeclared service"))?
             .clone();
+        if let Some(plan) = proposal.installation {
+            anyhow::ensure!(
+                entry.grants.contains("dependencies.prepare"),
+                "Dependency preparation permission required"
+            );
+            service.installation = Some(plan);
+        }
         if proposal.program.is_some() || proposal.args.is_some() {
             anyhow::ensure!(
                 entry.manifest.permissions.contains("process.exec")
@@ -117,6 +124,7 @@ impl Manager {
             );
             if let Some(program) = proposal.program {
                 service.program = program;
+                service.installation = None;
             }
             if let Some(args) = proposal.args {
                 service.args = args;
@@ -136,6 +144,7 @@ impl Manager {
                     .as_str()
                     .ok_or_else(|| anyhow::anyhow!("Invalid explicit executable"))?
                     .into();
+                service.installation = None;
                 anyhow::ensure!(
                     Path::new(&service.program).is_absolute(),
                     "Explicit executable must be an absolute path"
@@ -163,14 +172,25 @@ impl Manager {
             provider.valid(),
             "LSP hook returned invalid or oversized configuration"
         );
-        let program = crate::toolchains::resolve(&service.program)?;
-        Ok(LanguageService::new(
-            entry.manifest.id.clone(),
-            provider,
-            root,
-            program,
-            service.args,
-        ))
+        let prepared = service
+            .installation
+            .as_ref()
+            .map(|plan| crate::dependencies::cached(&self.root, plan))
+            .transpose()?;
+        let program = if let Some(prepared) = &prepared {
+            prepared.program.clone()
+        } else {
+            crate::toolchains::resolve(&service.program)?
+        };
+        let args = if let Some(prepared) = &prepared {
+            prepared.args(&service.args)?
+        } else {
+            service.args
+        };
+        let mut language_service =
+            LanguageService::new(entry.manifest.id.clone(), provider, root, program, args);
+        language_service.dependencies = prepared.map(|prepared| prepared.locks).unwrap_or_default();
+        Ok(language_service)
     }
     /// Called only on successful replacement or revocation; failed configuration preserves old leases.
     pub(super) fn retire_language_services(&mut self, id: &str) {

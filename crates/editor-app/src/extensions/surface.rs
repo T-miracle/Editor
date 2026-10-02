@@ -307,7 +307,8 @@ impl ExtensionPanel {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let executable = package.manifest.component.is_some();
+        let executable =
+            package.manifest.component.is_some() || !package.manifest.services.is_empty();
         let name = package.manifest.name.clone();
         let version = package.manifest.version.clone();
         let current = self
@@ -362,6 +363,7 @@ impl ExtensionPanel {
                                 "启动本机程序：这些程序以当前用户权限运行，可访问本机文件与网络"
                             }
                             "process.exec" => "执行任意本机程序（含交互式终端）：以当前用户权限访问文件与网络，WASM 沙箱不限制这些程序",
+                            "dependencies.prepare" => "下载、校验并解包插件声明或 WASM 钩子返回的服务依赖；保存在编辑器私有目录，不运行安装脚本、不修改全局 PATH",
                             value if value.starts_with("process.service.") => "启动此包声明的固定本机服务：程序以当前用户权限运行，可访问本机文件与网络",
                             "workspace.read" => "读取当前工作区文件",
                             "clipboard" => "读写系统剪贴板",
@@ -374,6 +376,11 @@ impl ExtensionPanel {
                             .and_then(|id| services.get(id)) {
                             // Show the approved executable and argument vector separately from prose.
                             details = details.child(format!("  程序：{} · 参数：{:?}", service.program, service.args));
+                            if let Some(plan) = &service.installation {
+                                for artifact in &plan.artifacts {
+                                    details = details.child(format!("  依赖：{} {} · {} · {:?} · SHA-256 {}", artifact.id, artifact.version, artifact.platform, artifact.source, artifact.sha256));
+                                }
+                            }
                         }
                     }
                     details = details.child(if executable {
@@ -451,7 +458,9 @@ impl ExtensionPanel {
         let name = entry
             .map(|entry| entry.manifest.name.clone())
             .unwrap_or_else(|| plugin_schema::canonical_plugin_id(&id).to_owned());
-        let executable = entry.is_some_and(|entry| entry.manifest.component.is_some());
+        let executable = entry.is_some_and(|entry| {
+            entry.manifest.component.is_some() || !entry.manifest.services.is_empty()
+        });
         let count = self.processes.get(&id).copied().unwrap_or(0);
         let impact = if executable {
             format!("将关闭 {count} 个运行中的程序。")
@@ -603,6 +612,12 @@ impl ExtensionPanel {
             self.manager_search = Some(input);
         }
         let busy = self.progress.is_some();
+        if self.installation.is_some() && !self.installation_dialog_open {
+            self.installation_dialog_open = true;
+            cx.defer_in(window, |this, window, cx| {
+                this.open_installation_progress(window, cx)
+            });
+        }
         if let Some(package) = self.pending.clone().filter(|_| !self.pending_dialog_open) {
             // Defer the overlay until the manager render finishes updating its Root.
             self.pending_dialog_open = true;

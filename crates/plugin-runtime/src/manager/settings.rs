@@ -80,6 +80,11 @@ fn validate_value(
 }
 
 impl Manager {
+    /// Candidates use their own declarations while sharing only user-approved persistent overrides.
+    pub(super) fn saved_settings(&self, manifest: &Manifest) -> anyhow::Result<Effective> {
+        SavedSettings::read(&self.settings_path(&manifest.id))?
+            .resolve(manifest, &self.environment.workspace)
+    }
     /// Return effective plugin values and provenance through the same manager used by the settings UI.
     pub fn effective_settings(&self, id: &str) -> anyhow::Result<Effective> {
         let entry = self

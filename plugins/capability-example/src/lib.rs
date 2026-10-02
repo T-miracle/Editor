@@ -66,11 +66,34 @@ impl State {
                     });
                 }
                 let dynamic = label == "dynamic-start";
+                // Resolve a data-only plan through the public asset API; the host owns all preparation work.
+                let installation =
+                    if label == "managed-dependency" || label == "managed-dependency-alternate" {
+                        let path = if label == "managed-dependency-alternate" {
+                            "dependency-plan-alternate.json"
+                        } else {
+                            "dependency-plan.json"
+                        };
+                        let api::Value::Asset { bytes } =
+                            api::guest::request(api::Operation::ReadAsset { path: path.into() })?
+                        else {
+                            return Err(Failure::new(
+                                ErrorCode::InvalidRequest,
+                                "Expected dependency plan asset",
+                            ));
+                        };
+                        Some(serde_json::from_slice(&bytes).map_err(|error| {
+                            Failure::new(ErrorCode::InvalidRequest, error.to_string())
+                        })?)
+                    } else {
+                        None
+                    };
                 let candidate = context.candidates.values().next().unwrap();
                 let mut args = candidate.args.clone();
                 args.push("--hook-selected".into());
                 return Ok(api::Output {
                     language_service: Some(plugin_protocol::language::Proposal {
+                        installation,
                         program: dynamic.then(|| candidate.program.clone()),
                         args: dynamic.then_some(args),
                         project_root: (label == "escaped-project").then(|| "../outside".into()),

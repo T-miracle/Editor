@@ -35,6 +35,8 @@ struct State {
     /// Service definitions and process handles cannot be retargeted by guest request fields.
     services: std::collections::BTreeMap<String, plugin_protocol::process::Service>,
     process_handles: std::collections::BTreeMap<u64, (api::ResourceHandle, String)>,
+    /// Each native process separately pins its immutable runtime files until it exits or is retired.
+    process_dependencies: std::collections::BTreeMap<u64, Vec<std::sync::Arc<std::fs::File>>>,
     workspace: PathBuf,
     data: PathBuf,
     assets: PathBuf,
@@ -343,6 +345,7 @@ mod tests {
             processes: Processes::default(),
             services: Default::default(),
             process_handles: Default::default(),
+            process_dependencies: Default::default(),
             workspace,
             data,
             assets,
@@ -492,6 +495,7 @@ mod tests {
             processes: Processes::default(),
             services: Default::default(),
             process_handles: Default::default(),
+            process_dependencies: Default::default(),
             workspace: root.path().into(),
             data: root.path().into(),
             assets: root.path().into(),
@@ -584,6 +588,7 @@ impl Instance {
             processes: Processes::default(),
             services: manifest.services.clone(),
             process_handles: Default::default(),
+            process_dependencies: Default::default(),
             workspace: PathBuf::from(&environment.workspace),
             data,
             assets,
@@ -761,6 +766,7 @@ impl Instance {
         self.scene = None;
         self.store.data_mut().processes.clear();
         self.store.data_mut().process_handles.clear();
+        self.store.data_mut().process_dependencies.clear();
         self.store.data_mut().active = false;
         self.store.data_mut().effects.clear();
     }

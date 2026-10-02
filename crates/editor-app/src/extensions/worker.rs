@@ -83,8 +83,20 @@ pub(super) struct OperationProgress {
     pub action: LifecycleAction,
     pub delete_data: Option<bool>,
 }
+/// Installation success and language-service readiness are separate user-visible states.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) struct InstallationProgress {
+    pub id: String,
+    pub message: String,
+    pub cancellable: bool,
+    /// Only a successful install may be followed by readiness; old-version callbacks cannot mask failures.
+    pub installed: bool,
+}
 #[derive(Default)]
 pub(super) struct Published {
+    pub installation: Option<InstallationProgress>,
+    pub install_control: Option<plugin_runtime::InstallControl>,
+    pub service_states: BTreeMap<String, String>,
     pub language_services: BTreeMap<String, Result<Arc<plugin_runtime::LanguageService>, String>>,
     pub configurations: BTreeMap<String, Result<settings::Effective, String>>,
     pub configuration_result: Option<(u64, Result<(), String>)>,
@@ -117,6 +129,12 @@ pub(super) struct Worker {
     pub recorded: Mutex<mpsc::Receiver<Work>>,
 }
 impl Worker {
+    /// This bypasses the serialized command queue so a long download cannot delay shutdown or trust revocation.
+    pub fn cancel_installation(&self) {
+        if let Some(control) = &self.state.lock().unwrap().install_control {
+            control.cancel();
+        }
+    }
     /// Publish enabled registry entries before the worker compiles any component.
     fn initial_state(
         root: &std::path::Path,
@@ -144,6 +162,31 @@ impl Worker {
         let mut state = self.state.lock().unwrap();
         if state.progress.is_some() {
             return false;
+        }
+        if let Work::Install(package) = &work {
+            state.installation = Some(InstallationProgress {
+                id: package.manifest.id.clone(),
+                message: "准备安装…".into(),
+                cancellable: true,
+                installed: false,
+            });
+            let output = Arc::downgrade(&self.state);
+            state.install_control = Some(plugin_runtime::InstallControl::new(move |stage| {
+                if let Some(output) = output.upgrade() {
+                    let mut state = output.lock().unwrap();
+                    if let Some(report) = &mut state.installation {
+                        use plugin_runtime::InstallStage::*;
+                        report.cancellable = stage != Prepared;
+                        report.message = match stage {
+                            Preparing => "正在准备依赖…".into(),
+                            Downloading(id) => format!("正在下载 / 读取依赖：{id}"),
+                            Verifying(id) => format!("正在验证 SHA-256：{id}"),
+                            Extracting(id) => format!("正在解包依赖：{id}"),
+                            Prepared => "依赖已准备，正在安装插件…".into(),
+                        };
+                    }
+                }
+            }));
         }
         state.progress = Some(progress);
         state.status = None;
@@ -234,7 +277,17 @@ impl Worker {
                     Some(Work::Inspect(path)) => Package::read(&path)
                         .map(|package| output.lock().unwrap().pending = Some(package)),
                     Some(Work::Install(package)) => {
-                        manager.install(&package, package.manifest.permissions.clone())
+                        let control = output
+                            .lock()
+                            .unwrap()
+                            .install_control
+                            .clone()
+                            .unwrap_or_default();
+                        manager.install_with_control(
+                            &package,
+                            package.manifest.permissions.clone(),
+                            &control,
+                        )
                     }
                     Some(Work::Enable(id)) => manager.enable(&id),
                     Some(Work::SetTrust(trusted)) => manager.set_workspace_trust(trusted),
@@ -319,6 +372,13 @@ impl Worker {
                         }
                     });
                 if services_changed {
+                    // Retired providers must not leave a previous version's ready badge behind.
+                    let unchanged = published.language_services.iter().filter_map(|(key, old)| {
+                        matches!((old, language_services.get(key)), (Ok(old), Some(Ok(new))) if Arc::ptr_eq(old,new)).then_some(key.clone())
+                    }).collect::<std::collections::BTreeSet<_>>();
+                    published
+                        .service_states
+                        .retain(|key, _| unchanged.contains(key));
                     published.language_services = language_services;
                     published.configuration_revision += 1;
                 }
@@ -340,6 +400,47 @@ impl Worker {
                     }
                 }
                 let replacement_succeeded = result.is_ok();
+                if lifecycle
+                    .as_ref()
+                    .is_some_and(|operation| operation.action == LifecycleAction::Install)
+                {
+                    if let Some(report) = &mut published.installation {
+                        report.cancellable = false;
+                        report.installed = result.is_ok();
+                        report.message = match &result {
+                            Err(error) => {
+                                format!("安装失败：{error:#}\n可关闭此窗口后重新点击安装重试。")
+                            }
+                            Ok(())
+                                if manager.installed.get(&report.id).is_some_and(|entry| {
+                                    !entry.manifest.language_servers.is_empty()
+                                }) =>
+                            {
+                                "插件已安装；等待语言服务选择与启动…".into()
+                            }
+                            Ok(()) => "插件安装完成。".into(),
+                        };
+                    }
+                    published.install_control = None;
+                    let failures = published
+                        .language_services
+                        .iter()
+                        .filter_map(|(key, service)| {
+                            service
+                                .as_ref()
+                                .err()
+                                .map(|error| format!("{key}：准备失败：{error}"))
+                        })
+                        .collect::<Vec<_>>();
+                    if let Some(report) = &mut published.installation {
+                        for failure in failures
+                            .iter()
+                            .filter(|line| line.starts_with(&format!("{}/", report.id)))
+                        {
+                            report.message.push_str(&format!("\n{failure}"));
+                        }
+                    }
+                }
                 // Startup loading ends only after Manager::open has restored every enabled plugin.
                 published.startup.clear();
                 if let Err(e) = result {
@@ -387,6 +488,7 @@ impl LifecycleAction {
 }
 impl Drop for Worker {
     fn drop(&mut self) {
+        self.cancel_installation();
         let _ = self.tx.send(Work::Shutdown(None));
     }
 }

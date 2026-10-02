@@ -55,6 +55,8 @@ pub struct Context {
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Proposal {
+    /// Dynamic download plans require the separate dependencies.prepare installation grant.
+    pub installation: Option<crate::dependencies::Plan>,
     /// Dynamic executables/arguments require the separate process.exec grant; fixed plans do not.
     pub program: Option<String>,
     pub args: Option<Vec<String>>,

@@ -6,6 +6,14 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 const SDK_FILES: &[(&str, &[u8])] = &[
+    (
+        "DEPENDENCIES.md",
+        include_bytes!("../../plugin-protocol/DEPENDENCIES.md"),
+    ),
+    (
+        "src/dependencies.rs",
+        include_bytes!("../../plugin-protocol/src/dependencies.rs"),
+    ),
     ("LSP.md", include_bytes!("../../plugin-protocol/LSP.md")),
     (
         "src/language.rs",

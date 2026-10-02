@@ -39,13 +39,17 @@ impl EditorApp {
                     }
                 };
                 let Some(server) =
-                    language_navigation::LanguageServer::from_service(plan).map(Arc::new)
+                    language_navigation::LanguageServer::from_service(plan.clone()).map(Arc::new)
                 else {
                     continue;
                 };
                 self.language_servers
                     .insert(language.clone(), server.clone());
                 changed = true;
+                let service_key = id.expect("selected plan has an ID");
+                self.extensions.update(cx, |extensions, cx| {
+                    extensions.language_service_status(&service_key, &plan, "正在启动…".into(), cx)
+                });
                 cx.spawn(async move |this, cx| {
                     let current = server.clone();
                     let result = cx
@@ -58,9 +62,17 @@ impl EditorApp {
                             .language_servers
                             .get(&language)
                             .is_some_and(|server| Arc::ptr_eq(server, &current))
-                            && let Err(error) = result
                         {
-                            app.status = format!("LSP {language}: {error:#}");
+                            let message = match result {
+                                Ok(()) => "已就绪".to_owned(),
+                                Err(error) => {
+                                    app.status = format!("LSP {language}: {error:#}");
+                                    format!("启动失败：{error:#}")
+                                }
+                            };
+                            app.extensions.update(cx, |extensions, cx| {
+                                extensions.language_service_status(&service_key, &plan, message, cx)
+                            });
                             cx.notify();
                         }
                     });

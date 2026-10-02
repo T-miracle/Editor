@@ -7,6 +7,7 @@ use std::{
     collections::{BTreeMap, BTreeSet},
     path::{Path, PathBuf},
 };
+mod dependencies;
 mod language;
 pub(crate) mod scopes;
 mod settings;
@@ -196,6 +197,16 @@ impl Manager {
     }
     /// Installation requires the caller's explicit grants; missing new permissions never inherit.
     pub fn install(&mut self, package: &Package, grants: BTreeSet<String>) -> anyhow::Result<()> {
+        self.install_with_control(package, grants, &crate::InstallControl::default())
+    }
+    /// The host shares cancellation/progress with its UI without permitting guest callbacks to grant consent.
+    pub fn install_with_control(
+        &mut self,
+        package: &Package,
+        grants: BTreeSet<String>,
+        control: &crate::InstallControl,
+    ) -> anyhow::Result<()> {
+        control.check()?;
         anyhow::ensure!(
             self.trusted && self.workspace_open,
             "Workspace is restricted or closed"
@@ -219,7 +230,7 @@ impl Manager {
             "Permission confirmation required"
         );
         if package.manifest.component.is_none() {
-            return self.install_declarative(package, grants);
+            return self.install_declarative(package, grants, control);
         }
         let snapshot = if let Some(old) = self.live.get_mut(&id) {
             Some(old.snapshot()?)
@@ -228,6 +239,7 @@ impl Manager {
         };
         let version = self.root.join("packages").join(&id).join(&package.digest);
         package.extract(&version)?;
+        control.check()?;
         if self.engine.is_none() {
             self.engine = Some(Instance::engine()?);
         }
@@ -242,10 +254,12 @@ impl Manager {
             snapshot.clone(),
         )?;
         self.configure_saved_settings(&mut next, &package.manifest)?;
+        self.prepare_dependencies(package, Some(&mut next), control)?;
         if let Some(snapshot) = &snapshot {
             self.save_snapshot(&id, snapshot)?;
         }
         // Cutover stops old process trees. Rollback starts new shells from the old snapshot.
+        control.check()?;
         let mut old = self.live.remove(&id);
         if let Some(old) = &mut old {
             old.stop();
@@ -253,6 +267,7 @@ impl Manager {
         let previous = self.installed.get(&id).cloned();
         let mut original_data = vec![];
         let result = (|| {
+            control.check()?;
             next.activate()?;
             original_data = next.commit_data()?;
             self.installed.insert(
@@ -305,6 +320,7 @@ impl Manager {
         &mut self,
         package: &Package,
         grants: BTreeSet<String>,
+        control: &crate::InstallControl,
     ) -> anyhow::Result<()> {
         let id = package.manifest.id.clone();
         if let Some(old) = self.live.get_mut(&id) {
@@ -313,11 +329,13 @@ impl Manager {
         }
         let version = self.root.join("packages").join(&id).join(&package.digest);
         package.extract(&version)?;
+        self.prepare_dependencies(package, None, control)?;
         let prior_projects = self
             .installed
             .get(&id)
             .map(|entry| entry.project_enabled.clone())
             .unwrap_or_default();
+        control.check()?;
         let previous = self.installed.insert(
             id.clone(),
             Installed {
@@ -511,6 +529,16 @@ impl Manager {
         self.disable(id)?;
         self.installed.remove(id);
         self.save_registry()?;
+        // Active native-service leases remain independently pinned; only installation/rollback pins are removed.
+        let receipts = self.root.join("dependency-receipts").join(id);
+        if receipts.exists() {
+            let resolved = receipts.canonicalize()?;
+            anyhow::ensure!(
+                resolved.starts_with(self.root.canonicalize()?.join("dependency-receipts")),
+                "Invalid dependency receipt deletion path"
+            );
+            std::fs::remove_dir_all(resolved)?;
+        }
         let package_directory = self.root.join("packages").join(id);
         if package_directory.exists() {
             let root = self.root.canonicalize()?;

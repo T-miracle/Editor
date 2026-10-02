@@ -134,6 +134,32 @@ impl Package {
         );
         super::capabilities::negotiate(&manifest)?;
         validate_language_services(&manifest)?;
+        if manifest.permissions.contains("dependencies.prepare") {
+            anyhow::ensure!(
+                manifest.protocol == 7
+                    && manifest
+                        .api
+                        .as_ref()
+                        .is_some_and(|api| api.required.contains_key("dependencies")),
+                "Dependency preparation requires dependencies capability"
+            );
+        }
+        for service in manifest.services.values() {
+            if let Some(plan) = &service.installation {
+                anyhow::ensure!(
+                    manifest.permissions.contains("dependencies.prepare"),
+                    "Dependency preparation permission required"
+                );
+                crate::dependencies::validate(plan)?;
+                for artifact in &plan.artifacts {
+                    if let plugin_protocol::dependencies::Source::Package { path } =
+                        &artifact.source
+                    {
+                        package_bytes(&files, path)?;
+                    }
+                }
+            }
+        }
         // Service keys are authority scopes, and definitions never accept dynamic command templates.
         anyhow::ensure!(manifest.services.len() <= 32, "Too many native services");
         for (id, service) in &manifest.services {
@@ -204,6 +230,9 @@ impl Package {
                 manifest.panels.is_empty()
                     && manifest.commands.is_empty()
                     && manifest.permissions.iter().all(|permission| {
+                        if permission == "dependencies.prepare" {
+                            return true;
+                        }
                         permission
                             .strip_prefix("process.service.")
                             .is_some_and(|service| {
@@ -273,7 +302,8 @@ impl Package {
                             "editor.read",
                             "editor.write",
                             "ui.panels",
-                            "process.exec"
+                            "process.exec",
+                            "dependencies.prepare"
                         ]
                         .contains(&permission.as_str())
                             || permission

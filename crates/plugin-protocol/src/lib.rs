@@ -5,6 +5,7 @@ use std::collections::BTreeSet;
 
 /// Capability-based API; legacy messages remain only during the staged migration.
 pub mod api;
+pub mod dependencies;
 pub mod language;
 pub mod process;
 pub mod settings;

@@ -306,6 +306,60 @@ fn second_market_install_shows_visible_consent(cx: &mut TestAppContext) {
         }),
         "confirming the reopened dialog must queue installation"
     );
+    // Running installation owns a native progress dialog, with a responsive cancel control.
+    dialog_cx.update(|_, cx| {
+        app.read(cx)
+            .extensions
+            .clone()
+            .update(cx, |owner, cx| owner.poll(cx))
+    });
+    dialog_cx.run_until_parked();
+    dialog_cx.update(|window, cx| window.draw(cx).clear(cx));
+    dialog_cx.run_until_parked();
+    let progress_window = dialog_cx
+        .update(|_, cx| cx.windows())
+        .into_iter()
+        .find(|handle| *handle != editor_window && *handle != dialog_window)
+        .expect("installation progress window");
+    let progress_cx = VisualTestContext::from_window(progress_window, cx).into_mut();
+    progress_cx.update(|window, cx| window.draw(cx).clear(cx));
+    assert!(
+        progress_cx
+            .debug_bounds("plugin-install-progress")
+            .is_some()
+    );
+    let button = progress_cx
+        .debug_bounds("plugin-install-progress-close-region")
+        .unwrap();
+    progress_cx.simulate_click(button.center(), Default::default());
+    let control = progress_cx.update(|_, cx| {
+        app.read(cx)
+            .extensions
+            .read(cx)
+            .worker
+            .state
+            .lock()
+            .unwrap()
+            .install_control
+            .clone()
+            .unwrap()
+    });
+    let package = super::language_tests::packages::language_package("cancelled-install");
+    let mut manager = plugin_runtime::Manager::open(
+        directory.path().join("cancelled-runtime"),
+        protocol::Environment {
+            workspace: directory.path().display().to_string(),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    assert!(
+        manager
+            .install_with_control(&package, Default::default(), &control)
+            .unwrap_err()
+            .to_string()
+            .contains("cancelled")
+    );
 }
 
 /// Uninstall choices belong to a modal and dispatch the selected data policy.

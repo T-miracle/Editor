@@ -3,8 +3,11 @@
 mod capability_tests;
 mod commands;
 pub(crate) mod contributions;
+#[cfg(test)]
+mod dependency_tests;
 mod editor_requests;
 mod images;
+mod installation;
 #[cfg(test)]
 mod language_tests;
 #[cfg(test)]
@@ -92,6 +95,8 @@ pub struct ExtensionPanel {
     pending: Option<Package>,
     /// Prevent repainting from opening the same installation dialog repeatedly.
     pending_dialog_open: bool,
+    installation: Option<worker::InstallationProgress>,
+    installation_dialog_open: bool,
     /// Search and selection belong to the manager window, not a plugin surface.
     manager_search: Option<Entity<InputState>>,
     manager_search_subscription: Option<Subscription>,
@@ -196,10 +201,13 @@ impl ExtensionPanel {
             // A fast cached worker can finish before this UI view is constructed.
             (state.startup.clone(), state.entries.clone())
         };
-        let shutdown = worker.tx.clone();
+        let shutdown = Arc::downgrade(&worker);
         let quit = cx.on_app_quit(move |_, _| {
             let (tx, rx) = futures::channel::oneshot::channel();
-            let _ = shutdown.send(Work::Shutdown(Some(tx)));
+            if let Some(worker) = shutdown.upgrade() {
+                worker.cancel_installation();
+                let _ = worker.tx.send(Work::Shutdown(Some(tx)));
+            }
             async move {
                 let _ = rx.await;
             }
@@ -246,6 +254,8 @@ impl ExtensionPanel {
             command_popup: None,
             pending: None,
             pending_dialog_open: false,
+            installation: None,
+            installation_dialog_open: false,
             manager_search: None,
             manager_search_subscription: None,
             manager_market: false,
@@ -328,6 +338,8 @@ impl ExtensionPanel {
             command_popup: None,
             pending: None,
             pending_dialog_open: false,
+            installation: None,
+            installation_dialog_open: false,
             manager_search: None,
             manager_search_subscription: None,
             manager_market: false,
@@ -350,6 +362,7 @@ impl ExtensionPanel {
     /// Apply host-local authority before accepting further worker scenes or contributions.
     pub(crate) fn set_workspace_trusted(&mut self, trusted: bool, cx: &mut Context<Self>) {
         if !trusted {
+            self.worker.cancel_installation();
             // Startup declarations can exist before the worker publishes any installed entries.
             contributions::refresh_entries(&self.root, &[]);
         }
@@ -421,7 +434,8 @@ impl ExtensionPanel {
                         || a.error != b.error
                 })
                 || self.startup != state.startup
-                || self.progress != state.progress;
+                || self.progress != state.progress
+                || self.installation != state.installation;
             if self.surface_id.is_none() {
                 contributions_changed |= self.entries.len() != state.entries.len()
                     || self.entries.iter().zip(&state.entries).any(|(old, new)| {
@@ -476,6 +490,7 @@ impl ExtensionPanel {
                 .map(|(id, n)| (id.clone(), *n))
                 .collect();
             self.progress = state.progress.clone();
+            self.installation = state.installation.clone();
             if self.surface_id.is_none() {
                 if let Some(p) = state.pending.take() {
                     changed = true;
@@ -617,7 +632,11 @@ impl ExtensionPanel {
     }
     /// Queue a plugin lifecycle operation and expose its waiting state on this frame.
     fn queue_lifecycle(&mut self, work: Work) -> bool {
+        let installing = matches!(&work, Work::Install(_));
         if self.worker.queue_lifecycle(work) {
+            if installing {
+                self.installation_dialog_open = false;
+            }
             self.status = None;
             self.progress = self.worker.state.lock().unwrap().progress.clone();
             true
@@ -976,6 +995,7 @@ impl EditorApp {
         self.capture_explorer_state(cx);
         self.persist_session();
         self.status = "正在保存插件状态…".into();
+        self.extensions.read(cx).worker.cancel_installation();
         cx.notify();
         let (tx, rx) = futures::channel::oneshot::channel();
         let _ = self
