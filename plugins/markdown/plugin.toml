@@ -1,0 +1,30 @@
+# Source recognition and grammar are ordinary independently replaceable contributions.
+[plugin]
+id = "markdown"
+name = "Markdown"
+version = "0.1.0"
+host_version = ">=0.1.0"
+
+[[language_definitions]]
+id = "markdown"
+name = "Markdown"
+extensions = ["md", "markdown"]
+
+[[highlighters]]
+id = "syntax"
+language = "markdown"
+grammar_name = "markdown"
+grammar = "grammar/markdown.wasm"
+highlights = "queries/highlights.scm"
+injections = "queries/injections.scm"
+injection_languages = ["markdown_inline"]
+tree_sitter_abi = 15
+
+# Inline grammar contributes no file recognition; the block parser selects its source ranges.
+[[highlighters]]
+id = "inline"
+language = "markdown_inline"
+grammar_name = "markdown_inline"
+grammar = "grammar/markdown_inline.wasm"
+highlights = "queries/inline.scm"
+tree_sitter_abi = 15

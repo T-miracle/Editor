@@ -25,6 +25,8 @@ pub(crate) mod lsp_tests;
 mod management;
 #[cfg(test)]
 mod management_tests;
+#[cfg(test)]
+mod markdown_tests;
 mod native_controls;
 #[cfg(test)]
 mod native_ui_tests;

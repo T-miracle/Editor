@@ -322,6 +322,9 @@ impl Package {
                 let grammar = package_bytes(&files, &provider.grammar.to_string_lossy())?;
                 anyhow::ensure!(grammar.starts_with(b"\0asm"), "Invalid grammar module");
                 package_text(&files, &provider.highlights.to_string_lossy())?;
+                if let Some(path) = &provider.injections {
+                    package_text(&files, &path.to_string_lossy())?;
+                }
             }
             anyhow::ensure!(
                 contributions.plugin.id == manifest.id,

@@ -3,7 +3,7 @@ param(
     [string]$Output = "$PSScriptRoot/../dist/plugins",
     [string]$HostExe = '',
     # Restrict verification to named packages without rebuilding unrelated components.
-    [ValidateSet('terminal', 'example', 'svg', 'rust', 'toml', 'html', 'javascript')]
+    [ValidateSet('terminal', 'example', 'svg', 'rust', 'toml', 'html', 'javascript', 'markdown')]
     [string[]]$Packages = @('terminal', 'example', 'svg', 'rust', 'toml', 'html', 'javascript')
 )
 $ErrorActionPreference = 'Stop'
@@ -82,7 +82,7 @@ try {
     } finally { $archive.Dispose(); $stream.Dispose() }
     Write-Output $destination
     }
-    foreach ($name in @('rust', 'toml', 'html', 'javascript')) {
+    foreach ($name in @('rust', 'toml', 'html', 'javascript', 'markdown')) {
         if ($Packages -notcontains $name) { continue }
         # Only Rust adds a policy component; the other language packages remain resource-only.
         $destination = [IO.Path]::GetFullPath((Join-Path $Output "$name.zip"))
@@ -91,10 +91,15 @@ try {
         try {
             $pluginRoot = Join-Path $projectRoot "plugins/$name"
             # Explicit distribution roots prevent Cargo/source/cache files from leaking into the Rust ZIP.
-            $packageFiles = @('manifest.json', 'README.md', 'plugin.toml', 'icons.json') | ForEach-Object {
+            $packageFiles = @('manifest.json', 'README.md', 'plugin.toml') | ForEach-Object {
                 ,@($_, (Join-Path $pluginRoot $_))
             }
+            # Resource-only languages may reuse the host's generic file icon without an icon catalog.
+            if (Test-Path -LiteralPath (Join-Path $pluginRoot 'icons.json')) {
+                $packageFiles += ,@('icons.json', (Join-Path $pluginRoot 'icons.json'))
+            }
             foreach ($directory in @('grammar', 'queries', 'icons')) {
+                if (-not (Test-Path -LiteralPath (Join-Path $pluginRoot $directory))) { continue }
                 foreach ($file in Get-ChildItem -LiteralPath (Join-Path $pluginRoot $directory) -Recurse -File | Sort-Object FullName) {
                     $relative = [IO.Path]::GetRelativePath($pluginRoot, $file.FullName).Replace('\', '/')
                     $packageFiles += ,@($relative, $file.FullName)

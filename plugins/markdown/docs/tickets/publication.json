@@ -1,0 +1,125 @@
+{
+  "slug": "markdown-plugin",
+  "parent": {
+    "id": 5690691592,
+    "number": 26,
+    "url": "https://github.com/T-miracle/Editor/issues/26"
+  },
+  "tickets": [
+    {
+      "blocked_by": [],
+      "sequence": "01",
+      "id": 5690696859,
+      "number": 27,
+      "url": "https://github.com/T-miracle/Editor/issues/27",
+      "file": "01-language-package.md"
+    },
+    {
+      "blocked_by": [
+        "01"
+      ],
+      "sequence": "02",
+      "id": 5690696989,
+      "number": 28,
+      "url": "https://github.com/T-miracle/Editor/issues/28",
+      "file": "02-native-preview.md"
+    },
+    {
+      "blocked_by": [
+        "02"
+      ],
+      "sequence": "03",
+      "id": 5690697312,
+      "number": 29,
+      "url": "https://github.com/T-miracle/Editor/issues/29",
+      "file": "03-view-modes.md"
+    },
+    {
+      "blocked_by": [
+        "02"
+      ],
+      "sequence": "04",
+      "id": 5690697616,
+      "number": 30,
+      "url": "https://github.com/T-miracle/Editor/issues/30",
+      "file": "04-format-toolbar.md"
+    },
+    {
+      "blocked_by": [
+        "02"
+      ],
+      "sequence": "05",
+      "id": 5690697834,
+      "number": 31,
+      "url": "https://github.com/T-miracle/Editor/issues/31",
+      "file": "05-image-preview.md"
+    },
+    {
+      "blocked_by": [
+        "04",
+        "05"
+      ],
+      "sequence": "06",
+      "id": 5690698065,
+      "number": 32,
+      "url": "https://github.com/T-miracle/Editor/issues/32",
+      "file": "06-paste-drop-images.md"
+    },
+    {
+      "blocked_by": [
+        "02",
+        "04"
+      ],
+      "sequence": "07",
+      "id": 5690698442,
+      "number": 33,
+      "url": "https://github.com/T-miracle/Editor/issues/33",
+      "file": "07-task-checkboxes.md"
+    },
+    {
+      "blocked_by": [
+        "02"
+      ],
+      "sequence": "08",
+      "id": 5690698744,
+      "number": 34,
+      "url": "https://github.com/T-miracle/Editor/issues/34",
+      "file": "08-link-navigation.md"
+    },
+    {
+      "blocked_by": [
+        "02"
+      ],
+      "sequence": "09",
+      "id": 5690698955,
+      "number": 35,
+      "url": "https://github.com/T-miracle/Editor/issues/35",
+      "file": "09-code-block-highlighting.md"
+    },
+    {
+      "blocked_by": [
+        "03",
+        "05"
+      ],
+      "sequence": "10",
+      "id": 5690699303,
+      "number": 36,
+      "url": "https://github.com/T-miracle/Editor/issues/36",
+      "file": "10-synchronized-scroll.md"
+    },
+    {
+      "blocked_by": [
+        "06",
+        "07",
+        "08",
+        "09",
+        "10"
+      ],
+      "sequence": "11",
+      "id": 5690699674,
+      "number": 37,
+      "url": "https://github.com/T-miracle/Editor/issues/37",
+      "file": "11-distribution-acceptance.md"
+    }
+  ]
+}

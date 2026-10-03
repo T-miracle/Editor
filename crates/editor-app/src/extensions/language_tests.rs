@@ -1,6 +1,7 @@
 //! Real resource packages must change an already-open editor through the installed contribution path.
 use super::*;
 use gpui_kit::{TestAppContext, gpui};
+mod injection_tests;
 pub(crate) mod packages;
 use packages::{language_package, repack, rust_resource_package};
 
@@ -351,7 +352,7 @@ fn unknown_declarative_language_highlights_open_document_without_restart(cx: &mu
 }
 
 /// Publish real Manager output through the same boundary used by the production worker.
-fn publish_languages(
+pub(super) fn publish_languages(
     app: &Entity<EditorApp>,
     manager: &plugin_runtime::Manager,
     cx: &mut gpui_kit::VisualTestContext,
