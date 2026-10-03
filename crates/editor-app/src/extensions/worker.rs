@@ -179,8 +179,10 @@ impl Worker {
             .unwrap_or_default()
             .into_iter()
             .filter_map(|(id, entry)| {
-                (trusted && (entry.enabled || entry.project_enabled_in(&environment.workspace)))
-                    .then_some((id, entry.manifest.name))
+                (trusted
+                    && entry.compatibility_error().is_none()
+                    && (entry.enabled || entry.project_enabled_in(&environment.workspace)))
+                .then_some((id, entry.manifest.name))
             })
             .collect();
         Published {

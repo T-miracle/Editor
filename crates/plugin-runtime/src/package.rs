@@ -107,16 +107,12 @@ impl Package {
             actual_total += data.len();
             anyhow::ensure!(files.insert(name, data).is_none(), "Duplicate package path");
         }
-        let mut manifest: Manifest = serde_json::from_slice(
+        let manifest: Manifest = serde_json::from_slice(
             files
                 .get("manifest.json")
                 .ok_or_else(|| anyhow::anyhow!("Missing manifest.json"))?,
         )?;
-        // Older install files enter the same canonical identity as current market packages.
-        manifest.id = plugin_schema::canonical_plugin_id(&manifest.id).to_owned();
-        if manifest.id == "svg" {
-            manifest.name = "SVG".into();
-        }
+        // New archives keep their declared identity; historical aliases belong exclusively to data import.
         anyhow::ensure!(
             manifest.id.len() <= 100
                 && !manifest.id.is_empty()
@@ -128,11 +124,7 @@ impl Package {
             "Invalid plugin identity"
         );
         semver::Version::parse(&manifest.version)?;
-        anyhow::ensure!(
-            matches!(manifest.protocol, 1..=7),
-            "Unsupported plugin protocol"
-        );
-        super::capabilities::negotiate(&manifest)?;
+        super::capabilities::require_current(&manifest)?;
         validate_language_services(&manifest)?;
         manifest
             .plugin_services
@@ -332,7 +324,7 @@ impl Package {
                 package_text(&files, &provider.highlights.to_string_lossy())?;
             }
             anyhow::ensure!(
-                plugin_schema::canonical_plugin_id(&contributions.plugin.id) == manifest.id,
+                contributions.plugin.id == manifest.id,
                 "Contribution manifest identity differs from package identity"
             );
             anyhow::ensure!(
@@ -550,15 +542,25 @@ pub(crate) fn atomic_write(path: &Path, bytes: &[u8]) -> anyhow::Result<()> {
 mod tests {
     use super::*;
 
-    /// New preview packages use protocol 6 while all earlier packages remain installable.
+    /// Inspection rejects retired wire formats before any component can be installed or activated.
     #[test]
-    fn package_accepts_protocol_five_and_preserves_version_boundary() {
-        for (protocol, supported) in [(3, true), (4, true), (5, true), (6, true), (7, false)] {
-            let manifest = serde_json::json!({
+    fn package_requires_the_current_protocol_and_negotiated_api() {
+        for (protocol, supported) in [
+            (3, false),
+            (4, false),
+            (5, false),
+            (6, false),
+            (7, true),
+            (8, false),
+        ] {
+            let mut manifest = serde_json::json!({
                 "id": "test", "name": "Test", "version": "0.1.0",
                 "protocol": protocol, "component": "test.wasm",
                 "permissions": [], "storage_limit": 1024
             });
+            if protocol == 7 {
+                manifest["api"] = serde_json::json!({"base":"^1","required":{}});
+            }
             let mut zip = zip::ZipWriter::new(Cursor::new(Vec::new()));
             zip.start_file("manifest.json", zip::write::SimpleFileOptions::default())
                 .unwrap();
@@ -576,7 +578,8 @@ mod tests {
     #[test]
     fn package_requires_component_or_declarative_contributions() {
         let manifest = serde_json::json!({
-            "id": "empty", "name": "Empty", "version": "0.1.0", "protocol": 1,
+            "id": "empty", "name": "Empty", "version": "0.1.0", "protocol": 7,
+            "api": {"base":"^1","required":{}},
             "permissions": [], "storage_limit": 1024
         });
         let mut zip = zip::ZipWriter::new(Cursor::new(Vec::new()));

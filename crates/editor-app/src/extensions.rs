@@ -1326,3 +1326,12 @@ impl EditorApp {
         cx.notify();
     }
 }
+
+/// Native UI fixtures reuse only declarative labels/layouts; their published package contract is current.
+#[cfg(test)]
+pub(crate) fn test_manifest(source: &str) -> protocol::Manifest {
+    let mut value: serde_json::Value = serde_json::from_str(source).unwrap();
+    value["protocol"] = serde_json::json!(7);
+    value["api"] = serde_json::json!({"base":"^1"});
+    serde_json::from_value(value).unwrap()
+}

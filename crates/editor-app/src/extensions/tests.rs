@@ -93,9 +93,9 @@ fn market_install_button_reports_loading_before_inspection(cx: &mut TestAppConte
     editor_cx.update(|window, cx| {
         let owner = app.read(cx).extensions.clone();
         owner.update(cx, |owner, cx| {
-            let manifest: protocol::Manifest =
-                serde_json::from_str(include_str!("../../../../plugins/example/manifest.json"))
-                    .unwrap();
+            let manifest: protocol::Manifest = crate::extensions::test_manifest(include_str!(
+                "../../../../plugins/example/manifest.json"
+            ));
             owner.manager_market = true;
             owner.manager_packages = vec![Package {
                 manifest,
@@ -157,9 +157,9 @@ fn second_market_install_shows_visible_consent(cx: &mut TestAppContext) {
     let app = slot.borrow_mut().take().unwrap();
     let editor_window = editor_cx.update(|window, _| window.window_handle());
     let first_manifest: protocol::Manifest =
-        serde_json::from_str(include_str!("../../../../plugins/example/manifest.json")).unwrap();
+        crate::extensions::test_manifest(include_str!("../../../../plugins/example/manifest.json"));
     let second_manifest: protocol::Manifest =
-        serde_json::from_str(include_str!("../../../../plugins/rust/manifest.json")).unwrap();
+        crate::extensions::test_manifest(include_str!("../../../../plugins/rust/manifest.json"));
     let first = Package {
         manifest: first_manifest.clone(),
         files: Default::default(),
@@ -383,7 +383,7 @@ fn uninstall_dialog_offers_both_data_choices(cx: &mut TestAppContext) {
     let app = slot.borrow_mut().take().unwrap();
     let editor_window = editor_cx.update(|window, _| window.window_handle());
     let manifest: protocol::Manifest =
-        serde_json::from_str(include_str!("../../../../plugins/example/manifest.json")).unwrap();
+        crate::extensions::test_manifest(include_str!("../../../../plugins/example/manifest.json"));
     editor_cx.update(|window, cx| {
         let owner = app.read(cx).extensions.clone();
         owner.update(cx, |owner, cx| {
@@ -566,8 +566,9 @@ fn plugin_panel_registration_input_and_ime(cx: &mut TestAppContext) {
         Root::new(app, window, cx)
     });
     let app = slot.borrow_mut().take().unwrap();
-    let mut manifest: protocol::Manifest =
-        serde_json::from_str(include_str!("../../../../plugins/terminal/manifest.json")).unwrap();
+    let mut manifest: protocol::Manifest = crate::extensions::test_manifest(include_str!(
+        "../../../../plugins/terminal/manifest.json"
+    ));
     // This test explicitly opens the dock; the packaged terminal now starts hidden.
     manifest.panels[0].default_visible = true;
     let scene = Scene {
@@ -835,10 +836,9 @@ fn deferred_legacy_effects_recheck_epoch_and_trust(cx: &mut TestAppContext) {
         cx.update(|_, cx| {
             let owner = app.read(cx).extensions.clone();
             owner.update(cx, |owner, cx| {
-                let manifest: protocol::Manifest = serde_json::from_str(include_str!(
+                let manifest: protocol::Manifest = crate::extensions::test_manifest(include_str!(
                     "../../../../plugins/terminal/manifest.json"
-                ))
-                .unwrap();
+                ));
                 owner
                     .worker
                     .trusted
@@ -888,4 +888,120 @@ fn deferred_legacy_effects_recheck_epoch_and_trust(cx: &mut TestAppContext) {
             assert!(!owner.worker.recorded.lock().unwrap().try_iter().any(|work| matches!(work, Work::Event(_, _, PluginEvent::Command { id, .. }) if id == "open_data:late.json.result")));
         });
     }
+}
+
+/// Incompatible records keep their scope preferences and expose recovery through update/removal, not activation.
+#[gpui::test]
+fn incompatible_plugin_details_keep_preferences_and_update_uninstall_actions(
+    cx: &mut TestAppContext,
+) {
+    cx.update(|cx| {
+        gpui_kit::init(cx);
+        typography::init(cx);
+        apply_theme(builtin_theme(false), cx);
+        cx.set_reduce_motion(true);
+    });
+    let directory = tempfile::tempdir().unwrap();
+    let workspace = Workspace::open(directory.path()).unwrap();
+    let project = workspace.root().display().to_string();
+    let slot = Rc::new(RefCell::new(None));
+    let capture = slot.clone();
+    let (_, cx) = cx.add_window_view(move |window, cx| {
+        let app = cx.new(|cx| EditorApp::new(workspace, None, window, cx));
+        *capture.borrow_mut() = Some(app.clone());
+        Root::new(app, window, cx)
+    });
+    let app = slot.borrow_mut().take().unwrap();
+    let editor_window = cx.update(|window, _| window.window_handle());
+    cx.update(|window, cx| {
+        let owner = app.read(cx).extensions.clone();
+        owner.update(cx, |owner, cx| {
+            let old: protocol::Manifest =
+                serde_json::from_str(include_str!("../../../../plugins/terminal/manifest.json"))
+                    .unwrap();
+            // Same-version SDK repacks must still offer an update for an incompatible installed protocol.
+            let current = crate::extensions::test_manifest(include_str!(
+                "../../../../plugins/terminal/manifest.json"
+            ));
+            owner.manager_selected = Some(old.id.clone());
+            owner.manager_packages = vec![Package {
+                manifest: current,
+                digest: "current".into(),
+                files: Default::default(),
+                source: Some("sdk-repack.zip".into()),
+            }];
+            owner.worker.state.lock().unwrap().entries = vec![Installed {
+                grants: old.permissions.clone(),
+                manifest: old,
+                digest: "old".into(),
+                enabled: false,
+                global_enabled: Some(false),
+                project_enabled: [project.clone()].into(),
+                error: None,
+            }];
+            owner.poll(cx);
+        });
+        app.update(cx, |app, cx| app.toggle_extensions(window, cx));
+    });
+    let dialog = cx
+        .update(|_, cx| cx.windows())
+        .into_iter()
+        .find(|handle| *handle != editor_window)
+        .unwrap();
+    let dialog_cx = VisualTestContext::from_window(dialog, cx).into_mut();
+    dialog_cx.update(|window, cx| window.draw(cx).clear(cx));
+    assert!(
+        dialog_cx
+            .debug_bounds("plugin-incompatible-status")
+            .is_some()
+    );
+    assert!(
+        dialog_cx
+            .debug_bounds("plugin-update-action-region")
+            .is_some()
+    );
+    assert!(
+        dialog_cx
+            .debug_bounds("plugin-uninstall-action-region")
+            .is_some()
+    );
+    assert!(dialog_cx.debug_bounds("plugin-restart-action").is_none());
+    let global = dialog_cx
+        .debug_bounds("plugin-global-scope-region")
+        .unwrap();
+    let project_scope = dialog_cx
+        .debug_bounds("plugin-project-scope-region")
+        .unwrap();
+    dialog_cx.simulate_click(global.center(), Default::default());
+    dialog_cx.simulate_click(project_scope.center(), Default::default());
+    dialog_cx.run_until_parked();
+    dialog_cx.update(|_, cx| {
+        let owner = app.read(cx).extensions.read(cx);
+        let entry = &owner.entries[0];
+        assert!(!entry.global_enabled.unwrap());
+        assert!(entry.project_enabled_in(&project));
+        assert!(
+            !owner
+                .worker
+                .recorded
+                .lock()
+                .unwrap()
+                .try_iter()
+                .any(|work| matches!(
+                    work,
+                    Work::Enable(_)
+                        | Work::Disable(_)
+                        | Work::Restart(_)
+                        | Work::SetProjectEnabled(_, _)
+                ))
+        );
+    });
+    let update = dialog_cx
+        .debug_bounds("plugin-update-action-region")
+        .unwrap();
+    dialog_cx.simulate_click(update.center(), Default::default());
+    dialog_cx.update(|_, cx| {
+        assert!(app.read(cx).extensions.read(cx).worker.recorded.lock().unwrap().try_iter()
+            .any(|work| matches!(work, Work::Inspect(path) if path == PathBuf::from("sdk-repack.zip"))));
+    });
 }

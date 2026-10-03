@@ -25,8 +25,7 @@ fn host_command_reveals_hidden_terminal_and_preserves_arguments(cx: &mut TestApp
         let owner = app.read(cx).extensions.clone();
         owner.update(cx, |owner, cx| {
             let manifest: protocol::Manifest =
-                serde_json::from_str(include_str!("../../../../plugins/terminal/manifest.json"))
-                    .unwrap();
+                crate::extensions::test_manifest(include_str!("../../../../plugins/terminal/manifest.json"));
             let mut state = owner.worker.state.lock().unwrap();
             state.entries = vec![Installed {
                 grants: manifest.permissions.clone(),
@@ -121,9 +120,9 @@ fn plugin_hide_requests_are_scoped_and_reclaim_the_empty_dock(cx: &mut TestAppCo
     let owner = cx.update(|window, cx| {
         let owner = app.read(cx).extensions.clone();
         owner.update(cx, |owner, cx| {
-            let mut manifest: protocol::Manifest =
-                serde_json::from_str(include_str!("../../../../plugins/terminal/manifest.json"))
-                    .unwrap();
+            let mut manifest: protocol::Manifest = crate::extensions::test_manifest(include_str!(
+                "../../../../plugins/terminal/manifest.json"
+            ));
             manifest.panels[0].default_visible = true;
             let mut state = owner.worker.state.lock().unwrap();
             for plugin in ["terminal", "peer"] {
@@ -232,7 +231,7 @@ fn native_panel_clicks_are_scoped_to_the_declared_surface(cx: &mut TestAppContex
     });
     let app = slot.borrow_mut().take().unwrap();
     let manifest: protocol::Manifest =
-        serde_json::from_str(include_str!("../../../../plugins/example/manifest.json")).unwrap();
+        crate::extensions::test_manifest(include_str!("../../../../plugins/example/manifest.json"));
     let scene = Scene {
         panel: "counter".into(),
         ui: Some(
@@ -298,8 +297,9 @@ fn canvas_controls_sidebar_routes_ui_without_canvas_pointer_events(cx: &mut Test
         Root::new(app, window, cx)
     });
     let app = slot.borrow_mut().take().unwrap();
-    let mut manifest: protocol::Manifest =
-        serde_json::from_str(include_str!("../../../../plugins/terminal/manifest.json")).unwrap();
+    let mut manifest: protocol::Manifest = crate::extensions::test_manifest(include_str!(
+        "../../../../plugins/terminal/manifest.json"
+    ));
     manifest.panels[0].default_visible = true;
     let scene = Scene {
         panel: "terminal".into(),

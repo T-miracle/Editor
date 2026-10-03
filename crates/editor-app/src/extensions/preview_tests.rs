@@ -2,6 +2,41 @@
 
 use super::*;
 use gpui_kit::{TestAppContext, gpui};
+use protocol::ui::{Action, Canvas, CanvasEvent, Document, Kind, Node};
+
+/// Inspect the public protocol-seven source notification without relying on a legacy serialization shape.
+fn preview_text(event: &PluginEvent) -> Option<&str> {
+    match event {
+        PluginEvent::Surface { event, .. } => preview_text(event),
+        PluginEvent::Capability(protocol::api::Notification::Preview {
+            document: Some(_),
+            text,
+        }) => Some(text),
+        _ => None,
+    }
+}
+
+/// Emulate the guest publishing a canvas bound to the source token received through the public preview channel.
+fn publish_preview_source(app: &Entity<EditorApp>, cx: &mut App) {
+    app.update(cx, |app, cx| app.sync_editor_previews(cx));
+    let Some(panel) = app.read(cx).plugin_panels.get("svg/preview").cloned() else {
+        return;
+    };
+    let version = panel.read(cx).preview_version.clone();
+    let owner = app.read(cx).extensions.clone();
+    owner.update(cx, |owner, cx| {
+        {
+            let mut state = owner.worker.state.lock().unwrap();
+            if let Some(scene) = state.scenes.get("svg/preview") {
+                let mut next = scene.as_ref().clone();
+                next.ui.as_mut().unwrap().source = version;
+                state.scenes.insert("svg/preview".into(), Arc::new(next));
+            }
+        }
+        owner.poll(cx);
+    });
+    panel.update(cx, |panel, cx| panel.poll(cx));
+}
 
 /// Opening a supported file creates an editor-local preview without adding an outer dock.
 #[gpui::test]
@@ -34,8 +69,8 @@ fn svg_preview_follows_open_documents_and_unsaved_edits(cx: &mut TestAppContext)
             // Publish through the existing runtime boundary; no installed user plugins are touched.
             let manifest: protocol::Manifest = serde_json::from_value(serde_json::json!({
                 "id": "svg", "name": "SVG 预览", "version": "0.1.0",
-                "protocol": 6, "component": "svg.wasm",
-                "permissions": ["editor.commands"], "storage_limit": 1024,
+                "protocol": 7, "api": {"base":"^1","required":{"ui.native":"^1","ui.canvas":"^1","editor.documents":"^1"}}, "component": "svg.wasm",
+                "permissions": ["editor.read"], "storage_limit": 1024,
                 "panels": [{ "id": "preview", "title": "SVG 预览",
                     "position": "editor", "file_extensions": ["svg"] }]
             }))
@@ -56,6 +91,11 @@ fn svg_preview_follows_open_documents_and_unsaved_edits(cx: &mut TestAppContext)
                     panel: "preview".into(),
                     font: "Segoe UI".into(),
                     font_size: 14.,
+                    // The current composable surface owns input; the host never falls back to the legacy scene path.
+                    ui: Some(Document::new(Node::column("root", vec![
+                        Node::text("heading", "SVG preview").height(32.),
+                        Node::new("viewport", Kind::Canvas(Canvas { focusable: true, ..Default::default() })).grow(),
+                    ]).grow()).revision(1)),
                     ..Default::default()
                 }),
             );
@@ -65,7 +105,10 @@ fn svg_preview_follows_open_documents_and_unsaved_edits(cx: &mut TestAppContext)
         app.update(cx, |app, cx| app.open_file(svg_path.clone(), window, cx));
     });
     cx.run_until_parked();
-    cx.update(|window, cx| window.draw(cx).clear(cx));
+    cx.update(|window, cx| {
+        publish_preview_source(&app, cx);
+        window.draw(cx).clear(cx);
+    });
     let source = cx.debug_bounds("editor-source-pane").expect("source pane");
     let preview = cx
         .debug_bounds("editor-preview-pane")
@@ -80,15 +123,21 @@ fn svg_preview_follows_open_documents_and_unsaved_edits(cx: &mut TestAppContext)
         Some(MouseButton::Left),
         Modifiers::default(),
     );
-    cx.update(|window, cx| window.draw(cx).clear(cx));
+    cx.update(|window, cx| {
+        publish_preview_source(&app, cx);
+        window.draw(cx).clear(cx);
+    });
     let destination = divider + point(px(120.), px(0.));
     cx.simulate_mouse_move(destination, Some(MouseButton::Left), Modifiers::default());
     cx.simulate_mouse_up(destination, MouseButton::Left, Modifiers::default());
     cx.run_until_parked();
-    cx.update(|window, cx| window.draw(cx).clear(cx));
+    cx.update(|window, cx| {
+        publish_preview_source(&app, cx);
+        window.draw(cx).clear(cx);
+    });
     let resized = cx.debug_bounds("editor-source-pane").unwrap();
     assert!(resized.size.width > source.size.width + px(80.));
-    let preview = cx.debug_bounds("editor-preview-pane").unwrap();
+    let preview = cx.debug_bounds("plugin-ui-viewport").unwrap();
     cx.update(|window, cx| {
         // Wheel input goes only to this surface, with coordinates relative to the preview panel.
         window.dispatch_event(
@@ -114,7 +163,7 @@ fn svg_preview_follows_open_documents_and_unsaved_edits(cx: &mut TestAppContext)
             .try_iter()
             .filter_map(|work| {
                 if let Work::Event(_, _, event) = work {
-                    Some(serde_json::to_value(event).unwrap())
+                    Some(event)
                 } else {
                     None
                 }
@@ -123,12 +172,12 @@ fn svg_preview_follows_open_documents_and_unsaved_edits(cx: &mut TestAppContext)
         assert!(
             events
                 .iter()
-                .any(|event| event["Surface"]["event"]["Document"]["text"] == original)
+                .any(|event| preview_text(event) == Some(original))
         );
         assert!(
             events
                 .iter()
-                .any(|event| event["Surface"]["event"]["Wheel"]["delta"] == 2.)
+                .any(|event| matches!(event, PluginEvent::Surface { event, .. } if matches!(event.as_ref(), PluginEvent::Ui(protocol::ui::UiEvent { node, action: Action::Canvas(CanvasEvent::Wheel { delta_y, x, y, .. }), .. }) if node == "viewport" && *delta_y > 0. && *x >= 0. && *y >= 0.)))
         );
     });
     // The public input action must synchronize the in-memory document before it is saved.
@@ -140,7 +189,10 @@ fn svg_preview_follows_open_documents_and_unsaved_edits(cx: &mut TestAppContext)
     });
     cx.simulate_input("<!-- draft -->");
     cx.run_until_parked();
-    cx.update(|window, cx| window.draw(cx).clear(cx));
+    cx.update(|window, cx| {
+        publish_preview_source(&app, cx);
+        window.draw(cx).clear(cx);
+    });
     cx.update(|_, cx| {
         let owner = app.read(cx).extensions.read(cx);
         assert!(
@@ -154,20 +206,24 @@ fn svg_preview_follows_open_documents_and_unsaved_edits(cx: &mut TestAppContext)
                     let Work::Event(_, _, event) = work else {
                         return false;
                     };
-                    serde_json::to_value(event).unwrap()["Surface"]["event"]["Document"]["text"]
-                        .as_str()
-                        .is_some_and(|text| text.starts_with("<!-- draft -->"))
+                    preview_text(&event).is_some_and(|text| text.starts_with("<!-- draft -->"))
                 })
         );
     });
     assert_eq!(std::fs::read_to_string(&svg_path).unwrap(), original);
     cx.update(|window, cx| app.update(cx, |app, cx| app.open_file(text_path, window, cx)));
     cx.run_until_parked();
-    cx.update(|window, cx| window.draw(cx).clear(cx));
+    cx.update(|window, cx| {
+        publish_preview_source(&app, cx);
+        window.draw(cx).clear(cx);
+    });
     assert!(cx.debug_bounds("editor-preview-pane").is_none());
     cx.update(|window, cx| app.update(cx, |app, cx| app.open_file(svg_path, window, cx)));
     cx.run_until_parked();
-    cx.update(|window, cx| window.draw(cx).clear(cx));
+    cx.update(|window, cx| {
+        publish_preview_source(&app, cx);
+        window.draw(cx).clear(cx);
+    });
     assert!(cx.debug_bounds("editor-preview-pane").is_some());
     cx.update(|_, cx| {
         let owner = app.read(cx).extensions.clone();
@@ -192,7 +248,10 @@ fn svg_preview_follows_open_documents_and_unsaved_edits(cx: &mut TestAppContext)
         panel.update(cx, |panel, cx| panel.poll(cx));
     });
     cx.run_until_parked();
-    cx.update(|window, cx| window.draw(cx).clear(cx));
+    cx.update(|window, cx| {
+        publish_preview_source(&app, cx);
+        window.draw(cx).clear(cx);
+    });
     cx.update(|_, cx| {
         let owner = app.read(cx).extensions.read(cx);
         assert!(
@@ -206,21 +265,22 @@ fn svg_preview_follows_open_documents_and_unsaved_edits(cx: &mut TestAppContext)
                     let Work::Event(_, _, event) = work else {
                         return false;
                     };
-                    serde_json::to_value(event).unwrap()["Surface"]["event"]["Document"]["text"]
-                        .as_str()
-                        .is_some_and(|text| text.starts_with("<!-- draft -->"))
+                    preview_text(&event).is_some_and(|text| text.starts_with("<!-- draft -->"))
                 }),
             "hot update must resynchronize the active draft automatically"
         );
     });
-    // A clean file changed on disk reloads without a user edit or a document revision increment.
+    // A clean disk reload updates the versioned preview source without a user edit.
     let reload_path = directory.path().join("reloaded.svg");
     std::fs::write(&reload_path, original).unwrap();
     cx.update(|window, cx| {
         app.update(cx, |app, cx| app.open_file(reload_path.clone(), window, cx))
     });
     cx.run_until_parked();
-    cx.update(|window, cx| window.draw(cx).clear(cx));
+    cx.update(|window, cx| {
+        publish_preview_source(&app, cx);
+        window.draw(cx).clear(cx);
+    });
     let replacement = "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"150\" height=\"60\"/>";
     std::fs::write(&reload_path, replacement).unwrap();
     cx.update(|window, cx| {
@@ -250,7 +310,10 @@ fn svg_preview_follows_open_documents_and_unsaved_edits(cx: &mut TestAppContext)
         });
     });
     cx.run_until_parked();
-    cx.update(|window, cx| window.draw(cx).clear(cx));
+    cx.update(|window, cx| {
+        publish_preview_source(&app, cx);
+        window.draw(cx).clear(cx);
+    });
     cx.update(|_, cx| {
         let app = app.read(cx);
         assert!(!app.tabs[app.active_tab_index().unwrap()].session.is_dirty());
@@ -266,10 +329,9 @@ fn svg_preview_follows_open_documents_and_unsaved_edits(cx: &mut TestAppContext)
                     let Work::Event(_, _, event) = work else {
                         return false;
                     };
-                    serde_json::to_value(event).unwrap()["Surface"]["event"]["Document"]["text"]
-                        == replacement
+                    preview_text(&event) == Some(replacement)
                 }),
-            "disk reload must refresh the preview even when the revision stays unchanged"
+            "disk reload must refresh the versioned preview source"
         );
     });
 }

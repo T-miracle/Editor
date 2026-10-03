@@ -60,6 +60,7 @@ pub fn refresh_entries(root: &Path, installed: &[Installed]) {
     for installed in installed {
         let id = &installed.manifest.id;
         if !installed.enabled
+            || installed.compatibility_error().is_some()
             || installed.error.is_some()
             || !id.bytes().all(|byte| {
                 byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'.' || byte == b'-'
@@ -114,7 +115,9 @@ pub fn refresh_entries(root: &Path, installed: &[Installed]) {
             .collect(),
         installed
             .iter()
-            .filter(|entry| entry.enabled && entry.error.is_none())
+            .filter(|entry| {
+                entry.enabled && entry.error.is_none() && entry.compatibility_error().is_none()
+            })
             .map(|entry| {
                 (
                     entry.manifest.id.clone(),
@@ -131,9 +134,8 @@ impl Contribution {
     fn read(root: &Path, manifest_path: &str, id: &str, digest: &str) -> anyhow::Result<Self> {
         let root = root.canonicalize()?;
         let source = read_asset(&root, Path::new(manifest_path))?;
-        let mut manifest = PluginManifest::parse(std::str::from_utf8(&source)?)?;
-        // Immutable migrated packages may still contain their original declarative manifest.
-        manifest.plugin.id = plugin_schema::canonical_plugin_id(&manifest.plugin.id).to_owned();
+        let manifest = PluginManifest::parse(std::str::from_utf8(&source)?)?;
+        // Historical identity import belongs to the registry migration; current packages keep exact author IDs.
         anyhow::ensure!(manifest.plugin.id == id, "Contribution identity mismatch");
         let icons = manifest
             .file_icons
@@ -294,6 +296,31 @@ pub fn asset(path: &str) -> Option<Vec<u8>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Startup resource loading must reject old protocols before opening their grammar/theme/icon assets.
+    #[test]
+    fn incompatible_resource_records_do_not_publish_contributions() {
+        let directory = tempfile::tempdir().unwrap();
+        let package =
+            crate::extensions::language_tests::packages::language_package("me.custom-language");
+        let mut manager = Manager::open(directory.path().into(), Default::default()).unwrap();
+        manager.install(&package, Default::default()).unwrap();
+        let mut entries = manager.published_entries();
+        refresh_entries(directory.path(), &entries);
+        assert!(
+            plugin_root("me.custom-language").is_some(),
+            "current author ID must remain exact"
+        );
+        entries[0].manifest.protocol = 1;
+        entries[0].manifest.api = None;
+        refresh_entries(directory.path(), &entries);
+        assert!(plugin_root("me.custom-language").is_none());
+        assert!(icon_rules().is_empty());
+        assert!(
+            entries[0].enabled,
+            "filtering must not clear the persisted preference"
+        );
+    }
 
     /// JavaScript aliases resolve from the installed manifest and carry valid themed icons.
     #[test]

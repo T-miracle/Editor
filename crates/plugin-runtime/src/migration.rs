@@ -3,23 +3,31 @@
 use crate::{Installed, package::atomic_write};
 use plugin_schema::canonical_plugin_id;
 use std::{collections::BTreeMap, fs, path::Path};
+mod installed;
+pub(crate) use installed::{
+    discard_legacy_data, needs_legacy_import, scope_snapshot, stage_legacy_data,
+};
 
 /// Copy before committing registry changes; original folders and a registry backup stay recoverable.
 pub(crate) fn migrate_registry(
     root: &Path,
     installed: BTreeMap<String, Installed>,
 ) -> anyhow::Result<BTreeMap<String, Installed>> {
-    if installed.keys().all(|id| canonical_plugin_id(id) == id) {
+    installed::backup_legacy(root, &installed)?;
+    if installed
+        .iter()
+        .all(|(id, entry)| historical_id(id, entry) == id)
+    {
         return Ok(installed);
     }
     // An already installed canonical package wins a collision, including its grants and settings.
     let mut current = installed
         .iter()
-        .filter(|(id, _)| canonical_plugin_id(id) == id.as_str())
+        .filter(|(id, entry)| historical_id(id, entry) == id.as_str())
         .map(|(id, entry)| (id.clone(), entry.clone()))
         .collect::<BTreeMap<_, _>>();
     for (old_id, mut entry) in installed {
-        let id = canonical_plugin_id(&old_id).to_owned();
+        let id = historical_id(&old_id, &entry).to_owned();
         if id == old_id || current.contains_key(&id) {
             continue;
         }
@@ -35,6 +43,11 @@ pub(crate) fn migrate_registry(
                 &root.join(directory).join(&id),
             )?;
         }
+        // Host configuration is a separate namespace from opaque data/settings.json owned by the guest.
+        copy_missing(
+            &root.join("settings").join(format!("{old_id}.json")),
+            &root.join("settings").join(format!("{id}.json")),
+        )?;
         entry.manifest.id = id.clone();
         if id == "svg" {
             entry.manifest.name = "SVG".into();
@@ -55,11 +68,19 @@ pub(crate) fn migrate_registry(
     Ok(current)
 }
 
+/// Only retired installation records participate in the bounded historical rename, never current packages.
+fn historical_id<'a>(id: &'a str, entry: &Installed) -> &'a str {
+    if matches!(entry.manifest.protocol, 1..=6) {
+        canonical_plugin_id(id)
+    } else {
+        id
+    }
+}
+
 /// Only plain ASCII plugin identifiers may form private directory names.
 fn safe_id(id: &str) -> bool {
     !id.is_empty()
-        && id != "."
-        && id != ".."
+        && !id.starts_with('.')
         && id.bytes().all(|byte| {
             byte.is_ascii_lowercase() || byte.is_ascii_digit() || matches!(byte, b'.' | b'-')
         })
@@ -67,6 +88,8 @@ fn safe_id(id: &str) -> bool {
 
 /// Idempotent copies preserve newer destination files and never follow package/data symlinks.
 fn copy_missing(source: &Path, destination: &Path) -> anyhow::Result<()> {
+    installed::reject_links(source)?;
+    installed::reject_links(destination)?;
     if !source.exists() {
         return Ok(());
     }

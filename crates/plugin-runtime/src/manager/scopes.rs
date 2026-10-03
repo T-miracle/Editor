@@ -37,7 +37,8 @@ impl Manager {
             .map(|entry| {
                 let mut visible = entry.clone();
                 visible.global_enabled = Some(entry.enabled);
-                visible.enabled = self.trusted
+                visible.enabled = entry.compatibility_error().is_none()
+                    && self.trusted
                     && self.workspace_open
                     && (entry.enabled
                         || (entry.manifest.scope == api::InstanceScope::Workspace

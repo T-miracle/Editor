@@ -27,6 +27,12 @@ impl InstallationPreparation {
         self.transaction.refresh()?;
         control.check()?;
         let candidate = self.transaction.candidate();
+        crate::migration::stage_legacy_data(
+            &self.root,
+            &self.package.manifest.id,
+            &self.environment,
+            &candidate,
+        )?;
         let mut next = Instance::prepare(
             &self.engine,
             self.package
@@ -47,18 +53,7 @@ impl InstallationPreparation {
             .data_format
             .as_ref()
             .map_or(1, |format| format.version);
-        let snapshot_path = candidate.join("state.json");
-        if snapshot_path.exists() {
-            // Match the manager's persisted-snapshot bound before allocating/parsing an untrusted file.
-            anyhow::ensure!(
-                snapshot_path.metadata()?.len() <= 40 * 1024 * 1024,
-                "Saved state exceeds host quota"
-            );
-        }
-        let mut snapshot = match crate::data_transaction::read_optional(&snapshot_path)? {
-            Some(bytes) => Some(serde_json::from_slice::<Snapshot>(&bytes)?),
-            None => None,
-        };
+        let mut snapshot = crate::migration::scope_snapshot(&candidate)?;
         if from != target {
             let hook = self
                 .package

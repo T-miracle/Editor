@@ -78,7 +78,7 @@ pub(in crate::extensions) fn repack(files: BTreeMap<String, Vec<u8>>) -> anyhow:
     Package::from_bytes(&zip.finish()?.into_inner())
 }
 
-/// Transitional packages still use their WASM grammar, with external services omitted from this fixture.
+/// A current resource-only package retains the established grammar declaration without a lifecycle component.
 pub(super) fn legacy_rust_package() -> Package {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../plugins/rust");
     let source = std::fs::read_to_string(root.join("plugin.toml")).unwrap();
@@ -90,7 +90,7 @@ pub(super) fn legacy_rust_package() -> Package {
     let declaration = plugin_schema::PluginManifest::parse(&source).unwrap();
     let language = &declaration.languages[0];
     let manifest = serde_json::json!({"id":"rust","name":"Rust","version":declaration.plugin.version,
-        "protocol":1,"contributions":"plugin.toml","storage_limit":1024});
+        "protocol":7,"api":{"base":"^1"},"contributions":"plugin.toml","storage_limit":1024});
     repack(BTreeMap::from([
         (
             "manifest.json".into(),

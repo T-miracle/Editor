@@ -36,6 +36,12 @@ pub struct Installed {
     pub error: Option<String>,
 }
 impl Installed {
+    /// Compatibility is derived without executing guest code or changing the user's enablement preference.
+    pub fn compatibility_error(&self) -> Option<String> {
+        crate::capabilities::require_current(&self.manifest)
+            .err()
+            .map(|error| format!("{error:#}"))
+    }
     /// Project choices follow canonical workspace identity, including Windows extended paths.
     pub fn project_enabled_in(&self, workspace: &str) -> bool {
         let key = scopes::workspace_key(workspace);
@@ -114,7 +120,11 @@ impl Manager {
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => BTreeMap::new(),
             Err(e) => return Err(e.into()),
         };
-        crate::migration::migrate_registry(root, installed)
+        let mut installed = crate::migration::migrate_registry(root, installed)?;
+        for entry in installed.values_mut() {
+            entry.error = entry.compatibility_error();
+        }
+        Ok(installed)
     }
     pub fn open(root: PathBuf, environment: Environment) -> anyhow::Result<Self> {
         Self::open_with_trust(root, environment, true)
@@ -144,11 +154,9 @@ impl Manager {
             workspace_open: true,
             language_services: BTreeMap::new(),
         };
-        if manager
-            .installed
-            .values()
-            .any(|entry| entry.manifest.component.is_some())
-        {
+        if manager.installed.values().any(|entry| {
+            entry.manifest.component.is_some() && entry.compatibility_error().is_none()
+        }) {
             manager.acquire_data_owner()?;
         }
         let ids: Vec<_> = manager
@@ -231,6 +239,7 @@ impl Manager {
         control: &crate::InstallControl,
     ) -> anyhow::Result<()> {
         control.check()?;
+        crate::capabilities::require_current(&package.manifest)?;
         anyhow::ensure!(
             self.trusted && self.workspace_open,
             "Workspace is restricted or closed"
@@ -425,6 +434,12 @@ impl Manager {
     pub fn enable(&mut self, id: &str) -> anyhow::Result<()> {
         // A prior failed rollback must finish before any instance can touch the formal data directory.
         drop(crate::data_transaction::recover(&self.root)?);
+        // Reject old metadata before reading or instantiating its component, preserving its saved preferences.
+        let entry = self
+            .installed
+            .get(id)
+            .ok_or_else(|| anyhow::anyhow!("Unknown plugin"))?;
+        crate::capabilities::require_current(&entry.manifest)?;
         anyhow::ensure!(
             self.trusted && self.workspace_open,
             "Workspace is restricted or closed"
@@ -487,15 +502,21 @@ impl Manager {
                 .join(&entry.digest)
                 .join(component_path),
         )?;
-        // A dormant workspace may still contain an older format than the globally installed package.
-        if let Some(format) = &entry.manifest.data_format {
-            let scope = self.data_directory(id).parent().unwrap().to_owned();
+        // Dormant scopes import historical data through the same transaction as explicit format migrations.
+        let scope = self.data_directory(id).parent().unwrap().to_owned();
+        let needs_import = crate::migration::needs_legacy_import(&self.root, id, &scope);
+        if needs_import || entry.manifest.data_format.is_some() {
             let from = if scope.exists() {
                 data_updates::data_version(&scope, true)?
             } else {
                 0
             };
-            if from != format.version {
+            let target = entry
+                .manifest
+                .data_format
+                .as_ref()
+                .map_or(1, |format| format.version);
+            if needs_import || from != target {
                 let package = Package {
                     manifest: entry.manifest.clone(),
                     digest: entry.digest.clone(),
@@ -627,6 +648,7 @@ impl Manager {
             std::fs::remove_dir_all(resolved)?;
         }
         if delete_data {
+            crate::migration::discard_legacy_data(&self.root, id, &self.installed)?;
             self.remove_saved_settings(id)?;
             let path = self.root.join("data").join(id);
             if path.exists() {
@@ -813,8 +835,12 @@ mod scope_tests {
             id: "example".into(),
             name: "Example".into(),
             version: "1.0.0".into(),
-            protocol: 1,
-            api: None,
+            protocol: 7,
+            api: Some(api::Requirements {
+                base: "^1".parse().unwrap(),
+                required: Default::default(),
+                optional: Default::default(),
+            }),
             scope: api::InstanceScope::Workspace,
             component: None,
             contributions: Some("plugin.toml".into()),

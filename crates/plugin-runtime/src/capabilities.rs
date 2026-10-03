@@ -2,6 +2,18 @@
 use plugin_protocol::{Manifest, api};
 use semver::Version;
 
+/// Production package admission has one current baseline; old codecs exist only until their cleanup ticket.
+pub(crate) fn require_current(manifest: &Manifest) -> anyhow::Result<()> {
+    anyhow::ensure!(
+        manifest.protocol == 7,
+        "插件不兼容：协议 {} 已停止支持，请使用新版 SDK 更新插件（需要协议 7）。",
+        manifest.protocol
+    );
+    negotiate(manifest)
+        .map(|_| ())
+        .map_err(|error| anyhow::anyhow!("插件 API 不兼容，请更新插件：{error:#}"))
+}
+
 /// Validate compatibility both when inspecting a package and before restoring an instance.
 pub(crate) fn negotiate(manifest: &Manifest) -> anyhow::Result<Option<api::Negotiated>> {
     if manifest.protocol != 7 {

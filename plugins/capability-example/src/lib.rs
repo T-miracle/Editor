@@ -10,6 +10,8 @@ mod service_demo;
 
 #[derive(Default)]
 struct State {
+    /// Opaque lifecycle state survives reinstall/recovery without interpreting the host's storage layout.
+    snapshot: plugin_protocol::Snapshot,
     service_client: service_demo::Client,
     /// Bounded observable process history demonstrates stream ordering through the public SDK.
     process_events: Vec<plugin_protocol::process::Update>,
@@ -188,7 +190,8 @@ impl State {
                     ..Default::default()
                 });
             }
-            api::Input::Prepare { api, .. } => {
+            api::Input::Prepare { api, snapshot, .. } => {
+                self.snapshot = snapshot.unwrap_or_default();
                 self.configuration.clear();
                 self.service_client = Default::default();
                 self.process_events.clear();
@@ -225,7 +228,7 @@ impl State {
             }
             api::Input::Snapshot => {
                 return Ok(api::Output {
-                    snapshot: Some(plugin_protocol::Snapshot::default()),
+                    snapshot: Some(self.snapshot.clone()),
                     ..Default::default()
                 });
             }

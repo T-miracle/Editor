@@ -130,6 +130,11 @@ impl Manager {
             }
             control.stage(crate::InstallStage::Migrating)?;
             prepared.transaction.refresh()?;
+            crate::migration::stage_legacy_data(&self.root, &id, &self.environment, &candidate)?;
+            // Dormant scopes and legacy reinstalls have no live checkpoint. Read their imported final copy.
+            if old.is_none() {
+                snapshot = crate::migration::scope_snapshot(&candidate)?;
+            }
             let from = data_version(&candidate, prepared.transaction.source_exists())?;
             prepared.next.call(Message::Prepare {
                 environment: self.environment.clone(),
@@ -264,6 +269,7 @@ impl Manager {
         package: &Package,
         grants: &BTreeSet<String>,
     ) -> anyhow::Result<()> {
+        crate::capabilities::require_current(&package.manifest)?;
         anyhow::ensure!(
             self.trusted && self.workspace_open,
             "Workspace is restricted or closed"
@@ -285,9 +291,17 @@ impl Manager {
             "Permission confirmation required"
         );
         anyhow::ensure!(
-            self.parked
-                .values()
-                .all(|scope| !scope.live.contains_key(&package.manifest.id)),
+            // Initializing another scope of the already installed immutable package cannot replace parked code.
+            self.installed
+                .get(&package.manifest.id)
+                .is_some_and(|old| old.digest == package.digest
+                    && old.grants == *grants
+                    && serde_json::to_value(&old.manifest).ok()
+                        == serde_json::to_value(&package.manifest).ok())
+                || self
+                    .parked
+                    .values()
+                    .all(|scope| !scope.live.contains_key(&package.manifest.id)),
             "Close other workspace instances before replacing this package"
         );
         anyhow::ensure!(

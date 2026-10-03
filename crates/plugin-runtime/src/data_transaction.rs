@@ -247,7 +247,7 @@ fn validate_scope(root: &Path, scope: &Path) -> anyhow::Result<()> {
 }
 
 /// Copy only bounded regular files; native connections and linked/project files cannot become rollback data.
-fn copy_tree(
+pub(crate) fn copy_tree(
     source: &Path,
     target: &Path,
     budget: &mut (u64, usize),

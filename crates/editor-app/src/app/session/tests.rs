@@ -143,10 +143,9 @@ fn plugin_dock_layout_survives_delayed_startup(cx: &mut TestAppContext) {
             .file_path()
             .unwrap(),
     );
-    let mut manifest: Manifest = serde_json::from_str(include_str!(
+    let mut manifest: Manifest = crate::extensions::test_manifest(include_str!(
         "../../../../../plugins/terminal/manifest.json"
-    ))
-    .unwrap();
+    ));
     manifest.panels[0].default_visible = true;
     let mut second_panel = manifest.panels[0].clone();
     second_panel.id = "tasks".into();

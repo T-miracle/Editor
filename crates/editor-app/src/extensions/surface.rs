@@ -491,7 +491,7 @@ impl ExtensionPanel {
         let entry = self.entries.iter().find(|entry| entry.manifest.id == id);
         let name = entry
             .map(|entry| entry.manifest.name.clone())
-            .unwrap_or_else(|| plugin_schema::canonical_plugin_id(&id).to_owned());
+            .unwrap_or_else(|| id.clone());
         let executable = entry.is_some_and(|entry| {
             entry.manifest.component.is_some() || !entry.manifest.services.is_empty()
         });
@@ -824,6 +824,9 @@ impl ExtensionPanel {
             .bg(cx.theme().background);
         if let Some(manifest) = selected_manifest {
             let id = manifest.id.clone();
+            // Installed preferences survive the protocol transition, but cannot authorize an old component.
+            let incompatibility = selected_entry.and_then(Installed::compatibility_error);
+            let incompatible = incompatibility.is_some();
             let installed_version = selected_entry.map(|entry| entry.manifest.version.as_str());
             let package_path = selected_package
                 .and_then(|package| package.source.as_ref())
@@ -832,14 +835,13 @@ impl ExtensionPanel {
             let can_install = selected_entry.is_none();
             let can_update = selected_package.is_some_and(|package| {
                 package_action(&package.manifest.version, installed_version) == "更新"
+                    || (incompatible
+                        && selected_entry.is_some_and(|entry| entry.digest != package.digest))
             });
             let global_enabled =
                 selected_entry.is_some_and(|entry| entry.global_enabled.unwrap_or(entry.enabled));
-            let project_enabled = selected_entry.is_some_and(|entry| {
-                entry
-                    .project_enabled
-                    .contains(&self.workspace.to_string_lossy().to_string())
-            });
+            let project_enabled = selected_entry
+                .is_some_and(|entry| entry.project_enabled_in(&self.workspace.to_string_lossy()));
             let uninstall_id = id.clone();
             // Package inspection belongs to install/update; removal has its own loading state.
             let install_loading = self.progress.as_ref().is_some_and(|progress| {
@@ -950,10 +952,11 @@ impl ExtensionPanel {
                                                 SegmentedTabs::new("plugin-global-scope")
                                                     .selected_index(usize::from(!enabled))
                                                     .labels(["全局启动", "全局禁用"])
-                                                    .disabled(busy)
+                                                    .disabled(busy || incompatible)
                                                     .on_change(move |index, _, cx| {
                                                         let enable = index == 0;
-                                                        if busy || enable == enabled {
+                                                        if busy || incompatible || enable == enabled
+                                                        {
                                                             return;
                                                         }
                                                         let _ = owner.update(cx, |this, cx| {
@@ -979,8 +982,11 @@ impl ExtensionPanel {
                                             Checkbox::new("plugin-project-enabled")
                                                 .label("本项目启用")
                                                 .checked(project_enabled)
-                                                .disabled(busy)
+                                                .disabled(busy || incompatible)
                                                 .on_change(move |checked, _, cx| {
+                                                    if busy || incompatible {
+                                                        return;
+                                                    }
                                                     let checked = *checked;
                                                     let _ = project_owner.update(cx, |this, cx| {
                                                         let _ = this.worker.tx.send(
@@ -997,7 +1003,20 @@ impl ExtensionPanel {
                             }),
                     ),
             );
-            if selected_entry.is_some() {
+            if let Some(reason) = incompatibility {
+                // This persistent status is independent of transient operation errors and README loading.
+                detail = detail.child(
+                    div()
+                        .debug_selector(|| "plugin-incompatible-status".into())
+                        .px_5()
+                        .py_3()
+                        .text_color(cx.theme().danger)
+                        .child(format!(
+                            "不兼容，请更新。{reason} 原有设置和启用范围已保留。"
+                        )),
+                );
+            }
+            if selected_entry.is_some() && !incompatible {
                 detail = detail.child(self.recovery_controls(&id, busy, cx));
             }
             if self.status.is_none() {

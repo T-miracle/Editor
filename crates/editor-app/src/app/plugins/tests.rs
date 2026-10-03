@@ -45,9 +45,9 @@ fn status_popup_blocks_title_bar_until_dismissed(cx: &mut TestAppContext) {
     assert!(window_cx.update(|_, cx| app.read(cx).titlebar_should_move));
 }
 
-/// A previously installed runtime plugin must appear in the startup indicator.
+/// A legacy installation retains preferences and files without advertising that its old component is starting.
 #[gpui::test]
-fn installed_runtime_plugin_is_visible_while_starting(cx: &mut TestAppContext) {
+fn incompatible_installed_plugin_preserves_data_without_starting(cx: &mut TestAppContext) {
     cx.update(|cx| {
         gpui_kit::init(cx);
         typography::init(cx);
@@ -91,8 +91,8 @@ fn installed_runtime_plugin_is_visible_while_starting(cx: &mut TestAppContext) {
     cx.simulate_resize(size(px(1000.), px(800.)));
     cx.update(|window, cx| window.draw(cx).clear(cx));
     assert!(
-        cx.debug_bounds("plugin-loading-indicator").is_some(),
-        "an enabled runtime plugin must show startup loading in the status bar"
+        cx.debug_bounds("plugin-loading-indicator").is_none(),
+        "an incompatible runtime plugin must not claim to start"
     );
     let migrated = plugin_runtime::Manager::read_registry(&root).unwrap();
     assert!(!migrated.contains_key("me.terminal"));
@@ -241,8 +241,9 @@ fn project_rust_registry(workspace: &Workspace) -> PathBuf {
     )
     .unwrap();
     let installed = plugin_runtime::Installed {
-        manifest: serde_json::from_str(include_str!("../../../../../plugins/rust/manifest.json"))
-            .unwrap(),
+        manifest: crate::extensions::test_manifest(include_str!(
+            "../../../../../plugins/rust/manifest.json"
+        )),
         digest,
         grants: Default::default(),
         enabled: false,
