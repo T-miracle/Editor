@@ -1,7 +1,7 @@
 {
   "date": "2026-10-04",
   "repository": "T-miracle/Editor",
-  "status": "implementation-in-progress",
+  "status": "implementation-completed",
   "label": "ready-for-agent",
   "spec": {
     "kind": "spec",
@@ -39,6 +39,8 @@
       "ticket": 3,
       "file": "03-status-popover.md",
       "number": 25,
+      "implementation": "completed",
+      "verification": "../../verification/plugin-status-popover-verification.md",
       "id": 5690181696,
       "url": "https://github.com/T-miracle/Editor/issues/25",
       "blocked_by": [

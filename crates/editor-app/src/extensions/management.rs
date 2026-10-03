@@ -188,7 +188,13 @@ impl ExtensionPanel {
                 v_flex()
                     .p_3()
                     .gap_2()
-                    .child(Input::new(self.manager_search.as_ref().unwrap()))
+                    // Keep a stable hit target for native search and summary-to-log routing tests.
+                    .child(
+                        div()
+                            .debug_selector(|| "plugin-manager-search".into())
+                            .w_full()
+                            .child(Input::new(self.manager_search.as_ref().unwrap())),
+                    )
                     .child(
                         div()
                             .id("plugin-manager-tab-strip")

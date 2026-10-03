@@ -32,6 +32,7 @@ mod preview;
 #[cfg(test)]
 mod preview_tests;
 mod recovery;
+pub(crate) use recovery::{level_label, log_time, severity_icon};
 #[cfg(test)]
 mod recovery_tests;
 #[cfg(test)]
@@ -1176,6 +1177,47 @@ impl EditorApp {
             }
         }));
         self.extensions_window = Some(handle);
+        cx.notify();
+    }
+
+    /// Open the installed plugin's complete log from a status summary, even with an active search filter.
+    pub(crate) fn open_plugin_logs(
+        &mut self,
+        plugin: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        // Retained summaries can outlive uninstall; validate the owner before changing selection or focus.
+        if !self
+            .extensions
+            .read(cx)
+            .entries
+            .iter()
+            .any(|entry| entry.manifest.id == plugin)
+        {
+            return;
+        }
+        self.close_plugin_popup(window, cx);
+        self.toggle_extensions(window, cx);
+        self.extensions.update(cx, |panel, cx| {
+            // Recreate the empty search input instead of emitting a delayed Change that could undo routing.
+            panel.manager_search_subscription = None;
+            panel.manager_search = None;
+            panel.manager_market = false;
+            panel.manager_selected = Some(plugin);
+            panel.manager_detail_tab = management::DetailTab::RuntimeLog;
+            panel.manager_log_view = None;
+            panel.manager_detail_scroll.set_offset(Default::default());
+            cx.notify();
+        });
+        if let Some(handle) = self.extensions_window {
+            let manager = self.extensions.clone();
+            let _ = handle.update(cx, |_, window, cx| {
+                // Release the panel read before focus mutates the application context.
+                let detail_focus = manager.read(cx).manager_detail_focus.clone();
+                detail_focus.focus(window, cx);
+            });
+        }
         cx.notify();
     }
 }

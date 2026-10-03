@@ -1,5 +1,7 @@
 //! Bounded, process-local plugin logs share record reads and independently acknowledged reminders.
 //! Clones retain the same sink across manager windows, background preparation and retired instances.
+//! Each plugin keeps 512 history records plus at most one evicted, unacknowledged anomaly per severity.
+//! These two reminder representatives do not restore evicted records or their log-tab unread markers.
 
 use std::{
     collections::{BTreeMap, VecDeque},
@@ -49,8 +51,49 @@ struct StoredRecord {
 #[derive(Debug, Default)]
 struct PluginLogs {
     records: VecDeque<StoredRecord>,
+    /// Only Warning/Error enter this map: latest evicted receipt per level, still unread and unconfirmed.
+    evicted_anomalies: BTreeMap<LogLevel, LogRecord>,
     /// Opening a summary dismisses that reminder generation without reading undisplayed records.
     reminders_confirmed_through: u64,
+}
+
+impl PluginLogs {
+    /// Preserve an actionable cause without allowing normal output to erase a pending bottom reminder.
+    fn evict_oldest(&mut self) {
+        let Some(entry) = self.records.pop_front() else {
+            return;
+        };
+        if !entry.read
+            && entry.record.level > LogLevel::Info
+            && entry.record.id > self.reminders_confirmed_through
+        {
+            // FIFO eviction follows receipt IDs. Replacing the same level coalesces older causes,
+            // bounding the extra storage to two records regardless of the producer's output volume.
+            self.evicted_anomalies
+                .insert(entry.record.level, entry.record);
+        }
+    }
+
+    /// Retained history remains reviewable after acknowledgement; evicted representatives are pending only.
+    fn latest_anomaly(&self) -> Option<&LogRecord> {
+        self.records
+            .iter()
+            .map(|entry| &entry.record)
+            .filter(|record| record.level > LogLevel::Info)
+            .chain(self.evicted_anomalies.values())
+            .max_by_key(|record| (record.time, record.id))
+    }
+
+    /// Clamp an acknowledgement to receipts already present and release representatives through that boundary.
+    fn confirm_through(&mut self, through: u64) -> bool {
+        let through = through.min(self.records.back().map_or(0, |entry| entry.record.id));
+        let changed = through > self.reminders_confirmed_through;
+        self.reminders_confirmed_through = self.reminders_confirmed_through.max(through);
+        let previous = self.evicted_anomalies.len();
+        self.evicted_anomalies
+            .retain(|_, record| record.id > self.reminders_confirmed_through);
+        changed || previous != self.evicted_anomalies.len()
+    }
 }
 
 #[derive(Debug, Default)]
@@ -92,9 +135,10 @@ impl RuntimeLogs {
             },
             read: false,
         });
-        // Read markers are stored with their record and therefore retire at the same eviction boundary.
+        // History reads retire with their records. Only an unviewed anomaly may survive as one of
+        // the two bounded bottom-reminder representatives, never as a restored log-tab entry.
         while history.records.len() > RECORDS_PER_PLUGIN {
-            history.records.pop_front();
+            history.evict_oldest();
         }
         state.generation += 1;
         id
@@ -134,7 +178,9 @@ impl RuntimeLogs {
             })
     }
 
-    /// Mark only listed, retained records belonging to this plugin; return whether visible state changed.
+    /// Read only the listed IDs for this plugin and release a matching evicted reminder representative.
+    /// A stale visible-summary callback cannot read a newer representative of the same severity.
+    /// Return whether history reads or bottom-reminder state changed.
     pub fn mark_read(&self, plugin: &str, ids: &[u64]) -> bool {
         let mut state = self.0.lock().unwrap();
         let Some(history) = state.plugins.get_mut(plugin) else {
@@ -147,6 +193,11 @@ impl RuntimeLogs {
                 changed = true;
             }
         }
+        let previous = history.evicted_anomalies.len();
+        history
+            .evicted_anomalies
+            .retain(|_, record| !ids.contains(&record.id));
+        changed |= previous != history.evicted_anomalies.len();
         if changed {
             state.generation += 1;
         }
@@ -168,50 +219,32 @@ impl RuntimeLogs {
                 changed = true;
             }
         }
-        if through > history.reminders_confirmed_through {
-            history.reminders_confirmed_through = through;
-            changed = true;
-        }
+        changed |= history.confirm_through(through);
         if changed {
             state.generation += 1;
         }
         changed
     }
 
-    /// Latest warning/error per plugin, regardless of reads; receipt time and ID select the summary.
-    /// Results are newest-first. Summary selection never lowers a separate unread error indicator.
+    /// Latest retained warning/error or pending evicted representative per plugin, newest-first.
+    /// Retained records remain reviewable after reads; viewed evicted representatives are released.
+    /// Receipt time and ID select the summary independently of highest pending reminder severity.
     pub fn latest_anomalies(&self) -> Vec<LogRecord> {
         let state = self.0.lock().unwrap();
-        let mut result: Vec<_> = state
-            .plugins
-            .values()
-            .filter_map(|history| {
-                history
-                    .records
-                    .iter()
-                    .filter(|entry| entry.record.level > LogLevel::Info)
-                    .max_by_key(|entry| (entry.record.time, entry.record.id))
-                    .map(|entry| entry.record.clone())
-            })
-            .collect();
-        result.sort_by_key(|record| std::cmp::Reverse((record.time, record.id)));
-        result
+        latest_summaries(&state)
+    }
+
+    /// Atomically capture per-plugin receipt checkpoints and latest anomaly summaries for one popup.
+    /// The returned record clones survive later eviction or representative replacement. Confirm only
+    /// these checkpoints after opening; arrivals beyond them remain eligible for the next reminder.
+    pub fn reminder_snapshot(&self) -> (Vec<(String, u64)>, Vec<LogRecord>) {
+        let state = self.0.lock().unwrap();
+        (reminder_checkpoints(&state), latest_summaries(&state))
     }
 
     /// Capture current per-plugin ID boundaries before a summary is displayed.
     pub fn reminder_checkpoint(&self) -> Vec<(String, u64)> {
-        self.0
-            .lock()
-            .unwrap()
-            .plugins
-            .iter()
-            .filter_map(|(plugin, history)| {
-                history
-                    .records
-                    .back()
-                    .map(|entry| (plugin.clone(), entry.record.id))
-            })
-            .collect()
+        reminder_checkpoints(&self.0.lock().unwrap())
     }
 
     /// Confirm only captured reminder generations. Undisplayed records retain their unread state.
@@ -223,11 +256,7 @@ impl RuntimeLogs {
             let Some(history) = state.plugins.get_mut(plugin) else {
                 continue;
             };
-            let through = (*through).min(history.records.back().map_or(0, |entry| entry.record.id));
-            if through > history.reminders_confirmed_through {
-                history.reminders_confirmed_through = through;
-                changed = true;
-            }
+            changed |= history.confirm_through(*through);
         }
         if changed {
             state.generation += 1;
@@ -235,7 +264,8 @@ impl RuntimeLogs {
         changed
     }
 
-    /// One highest-severity reminder per plugin, requiring both unread and unconfirmed records.
+    /// Highest unread, unconfirmed severity per plugin, including the two bounded evicted representatives.
+    /// History eviction can remove a log-tab marker but cannot silently dismiss a bottom reminder.
     pub fn pending_reminders(&self) -> Vec<(String, LogLevel)> {
         self.0
             .lock()
@@ -246,10 +276,38 @@ impl RuntimeLogs {
                 anomaly_severity(history.records.iter().filter(|entry| {
                     !entry.read && entry.record.id > history.reminders_confirmed_through
                 }))
+                .into_iter()
+                .chain(history.evicted_anomalies.keys().copied())
+                .max()
                 .map(|level| (plugin.clone(), level))
             })
             .collect()
     }
+}
+
+/// Capture boundaries while the caller holds the same lock used to clone popup summaries.
+fn reminder_checkpoints(state: &State) -> Vec<(String, u64)> {
+    state
+        .plugins
+        .iter()
+        .filter_map(|(plugin, history)| {
+            history
+                .records
+                .back()
+                .map(|entry| (plugin.clone(), entry.record.id))
+        })
+        .collect()
+}
+
+/// Shared selection keeps standalone queries and atomic popup snapshots consistent.
+fn latest_summaries(state: &State) -> Vec<LogRecord> {
+    let mut summaries: Vec<_> = state
+        .plugins
+        .values()
+        .filter_map(|history| history.latest_anomaly().cloned())
+        .collect();
+    summaries.sort_by_key(|record| std::cmp::Reverse((record.time, record.id)));
+    summaries
 }
 
 /// Normal records affect history only; reminder precedence follows the ordered severity enum.

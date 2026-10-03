@@ -42,23 +42,6 @@ impl EditorApp {
         cx.notify();
     }
 
-    /// Status popovers report arbitrary declared languages, with no built-in identity list.
-    pub(crate) fn language_service_details(&self, kind: PluginPopupKind) -> Vec<(String, String)> {
-        self.language_service_states
-            .iter()
-            .filter_map(|(language, state)| {
-                let message = match (state, kind) {
-                    (ServiceLoadState::Loading, PluginPopupKind::Loading) => {
-                        t!("plugins.loading").to_string()
-                    }
-                    (ServiceLoadState::Failed(error), PluginPopupKind::Error) => error.clone(),
-                    _ => return None,
-                };
-                Some((format!("{language} · LSP"), message))
-            })
-            .collect()
-    }
-
     pub(crate) fn sync_dynamic_language_servers(&mut self, cx: &mut Context<Self>) {
         let selected = crate::language::providers::language_servers();
         let available = self.extensions.read(cx).language_services();

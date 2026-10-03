@@ -380,6 +380,36 @@ plugins.error:
 plugins.loading_list:
   en: "Loading plugins"
   zh-CN: "正在加载的插件"
+plugins.warning:
+  en: "Plugin warnings"
+  zh-CN: "插件警告"
+plugins.status_title:
+  en: "Plugin status"
+  zh-CN: "插件运行状态"
+plugins.status_starting:
+  en: "Starting the plugin."
+  zh-CN: "正在启动插件。"
+plugins.status_highlight_loading:
+  en: "Loading syntax highlighting for %{language}."
+  zh-CN: "正在加载 %{language} 的语法高亮。"
+plugins.status_service_loading:
+  en: "Starting %{language} language service · %{service}"
+  zh-CN: "正在启动 %{language} 语言服务 · %{service}"
+plugins.status_view_log:
+  en: "View runtime log"
+  zh-CN: "查看运行日志"
+plugins.status_uninstalled:
+  en: "Plugin is no longer installed"
+  zh-CN: "插件已卸载"
+plugins.status_source:
+  en: "Source · %{source}"
+  zh-CN: "来源 · %{source}"
+plugins.status_close:
+  en: "Close plugin status"
+  zh-CN: "关闭插件运行状态"
+plugins.status_loading_summary:
+  en: "Loading"
+  zh-CN: "加载中"
 plugins.error_list:
   en: "Plugins that failed to load"
   zh-CN: "加载失败的插件"

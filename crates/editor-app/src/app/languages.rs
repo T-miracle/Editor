@@ -263,23 +263,4 @@ impl EditorApp {
         self.reset_syntax_diagnostics(cx);
         cx.notify();
     }
-
-    /// The existing status indicator also exposes failures and loading of unfamiliar providers.
-    pub(crate) fn dynamic_language_status(&self, kind: PluginPopupKind) -> Vec<(String, String)> {
-        self.dynamic_languages
-            .entries
-            .iter()
-            .filter_map(|(provider, state)| {
-                let detail = match (state, kind) {
-                    (Ok(false), PluginPopupKind::Loading) => t!("plugins.loading").to_string(),
-                    (Err(error), PluginPopupKind::Error) => error.clone(),
-                    _ => return None,
-                };
-                Some((
-                    format!("{} · {}", provider.declaration.language, provider.owner),
-                    detail,
-                ))
-            })
-            .collect()
-    }
 }
