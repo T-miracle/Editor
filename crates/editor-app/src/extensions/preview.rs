@@ -54,6 +54,7 @@ impl EditorApp {
                 if panel.editor_preview {
                     panel.preview_document = None;
                     panel.preview_version = None;
+                    panel.preview_error = None;
                 }
             });
         }
@@ -86,6 +87,7 @@ impl EditorApp {
                         || (capability && panel.preview_version != version))
                 {
                     if let Some((path, _)) = &context {
+                        panel.preview_error = None;
                         let text = self.editor.read(cx).text().to_string();
                         if capability {
                             // No source token means the document is outside this workspace's authority.
@@ -101,6 +103,21 @@ impl EditorApp {
                                 ));
                                 return;
                             };
+                            if text.len() > 1024 * 1024 {
+                                // The source token remains current while the oversized text never crosses WASM.
+                                panel.preview_version = Some(version.clone());
+                                panel.preview_document = context.clone();
+                                panel.preview_error = Some("文档超过 1 MiB，无法预览".into());
+                                panel.native_ui = None;
+                                panel.send(PluginEvent::Capability(
+                                    protocol::api::Notification::Preview {
+                                        document: None,
+                                        text: String::new(),
+                                    },
+                                ));
+                                cx.notify();
+                                return;
+                            }
                             panel.send(PluginEvent::Capability(
                                 protocol::api::Notification::Preview {
                                     document: Some(version.clone()),
@@ -131,6 +148,7 @@ impl EditorApp {
                         });
                     }
                     panel.preview_version = None;
+                    panel.preview_error = None;
                     panel.native_ui = None;
                 }
             });

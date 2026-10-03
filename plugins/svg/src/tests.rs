@@ -1,26 +1,76 @@
-//! Specifications use the exported guest interface and its observable drawing output.
-
+//! Specifications exercise the current SDK dispatch and observable canvas output.
 use super::*;
 
-/// Send the exact protocol used by the native host, without bypassing plugin dispatch.
-fn dispatch(message: Message) -> Scene {
-    let payload = SvgPreview::dispatch(serde_json::to_string(&message).unwrap()).unwrap();
-    serde_json::from_str::<Reply>(&payload)
-        .unwrap()
-        .scene
-        .unwrap()
+/// Decode exactly the result envelope exported by the SDK.
+fn dispatch(message: api::Input) -> ui::Canvas {
+    let payload =
+        SvgPreview::dispatch(serde_json::to_string(&api::Invocation { id: 1, message }).unwrap())
+            .unwrap();
+    let result: api::Completion = serde_json::from_str(&payload).unwrap();
+    assert_eq!(result.id, 1);
+    let output = result.result.unwrap();
+    output.views[0].document.validate().unwrap();
+    let ui::Kind::Canvas(canvas) = output.views.into_iter().next().unwrap().document.root.kind
+    else {
+        panic!("canvas required")
+    };
+    canvas
 }
-
-/// Surface identity travels with resize, document and wheel events.
-fn event(event: Event) -> Scene {
-    dispatch(Message::Event(Event::Surface {
-        panel: "preview".into(),
-        event: Box::new(event),
+fn prepare(environment: Environment) {
+    let api = serde_json::from_value(serde_json::json!({"base":"1.0.0","capabilities":{"ui.native":"1.0.0","ui.canvas":"1.1.0","editor.documents":"1.0.0"}})).unwrap();
+    dispatch(api::Input::Prepare {
+        environment,
+        api,
+        snapshot: None,
+    });
+}
+fn event(event: api::Notification) -> ui::Canvas {
+    dispatch(api::Input::Event {
+        panel: Some("preview".into()),
+        event,
+    })
+}
+fn preview(path: &str, text: String) -> ui::Canvas {
+    event(api::Notification::Preview {
+        document: Some(api::DocumentVersion {
+            id: path.into(),
+            path: path.into(),
+            revision: 1,
+        }),
+        text,
+    })
+}
+fn canvas(action: ui::CanvasEvent) -> ui::Canvas {
+    let revision = STATE.with(|state| state.borrow().revision);
+    event(api::Notification::Ui(ui::UiEvent {
+        revision,
+        node: "preview-canvas".into(),
+        action: ui::Action::Canvas(action),
     }))
+}
+/// Toolbar commands are driven by real pointer pairs, not an undeclared command backdoor.
+fn command(id: String) -> ui::Canvas {
+    let index = TOOLBAR_ICONS
+        .iter()
+        .position(|(name, _)| *name == id)
+        .unwrap();
+    let rect = STATE.with(|state| state.borrow().toolbar_button_rect(index));
+    let mut result = ui::Canvas::default();
+    for phase in [ui::PointerPhase::Down, ui::PointerPhase::Up] {
+        result = canvas(ui::CanvasEvent::Pointer {
+            phase,
+            x: rect.x + rect.w / 2.,
+            y: rect.y + rect.h / 2.,
+            button: 0,
+            clicks: 1,
+            shift: false,
+        });
+    }
+    result
 }
 
 /// Read the vector operation through the public drawing protocol.
-fn vector(scene: &Scene) -> (Rect, &str) {
+fn vector(scene: &ui::Canvas) -> (Rect, &str) {
     scene
         .paint
         .iter()
@@ -39,21 +89,14 @@ fn vector(scene: &Scene) -> (Rect, &str) {
 /// Transparent vectors sit above the board, and off-center wheel input keeps the image centered.
 #[test]
 fn document_renders_above_checkerboard_and_stays_centered_during_zoom() {
-    dispatch(Message::Prepare {
-        environment: Environment::default(),
-        snapshot: None,
-    });
-    event(Event::Resize {
+    prepare(Environment::default());
+    canvas(ui::CanvasEvent::Resize {
         width: 400.,
         height: 300.,
-        cell_width: 8.,
-        cell_height: 20.,
+        grid: None,
     });
     let source = "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"200\" height=\"100\"><circle cx=\"100\" cy=\"50\" r=\"40\" fill=\"#667180\"/></svg>";
-    let scene = event(Event::Document {
-        path: Some("sample.svg".into()),
-        text: source.into(),
-    });
+    let scene = preview("sample.svg", source.into());
     let (rect, rendered) = vector(&scene);
     assert_eq!(rendered, source);
     // Intrinsic-to-logical scaling uses f32, so compare the visible geometry within a subpixel.
@@ -69,8 +112,9 @@ fn document_renders_above_checkerboard_and_stays_centered_during_zoom() {
             ..
         }
     )));
-    let zoomed = event(Event::Wheel {
-        delta: 1.,
+    let zoomed = canvas(ui::CanvasEvent::Wheel {
+        delta_x: 0.,
+        delta_y: 1. * 14.,
         shift: false,
         x: 120.,
         y: 126.,
@@ -81,8 +125,9 @@ fn document_renders_above_checkerboard_and_stays_centered_during_zoom() {
     assert!((rect.x + rect.w / 2. - 200.).abs() < 0.01);
     assert!((rect.y + rect.h / 2. - 166.).abs() < 0.01);
     // An opposite-corner wheel event and every toolbar command must retain the same center.
-    let zoomed = event(Event::Wheel {
-        delta: -2.,
+    let zoomed = canvas(ui::CanvasEvent::Wheel {
+        delta_x: 0.,
+        delta_y: -2. * 14.,
         shift: false,
         x: 390.,
         y: 290.,
@@ -91,28 +136,17 @@ fn document_renders_above_checkerboard_and_stays_centered_during_zoom() {
     assert!((rect.x + rect.w / 2. - 200.).abs() < 0.01);
     assert!((rect.y + rect.h / 2. - 166.).abs() < 0.01);
     for id in ["zoom-in", "zoom-out", "actual-size", "fit"] {
-        let changed = event(Event::Command {
-            id: id.into(),
-            arguments: None,
-            cwd: None,
-            text: None,
-        });
+        let changed = command(id.into());
         let rect = vector(&changed).0;
         assert!((rect.x + rect.w / 2. - 200.).abs() < 0.01);
         assert!((rect.y + rect.h / 2. - 166.).abs() < 0.01);
     }
     // A manual zoom must also recenter when the native split resizes the preview canvas.
-    event(Event::Command {
-        id: "zoom-in".into(),
-        arguments: None,
-        cwd: None,
-        text: None,
-    });
-    let resized = event(Event::Resize {
+    command("zoom-in".into());
+    let resized = canvas(ui::CanvasEvent::Resize {
         width: 600.,
         height: 400.,
-        cell_width: 8.,
-        cell_height: 20.,
+        grid: None,
     });
     let rect = vector(&resized).0;
     assert!((rect.x + rect.w / 2. - 300.).abs() < 0.01);
@@ -122,18 +156,15 @@ fn document_renders_above_checkerboard_and_stays_centered_during_zoom() {
 /// Large but valid vectors must stay renderable instead of exceeding the host's geometry quota.
 #[test]
 fn huge_svg_zoom_stays_inside_protocol_geometry_limits() {
-    dispatch(Message::Prepare {
-        environment: Environment::default(),
-        snapshot: None,
-    });
-    let scene = event(Event::Document {
-        path: Some("huge.svg".into()),
-        text: "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"1000000\" height=\"1000000\"/>"
-            .into(),
-    });
+    prepare(Environment::default());
+    let scene = preview(
+        "huge.svg",
+        "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"1000000\" height=\"1000000\"/>".into(),
+    );
     assert!(vector(&scene).0.w <= 1_000_000.);
-    let scene = event(Event::Wheel {
-        delta: 100.,
+    let scene = canvas(ui::CanvasEvent::Wheel {
+        delta_x: 0.,
+        delta_y: 100. * 14.,
         shift: false,
         x: 200.,
         y: 150.,
@@ -146,21 +177,17 @@ fn huge_svg_zoom_stays_inside_protocol_geometry_limits() {
 /// Default previews keep their longest edge at 240 logical pixels across viewport resizes.
 #[test]
 fn default_preview_uses_240_pixels_and_preserves_aspect_ratio() {
-    dispatch(Message::Prepare {
-        environment: Environment::default(),
-        snapshot: None,
-    });
-    let scene = event(Event::Document {
-        path: Some("portrait.svg".into()),
-        text: "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"300\" height=\"600\"/>".into(),
-    });
+    prepare(Environment::default());
+    let scene = preview(
+        "portrait.svg",
+        "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"300\" height=\"600\"/>".into(),
+    );
     let rect = vector(&scene).0;
     assert_eq!((rect.w, rect.h), (120., 240.));
-    let resized = event(Event::Resize {
+    let resized = canvas(ui::CanvasEvent::Resize {
         width: 900.,
         height: 700.,
-        cell_width: 8.,
-        cell_height: 20.,
+        grid: None,
     });
     let rect = vector(&resized).0;
     assert_eq!((rect.w, rect.h), (120., 240.));
@@ -169,15 +196,11 @@ fn default_preview_uses_240_pixels_and_preserves_aspect_ratio() {
 /// The four visible SVG icons behave like clicks, and window fitting follows later resizes.
 #[test]
 fn svg_toolbar_controls_zoom_and_places_percentage_at_right() {
-    dispatch(Message::Prepare {
-        environment: Environment::default(),
-        snapshot: None,
-    });
-    let scene = event(Event::Document {
-        path: Some("toolbar.svg".into()),
-        text: "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"200\" height=\"100\"/>".into(),
-    });
-    assert!(scene.widgets.is_empty(), "replace the old text buttons");
+    prepare(Environment::default());
+    let scene = preview(
+        "toolbar.svg",
+        "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"200\" height=\"100\"/>".into(),
+    );
     let icons = scene
         .paint
         .iter()
@@ -200,8 +223,8 @@ fn svg_toolbar_controls_zoom_and_places_percentage_at_right() {
         Paint::Text { x, y, text, .. } if text == "120%" && *x > 300. && *y < 32.
     )));
     // An unmatched release must not activate a button or change the current image size.
-    let unchanged = event(Event::Pointer {
-        kind: "up".into(),
+    let unchanged = canvas(ui::CanvasEvent::Pointer {
+        phase: ui::PointerPhase::Up,
         x: icons[0].x + 10.,
         y: icons[0].y + 10.,
         button: 0,
@@ -211,16 +234,16 @@ fn svg_toolbar_controls_zoom_and_places_percentage_at_right() {
     assert!((vector(&unchanged).0.w - 240.).abs() < 0.01);
     for (index, expected) in [(0, 268.8), (1, 240.), (2, 200.), (3, 352.)] {
         let rect = icons[index];
-        event(Event::Pointer {
-            kind: "down".into(),
+        canvas(ui::CanvasEvent::Pointer {
+            phase: ui::PointerPhase::Down,
             x: rect.x + 10.,
             y: rect.y + 10.,
             button: 0,
             clicks: 1,
             shift: false,
         });
-        let clicked = event(Event::Pointer {
-            kind: "up".into(),
+        let clicked = canvas(ui::CanvasEvent::Pointer {
+            phase: ui::PointerPhase::Up,
             x: rect.x + 10.,
             y: rect.y + 10.,
             button: 0,
@@ -229,11 +252,10 @@ fn svg_toolbar_controls_zoom_and_places_percentage_at_right() {
         });
         assert!((vector(&clicked).0.w - expected).abs() < 0.01);
     }
-    let resized = event(Event::Resize {
+    let resized = canvas(ui::CanvasEvent::Resize {
         width: 800.,
         height: 600.,
-        cell_width: 8.,
-        cell_height: 20.,
+        grid: None,
     });
     assert_eq!(vector(&resized).0.w, 752.);
 }
@@ -242,27 +264,24 @@ fn svg_toolbar_controls_zoom_and_places_percentage_at_right() {
 #[test]
 fn percentage_text_inherits_editor_default_typography() {
     let environment = Environment {
-        ui_font: FontStyle {
+        ui_font: plugin_protocol::FontStyle {
             family: Some("Segoe UI".into()),
             size_px: Some(18.),
             bold: Some(true),
         },
         ..Default::default()
     };
-    dispatch(Message::Prepare {
-        environment,
-        snapshot: None,
-    });
-    let scene = event(Event::Document {
-        path: Some("font.svg".into()),
-        text: "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"480\" height=\"480\"/>".into(),
-    });
+    prepare(environment);
+    let scene = preview(
+        "font.svg",
+        "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"480\" height=\"480\"/>".into(),
+    );
     assert!(scene.paint.iter().any(|operation| matches!(operation,
         Paint::Text { text, size, bold, font, .. } if text == "50%" && *size == 18. && *bold
-            && font.as_deref().unwrap_or(&scene.font) == "Segoe UI"
+            && font.as_deref().or(scene.font.family.as_deref()).unwrap() == "Segoe UI"
     )));
-    let updated = event(Event::Theme(Environment {
-        ui_font: FontStyle {
+    let updated = event(api::Notification::Theme(Environment {
+        ui_font: plugin_protocol::FontStyle {
             family: Some("Arial".into()),
             size_px: Some(16.),
             bold: Some(false),
@@ -271,6 +290,6 @@ fn percentage_text_inherits_editor_default_typography() {
     }));
     assert!(updated.paint.iter().any(|operation| matches!(operation,
         Paint::Text { text, size, bold, font, .. } if text == "50%" && *size == 16. && !*bold
-            && font.as_deref().unwrap_or(&updated.font) == "Arial"
+            && font.as_deref().or(updated.font.family.as_deref()).unwrap() == "Arial"
     )));
 }

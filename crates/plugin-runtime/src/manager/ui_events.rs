@@ -42,6 +42,18 @@ impl Manager {
             let instance = self.live.get_mut(id).ok_or_else(|| {
                 api::Failure::new(api::ErrorCode::InvalidState, "Preview plugin is disabled")
             })?;
+            // Late memory notifications must not roll back source authority or retire a healthy guest.
+            if let (Some(Some(current)), Some(next)) =
+                (instance.preview_sources.get(surfaces[0]), document)
+                && current.id == next.id
+                && next.revision < current.revision
+            {
+                return Err(api::Failure::new(
+                    api::ErrorCode::StaleRevision,
+                    "Preview document is obsolete",
+                )
+                .into());
+            }
             instance
                 .preview_sources
                 .insert(surfaces[0].clone(), document.clone());

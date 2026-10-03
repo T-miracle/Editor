@@ -1,8 +1,8 @@
-//! Two independent dock panels prove that the host does not special-case terminals.
-use plugin_protocol::*;
-mod views;
+//! Two independent native panels demonstrate UI and snapshots without native permissions.
+use plugin_protocol::bindings::{Guest, export};
+use plugin_protocol::{Environment, Snapshot, api, ui};
 use std::cell::RefCell;
-use plugin_protocol::bindings::{Guest, editor, export};
+mod views;
 struct Example;
 #[derive(Default)]
 struct State {
@@ -17,83 +17,84 @@ struct State {
 }
 thread_local! {static STATE:RefCell<State>=RefCell::new(State::default());}
 impl Guest for Example {
-    /// This package has no native permissions; it uses only UI events and opaque snapshots.
+    /// SDK lifecycle and opaque snapshots need no filesystem or process authority.
     fn dispatch(payload: String) -> Result<String, String> {
-        let message: Message = serde_json::from_str(&payload).map_err(|e| e.to_string())?;
-        STATE.with(|state| {
-            let mut state = state.borrow_mut();
-            let mut reply = Reply::default();
-            match message {
-                Message::Prepare {
-                    environment,
-                    snapshot,
-                } => {
-                    state.env = environment;
-                    if let Some(snapshot) = snapshot {
-                        if snapshot.schema != 7 {
-                            return Err("Example requires snapshot schema 7".into());
-                        }
-                        let (count, note) =
-                            serde_json::from_str(&snapshot.data).map_err(|e| e.to_string())?;
-                        state.count = count;
-                        state.note = note;
-                    }
-                }
-                Message::Snapshot => {
-                    reply.snapshot = Some(Snapshot {
-                        schema: 7,
-                        data: serde_json::to_string(&(state.count, &state.note)).unwrap(),
-                    })
-                }
-                Message::Event(event) => state.event(event),
-                Message::Activate => {
-                    // Optional fixture asset exercises host rollback after successful preparation.
-                    let request = serde_json::to_string(&Request::ReadAsset {
-                        path: "activation-policy.txt".into(),
-                    })
-                    .unwrap();
-                    if let Ok(value) = editor::plugin::host::request(&request) {
-                        if let Ok(bytes) = serde_json::from_str::<Vec<u8>>(&value) {
-                            if bytes == b"reject" {
-                                return Err("Example activation rejected by package policy".into());
+        api::guest::dispatch(&payload, |message| {
+            STATE.with(|cell| {
+                let mut state = cell.borrow_mut();
+                match message {
+                    api::Input::Prepare {
+                        environment,
+                        snapshot,
+                        ..
+                    } => {
+                        *state = State {
+                            env: environment,
+                            ..Default::default()
+                        };
+                        if let Some(snapshot) = snapshot {
+                            if snapshot.schema != 7 {
+                                return Err(api::Failure::new(
+                                    api::ErrorCode::InvalidRequest,
+                                    "Example requires snapshot schema 7",
+                                ));
                             }
+                            let (count, note) =
+                                serde_json::from_str(&snapshot.data).map_err(|error| {
+                                    api::Failure::new(
+                                        api::ErrorCode::InvalidRequest,
+                                        error.to_string(),
+                                    )
+                                })?;
+                            state.count = count;
+                            state.note = note;
                         }
                     }
+                    api::Input::Snapshot => {
+                        return Ok(api::Output {
+                            snapshot: Some(Snapshot {
+                                schema: 7,
+                                data: serde_json::to_string(&(state.count, &state.note)).unwrap(),
+                            }),
+                            ..Default::default()
+                        });
+                    }
+                    api::Input::Event { panel, event } => state.event(panel.as_deref(), event),
+                    api::Input::Activate => {}
                 }
-            }
-            reply.scenes = vec![state.scene("counter"), state.scene("notes")];
-            serde_json::to_string(&reply).map_err(|e| e.to_string())
+                Ok(api::Output {
+                    views: vec![state.view("counter"), state.view("notes")],
+                    ..Default::default()
+                })
+            })
         })
     }
 }
 export!(Example);
 impl State {
-    fn event(&mut self, event: Event) {
-        self.revision += 1;
+    /// Value updates preserve input identity; only a changed target tree invalidates queued UI events.
+    fn event(&mut self, panel: Option<&str>, event: api::Notification) {
+        let identity = (self.editing, self.tab.clone());
         match event {
-            Event::Surface { event, .. } => self.event(*event),
-            Event::Theme(env) => self.env = env,
-            Event::Command { id, .. } if id == "increment" => self.count += 1,
-            Event::Command { id, .. } if id == "edit" => self.editing = true,
-            Event::Ui(event) => match (event.node.as_str(), event.action) {
-                ("increment", ui::Action::Click) => self.count += 1,
-                ("note", ui::Action::Change(value) | ui::Action::Submit(value)) => {
+            api::Notification::Theme(env) => self.env = env,
+            api::Notification::Command { id, .. } if id == "increment" => self.count += 1,
+            api::Notification::Ui(event) => match (panel, event.node.as_str(), event.action) {
+                (Some("counter"), "increment", ui::Action::Click) => self.count += 1,
+                (Some("notes"), "note", ui::Action::Change(value) | ui::Action::Submit(value)) => {
                     self.note = value
                 }
-                ("enabled", ui::Action::Toggle(value)) => self.checked = value,
-                ("mode", ui::Action::Select(value)) => self.selected = Some(value),
-                ("pages", ui::Action::Select(value)) => self.tab = value,
-                ("open-dialog", ui::Action::Click) => self.editing = true,
-                ("sample-dialog", ui::Action::Dismiss) | ("close-dialog", ui::Action::Click) => {
-                    self.editing = false
-                }
+                (Some("counter"), "enabled", ui::Action::Toggle(value)) => self.checked = value,
+                (Some("counter"), "mode", ui::Action::Select(value)) => self.selected = Some(value),
+                (Some("counter"), "pages", ui::Action::Select(value)) => self.tab = value,
+                (Some("counter"), "open-dialog", ui::Action::Click) => self.editing = true,
+                (Some("counter"), "sample-dialog", ui::Action::Dismiss)
+                | (Some("counter"), "close-dialog", ui::Action::Click) => self.editing = false,
                 _ => {}
             },
-            Event::Edit { text, .. } => {
-                self.note = text;
-                self.editing = false;
-            }
             _ => {}
+        }
+        if identity != (self.editing, self.tab.clone()) {
+            self.revision = self.revision.saturating_add(1);
         }
     }
 }

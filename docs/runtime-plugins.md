@@ -8,7 +8,7 @@ SVG 预览插件使用 `protocol = 6`：清单面板声明 `position = "editor"`
 
 终端插件 0.6.0 使用 `protocol = 7` 和公开能力协议：普通 Row 组合 SideTabs 与 Canvas，画布负责字符网格，原生侧栏支持左右布局、滚动、重命名、关闭、排序和宽度调整。菜单使用共享原生控件，以稳定 ID 回传操作。主题、字体、滚动和输入均经通用 UI 契约传递。当前包安装与激活只接受协议 7；旧包保留数据并提示更新。
 
-插件可声明 `protocol = 2`，使用 `plugin_protocol::ui::Document/Node` 返回行列布局和原生控件树，宿主通过 gpui-base 实现布局、输入、焦点、滚动和模态弹窗。协议、事件、主题角色与限制见 [插件原生界面协议](../crates/plugin-protocol/UI.md)。该文档及 Rust 接口由主程序内嵌，并自动提供给插件构建。protocol 1 的画布终端继续兼容；示例插件 0.2.0 演示新接口。
+插件通过协议 7 的 `api::View` 返回 `ui::Document/Node` 行列布局与原生控件树，宿主通过 gpui-base 实现布局、输入、焦点、滚动和模态弹窗。协议、事件、主题角色与限制见 [插件原生界面协议](../crates/plugin-protocol/UI.md)。文档及 Rust 接口由主程序内嵌并提供给独立构建。示例插件 0.3.0 无需原生权限，通过逻辑快照保留计数和笔记；SVG 0.2.0 仅申请 `editor.read`，以带版本的内存预览通知和普通 Canvas 实现缩放、透明底图与主题。
 
 编辑器提供通用安装接口。终端和示例插件通过 WebAssembly Component Model 执行；Rust 为声明式资源加可选 WASM 策略，TOML、HTML 和 JavaScript 是声明式资源包。亮色与深色基础主题内置于编辑器，首次启动默认使用亮色主题。终端核心直接依赖支持 WASM 的上游 `term-wm-vt100`，不在项目保留 vendor 副本。语言插件包携带 Tree-sitter WASM grammar；其他主题插件仍可携带主题和图标资源，由宿主验证并注册。
 

@@ -2,36 +2,63 @@
 
 use plugin_runtime::{
     Manager, Package,
-    plugin_protocol::{Environment, Event, FontStyle, Paint, Rect},
+    plugin_protocol::{Environment, Event, FontStyle, Paint, Rect, api, ui},
 };
 use std::path::Path;
 
 /// Deliver native surface events with the same identity used by the editor's inner split.
-fn send(manager: &mut Manager, event: Event) -> anyhow::Result<()> {
+fn send(manager: &mut Manager, event: api::Notification) -> anyhow::Result<()> {
     manager.event(
         "svg",
         Event::Surface {
             panel: "preview".into(),
-            event: Box::new(event),
+            event: Box::new(Event::Capability(event)),
         },
+    )
+}
+
+/// Read the ordinary canvas node without relying on a legacy scene drawing slot.
+fn drawing(manager: &Manager) -> &ui::Canvas {
+    let ui::Kind::Canvas(canvas) = &manager.live["svg"].scenes["preview"]
+        .ui
+        .as_ref()
+        .unwrap()
+        .root
+        .kind
+    else {
+        panic!("canvas required")
+    };
+    canvas
+}
+/// Native canvas input uses the revision published by the plugin's current tree.
+fn canvas(manager: &mut Manager, action: ui::CanvasEvent) -> anyhow::Result<()> {
+    let revision = manager.live["svg"].scenes["preview"]
+        .ui
+        .as_ref()
+        .unwrap()
+        .revision;
+    send(
+        manager,
+        api::Notification::Ui(ui::UiEvent {
+            revision,
+            node: "preview-canvas".into(),
+            action: ui::Action::Canvas(action),
+        }),
     )
 }
 
 /// Observe the public vector operation rather than guest-private view state.
 fn vector(manager: &Manager) -> Option<Rect> {
-    manager.live["svg"].scenes["preview"]
-        .paint
-        .iter()
-        .find_map(|operation| {
-            // Toolbar SVGs use a clip starting at zero; only document vectors occupy the viewport.
-            if let Paint::Svg { rect, clip, .. } = operation
-                && clip.y > 0.
-            {
-                Some(*rect)
-            } else {
-                None
-            }
-        })
+    drawing(manager).paint.iter().find_map(|operation| {
+        // Toolbar SVGs use a clip starting at zero; only document vectors occupy the viewport.
+        if let Paint::Svg { rect, clip, .. } = operation
+            && clip.y > 0.
+        {
+            Some(*rect)
+        } else {
+            None
+        }
+    })
 }
 
 /// The 600×400 fixture has a 32px toolbar; every zoom must preserve its viewport center.
@@ -77,6 +104,8 @@ fn main() -> anyhow::Result<()> {
         let mut entry = installed.remove("svg").expect("installed SVG");
         entry.manifest.id = "me.svg-preview".into();
         entry.manifest.name = "SVG Preview".into();
+        // Only genuinely retired records participate in historical identity migration.
+        entry.manifest.protocol = 6;
         std::fs::rename(
             root.join("packages/svg"),
             root.join("packages/me.svg-preview"),
@@ -94,22 +123,27 @@ fn main() -> anyhow::Result<()> {
         );
         assert!(root.join("registry.before-plugin-id-rename.json").is_file());
         assert!(root.join("packages/me.svg-preview").is_dir());
+        assert!(!manager.live.contains_key("svg"));
+        manager.install(&package, package.manifest.permissions.clone())?;
         assert!(manager.live.contains_key("svg"));
     }
-    send(
+    canvas(
         &mut manager,
-        Event::Resize {
+        ui::CanvasEvent::Resize {
             width: 600.,
             height: 400.,
-            cell_width: 8.,
-            cell_height: 20.,
+            grid: None,
         },
     )?;
     let source = "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 200 100\"><circle cx=\"100\" cy=\"50\" r=\"40\" fill=\"#667180\" fill-opacity=\"0.5\"/></svg>";
     send(
         &mut manager,
-        Event::Document {
-            path: Some("draft.svg".into()),
+        api::Notification::Preview {
+            document: Some(api::DocumentVersion {
+                id: "draft.svg".into(),
+                path: "draft.svg".into(),
+                revision: 1,
+            }),
             text: source.into(),
         },
     )?;
@@ -117,13 +151,13 @@ fn main() -> anyhow::Result<()> {
     assert!((original.w - 240.).abs() < 0.01);
     assert!((original.h - 120.).abs() < 0.01);
     assert_centered(&manager);
-    let scene = &manager.live["svg"].scenes["preview"];
+    let scene = drawing(&manager);
     assert!(
         matches!(scene.paint.last(), Some(Paint::Svg { source: rendered, .. }) if rendered == source)
     );
     assert!(scene.paint.iter().any(|paint| matches!(paint,
         Paint::Text { text, size, font, .. } if text == "120%" && *size == 16.
-            && font.as_deref().unwrap_or(&scene.font) == "Segoe UI"
+            && font.as_deref().or(scene.font.family.as_deref()).unwrap() == "Segoe UI"
     )));
     assert_eq!(
         scene
@@ -135,11 +169,11 @@ fn main() -> anyhow::Result<()> {
     );
     // Route physical toolbar clicks through the same pointer events emitted by the native surface.
     for (x, expected_width) in [(18., 268.8), (50., 240.), (82., 200.), (114., 552.)] {
-        for kind in ["down", "up"] {
-            send(
+        for phase in [ui::PointerPhase::Down, ui::PointerPhase::Up] {
+            canvas(
                 &mut manager,
-                Event::Pointer {
-                    kind: kind.into(),
+                ui::CanvasEvent::Pointer {
+                    phase,
                     x,
                     y: 16.,
                     button: 0,
@@ -154,15 +188,20 @@ fn main() -> anyhow::Result<()> {
     // A new document resets the default size after the window-fit action.
     send(
         &mut manager,
-        Event::Document {
-            path: Some("another-draft.svg".into()),
+        api::Notification::Preview {
+            document: Some(api::DocumentVersion {
+                id: "another-draft.svg".into(),
+                path: "another-draft.svg".into(),
+                revision: 1,
+            }),
             text: source.into(),
         },
     )?;
-    send(
+    canvas(
         &mut manager,
-        Event::Wheel {
-            delta: 1.,
+        ui::CanvasEvent::Wheel {
+            delta_x: 0.,
+            delta_y: 1. * 16.,
             shift: false,
             x: 550.,
             y: 360.,
@@ -171,10 +210,11 @@ fn main() -> anyhow::Result<()> {
     let zoomed = vector(&manager).unwrap();
     assert!((zoomed.w - 268.8).abs() < 0.01);
     assert_centered(&manager);
-    send(
+    canvas(
         &mut manager,
-        Event::Wheel {
-            delta: -100.,
+        ui::CanvasEvent::Wheel {
+            delta_x: 0.,
+            delta_y: -100. * 16.,
             shift: false,
             x: 300.,
             y: 200.,
@@ -182,10 +222,11 @@ fn main() -> anyhow::Result<()> {
     )?;
     assert!((vector(&manager).unwrap().w - 2.).abs() < 0.01);
     assert_centered(&manager);
-    send(
+    canvas(
         &mut manager,
-        Event::Wheel {
-            delta: 100.,
+        ui::CanvasEvent::Wheel {
+            delta_x: 0.,
+            delta_y: 100. * 16.,
             shift: false,
             x: 300.,
             y: 200.,
@@ -195,8 +236,12 @@ fn main() -> anyhow::Result<()> {
     assert_centered(&manager);
     send(
         &mut manager,
-        Event::Document {
-            path: Some("draft.svg".into()),
+        api::Notification::Preview {
+            document: Some(api::DocumentVersion {
+                id: "draft.svg".into(),
+                path: "draft.svg".into(),
+                revision: 1,
+            }),
             text: "<svg".into(),
         },
     )?;
@@ -204,16 +249,20 @@ fn main() -> anyhow::Result<()> {
     assert!(manager.installed["svg"].error.is_none());
     send(
         &mut manager,
-        Event::Document {
-            path: Some("draft.svg".into()),
+        api::Notification::Preview {
+            document: Some(api::DocumentVersion {
+                id: "draft.svg".into(),
+                path: "draft.svg".into(),
+                revision: 1,
+            }),
             text: source.into(),
         },
     )?;
     assert!(vector(&manager).is_some());
     send(
         &mut manager,
-        Event::Document {
-            path: None,
+        api::Notification::Preview {
+            document: None,
             text: String::new(),
         },
     )?;
@@ -223,8 +272,12 @@ fn main() -> anyhow::Result<()> {
     assert!(
         send(
             &mut manager,
-            Event::Document {
-                path: Some("draft.svg".into()),
+            api::Notification::Preview {
+                document: Some(api::DocumentVersion {
+                    id: "draft.svg".into(),
+                    path: "draft.svg".into(),
+                    revision: 1
+                }),
                 text: source.into()
             }
         )
@@ -235,8 +288,12 @@ fn main() -> anyhow::Result<()> {
     manager.install(&package, package.manifest.permissions.clone())?;
     send(
         &mut manager,
-        Event::Document {
-            path: Some("draft.svg".into()),
+        api::Notification::Preview {
+            document: Some(api::DocumentVersion {
+                id: "draft.svg".into(),
+                path: "draft.svg".into(),
+                revision: 1,
+            }),
             text: source.into(),
         },
     )?;

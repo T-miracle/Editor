@@ -3,7 +3,8 @@ use super::*;
 use ui::{Dialog, Document, Input, Kind, Node, OptionItem, Tab};
 
 impl State {
-    pub(super) fn scene(&self, panel: &str) -> Scene {
+    /// Each declared panel owns a native tree, with no legacy drawing envelope.
+    pub(super) fn view(&self, panel: &str) -> api::View {
         let root = if panel == "counter" {
             Node::column(
                 "counter-root",
@@ -127,10 +128,9 @@ impl State {
                 .gap(12.),
             ));
         }
-        Scene {
+        api::View {
             panel: panel.into(),
-            ui: Some(document),
-            ..Default::default()
+            document,
         }
     }
 }
@@ -145,14 +145,17 @@ mod tests {
             state.tab = tab.into();
             state.editing = true;
             for panel in ["counter", "notes"] {
-                state.scene(panel).ui.unwrap().validate().unwrap();
+                state.view(panel).document.validate().unwrap();
             }
         }
-        state.event(Event::Ui(ui::UiEvent {
-            revision: 0,
-            node: "increment".into(),
-            action: ui::Action::Click,
-        }));
+        state.event(
+            Some("counter"),
+            api::Notification::Ui(ui::UiEvent {
+                revision: 0,
+                node: "increment".into(),
+                action: ui::Action::Click,
+            }),
+        );
         assert_eq!(state.count, 1);
     }
 }

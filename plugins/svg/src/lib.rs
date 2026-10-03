@@ -1,8 +1,9 @@
 //! SVG document preview using the host's generic file-scoped surface contract.
 
 use plugin_protocol::{
+    Environment, Paint, Rect, Snapshot, api,
     bindings::{Guest, export},
-    *,
+    ui,
 };
 use std::cell::RefCell;
 
@@ -37,7 +38,9 @@ struct State {
     environment: Environment,
     width: f32,
     height: f32,
-    path: Option<String>,
+    /// Echoed source authority; reopening a path creates a different document identity.
+    document: Option<api::DocumentVersion>,
+    revision: u64,
     source: String,
     intrinsic: Option<(f32, f32)>,
     error: Option<String>,
@@ -55,7 +58,8 @@ impl Default for State {
             environment: Environment::default(),
             width: 400.,
             height: 300.,
-            path: None,
+            document: None,
+            revision: 0,
             source: String::new(),
             intrinsic: None,
             error: None,
@@ -72,51 +76,73 @@ thread_local! { static STATE: RefCell<State> = RefCell::new(State::default()); }
 struct SvgPreview;
 
 impl Guest for SvgPreview {
-    /// All plugin behavior enters through the same JSON/WIT interface as installed guests.
+    /// The typed lifecycle never reads the source document from disk or retains it in snapshots.
     fn dispatch(payload: String) -> Result<String, String> {
-        let message: Message = serde_json::from_str(&payload).map_err(|error| error.to_string())?;
-        STATE.with(|state| {
-            let mut state = state.borrow_mut();
-            let mut reply = Reply::default();
-            match message {
-                Message::Prepare {
-                    environment,
-                    snapshot,
-                } => {
-                    if snapshot.is_some_and(|snapshot| snapshot.schema != 1) {
-                        return Err("Unsupported SVG preview snapshot".into());
-                    }
-                    *state = State {
+        api::guest::dispatch(&payload, |message| {
+            STATE.with(|cell| {
+                let mut state = cell.borrow_mut();
+                match message {
+                    api::Input::Prepare {
                         environment,
-                        ..Default::default()
-                    };
+                        snapshot,
+                        ..
+                    } => {
+                        if snapshot.is_some_and(|snapshot| snapshot.schema != 1) {
+                            return Err(api::Failure::new(
+                                api::ErrorCode::InvalidRequest,
+                                "Unsupported SVG preview snapshot",
+                            ));
+                        }
+                        *state = State {
+                            environment,
+                            ..Default::default()
+                        };
+                    }
+                    api::Input::Event { panel, event } => state.event(panel.as_deref(), event),
+                    api::Input::Snapshot => {
+                        return Ok(api::Output {
+                            snapshot: Some(Snapshot {
+                                schema: 1,
+                                data: "{}".into(),
+                            }),
+                            ..Default::default()
+                        });
+                    }
+                    api::Input::Activate => {}
                 }
-                Message::Event(event) => state.event(event),
-                Message::Snapshot => {
-                    // Source documents and paths stay in the editor, never in plugin snapshots.
-                    reply.snapshot = Some(Snapshot {
-                        schema: 1,
-                        data: "{}".into(),
-                    });
-                }
-                Message::Activate => {}
-            }
-            reply.scene = Some(state.scene());
-            serde_json::to_string(&reply).map_err(|error| error.to_string())
+                Ok(api::Output {
+                    views: vec![state.view()],
+                    ..Default::default()
+                })
+            })
         })
     }
 }
-
 export!(SvgPreview);
-
 impl State {
-    /// Unwrap only the declared surface and ignore unrelated keyboard, process and text events.
-    fn event(&mut self, event: Event) {
+    /// Preview is the host-managed current-document subscription; unrelated panels cannot retarget it.
+    fn event(&mut self, panel: Option<&str>, event: api::Notification) {
         match event {
-            Event::Surface { panel, event } if panel == "preview" => self.event(*event),
-            Event::Theme(environment) => self.environment = environment,
-            Event::Document { path, text } => self.document(path, text),
-            Event::Resize { width, height, .. } if width.is_finite() && height.is_finite() => {
+            api::Notification::Theme(environment) => self.environment = environment,
+            api::Notification::Preview { document, text } if panel == Some("preview") => {
+                self.document(document, text)
+            }
+            api::Notification::Ui(event)
+                if panel == Some("preview") && event.node == "preview-canvas" =>
+            {
+                if let ui::Action::Canvas(event) = event.action {
+                    self.canvas_event(event);
+                }
+            }
+            _ => {}
+        }
+    }
+    /// Coordinates are local to this ordinary canvas; the host never interprets SVG zoom or toolbar commands.
+    fn canvas_event(&mut self, event: ui::CanvasEvent) {
+        match event {
+            ui::CanvasEvent::Resize { width, height, .. }
+                if width.is_finite() && height.is_finite() =>
+            {
                 self.width = width.clamp(0., 10_000.);
                 self.height = height.clamp(0., 10_000.);
                 match self.view_mode {
@@ -125,32 +151,44 @@ impl State {
                     ViewMode::Manual => {}
                 }
             }
-            Event::Wheel { delta, x, y, .. } if self.viewport().contains(x, y) => {
+            ui::CanvasEvent::Wheel { delta_y, x, y, .. } if self.viewport().contains(x, y) => {
+                // Native wheel deltas are logical pixels; a UI-font line preserves the previous zoom step.
+                let delta = delta_y / self.environment.ui_font.size_px.unwrap_or(14.).max(1.);
                 if delta.is_finite() && delta != 0. {
-                    // Pointer coordinates decide whether the event is inside the preview, never its pivot.
                     self.zoom(self.scale * 1.12_f32.powf(delta.clamp(-100., 100.)));
                 }
             }
-            Event::Command { id, .. } => self.command(&id),
-            Event::Pointer {
-                kind, x, y, button, ..
-            } => self.pointer(&kind, x, y, button),
+            ui::CanvasEvent::Pointer {
+                phase,
+                x,
+                y,
+                button,
+                ..
+            } => self.pointer(phase, x, y, button),
             _ => {}
         }
     }
 
     /// Parse unsaved source with external image resolution disabled, keeping malformed input recoverable.
-    fn document(&mut self, path: Option<String>, source: String) {
-        let changed_file = self.path != path;
+    fn document(&mut self, document: Option<api::DocumentVersion>, source: String) {
+        if matches!((&self.document, &document), (Some(current), Some(next)) if current.id == next.id && next.revision < current.revision)
+        {
+            return;
+        }
+        let changed_file = self.document.as_ref().map(|source| &source.id)
+            != document.as_ref().map(|source| &source.id);
         if changed_file {
             self.pressed_button = None;
             self.hovered_button = None;
         }
-        self.path = path;
+        if changed_file {
+            self.revision = self.revision.saturating_add(1);
+        }
+        self.document = document;
         self.intrinsic = None;
         self.error = None;
         self.source.clear();
-        if self.path.is_none() {
+        if self.document.is_none() {
             return;
         }
         if source.len() > 1024 * 1024 {
@@ -220,15 +258,15 @@ impl State {
     }
 
     /// Keep pointer activation inside the toolbar and cancel releases outside the pressed icon.
-    fn pointer(&mut self, kind: &str, x: f32, y: f32, button: u8) {
+    fn pointer(&mut self, phase: ui::PointerPhase, x: f32, y: f32, button: u8) {
         let target = (0..TOOLBAR_ICONS.len()).find(|index| {
             let rect = self.toolbar_button_rect(*index);
             rect.w > 0. && rect.contains(x, y)
         });
         self.hovered_button = target;
-        match kind {
-            "down" if button == 0 => self.pressed_button = target,
-            "up" if button == 0 => {
+        match phase {
+            ui::PointerPhase::Down if button == 0 => self.pressed_button = target,
+            ui::PointerPhase::Up if button == 0 => {
                 if let Some(index) = self
                     .pressed_button
                     .take()

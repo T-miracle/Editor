@@ -5,13 +5,30 @@ mod images;
 
 use plugin_runtime::{
     Manager, Package,
-    plugin_protocol::{Environment, Event, Paint, Rect, Scene},
+    plugin_protocol::{Environment, Event, Paint, Rect, Scene, api, ui},
 };
 use std::{collections::BTreeMap, path::Path, sync::Arc};
 
+/// Inspect the ordinary native document tree used by the production renderer.
+fn drawing(scene: &Scene) -> &ui::Canvas {
+    let ui::Kind::Canvas(canvas) = &scene.ui.as_ref().unwrap().root.kind else {
+        panic!("canvas required")
+    };
+    canvas
+}
+fn send(manager: &mut Manager, event: api::Notification) -> anyhow::Result<()> {
+    manager.event(
+        "svg",
+        Event::Surface {
+            panel: "preview".into(),
+            event: Box::new(Event::Capability(event)),
+        },
+    )
+}
+
 /// Locate document rasters separately from toolbar SVGs through their public viewport clip.
 fn document_index(scene: &Scene) -> usize {
-    scene
+    drawing(scene)
         .paint
         .iter()
         .position(|operation| matches!(operation, Paint::Svg { clip, .. } if clip.y > 0.))
@@ -22,7 +39,15 @@ fn document_index(scene: &Scene) -> usize {
 fn render_panel(scene: &Scene, renderer: &mut images::VectorRenderer) -> image::RgbaImage {
     let mut scene = scene.clone();
     // Text uses the same font database as the SVG renderer for this standalone diagnostic PNG.
-    for operation in &mut scene.paint {
+    let ui::Kind::Canvas(canvas) = &mut scene.ui.as_mut().unwrap().root.kind else {
+        panic!("canvas required")
+    };
+    let family_default = canvas
+        .font
+        .family
+        .clone()
+        .unwrap_or_else(|| "Segoe UI".into());
+    for operation in &mut canvas.paint {
         if let Paint::Text {
             x,
             y,
@@ -39,7 +64,7 @@ fn render_panel(scene: &Scene, renderer: &mut images::VectorRenderer) -> image::
                 .replace('>', "&gt;");
             let family = font
                 .as_deref()
-                .unwrap_or(&scene.font)
+                .unwrap_or(&family_default)
                 .replace('"', "&quot;");
             let rect = Rect {
                 x: *x,
@@ -64,7 +89,7 @@ fn render_panel(scene: &Scene, renderer: &mut images::VectorRenderer) -> image::
     }
     let rendered = renderer.prepare(&BTreeMap::from([("panel".into(), Arc::new(scene.clone()))]));
     let mut output = image::RgbaImage::new(1200, 1200);
-    for (index, operation) in scene.paint.iter().enumerate() {
+    for (index, operation) in drawing(&scene).paint.iter().enumerate() {
         match operation {
             Paint::Fill { rect, color, .. } => {
                 let color =
@@ -80,7 +105,7 @@ fn render_panel(scene: &Scene, renderer: &mut images::VectorRenderer) -> image::
                 }
             }
             Paint::Svg { .. } => {
-                if let Some(vector) = &rendered["panel"][index] {
+                if let Some(vector) = &rendered["panel/canvas/preview-canvas"][index] {
                     let dimensions = vector.image.size(0);
                     let mut pixels = vector.image.as_bytes(0).unwrap().to_vec();
                     // Native rasters contain straight BGRA; image compositing expects RGBA.
@@ -127,34 +152,37 @@ fn main() -> anyhow::Result<()> {
         },
     )?;
     manager.install(&package, package.manifest.permissions.clone())?;
-    for event in [
-        Event::Resize {
-            width: 600.,
-            height: 600.,
-            cell_width: 8.,
-            cell_height: 20.,
-        },
-        Event::Document {
-            path: Some("gear.svg".into()),
+    send(
+        &mut manager,
+        api::Notification::Ui(ui::UiEvent {
+            revision: 0,
+            node: "preview-canvas".into(),
+            action: ui::Action::Canvas(ui::CanvasEvent::Resize {
+                width: 600.,
+                height: 600.,
+                grid: None,
+            }),
+        }),
+    )?;
+    send(
+        &mut manager,
+        api::Notification::Preview {
+            document: Some(api::DocumentVersion {
+                id: "gear".into(),
+                path: "gear.svg".into(),
+                revision: 1,
+            }),
             text: source,
         },
-    ] {
-        manager.event(
-            "svg",
-            Event::Surface {
-                panel: "preview".into(),
-                event: Box::new(event),
-            },
-        )?;
-    }
+    )?;
     let scene = manager.live["svg"].scenes["preview"].clone();
     let scenes = BTreeMap::from([("preview".into(), scene.clone())]);
     let mut renderer = images::VectorRenderer::default();
     let rendered = renderer.prepare(&scenes);
     // Each asset must produce actual nontransparent pixels through the native SVG rasterizer.
-    for (index, operation) in scene.paint.iter().enumerate() {
+    for (index, operation) in drawing(&scene).paint.iter().enumerate() {
         if matches!(operation, Paint::Svg { clip, .. } if clip.y == 0.) {
-            let icon = rendered["preview"][index]
+            let icon = rendered["preview/canvas/preview-canvas"][index]
                 .as_ref()
                 .expect("toolbar icon raster");
             assert!(
@@ -166,7 +194,7 @@ fn main() -> anyhow::Result<()> {
             );
         }
     }
-    let vector = rendered["preview"][document_index(&scene)]
+    let vector = rendered["preview/canvas/preview-canvas"][document_index(&scene)]
         .as_ref()
         .expect("native SVG raster");
     let dimensions = vector.image.size(0);
@@ -186,7 +214,7 @@ fn main() -> anyhow::Result<()> {
     assert_eq!(pixel(240., 245.)[3], 0);
     assert_eq!(pixel(240., 100.), &[0x80, 0x71, 0x66, 255]);
     let mut composite = image::RgbaImage::new(width, height);
-    for operation in &scene.paint {
+    for operation in &drawing(&scene).paint {
         if let Paint::Fill { rect, color, .. } = operation {
             // Project the guest's actual board operations into the cropped SVG raster bounds.
             let left = ((rect.x - vector.rect.x) * density).floor().max(0.) as u32;
@@ -217,13 +245,13 @@ fn main() -> anyhow::Result<()> {
     ));
     render_panel(&scene, &mut renderer).save(&panel_output)?;
     // A second real document checks partial alpha, which requires unpremultiplication for GPUI.
-    manager.event("svg", Event::Surface { panel: "preview".into(), event: Box::new(Event::Document {
-        path: Some("alpha.svg".into()),
+    send(&mut manager, api::Notification::Preview {
+        document: Some(api::DocumentVersion { id: "alpha".into(), path: "alpha.svg".into(), revision: 1 }),
         text: "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"10\" height=\"10\"><rect width=\"10\" height=\"10\" fill=\"red\" fill-opacity=\"0.5\"/></svg>".into(),
-    }) })?;
+    })?;
     let alpha_scene = manager.live["svg"].scenes["preview"].clone();
     let rendered = renderer.prepare(&BTreeMap::from([("preview".into(), alpha_scene.clone())]));
-    let vector = rendered["preview"][document_index(&alpha_scene)]
+    let vector = rendered["preview/canvas/preview-canvas"][document_index(&alpha_scene)]
         .as_ref()
         .unwrap();
     assert_eq!(&vector.image.as_bytes(0).unwrap()[..4], &[0, 0, 255, 128]);

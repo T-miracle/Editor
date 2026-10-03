@@ -36,6 +36,8 @@ mod settings;
 #[cfg(test)]
 mod settings_tests;
 mod surface;
+#[cfg(test)]
+mod ui_package_tests;
 pub(crate) use settings::SettingsView;
 #[cfg(test)]
 mod tests;
@@ -89,6 +91,8 @@ pub struct ExtensionPanel {
     preview_document: Option<(PathBuf, u64)>,
     /// New previews echo the open-document token so old drawing results cannot replace a newer file.
     preview_version: Option<protocol::api::DocumentVersion>,
+    /// A host transport limit is shown against the current source instead of leaving an empty preview.
+    preview_error: Option<String>,
     panel_title: String,
     /// Cache package-owned artwork so repainting does not read from disk.
     panel_icons: [Option<Vec<u8>>; 2],
@@ -252,6 +256,7 @@ impl ExtensionPanel {
             editor_preview: false,
             preview_document: None,
             preview_version: None,
+            preview_error: None,
             panel_title: "插件管理".into(),
             panel_icons: [None, None],
             panel_icon_digest: None,
@@ -337,6 +342,7 @@ impl ExtensionPanel {
             editor_preview: panel.position == "editor",
             preview_document: None,
             preview_version: None,
+            preview_error: None,
             panel_title: panel.title,
             panel_icons,
             panel_icon_digest,
@@ -470,6 +476,7 @@ impl ExtensionPanel {
                     self.last_size = (0., 0., 0., 0.);
                     self.preview_document = None;
                     self.preview_version = None;
+                    self.preview_error = None;
                     self.native_ui = None;
                     self.canvas_controls = None;
                     self.editing = None;

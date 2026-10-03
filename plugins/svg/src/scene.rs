@@ -4,18 +4,11 @@ use super::*;
 
 impl State {
     /// The checkerboard is separate paint underneath the SVG, never injected into the document.
-    pub(super) fn scene(&self) -> Scene {
+    pub(super) fn canvas(&self) -> ui::Canvas {
         let environment = &self.environment;
-        let font = environment
-            .ui_font
-            .family
-            .clone()
-            .unwrap_or_else(|| "Segoe UI".into());
         let font_size = environment.ui_font.size_px.unwrap_or(14.).clamp(1., 128.);
-        let mut scene = Scene {
-            panel: "preview".into(),
-            font,
-            font_size,
+        let mut scene = ui::Canvas {
+            font: environment.ui_font.clone(),
             ..Default::default()
         };
         scene.paint.push(Paint::Fill {
@@ -77,6 +70,19 @@ impl State {
         scene
     }
 
+    /// The public tree carries the exact memory revision used to draw this frame.
+    pub(super) fn view(&self) -> api::View {
+        let mut document = ui::Document::new(
+            ui::Node::new("preview-canvas", ui::Kind::Canvas(self.canvas())).grow(),
+        )
+        .revision(self.revision);
+        document.source = self.document.clone();
+        api::View {
+            panel: "preview".into(),
+            document,
+        }
+    }
+
     /// Paint themed SVG controls and percentage text using the host's default UI typography.
     fn toolbar(&self, paint: &mut Vec<Paint>, font_size: f32) {
         let color = if self.intrinsic.is_some() {
@@ -131,7 +137,7 @@ impl State {
             color: self.environment.foreground,
             size: font_size,
             bold: self.environment.ui_font.bold.unwrap_or(false),
-            // None inherits Scene.font, which is populated from the editor's UI font family.
+            // None inherits the canvas's UI font, independently of any sibling character grid.
             font: None,
         });
     }

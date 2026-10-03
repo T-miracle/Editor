@@ -1169,6 +1169,16 @@ impl Render for ExtensionPanel {
                 }
             }
         }
+        if let Some(error) = &self.preview_error {
+            // Host-side admission failures are readable UI, with no stale guest input target underneath.
+            return div()
+                .size_full()
+                .p_4()
+                .text_color(cx.theme().muted_foreground)
+                .debug_selector(|| "plugin-preview-error".into())
+                .child(error.clone())
+                .into_any_element();
+        }
         if let Some(document) = self.current_scene().and_then(|scene| scene.ui.clone()) {
             self.canvas_controls = None;
             self.editing = None;
