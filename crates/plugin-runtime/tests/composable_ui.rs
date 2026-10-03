@@ -48,6 +48,165 @@ fn package_with_ui(edit: impl FnOnce(&mut Value), edit_ui: impl FnOnce(&mut Valu
     Package::from_bytes(&archive.finish().unwrap().into_inner()).unwrap()
 }
 
+/// A separate package identity exercises only the native rich-text contract and optional preview read.
+fn richtext_package(node: Value, negotiated: bool, preview: bool) -> Package {
+    package_with_ui(
+        |manifest| {
+            manifest["id"] = json!("richtext-fixture");
+            manifest["name"] = json!("Rich text fixture");
+            manifest["api"]["required"] =
+                json!({"package.assets":"^1","ui.native":"^1","configuration":"^1"});
+            manifest["api"]["optional"] = json!({});
+            manifest["permissions"] = json!(["assets.read"]);
+            if negotiated {
+                manifest["api"]["required"]["ui.richtext"] = json!("^1");
+            }
+            if preview {
+                manifest["api"]["required"]["editor.documents"] = json!("^1");
+                manifest["permissions"] = json!(["assets.read", "editor.read"]);
+                manifest["panels"][0]["position"] = json!("editor");
+                manifest["panels"][0]["file_extensions"] = json!(["sample"]);
+            }
+            manifest["settings_hook"] = json!(false);
+            manifest["settings"]["label"]["default"] = json!("composable-ui");
+        },
+        |tree| tree["root"] = node,
+    )
+}
+
+/// Both new node kinds require their own capability without changing the existing UI document version.
+#[test]
+#[ignore = "build current capability-example through the host SDK first"]
+fn richtext_nodes_negotiate_independently_of_markdown() {
+    use plugin_runtime::plugin_protocol::api::{ErrorCode, Failure};
+    for kind in [
+        json!({"type":"rich_text","html":"<p><strong>你好</strong></p>"}),
+        json!({"type":"code_block","text":"let value = 1;\n","language":"rust"}),
+    ] {
+        for negotiated in [false, true] {
+            let package =
+                richtext_package(json!({"id":"block","kind":kind.clone()}), negotiated, false);
+            let temp = tempfile::tempdir().unwrap();
+            let mut manager =
+                Manager::open(temp.path().join("plugins"), Environment::default()).unwrap();
+            let result = manager.install(&package, package.manifest.permissions.clone());
+            if negotiated {
+                result.unwrap();
+                let document = manager.live["richtext-fixture"].views["welcome"].as_ref();
+                assert_eq!(document.version, 1);
+                assert_eq!(serde_json::to_value(&document.root.kind).unwrap(), kind);
+                assert!(document.root.source_range.is_none());
+            } else {
+                let error = result.unwrap_err();
+                assert_eq!(
+                    error.downcast_ref::<Failure>().map(|error| error.code),
+                    Some(ErrorCode::CapabilityUnavailable),
+                    "unexpected rejection: {error:#}"
+                );
+                assert!(manager.installed.is_empty() && manager.live.is_empty());
+            }
+        }
+    }
+}
+
+/// Source mappings need the rich-text capability even when attached to an otherwise ordinary text node.
+#[test]
+#[ignore = "build current capability-example through the host SDK first"]
+fn richtext_source_ranges_require_capability_and_preserve_utf8_byte_offsets() {
+    use plugin_runtime::plugin_protocol::{
+        api::{DocumentVersion, ErrorCode, Failure, Notification},
+        ui::SourceRange,
+    };
+    for negotiated in [false, true] {
+        let package = richtext_package(
+            json!({"id":"block","source_range":{"start":0,"end":6},
+                "kind":{"type":"text","text":"你好"}}),
+            negotiated,
+            true,
+        );
+        let temp = tempfile::tempdir().unwrap();
+        let mut manager =
+            Manager::open(temp.path().join("plugins"), Environment::default()).unwrap();
+        manager
+            .install(&package, package.manifest.permissions.clone())
+            .unwrap();
+        // Until a versioned preview arrives, the independent guest emits only static content.
+        let initial = manager.live["richtext-fixture"].views["welcome"].as_ref();
+        assert!(initial.source.is_none() && initial.root.source_range.is_none());
+        let source = DocumentVersion {
+            id: "memory-only".into(),
+            path: "source.sample".into(),
+            revision: 7,
+        };
+        let result = manager.event(
+            "richtext-fixture",
+            Some("welcome".into()),
+            Notification::Preview {
+                document: Some(source.clone()),
+                text: "你好".into(),
+            },
+        );
+        if negotiated {
+            result.unwrap();
+            let document = manager.live["richtext-fixture"].views["welcome"].as_ref();
+            assert_eq!(document.source, Some(source));
+            assert_eq!(
+                document.root.source_range,
+                Some(SourceRange { start: 0, end: 6 })
+            );
+        } else {
+            let error = result.unwrap_err();
+            assert_eq!(
+                error.downcast_ref::<Failure>().map(|error| error.code),
+                Some(ErrorCode::CapabilityUnavailable),
+                "unexpected rejection: {error:#}"
+            );
+            assert!(manager.live["richtext-fixture"].views.is_empty());
+        }
+    }
+}
+
+/// Malformed guest mappings are rejected at the public manager boundary before publishing a view.
+#[test]
+#[ignore = "build current capability-example through the host SDK first"]
+fn richtext_source_ranges_reject_inverted_and_over_quota_bounds() {
+    use plugin_runtime::plugin_protocol::api::{DocumentVersion, ErrorCode, Failure, Notification};
+    for (start, end) in [(6, 0), (0, 1024 * 1024 + 1)] {
+        let package = richtext_package(
+            json!({"id":"block","source_range":{"start":start,"end":end},
+                "kind":{"type":"text","text":"你好"}}),
+            true,
+            true,
+        );
+        let temp = tempfile::tempdir().unwrap();
+        let mut manager =
+            Manager::open(temp.path().join("plugins"), Environment::default()).unwrap();
+        manager
+            .install(&package, package.manifest.permissions.clone())
+            .unwrap();
+        let error = manager
+            .event(
+                "richtext-fixture",
+                Some("welcome".into()),
+                Notification::Preview {
+                    document: Some(DocumentVersion {
+                        id: "memory-only".into(),
+                        path: "source.sample".into(),
+                        revision: 7,
+                    }),
+                    text: "你好".into(),
+                },
+            )
+            .unwrap_err();
+        assert_eq!(
+            error.downcast_ref::<Failure>().map(|error| error.code),
+            Some(ErrorCode::InvalidRequest),
+            "unexpected rejection for {start}..{end}: {error:#}"
+        );
+        assert!(manager.live["richtext-fixture"].views.is_empty());
+    }
+}
+
 /// Canvas drawing and character measurements are independently negotiated capabilities.
 #[test]
 #[ignore = "build current capability-example through the host SDK first"]

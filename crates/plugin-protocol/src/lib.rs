@@ -135,6 +135,10 @@ pub struct Snapshot {
 pub struct Environment {
     pub workspace: String,
     pub os: String,
+    /// Current user interface locale, supplied at preparation and in Theme notifications.
+    /// Missing or empty values preserve the existing Simplified Chinese default.
+    #[serde(default)]
+    pub locale: String,
     pub background: u32,
     pub foreground: u32,
     pub muted: u32,

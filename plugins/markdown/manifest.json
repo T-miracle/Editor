@@ -1,10 +1,28 @@
 {
   "id": "markdown",
   "name": "Markdown",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "protocol": 7,
   "contributions": "plugin.toml",
-  "permissions": [],
+  "component": "markdown.wasm",
+  "permissions": ["editor.read"],
   "storage_limit": 1024,
-  "api": {"base": "^1"}
+  "api": {
+    "base": "^1",
+    "required": {
+      "ui.native": "^1",
+      "ui.richtext": "^1",
+      "editor.documents": "^1"
+    }
+  },
+  "panels": [
+    {
+      "id": "preview",
+      "title": "Markdown",
+      "position": "editor",
+      "file_extensions": ["md", "markdown"],
+      "default_visible": true
+    }
+  ],
+  "commands": []
 }

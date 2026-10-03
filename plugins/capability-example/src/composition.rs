@@ -138,8 +138,17 @@ impl Demo {
         });
         self.document.revision += 1;
     }
+    /// Source ranges become meaningful only after a versioned preview notification arrives.
     pub(super) fn document(&self) -> ui::Document {
-        self.document.clone()
+        let mut document = self.document.clone();
+        if document.source.is_none() {
+            // Preserve the asset's mapping template for later previews, but never publish unbound ranges.
+            visit(&mut document.root, &mut |node| node.source_range = None);
+            if let Some(dialog) = &mut document.dialog {
+                visit(&mut dialog.content, &mut |node| node.source_range = None);
+            }
+        }
+        document
     }
 }
 

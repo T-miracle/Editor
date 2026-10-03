@@ -1,0 +1,15 @@
+[package]
+name = "markdown-guest"
+version = "0.2.0"
+edition = "2024"
+rust-version = "1.95"
+license = "MIT"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+# The building editor supplies the versioned interface; the guest never references host sources.
+plugin-protocol = { version = "=0.2.0", features = ["guest"] }
+# Only CommonMark parsing and safe HTML generation are needed; no CLI or optional syntax extensions.
+pulldown-cmark = { version = "=0.13.0", default-features = false, features = ["html"] }

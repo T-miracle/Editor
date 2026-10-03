@@ -1,6 +1,6 @@
 # 02 — 编辑未保存 Markdown 并实时查看原生分栏预览
 
-**Status:** ready-for-agent — 用户已要求执行，按阻塞关系实施。
+**Status:** completed — 实际插件原生预览、独立能力夹具及双轴审查通过，见[验收记录](../verification/02-native-preview.md)。远端交付读回随下一阶段记录。
 
 **GitHub:** [#28](https://github.com/T-miracle/Editor/issues/28)；父方案 [#26](https://github.com/T-miracle/Editor/issues/26)。
 
@@ -12,11 +12,11 @@
 
 ## Acceptance criteria
 
-- [ ] 通过通用编辑区预览贡献接入原生分栏，源码仍使用既有 EditorState 与 DocumentSession。
-- [ ] CommonMark 基础语法、GFM 表格、任务列表和删除线可见；任务框本单只读，图片可先显示替代文字，代码块先以等宽文本呈现。
-- [ ] 输入、粘贴、撤销、重做和重新加载更新预览；文档身份、revision、实例校验拒绝过期结果。
-- [ ] 解析结果保留源码块范围与渲染块对应信息，供后续交互和滚动复用；不维护第二份可变文档。
-- [ ] 切换非 Markdown 文档、禁用或卸载后收回分栏；中英文、深浅主题及原生布局通过实际包 GPUI 验证。
+- [x] 通过通用编辑区预览贡献接入原生分栏，源码仍使用既有 EditorState 与 DocumentSession。
+- [x] CommonMark 基础语法、GFM 表格、任务列表和删除线可见；任务框本单只读，图片可先显示替代文字，代码块先以等宽文本呈现。
+- [x] 输入、粘贴、撤销、重做和重新加载更新预览；文档身份、revision、实例校验拒绝过期结果。
+- [x] 解析结果保留源码块范围与渲染块对应信息，供后续交互和滚动复用；不维护第二份可变文档。
+- [x] 切换非 Markdown 文档、禁用或卸载后收回分栏；中英文、深浅主题及原生布局通过实际包 GPUI 验证。
 
 ## Blocked by
 

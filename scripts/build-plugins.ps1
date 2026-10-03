@@ -37,6 +37,11 @@ try {
         & $hostPath --plugin-cargo 'plugins/rust/Cargo.toml' build --target wasm32-wasip2 --release
         if ($LASTEXITCODE -ne 0) { throw 'Rust language WASM build failed' }
         }
+        # Markdown owns parsing inside an ordinary file-scoped guest built against the public SDK.
+        if ($Packages -contains 'markdown') {
+        & $hostPath --plugin-cargo 'plugins/markdown/Cargo.toml' build --target wasm32-wasip2 --release
+        if ($LASTEXITCODE -ne 0) { throw 'Markdown preview WASM build failed' }
+        }
     } finally { $env:CARGO_TARGET_DIR = $previousTargetDir }
     New-Item -ItemType Directory -Force $Output | Out-Null
     Add-Type -AssemblyName System.IO.Compression
@@ -84,7 +89,7 @@ try {
     }
     foreach ($name in @('rust', 'toml', 'html', 'javascript', 'markdown')) {
         if ($Packages -notcontains $name) { continue }
-        # Only Rust adds a policy component; the other language packages remain resource-only.
+        # Policy and document-preview guests may accompany the same declaration-only language resources.
         $destination = [IO.Path]::GetFullPath((Join-Path $Output "$name.zip"))
         $stream = [IO.File]::Create($destination)
         $archive = [IO.Compression.ZipArchive]::new($stream, [IO.Compression.ZipArchiveMode]::Create)
@@ -107,6 +112,10 @@ try {
             }
             if ($name -eq 'rust') {
                 $packageFiles += ,@('rust.wasm', (Join-Path $projectRoot 'target/wasm32-wasip2/release/rust_language_guest.wasm'))
+            }
+            if ($name -eq 'markdown') {
+                $packageFiles += ,@('markdown.wasm', (Join-Path $projectRoot 'target/wasm32-wasip2/release/markdown_guest.wasm'))
+                $packageFiles += ,@('licenses/pulldown-cmark-LICENSE', (Join-Path $pluginRoot 'src/pulldown-cmark-LICENSE'))
             }
             foreach ($item in $packageFiles) {
                 $entryStream = $archive.CreateEntry($item[0]).Open()

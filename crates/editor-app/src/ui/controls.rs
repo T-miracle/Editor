@@ -36,5 +36,5 @@ pub(crate) use segmented_tabs::SegmentedTabs;
 pub(crate) use spinner::Spinner;
 pub(crate) use status_bar::StatusBar;
 pub(crate) use tabs::tab_strip;
-pub(crate) use text::markdown_view;
+pub(crate) use text::{RichTextColors, markdown_view, rich_text_view};
 pub(crate) use tooltip::Tooltip;

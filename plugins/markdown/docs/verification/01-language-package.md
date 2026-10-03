@@ -4,6 +4,8 @@
 
 实现、针对性测试、必需检查及 Standards / Spec 双轴审查通过。对应工单 [#27](https://github.com/T-miracle/Editor/issues/27)。
 
+提交：`72b23146258bf93deebe531b7b3c63eda27e4483`，已推送 `origin/codex/markdown-plugin` 并核对远端 SHA。2026-10-03 读回 #27 为 closed / completed；父方案 #26 保持 open。
+
 ## 实际验证
 
 - `cargo test -p editor-app markdown_language_package_restores -- --nocapture`：1 项通过，真实 ZIP 经 Manager 安装，已打开文档由 text 恢复 Markdown；标题、粗体、斜体、代码、删除线、链接产生非默认样式。禁用、启用和卸载同步切换语言并撤销旧 grammar 名称。

@@ -722,6 +722,7 @@ fn environment(workspace: &Path, cx: &App) -> protocol::Environment {
     protocol::Environment {
         workspace: workspace.display().to_string(),
         os: std::env::consts::OS.into(),
+        locale: rust_i18n::locale().to_string(),
         background: color(cx.theme().background),
         foreground: color(cx.theme().foreground),
         muted: color(cx.theme().tab_bar),

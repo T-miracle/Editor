@@ -331,6 +331,7 @@ impl Instance {
             let mut grid = false;
             let mut collections = view.document.menu.is_some();
             let mut enhanced_canvas = false;
+            let mut rich_text = false;
             let mut visit = |node: &ui::Node| {
                 if let ui::Kind::Canvas(value) = &node.kind {
                     canvas = true;
@@ -338,6 +339,12 @@ impl Instance {
                     enhanced_canvas |= value.scroll.is_some() || value.font != Default::default();
                 }
                 collections |= matches!(node.kind, ui::Kind::SideTabs(_));
+                // Source metadata is part of the same optional interface even on ordinary nodes.
+                rich_text |= node.source_range.is_some()
+                    || matches!(
+                        node.kind,
+                        ui::Kind::RichText { .. } | ui::Kind::CodeBlock { .. }
+                    );
             };
             view.document.root.visit(&mut visit);
             if let Some(dialog) = &view.document.dialog {
@@ -359,6 +366,7 @@ impl Instance {
                 (canvas, "ui.canvas"),
                 (grid, "ui.grid"),
                 (collections, "ui.collections"),
+                (rich_text, "ui.richtext"),
             ] {
                 if required && !api.capabilities.contains_key(capability) {
                     return Err(api::Failure::new(

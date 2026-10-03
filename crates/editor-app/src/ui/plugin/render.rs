@@ -175,6 +175,47 @@ impl PluginView {
                     .into_any_element()
             }
             Kind::Text { text } => div().child(text.clone()).into_any_element(),
+            Kind::RichText { html } => crate::ui::controls::rich_text_view(
+                native_id.clone(),
+                html.clone(),
+                px(self
+                    .environment
+                    .font_style(&self.plugin, node.theme_role(), false)
+                    .size_px
+                    .unwrap_or(14.)),
+                crate::ui::controls::RichTextColors {
+                    foreground: colors.foreground,
+                    background: colors.background,
+                    border: colors.border,
+                    link: colors.accent,
+                },
+                cx,
+            )
+            .into_any_element(),
+            Kind::CodeBlock { text, .. } => {
+                // Each literal line keeps its whitespace; the host never parses guest code as markup.
+                let font = self
+                    .environment
+                    .font_style(&self.plugin, node.theme_role(), true);
+                div()
+                    .id(native_id.clone())
+                    .w_full()
+                    .overflow_x_scroll()
+                    .bg(colors.background)
+                    .border_1()
+                    .border_color(colors.border)
+                    .rounded(px(4.))
+                    .p_3()
+                    .font_family(font.family.unwrap_or_else(|| "Consolas".into()))
+                    .text_size(px(font.size_px.unwrap_or(14.)))
+                    .child(div().flex().flex_col().children(text.lines().map(|line| {
+                        div()
+                            .flex_shrink_0()
+                            .whitespace_nowrap()
+                            .child(if line.is_empty() { " " } else { line }.to_owned())
+                    })))
+                    .into_any_element()
+            }
             Kind::Button { label } => self
                 .font(
                     Button::new(native_id.clone())

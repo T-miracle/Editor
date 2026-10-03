@@ -62,6 +62,26 @@ fn rejects_unsupported_and_ambiguous_documents() {
     assert!(doc.validate().unwrap_err().contains("Duplicate"));
 }
 
+/// Public SDK mappings are version-bound and use inclusive quota limits with half-open byte ranges.
+#[test]
+fn richtext_source_ranges_require_a_version_and_bounded_offsets() {
+    let mut document = Document::new(Node::text("block", "你好").source_range(0..6));
+    assert!(document.validate().is_err());
+    document.source = Some(crate::api::DocumentVersion {
+        id: "open-document".into(),
+        path: "source.sample".into(),
+        revision: 7,
+    });
+    for (start, end) in [(0, 0), (0, 6), (1024 * 1024, 1024 * 1024)] {
+        document.root.source_range = Some(SourceRange { start, end });
+        assert!(document.validate().is_ok(), "valid range {start}..{end}");
+    }
+    for (start, end) in [(6, 0), (0, 1024 * 1024 + 1)] {
+        document.root.source_range = Some(SourceRange { start, end });
+        assert!(document.validate().is_err(), "invalid range {start}..{end}");
+    }
+}
+
 #[test]
 fn bounds_native_work_including_table_cells_and_depth() {
     let mut node = Node::text("leaf", "文字");

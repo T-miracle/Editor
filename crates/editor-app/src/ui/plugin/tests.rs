@@ -678,6 +678,36 @@ fn live_theme_roles_override_native_control_colors_and_fonts(cx: &mut TestAppCon
     cx.update(|window, cx| window.draw(cx).clear(cx));
 }
 
+/// A custom code role changes native glyph metrics, rather than only its surrounding container.
+#[gpui::test]
+fn code_block_custom_role_changes_native_line_height(cx: &mut TestAppContext) {
+    init(cx);
+    let (_, cx) = cx.add_window_view(|window, cx| {
+        let mut environment = Environment::default();
+        environment.theme_text_styles.insert(
+            "test.large_code".into(),
+            plugin_runtime::plugin_protocol::FontStyle {
+                size_px: Some(30.),
+                ..Default::default()
+            },
+        );
+        let document = Document::new(Node::column(
+            "code-roles",
+            vec![
+                Node::code_block("ordinary-code", "let x = 1;", None),
+                Node::code_block("custom-code", "let x = 1;", None).role("large_code"),
+            ],
+        ));
+        let view = cx
+            .new(|cx| PluginView::new("test".into(), document, environment, |_, _| {}, window, cx));
+        Root::new(view, window, cx)
+    });
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+    let ordinary = cx.debug_bounds("plugin-ui-ordinary-code").unwrap();
+    let custom = cx.debug_bounds("plugin-ui-custom-code").unwrap();
+    assert!(custom.size.height > ordinary.size.height + gpui_kit::px(10.));
+}
+
 #[gpui::test]
 fn growing_children_fill_constrained_layout_and_scrolling_has_a_viewport(cx: &mut TestAppContext) {
     init(cx);

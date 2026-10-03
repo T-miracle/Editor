@@ -6,6 +6,8 @@
 
 `ui.canvas >=1.1` 增加 `Canvas.font` 和 `Canvas.scroll: Option<ScrollRange>`。字体覆盖画布继承值并参与网格测量；范围的 `content/offset` 使用逻辑像素，拖动原生滚动条产生 `CanvasEvent::Scroll { offset }`，宿主不保存第二份终端内容。字符网格的行滚轮以 `GridMetrics.cell_height` 换算，普通画布保持像素事件。
 
+`ui.richtext ^1` 增加只读 `Kind::RichText { html }`、`Kind::CodeBlock { text, language }` 与可选 `Node.source_range`。这是独立能力：继续使用 `Document.version=1` 与 `ui.native ^1`，没有使用这些字段的包无需增加声明。未协商该能力时，任何富文本、代码块或带源码范围的普通节点都在发布前返回 `CapabilityUnavailable`。
+
 文档 revision 标识交互对象及语义，不是绘制帧计数。输入目标、会话/进程身份或模态变化应递增；普通输出、绘制、按键反馈保持版本，避免同一帧的 Key/Text 或在途输入被错误判为过期。插件异步调用的后续操作应绑定最初目标的稳定身份，目标撤销后丢弃，不能跟随当前焦点。
 
 新插件协商 `ui.native ^1`，通过 `api::Output.views` 返回 `ui::Document`。`Column`、`Row`、`Scroll`、`Tabs` 可在任意位置嵌套标准组件和 `Kind::Canvas`，没有终端专属槽位。画布另需 `ui.canvas ^1`，字符网格仅在协商 `ui.grid ^1` 并设置 `Canvas.grid=true` 时出现。UI 能力不授予文件、文档或进程权限。
@@ -26,6 +28,8 @@
 | `Row` / `Node::row` | 横向自动布局 | — |
 | `Scroll` / `Node::scroll` | 带原生滚动条的纵向滚动区，设置 height 约束视口 | — |
 | `Text` / `Node::text` | 普通文字，按容器换行 | — |
+| `RichText` / `Node::rich_text` | 只读原生富文本，输入为受限 HTML 标记，需 `ui.richtext` | — |
+| `CodeBlock` / `Node::code_block` | 保留空白和换行的只读等宽代码，需 `ui.richtext` | — |
 | `Button` / `Node::button` | 原生按钮，支持键盘激活 | `Click` |
 | `Input` / `Node::input` | 单行原生编辑，支持中文 IME、选区、撤销与复制粘贴 | `Change(String)`、`Submit(String)` |
 | `Checkbox` / `Node::checkbox` | 复选框 | `Toggle(bool)` |
@@ -38,7 +42,21 @@
 | `Spacer` | 占位空间，可设置宽高或 grow | — |
 | `Document.dialog` | 复用主程序原生控件的模态浮层 | `Dismiss` |
 
-`Node::new(id, Kind::...)` 可构造全部类型。`gap/padding/width/height/grow/role/disabled` 构造方法对应公开的 `layout/role/disabled` 字段。布局尺寸为逻辑像素。`disabled` 作用于整个子树；隐藏标签页和模态弹窗背后的节点不会收到操作事件。
+`Node::new(id, Kind::...)` 可构造全部类型。`gap/padding/width/height/grow/role/disabled` 构造方法对应公开的 `layout/role/disabled` 字段。`source_range(start..end)` 对应可选源码映射，默认留空。布局尺寸为逻辑像素。`disabled` 作用于整个子树；隐藏标签页和模态弹窗背后的节点不会收到操作事件。
+
+## 只读富文本与源码块映射（ui.richtext 1.0）
+
+插件负责领域解析，把标题、段落、强调、删除线、列表和表格转换为受限 HTML，再交给 `RichText.html`。宿主只用原生富文本控件排版，不解析 Markdown，不使用 WebView，不执行脚本或任意 CSS。原文中的内嵌 HTML 不获得执行入口；插件应过滤或转义不支持的原始标记。颜色、字体与间距由本地主题决定。
+
+插件生成的提示、图片替代说明和空状态应跟随 `Environment.locale`，同时保留中英文。该字段在 Prepare 时提供，并随 `Notification::Theme` 更新；缺失或空值沿用既有简体中文默认，不从工作区文件推断用户界面语言。
+
+富文本控件必须覆盖默认链接点击与图片资源加载回调：出现 `href` 或 `src` 不自动打开浏览器，不读取本地文件、网络或 data URL，也不借用宿主加载器绕过插件权限。这一能力本身不提供链接导航、图片访问或预览写入。暂未接入授权图片读取时，插件以替代文字表示图片。任务框通过普通原生 `Checkbox` 节点表达；只读任务应设置 `disabled=true`，不能依赖 HTML `<input>` 自动变成可交互控件。
+
+`CodeBlock.text` 是无需转义的原始代码，空白与换行按原样显示；可选 `language` 是 1–100 个 ASCII 字母、数字或 `._+-#` 的标识，允许 `c++`、`c#` 等名称。它不启动工具，不授予高亮能力；当前基础呈现是等宽文字，后续高亮只能复用已启用的语言提供者。
+
+每个源码块使用稳定的 `Node.id`，`Node.source_range = { start, end }` 表示半开 UTF-8 字节范围。范围针对 `Document.source` 绑定的不可变内存文本版本，不能用生成的 HTML 字节偏移代替。任何类型的节点都可带映射，但必须协商 `ui.richtext` 并提供 `Document.source`；未提供版本或 `start > end`、`end > 1 MiB` 返回 `InvalidRequest`。宿主使用映射前还应对当前源文本核对长度与字符边界；旧文档身份或 revision 仍按现有预览门禁返回 `StaleRevision`。
+
+映射只携带身份与偏移，不保存第二份可变文档，也不构成编辑授权。HTML 控件不保留原始 Markdown 的源码范围；布局定位必须使用协议中的块 ID 与范围，在块重排、文档修改或视图撤销后相应更新、丢弃。
 
 ## 身份、状态与事件
 
@@ -65,7 +83,7 @@ let document = Document::new(Node::button("open", "打开"))
 
 ## 主题和字体
 
-节点只声明样式角色，没有硬编码颜色或字体字段。省略 `role` 时，使用 `button/input/checkbox/choice/tabs/text/list/table/progress/separator/scroll/spacer/container`；弹窗外壳使用 `dialog`。
+节点只声明样式角色，没有硬编码颜色或字体字段。省略 `role` 时，使用 `button/input/checkbox/choice/tabs/text/rich_text/code_block/list/table/progress/separator/scroll/spacer/container`；弹窗外壳使用 `dialog`。
 
 主题在 `themes[].plugins[插件ID]` 中配置，示例：
 
@@ -92,9 +110,9 @@ let document = Document::new(Node::button("open", "打开"))
 ## 约束与兼容
 
 - `Document.version` 当前必须为 1；构造器自动设置。
-- 单文档至多 2048 个节点及展开后的选项、列表行和表格单元格，嵌套深度至多 24。单段文字至多 64 KiB，总文字至多 1 MiB。
+- 单文档至多 2048 个节点及展开后的选项、列表行和表格单元格，嵌套深度至多 24。富文本每个 `<` 标记与代码每行也保守计入展开节点额度，避免用一个协议节点制造无界原生布局。单段文字、富文本 HTML 或代码文字至多 64 KiB，总文字至多 1 MiB（包含代码语言标识），完整文档编码至多 2 MiB；富文本不会获得独立的额外额度。
 - 宽高必须为有限的 0–10000 数值；间距和内边距为 0–256；弹窗宽度为 240–1200；表格为 1–32 列，每行列数一致。
 - 重复 ID、无效选中值和未知协议会被拒绝。一次 Output 的所有文档先验证，再一起发布，避免部分界面更新。
-- Canvas、SideTabs 和标准组件使用同一棵节点树；尚不提供任意 GPUI 对象、富文本编辑器或虚拟表格。旧 Scene/Widget/controls/chrome 传输已删除，旧包在安装与恢复前明确拒绝。
+- Canvas、SideTabs、只读富文本和标准组件使用同一棵节点树；尚不提供任意 GPUI 对象、富文本编辑器或虚拟表格。旧 Scene/Widget/controls/chrome 传输已删除，旧包在安装与恢复前明确拒绝。
 
 验证协议可运行 `Document::validate()`；SDK 随附契约测试。主程序另有原生点击、输入、弹窗与实际 WASM 包回归测试。

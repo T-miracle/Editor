@@ -3,6 +3,7 @@
 //! No GPUI objects cross this interface.
 
 use serde::{Deserialize, Serialize};
+use std::ops::Range;
 
 mod controls;
 pub use controls::*;
@@ -96,6 +97,10 @@ impl Dialog {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Node {
     pub id: String,
+    /// Optional UTF-8 source bytes in the immutable version echoed by `Document.source`.
+    /// Mapping does not grant document access or editing authority; it requires `ui.richtext`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_range: Option<SourceRange>,
     /// Resolves `plugins[plugin_id].ui[role]` colors and `typography[role]` fonts.
     /// If empty, the host uses the node kind (e.g. `button`) as the role.
     #[serde(default)]
@@ -105,6 +110,17 @@ pub struct Node {
     #[serde(default)]
     pub layout: Layout,
     pub kind: Kind,
+}
+
+/// Half-open UTF-8 byte offsets for one rendered block in its source document version.
+/// `start <= end <= 1 MiB`; the host must check actual source length and character boundaries
+/// before using the range. Blocks retain their identity through the enclosing node ID.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SourceRange {
+    /// Inclusive byte offset in the current immutable source text.
+    pub start: usize,
+    /// Exclusive byte offset in the same source text.
+    pub end: usize,
 }
 
 /// Layout contains geometry only. Color and typography always come from the active theme.
@@ -138,6 +154,19 @@ pub enum Kind {
     },
     Text {
         text: String,
+    },
+    /// Read-only native rich markup, requiring `ui.richtext` in addition to `ui.native`.
+    /// The host renders a restricted HTML subset and disables implicit URL/image access;
+    /// this is neither a WebView nor a request to parse Markdown in the host.
+    RichText {
+        html: String,
+    },
+    /// Read-only literal code with preserved whitespace and a monospace presentation.
+    /// The optional language is an informational ID, not authority to start a language tool.
+    CodeBlock {
+        text: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        language: Option<String>,
     },
     Button {
         label: String,
@@ -260,6 +289,7 @@ impl Node {
     pub fn new(id: impl Into<String>, kind: Kind) -> Self {
         Self {
             id: id.into(),
+            source_range: None,
             role: String::new(),
             disabled: false,
             layout: Layout::default(),
@@ -282,6 +312,36 @@ impl Node {
     }
     pub fn text(id: impl Into<String>, text: impl Into<String>) -> Self {
         Self::new(id, Kind::Text { text: text.into() })
+    }
+    /// Create a read-only rich block with stable `id` and restricted `html` markup.
+    /// The returned node needs `ui.richtext`; text quotas are checked by `Document::validate`.
+    pub fn rich_text(id: impl Into<String>, html: impl Into<String>) -> Self {
+        Self::new(id, Kind::RichText { html: html.into() })
+    }
+    /// Create a literal code block from `text` and an optional ASCII language ID.
+    /// Returns a node requiring `ui.richtext`; the language does not imply highlighting support.
+    pub fn code_block(
+        id: impl Into<String>,
+        text: impl Into<String>,
+        language: Option<String>,
+    ) -> Self {
+        Self::new(
+            id,
+            Kind::CodeBlock {
+                text: text.into(),
+                language,
+            },
+        )
+    }
+    /// Attach half-open UTF-8 `range` offsets into the version in `Document.source`.
+    /// Returns the mapped node; invalid bounds are rejected by `Document::validate`.
+    /// Even ordinary text or layout nodes need `ui.richtext` when carrying this metadata.
+    pub fn source_range(mut self, range: Range<usize>) -> Self {
+        self.source_range = Some(SourceRange {
+            start: range.start,
+            end: range.end,
+        });
+        self
     }
     pub fn button(id: impl Into<String>, label: impl Into<String>) -> Self {
         Self::new(
@@ -342,6 +402,8 @@ impl Node {
             Kind::Column { .. } | Kind::Row { .. } => "container",
             Kind::Scroll { .. } => "scroll",
             Kind::Text { .. } => "text",
+            Kind::RichText { .. } => "rich_text",
+            Kind::CodeBlock { .. } => "code_block",
             Kind::Button { .. } => "button",
             Kind::Input(_) => "input",
             Kind::Checkbox { .. } => "checkbox",

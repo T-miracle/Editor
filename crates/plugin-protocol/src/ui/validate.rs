@@ -12,6 +12,7 @@ pub(super) fn document(document: &Document) -> Result<(), String> {
         bytes: 0,
         drawings: 0,
         vectors: 0,
+        has_source: document.source.is_some(),
     };
     validator.node(&document.root, 0)?;
     if let Some(menu) = &document.menu {
@@ -52,6 +53,8 @@ struct Validator {
     bytes: usize,
     drawings: usize,
     vectors: usize,
+    /// Source mappings are meaningful only in a version-bound preview document.
+    has_source: bool,
 }
 impl Validator {
     fn budget(&mut self, count: usize) -> Result<(), String> {
@@ -90,6 +93,14 @@ impl Validator {
         }
         self.budget(1)?;
         self.id(&node.id)?;
+        if let Some(range) = node.source_range {
+            if !self.has_source {
+                return Err("UI source ranges require Document.source".into());
+            }
+            if range.start > range.end || range.end > 1024 * 1024 {
+                return Err("Invalid UI source range".into());
+            }
+        }
         if node.role.len() > 128 {
             return Err("UI theme role too long".into());
         }
@@ -140,6 +151,30 @@ impl Validator {
             }
             Kind::Scroll { content } => self.node(content, depth + 1)?,
             Kind::Text { text } => self.text(text)?,
+            Kind::RichText { html } => {
+                self.text(html)?;
+                // Bound the generated native markup tree too, including dense empty/table tags.
+                // Counting delimiters is deliberately conservative and never interprets Markdown.
+                self.budget(html.bytes().filter(|byte| *byte == b'<').count())?;
+            }
+            Kind::CodeBlock { text, language } => {
+                self.text(text)?;
+                self.budget(text.lines().count())?;
+                if let Some(language) = language
+                    && (language.is_empty()
+                        || language.len() > 100
+                        || !language
+                            .bytes()
+                            .all(|byte| byte.is_ascii_alphanumeric() || b"._+-#".contains(&byte)))
+                {
+                    return Err(
+                        "Code language IDs must use 1..100 ASCII identifier characters".into(),
+                    );
+                }
+                if let Some(language) = language {
+                    self.text(language)?;
+                }
+            }
             Kind::Button { label } | Kind::Checkbox { label, .. } => self.text(label)?,
             Kind::Input(input) => {
                 self.text(&input.value)?;
