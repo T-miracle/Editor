@@ -1,4 +1,31 @@
 _version: 2
+preview.image_loading:
+  en: "Loading image…"
+  zh-CN: "正在加载图片…"
+preview.image_denied:
+  en: "Permission required to read this image"
+  zh-CN: "未获读取此图片的权限"
+preview.image_path:
+  en: "Image path is invalid or outside the workspace"
+  zh-CN: "图片路径无效或超出工作区"
+preview.image_missing:
+  en: "Image file was not found"
+  zh-CN: "找不到图片文件"
+preview.image_timeout:
+  en: "Image request timed out"
+  zh-CN: "图片请求超时"
+preview.image_limit:
+  en: "Image exceeds the resource limit"
+  zh-CN: "图片超出资源限制"
+preview.image_unsupported:
+  en: "Unsupported image format or address"
+  zh-CN: "不支持此图片格式或地址"
+preview.image_failed:
+  en: "Image read, network request or decoding failed"
+  zh-CN: "图片读取、网络请求或解码失败"
+plugins.permission_network_images:
+  en: "Download preview images through bounded HTTP(S) requests"
+  zh-CN: "通过受限 HTTP(S) 请求下载预览图片"
 preview.source_mode:
   en: "Editor only"
   zh-CN: "仅编辑"

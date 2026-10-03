@@ -295,7 +295,8 @@ impl Worker {
                     last_save = Instant::now();
                 }
                 // Vector parsing and rendering stay on this worker, outside the shared-state lock.
-                let images = vectors.prepare(&views);
+                let image_resources = manager.image_resources();
+                let images = vectors.prepare_resources(&views, &image_resources);
                 let configurations = manager
                     .installed
                     .keys()

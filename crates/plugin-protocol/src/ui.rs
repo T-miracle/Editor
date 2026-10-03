@@ -12,6 +12,8 @@ pub use canvas::*;
 mod events;
 
 #[cfg(test)]
+mod images_tests;
+#[cfg(test)]
 mod tests;
 mod validate;
 
@@ -183,6 +185,16 @@ pub enum Kind {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         language: Option<String>,
     },
+    /// Source-bound native image, requiring `ui.images`; loading is a controlled host resource task.
+    /// Document-relative paths require `workspace.read`, HTTP(S) requires `network.images`.
+    /// The host limits reads to 8 MiB and 30 seconds and never follows redirects or uses credentials.
+    /// Failures affect this image only; markup image tags remain unable to perform ambient reads.
+    Image {
+        /// Relative percent-encoded URI or credential-free HTTP(S) URL, at most 4096 UTF-8 bytes.
+        source: String,
+        /// Localized alternative text used while loading or displaying a per-image failure.
+        alt: String,
+    },
     Button {
         label: String,
     },
@@ -349,6 +361,18 @@ impl Node {
             },
         )
     }
+    /// Declare a native image with stable `id`, resource `source` and localized alternative text.
+    /// `Document.source` and negotiated `ui.images` are mandatory. Loading never grants WASM bytes
+    /// or file/network authority; unavailable grants become a failure for this node only.
+    pub fn image(id: impl Into<String>, source: impl Into<String>, alt: impl Into<String>) -> Self {
+        Self::new(
+            id,
+            Kind::Image {
+                source: source.into(),
+                alt: alt.into(),
+            },
+        )
+    }
     /// Attach half-open UTF-8 `range` offsets into the version in `Document.source`.
     /// Returns the mapped node; invalid bounds are rejected by `Document::validate`.
     /// Even ordinary text or layout nodes need `ui.richtext` when carrying this metadata.
@@ -432,6 +456,7 @@ impl Node {
             Kind::Text { .. } => "text",
             Kind::RichText { .. } => "rich_text",
             Kind::CodeBlock { .. } => "code_block",
+            Kind::Image { .. } => "image",
             Kind::Button { .. } => "button",
             Kind::Input(_) => "input",
             Kind::Checkbox { .. } => "checkbox",

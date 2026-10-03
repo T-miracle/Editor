@@ -12,6 +12,7 @@ pub(super) fn document(document: &Document) -> Result<(), String> {
         bytes: 0,
         drawings: 0,
         vectors: 0,
+        images: 0,
         has_source: document.source.is_some(),
     };
     validator.node(&document.root, 0)?;
@@ -60,6 +61,8 @@ struct Validator {
     bytes: usize,
     drawings: usize,
     vectors: usize,
+    /// One document owns the combined image budget across its root, toolbar and dialog.
+    images: usize,
     /// Source mappings are meaningful only in a version-bound preview document.
     has_source: bool,
 }
@@ -184,6 +187,20 @@ impl Validator {
                 if let Some(language) = language {
                     self.text(language)?;
                 }
+            }
+            Kind::Image { source, alt } => {
+                if !self.has_source {
+                    return Err("Images require Document.source".into());
+                }
+                self.images += 1;
+                if self.images > 64 {
+                    return Err("Image node quota exceeded".into());
+                }
+                if source.is_empty() || source.len() > 4096 {
+                    return Err("Image URI must use 1..4096 UTF-8 bytes".into());
+                }
+                self.text(source)?;
+                self.text(alt)?;
             }
             Kind::Button { label } | Kind::Checkbox { label, .. } => self.text(label)?,
             Kind::Input(input) => {

@@ -116,7 +116,9 @@ impl ExtensionPanel {
         self.native_toolbar
             .as_ref()
             .unwrap()
-            .update(cx, |view, cx| view.update_images(&key, &self.images, cx));
+            .update(cx, |view, cx| {
+                view.update_images(&key, &self.images, window, cx)
+            });
         self.native_toolbar.clone()
     }
 }

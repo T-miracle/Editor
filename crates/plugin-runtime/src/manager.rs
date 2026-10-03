@@ -10,6 +10,7 @@ use std::{
 mod artwork;
 mod data_updates;
 mod dependencies;
+mod images;
 mod language;
 mod plugin_services;
 mod preparation;
@@ -70,6 +71,10 @@ pub struct Manager {
     trusted: bool,
     workspace_open: bool,
     language_services: BTreeMap<String, language::Prepared>,
+    /// Byte producers are independent of WASM calls and retained only for current preview identities.
+    images: BTreeMap<String, crate::images::Entry>,
+    image_budget: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+    retired_image_sources: BTreeMap<String, api::DocumentVersion>,
 }
 impl Manager {
     /// Expose an opaque live incarnation for host publications, never authority for guest-supplied requests.
@@ -132,6 +137,9 @@ impl Manager {
             trusted,
             workspace_open: true,
             language_services: BTreeMap::new(),
+            images: BTreeMap::new(),
+            image_budget: Default::default(),
+            retired_image_sources: BTreeMap::new(),
         };
         if manager.installed.values().any(|entry| {
             entry.manifest.component.is_some() && entry.compatibility_error().is_none()
@@ -444,6 +452,7 @@ impl Manager {
     }
     /// Project overrides retire only their owner; global disable additionally retires parked owners.
     fn disable_current(&mut self, id: &str) -> anyhow::Result<()> {
+        self.retire_plugin_images(id);
         self.retire_language_services(id);
         let snapshot = self.live.get_mut(id).map(Instance::snapshot);
         let saved = match snapshot {
@@ -588,6 +597,7 @@ impl Manager {
                 }
             }
         }
+        self.reconcile_images();
     }
     /// Periodic and shutdown checkpoints use atomic files, leaving last good data on failure.
     pub fn checkpoint(&mut self) -> anyhow::Result<()> {

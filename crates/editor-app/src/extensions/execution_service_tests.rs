@@ -46,7 +46,7 @@ fn execution_service_reveals_native_panel_and_reclaims_it_on_disable(cx: &mut Te
     let app = slot.borrow_mut().take().unwrap();
     cx.simulate_resize(size(px(1400.), px(900.)));
     let mut renderer = images::VectorRenderer::default();
-    publish(&manager, &mut renderer, &app, cx);
+    publish(&mut manager, &mut renderer, &app, cx);
     assert!(cx.debug_bounds("plugin-ui-output").is_none());
     manager
         .invoke_command(
@@ -59,7 +59,7 @@ fn execution_service_reveals_native_panel_and_reclaims_it_on_disable(cx: &mut Te
         "method":"execute", "value":{"program":"powershell.exe", "args":["-NoProfile","-Command","Start-Sleep -Seconds 60"], "name":"服务执行"}
     })).unwrap();
     manager.poll();
-    publish(&manager, &mut renderer, &app, cx);
+    publish(&mut manager, &mut renderer, &app, cx);
     let requests = manager
         .live
         .get_mut("terminal")
@@ -79,7 +79,7 @@ fn execution_service_reveals_native_panel_and_reclaims_it_on_disable(cx: &mut Te
     });
     cx.run_until_parked();
     manager.poll();
-    publish(&manager, &mut renderer, &app, cx);
+    publish(&mut manager, &mut renderer, &app, cx);
     assert!(matches!(
         request.status(),
         protocol::api::RequestUpdate::Completed {
@@ -89,7 +89,7 @@ fn execution_service_reveals_native_panel_and_reclaims_it_on_disable(cx: &mut Te
     assert!(cx.debug_bounds("plugin-ui-output").is_some());
     assert!(cx.debug_bounds("plugin-ui-sessions").is_some());
     manager.disable("terminal").unwrap();
-    publish(&manager, &mut renderer, &app, cx);
+    publish(&mut manager, &mut renderer, &app, cx);
     assert!(cx.debug_bounds("plugin-ui-output").is_none());
     assert!(cx.update(|_, cx| !app.read(cx).plugin_panels.contains_key("terminal/terminal")));
 }

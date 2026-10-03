@@ -29,7 +29,9 @@ futures = "0.3"
 sha2 = "0.10"
 # Full-color plugin vectors are rasterized on the existing background worker.
 resvg = "=0.45.1"
-image = { version = "0.25", default-features = false }
+svgtypes = "=0.15.3"
+# Explicitly retain the documented bitmap formats; native images are decoded under host quotas.
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "webp"] }
 tempfile.workspace = true
 # Discover nested plugin manifests without traversing ignored build output.
 ignore.workspace = true

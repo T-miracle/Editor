@@ -18,6 +18,8 @@
 
 `Environment.locale` 显式传入用户界面语言，在 Prepare 与 `Notification::Theme` 中同步；缺失或空值保持简体中文默认。插件本身的提示和空状态应同时提供中英文，不读取项目设置来覆盖该用户选择。
 
+`ui.images ^1` 用 `Kind::Image { source, alt }` / `Node::image` 声明源码版本绑定的原生图片，独立于 `ui.richtext`，保持 UI 文档版本 1。Document.source 必需，整篇最多 64 张、URI 最多 4096 字节；本地文档相对 URI 需要 `workspace.read`，HTTP(S) 需要 `network.images`。宿主后台加载只返回有限的原生资源快照，不向 WASM 输出大字节 JSON；缺权限、找不到文件、HTTP、解码、配额或超时错误仅影响对应图片。线程、字节限制、规范化工作区边界与取消生命周期见 [UI.md](UI.md#授权图片资源uiimages-10)。
+
 `editor.presentation ^1` 允许工作区编辑区预览用 `Panel.view_modes` 声明源码、分栏、预览三个包内几何 SVG。该能力必须为 required，沿用 `editor.documents` 与 `editor.read` 门禁；不授予文件、网络或文本编辑权限。公开 `PreviewMode` 以 `source/split/preview` 序列化，默认 Split，供宿主按工作区保存原生布局选择。未声明模式的已有包无需增加能力或升级 `protocol=7` / UI 文档版本 1。图标检查与布局生命周期详见 [UI.md](UI.md#编辑区呈现模式editorpresentation-10)。独立 `editor_presentation` 实际包回归通过 `capability-example.zip` 重新打包为另一身份，验证协商、权限、资源边界与安装后的安全读取。
 
 当前包安装和实例恢复要求 `protocol = 7` 及可协商的基础 API。协议 1–6 的已安装记录保留设置、权限、启用范围和私有数据，并显示需要更新；旧组件不会激活。使用当前 SDK 重建并安装同一插件的新包后恢复使用。旧运行协议与转换器已经删除；旧安装记录只参与管理界面展示和有限数据导入，不恢复执行。

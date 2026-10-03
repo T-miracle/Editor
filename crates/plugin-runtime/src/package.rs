@@ -349,6 +349,7 @@ impl Package {
             anyhow::ensure!(
                 [
                     "workspace.read",
+                    "network.images",
                     "storage",
                     "clipboard",
                     "assets.read",

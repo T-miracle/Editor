@@ -28,6 +28,7 @@ pub(crate) fn negotiate(manifest: &Manifest) -> anyhow::Result<api::Negotiated> 
         ("package.assets".into(), Version::new(1, 0, 0)),
         ("ui.native".into(), Version::new(1, 0, 0)),
         ("ui.richtext".into(), Version::new(1, 0, 0)),
+        ("ui.images".into(), Version::new(1, 0, 0)),
         ("ui.canvas".into(), Version::new(1, 1, 0)),
         ("ui.collections".into(), Version::new(1, 0, 0)),
         ("ui.grid".into(), Version::new(1, 0, 0)),

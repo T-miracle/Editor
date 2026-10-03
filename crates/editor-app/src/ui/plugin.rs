@@ -1,8 +1,11 @@
 //! Native plugin view lifecycle. GPUI entities stay here; guests receive typed events only.
+mod atlas;
+mod bitmap;
 mod canvas;
 pub(crate) mod controls;
 pub(crate) mod images;
 mod render;
+mod svg;
 #[cfg(test)]
 mod tests;
 mod theme;
@@ -48,16 +51,48 @@ pub(crate) struct PluginView {
     dismissed_dialog: Option<String>,
     /// Editor-local toolbar projections fit their wrapped content instead of consuming the full pane.
     content_sized: bool,
+    /// Decoded resources are accepted only for this tree's source version and URI.
+    photos: BTreeMap<String, std::sync::Arc<images::Photo>>,
+    /// GPU textures outlive pixel Arcs unless the last native projection explicitly evicts them.
+    image_leases: atlas::ImageLeases,
 }
 
 impl PluginView {
     /// Image decoding belongs to the worker; native children only borrow the matching immutable raster.
     pub(crate) fn update_images(
-        &self,
+        &mut self,
         panel_key: &str,
         images: &images::SceneImages,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        let mut photos = BTreeMap::new();
+        let mut visit = |node: &plugin_runtime::plugin_protocol::ui::Node| {
+            if let Kind::Image { source, .. } = &node.kind
+                && let Some(photo) = images.photos.get(&format!("{panel_key}/image/{}", node.id))
+                && self.document.source.as_ref() == Some(&photo.resource.source)
+                && source == &photo.resource.uri
+            {
+                photos.insert(node.id.clone(), photo.clone());
+            }
+        };
+        self.document.root.visit(&mut visit);
+        if let Some(toolbar) = &self.document.editor_toolbar {
+            toolbar.visit(&mut visit);
+        }
+        if let Some(dialog) = &self.document.dialog {
+            dialog.content.visit(&mut visit);
+        }
+        let changed = photos.len() != self.photos.len()
+            || photos.iter().any(|(id, image)| {
+                self.photos
+                    .get(id)
+                    .is_none_or(|old| !std::sync::Arc::ptr_eq(old, image))
+            });
+        self.photos = photos;
+        if changed {
+            cx.notify();
+        }
         for (id, canvas) in &self.canvases {
             let images = images.get(&format!("{panel_key}/canvas/{id}")).cloned();
             canvas.update(cx, |view, cx| {
@@ -71,6 +106,32 @@ impl PluginView {
                 }
             });
         }
+        self.sync_image_leases(window, cx);
+    }
+
+    /// Reconcile all decoded native pixels once per projection, including shared dialog/canvas images.
+    fn sync_image_leases(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let mut pixels = self
+            .photos
+            .values()
+            .filter_map(|photo| {
+                photo
+                    .decoded
+                    .as_ref()
+                    .ok()
+                    .and_then(Option::as_ref)
+                    .map(|bitmap| bitmap.image.clone())
+            })
+            .collect::<Vec<_>>();
+        for canvas in self.canvases.values() {
+            if let Some(images) = &canvas.read(cx).images {
+                pixels.extend(images.iter().flatten().map(|image| image.image.clone()));
+            }
+        }
+        for image in self.image_leases.update(pixels, cx) {
+            // GPUI removes the borrowed window from App.windows during rendering and updates.
+            cx.drop_image(image, Some(window));
+        }
     }
     pub(crate) fn new(
         plugin: String,
@@ -80,6 +141,26 @@ impl PluginView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
+        // RenderImage Arcs do not evict GPUI's atlas. Entity retirement therefore owns
+        // an explicit cleanup, including the current window while App temporarily lends it out.
+        let image_window = window.window_handle();
+        cx.on_release(move |this, cx| {
+            let pixels = this.image_leases.clear(cx);
+            if image_window
+                .update(cx, |_, window, cx| {
+                    for image in &pixels {
+                        cx.drop_image(image.clone(), Some(window));
+                    }
+                })
+                .is_err()
+            {
+                // A closed owner window is already gone; shared application atlases still need retirement.
+                for image in pixels {
+                    cx.drop_image(image, None);
+                }
+            }
+        })
+        .detach();
         let mut this = Self {
             plugin,
             document,
@@ -95,6 +176,8 @@ impl PluginView {
             previous_focus: None,
             dismissed_dialog: None,
             content_sized: false,
+            photos: BTreeMap::new(),
+            image_leases: Default::default(),
         };
         this.sync_native(window, cx);
         if this.document.dialog.is_some() {
@@ -139,6 +222,26 @@ impl PluginView {
             }
         }
         self.sync_native(window, cx);
+        // A removed image or source replacement can retire this tree without another worker update.
+        let mut keep = BTreeSet::new();
+        let mut visit = |node: &plugin_runtime::plugin_protocol::ui::Node| {
+            if let Kind::Image { source, .. } = &node.kind
+                && let Some(photo) = self.photos.get(&node.id)
+                && self.document.source.as_ref() == Some(&photo.resource.source)
+                && source == &photo.resource.uri
+            {
+                keep.insert(node.id.clone());
+            }
+        };
+        self.document.root.visit(&mut visit);
+        if let Some(toolbar) = &self.document.editor_toolbar {
+            toolbar.visit(&mut visit);
+        }
+        if let Some(dialog) = &self.document.dialog {
+            dialog.content.visit(&mut visit);
+        }
+        self.photos.retain(|id, _| keep.contains(id));
+        self.sync_image_leases(window, cx);
         // Closing a source-only overlay can retire this view before it is rendered again.
         // Reconcile popup removal here as well so its previous native focus is returned first.
         self.sync_widgets(window, cx);

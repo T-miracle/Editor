@@ -165,12 +165,20 @@ impl Demo {
             // Source controls cannot publish until their immutable document identity is available.
             document.editor_toolbar = None;
             // Preserve the asset's mapping template for later previews, but never publish unbound ranges.
-            visit(&mut document.root, &mut |node| node.source_range = None);
+            visit(&mut document.root, &mut unbind_source);
             if let Some(dialog) = &mut document.dialog {
-                visit(&mut dialog.content, &mut |node| node.source_range = None);
+                visit(&mut dialog.content, &mut unbind_source);
             }
         }
         document
+    }
+}
+
+/// Hide source-bound resources only in the publication clone; preserve the asset for later previews.
+fn unbind_source(node: &mut Node) {
+    node.source_range = None;
+    if let Kind::Image { alt, .. } = &node.kind {
+        node.kind = Kind::Text { text: alt.clone() };
     }
 }
 

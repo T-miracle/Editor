@@ -99,7 +99,7 @@ impl NativeMarkdown {
                     .editor_requests
                     .extend(requests);
             });
-            publish(&self.manager, &mut self.renderer, &self.app, cx);
+            publish(&mut self.manager, &mut self.renderer, &self.app, cx);
         }
     }
 

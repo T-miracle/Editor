@@ -226,11 +226,11 @@ fn composed_wasm_preview_follows_memory_and_reclaims_the_editor_split(cx: &mut T
     });
     let app = slot.borrow_mut().take().unwrap();
     cx.simulate_resize(size(px(1200.), px(800.)));
-    publish(&manager, &mut renderer, &app, cx);
+    publish(&mut manager, &mut renderer, &app, cx);
     cx.update(|window, cx| app.update(cx, |app, cx| app.open_file(path.clone(), window, cx)));
     cx.run_until_parked();
     pump(&mut manager, &app, cx);
-    publish(&manager, &mut renderer, &app, cx);
+    publish(&mut manager, &mut renderer, &app, cx);
     assert!(cx.debug_bounds("editor-preview-pane").is_some());
     assert!(cx.debug_bounds("plugin-ui-caption").is_some());
     cx.update(|_, cx| {
@@ -245,7 +245,7 @@ fn composed_wasm_preview_follows_memory_and_reclaims_the_editor_split(cx: &mut T
     );
     cx.run_until_parked();
     pump(&mut manager, &app, cx);
-    publish(&manager, &mut renderer, &app, cx);
+    publish(&mut manager, &mut renderer, &app, cx);
     let tree = manager.live["capability-example"].views["welcome"].as_ref();
     let Kind::Canvas(canvas) = &tree.active_node("viewport").unwrap().kind else {
         unreachable!()
@@ -261,13 +261,13 @@ fn composed_wasm_preview_follows_memory_and_reclaims_the_editor_split(cx: &mut T
     cx.simulate_input("未保存 ");
     cx.run_until_parked();
     pump(&mut manager, &app, cx);
-    publish(&manager, &mut renderer, &app, cx);
+    publish(&mut manager, &mut renderer, &app, cx);
     let tree = manager.live["capability-example"].views["welcome"].as_ref();
     assert!(serde_json::to_string(tree).unwrap().contains("未保存 "));
     assert_eq!(std::fs::read_to_string(&path).unwrap(), svg);
     assert!(tree.source.is_some());
     manager.uninstall("capability-example", true).unwrap();
-    publish(&manager, &mut renderer, &app, cx);
+    publish(&mut manager, &mut renderer, &app, cx);
     assert!(cx.debug_bounds("editor-preview-pane").is_none());
     assert!(cx.debug_bounds("plugin-ui-viewport").is_none());
     assert!(cx.update(|_, cx| app.read(cx).plugin_panels.is_empty()));
@@ -304,7 +304,7 @@ pub(super) fn pump(
 
 /// The existing worker publication seam also supplies the actual asynchronous vector renderer output.
 pub(super) fn publish(
-    manager: &plugin_runtime::Manager,
+    manager: &mut plugin_runtime::Manager,
     renderer: &mut images::VectorRenderer,
     app: &Entity<EditorApp>,
     cx: &mut gpui_kit::VisualTestContext,
@@ -319,7 +319,8 @@ pub(super) fn publish(
                 .map(move |(panel, scene)| (format!("{id}/{panel}"), scene.clone()))
         })
         .collect();
-    let images = renderer.prepare(&scenes);
+    let resources = manager.image_resources();
+    let images = renderer.prepare_resources(&scenes, &resources);
     cx.update(|window, cx| {
         app.read(cx).extensions.clone().update(cx, |owner, cx| {
             let mut state = owner.worker.state.lock().unwrap();

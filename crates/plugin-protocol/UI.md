@@ -8,6 +8,8 @@
 
 `ui.richtext ^1` 增加只读 `Kind::RichText { html }`、`Kind::CodeBlock { text, language }` 与可选 `Node.source_range`。这是独立能力：继续使用 `Document.version=1` 与 `ui.native ^1`，没有使用这些字段的包无需增加声明。未协商该能力时，任何富文本、代码块或带源码范围的普通节点都在发布前返回 `CapabilityUnavailable`。
 
+`ui.images ^1` 增加 `Kind::Image { source, alt }` 与 `Node::image(id, source, alt)`。它继续使用 UI 文档版本 1，必须提供当前 `Document.source`；没有协商能力返回 `CapabilityUnavailable`。资源加载和富文本 HTML 的默认图片回调互相独立，详见下文授权图片资源。
+
 文档 revision 标识交互对象及语义，不是绘制帧计数。输入目标、会话/进程身份或模态变化应递增；普通输出、绘制、按键反馈保持版本，避免同一帧的 Key/Text 或在途输入被错误判为过期。插件异步调用的后续操作应绑定最初目标的稳定身份，目标撤销后丢弃，不能跟随当前焦点。
 
 新插件协商 `ui.native ^1`，通过 `api::Output.views` 返回 `ui::Document`。`Column`、`Row`、`Scroll`、`Tabs` 可在任意位置嵌套标准组件和 `Kind::Canvas`，没有终端专属槽位。画布另需 `ui.canvas ^1`，字符网格仅在协商 `ui.grid ^1` 并设置 `Canvas.grid=true` 时出现。UI 能力不授予文件、文档或进程权限。
@@ -56,6 +58,7 @@
 | `Text` / `Node::text` | 普通文字，按容器换行 | — |
 | `RichText` / `Node::rich_text` | 只读原生富文本，输入为受限 HTML 标记，需 `ui.richtext` | — |
 | `CodeBlock` / `Node::code_block` | 保留空白和换行的只读等宽代码，需 `ui.richtext` | — |
+| `Image` / `Node::image` | 按版本与权限异步读取并原生呈现图片，需 `ui.images` | — |
 | `Button` / `Node::button` | 原生按钮，支持键盘激活 | `Click` |
 | `Input` / `Node::input` | 单行原生编辑，支持中文 IME、选区、撤销与复制粘贴 | `Change(String)`、`Submit(String)` |
 | `Checkbox` / `Node::checkbox` | 复选框 | `Toggle(bool)` |
@@ -76,13 +79,33 @@
 
 插件生成的提示、图片替代说明和空状态应跟随 `Environment.locale`，同时保留中英文。该字段在 Prepare 时提供，并随 `Notification::Theme` 更新；缺失或空值沿用既有简体中文默认，不从工作区文件推断用户界面语言。
 
-富文本控件必须覆盖默认链接点击与图片资源加载回调：出现 `href` 或 `src` 不自动打开浏览器，不读取本地文件、网络或 data URL，也不借用宿主加载器绕过插件权限。这一能力本身不提供链接导航、图片访问或预览写入。暂未接入授权图片读取时，插件以替代文字表示图片。任务框通过普通原生 `Checkbox` 节点表达；只读任务应设置 `disabled=true`，不能依赖 HTML `<input>` 自动变成可交互控件。
+富文本控件必须覆盖默认链接点击与图片资源加载回调：出现 `href` 或 `src` 不自动打开浏览器，不读取本地文件、网络或 data URL，也不借用宿主加载器绕过插件权限。这一能力本身不提供链接导航、图片访问或预览写入。授权图片使用独立 Image 节点，缺少该能力时插件以替代文字表示图片。任务框通过普通原生 `Checkbox` 节点表达；只读任务应设置 `disabled=true`，不能依赖 HTML `<input>` 自动变成可交互控件。
 
 `CodeBlock.text` 是无需转义的原始代码，空白与换行按原样显示；可选 `language` 是 1–100 个 ASCII 字母、数字或 `._+-#` 的标识，允许 `c++`、`c#` 等名称。它不启动工具，不授予高亮能力；当前基础呈现是等宽文字，后续高亮只能复用已启用的语言提供者。
 
 每个源码块使用稳定的 `Node.id`，`Node.source_range = { start, end }` 表示半开 UTF-8 字节范围。范围针对 `Document.source` 绑定的不可变内存文本版本，不能用生成的 HTML 字节偏移代替。任何类型的节点都可带映射，但必须协商 `ui.richtext` 并提供 `Document.source`；未提供版本或 `start > end`、`end > 1 MiB` 返回 `InvalidRequest`。宿主使用映射前还应对当前源文本核对长度与字符边界；旧文档身份或 revision 仍按现有预览门禁返回 `StaleRevision`。
 
 映射只携带身份与偏移，不保存第二份可变文档，也不构成编辑授权。HTML 控件不保留原始 Markdown 的源码范围；布局定位必须使用协议中的块 ID 与范围，在块重排、文档修改或视图撤销后相应更新、丢弃。
+
+## 授权图片资源（ui.images 1.0）
+
+插件发布 `Node::image("photo", "../assets/photo.png", "照片说明")`，将同一次 Preview 的 `DocumentVersion` 原样放入 `Document.source`。Image 是工作区编辑区预览的声明式资源，宿主校验当前实例与面板归属，再在后台读取和解码，不把图片大字节经 JSON 返回 WASM。`source` 为 1–4096 个 UTF-8 字节；`alt` 由插件提供，作者文本原样保留，缺省文案按 `Environment.locale` 本地化。两者计入普通 UI 文字预算。root、toolbar、dialog 合计最多 64 个图片节点，超限或缺 source 返回 `InvalidRequest`。图片节点附加源码范围时仍须另外协商 `ui.richtext`。
+
+本地 URI 以源文件所在目录为基准，先进行一次 percent decoding，再拒绝绝对路径、反斜杠、设备名称、冒号和备用数据流。允许 `../`，但源文件目录和图片最终规范化路径必须仍位于当前实例所属工作区内；符号链接和 Windows junction 的实际目标同样检查。必须声明并批准 `workspace.read`，不能借用私有数据、其他工作区或其他插件的访问权。
+
+远程 URI 只接受无凭据的 `http://` / `https://`，必须声明并批准 `network.images`。请求不跟随任何重定向，不读取环境代理、不附加认证信息或 Cookie；`file:`、`data:`、其他 scheme 和凭据 URL 不进入宿主通用图片加载器。每张编码图片最多 8 MiB，manager 编码驻留总额最多 64 MiB；进程内所有 manager 共用最多 8 个工作线程。排队及读取共用 30 秒期限，HTTP 解析、连接和流读取都受此期限限制；超时为终态，迟到 body 不会复活成功。
+
+缺少图片对应权限、路径不存在或越界、HTTP 错误、超额和解码失败只影响该图片。宿主显示该节点 `alt` 与本地化原因，继续呈现其他文字与图片。加载和失败均不触发整篇视图拒绝；协议结构和能力协商错误仍在发布之前拒绝。
+
+宿主通过公开 runtime `Manager::image_resources(&mut self)` 获取 `BTreeMap<String, Arc<ImageResource>>`，key 为 `plugin/panel/image/node_id`。`ImageResource { source: DocumentVersion, uri: String, state: ImageState }` 的状态为 `Loading`、`Ready(Arc<Vec<u8>>)` 或 `Failed(api::Failure)`；原生层只将 Ready 的有限字节交给安全解码器，不能把 URI 直接交给会读取环境文件或网络的原生控件。PNG、JPEG、GIF、WebP 与受限 SVG 的支持由原生解码器提供；SVG 的外部文件、网络和脚本仍无执行或读取入口。
+
+原生缓存共用 64 MiB 像素额度、单轴至多 4096。SVG 仅支持 UTF-8 XML，拒绝 SVGZ 与 DTD；XML、深度、引用展开（含文字／几何载荷）及 paint 定义复用在转换前检查，临时画布与效果采样工作量在绘制前检查。配额失败在可用容量增加前保留结果，避免后台轮询重复重解码。已绘制图片由有效原生投影计数，最后一个投影退休时显式清除 GPUI atlas；共享投影不能提前清除仍在使用的图片。
+
+任务同时绑定实例 incarnation、面板、源码身份与 revision、节点和 URI。节点替换、Preview 撤销、文档推进或关闭、停用/卸载、实例更新和工作区切换都会断开旧消费者；取消不等待后台 IO 完成，旧结果与字节额度随其消费者/生产者释放。资源是不可变发布快照，不保存第二份可变源码、撤销栈或图片磁盘缓存。
+
+系统 DNS 无法物理中断时仍在已计数的 worker 内执行；消费者到期即失效，迟到 DNS 不再连接网络，不创建额外、未计数的解析线程。
+
+HTTP(S) scheme 按 ASCII 忽略大小写，因此 `HTTP://` 与 `HtTpS://` 仍使用网络授权；资源身份与 `ImageResource.uri` 保留插件原样声明的 URI。
 
 ## 身份、状态与事件
 
@@ -109,7 +132,7 @@ let document = Document::new(Node::button("open", "打开"))
 
 ## 主题和字体
 
-节点只声明样式角色，没有硬编码颜色或字体字段。省略 `role` 时，使用 `button/input/checkbox/choice/tabs/text/rich_text/code_block/list/table/progress/separator/scroll/spacer/container`；弹窗外壳使用 `dialog`。
+节点只声明样式角色，没有硬编码颜色或字体字段。省略 `role` 时，使用 `button/input/checkbox/choice/tabs/text/rich_text/code_block/image/list/table/progress/separator/scroll/spacer/container`；弹窗外壳使用 `dialog`。
 
 主题在 `themes[].plugins[插件ID]` 中配置，示例：
 

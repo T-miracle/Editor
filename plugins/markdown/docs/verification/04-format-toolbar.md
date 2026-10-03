@@ -2,6 +2,8 @@
 
 日期：2026-10-04。代码基线：`4f2c9bd1411c9b64c4058a74d1db016e39e15387`。Markdown 包版本：`0.4.0`；独立 SDK 夹具：`capability-example 0.15.3`。对应工单 [#30](https://github.com/T-miracle/Editor/issues/30)。状态：行为验收、必需检查和双轴审查通过。
 
+提交 `33633b1bde585b2a980dbe7620ea5c83d675f6ca` 已推送 `origin/codex/markdown-plugin`，远端 SHA 一致。2026-10-04 读回 #30 为 closed / completed。
+
 ## 实现与边界
 
 包通过公开 `editor.toolbar 1.0` 贡献源码顶部五组共 13 个格式按钮，包含中英文提示。工具栏自动调整高度；真实 120 px 源分栏中全部按钮边界可见且不重叠。预览模式隐藏源码和工具栏；源码模式仍能显示同一公共树的 Dialog / Menu，不产生第二个模态实例。通用 Canvas SVG 复用普通视图的工作线程栅格缓存与原生投送。

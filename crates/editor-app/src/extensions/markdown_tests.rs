@@ -5,6 +5,7 @@ use gpui_kit::{TestAppContext, gpui};
 
 mod format_toolbar;
 mod harness;
+mod image_preview;
 mod modes;
 mod range_edits;
 mod source_overlay;
@@ -85,12 +86,12 @@ fn delivered_markdown_preview_tracks_unsaved_native_edits_and_reclaims_split(
     });
     let app = slot.borrow_mut().take().unwrap();
     cx.simulate_resize(size(px(1400.), px(900.)));
-    publish(&manager, &mut renderer, &app, cx);
+    publish(&mut manager, &mut renderer, &app, cx);
     cx.update(|window, cx| app.update(cx, |app, cx| app.open_file(path.clone(), window, cx)));
     cx.run_until_parked();
     for _ in 0..3 {
         pump(&mut manager, &app, cx);
-        publish(&manager, &mut renderer, &app, cx);
+        publish(&mut manager, &mut renderer, &app, cx);
     }
     let preview = cx.debug_bounds("editor-preview-pane").unwrap();
     assert!(preview.size.width > px(100.) && preview.size.height > px(100.));
@@ -151,7 +152,7 @@ fn delivered_markdown_preview_tracks_unsaved_native_edits_and_reclaims_split(
     cx.run_until_parked();
     for _ in 0..2 {
         pump(&mut manager, &app, cx);
-        publish(&manager, &mut renderer, &app, cx);
+        publish(&mut manager, &mut renderer, &app, cx);
     }
     assert!(
         serde_json::to_string(&manager.live["markdown"].views["preview"])
@@ -163,7 +164,7 @@ fn delivered_markdown_preview_tracks_unsaved_native_edits_and_reclaims_split(
     cx.run_until_parked();
     for _ in 0..2 {
         pump(&mut manager, &app, cx);
-        publish(&manager, &mut renderer, &app, cx);
+        publish(&mut manager, &mut renderer, &app, cx);
     }
     let after_undo = serde_json::to_string(&manager.live["markdown"].views["preview"]).unwrap();
     assert!(
@@ -175,7 +176,7 @@ fn delivered_markdown_preview_tracks_unsaved_native_edits_and_reclaims_split(
     cx.run_until_parked();
     for _ in 0..2 {
         pump(&mut manager, &app, cx);
-        publish(&manager, &mut renderer, &app, cx);
+        publish(&mut manager, &mut renderer, &app, cx);
     }
     assert!(
         serde_json::to_string(&manager.live["markdown"].views["preview"])
@@ -186,7 +187,7 @@ fn delivered_markdown_preview_tracks_unsaved_native_edits_and_reclaims_split(
     cx.run_until_parked();
     for _ in 0..2 {
         pump(&mut manager, &app, cx);
-        publish(&manager, &mut renderer, &app, cx);
+        publish(&mut manager, &mut renderer, &app, cx);
     }
     assert!(
         serde_json::to_string(&manager.live["markdown"].views["preview"])
@@ -202,14 +203,14 @@ fn delivered_markdown_preview_tracks_unsaved_native_edits_and_reclaims_split(
     cx.run_until_parked();
     for _ in 0..2 {
         pump(&mut manager, &app, cx);
-        publish(&manager, &mut renderer, &app, cx);
+        publish(&mut manager, &mut renderer, &app, cx);
     }
     assert!(cx.debug_bounds("editor-preview-pane").is_none());
     cx.update(|window, cx| app.update(cx, |app, cx| app.open_file(path.clone(), window, cx)));
     cx.run_until_parked();
     for _ in 0..2 {
         pump(&mut manager, &app, cx);
-        publish(&manager, &mut renderer, &app, cx);
+        publish(&mut manager, &mut renderer, &app, cx);
     }
     assert!(cx.debug_bounds("editor-preview-pane").is_some());
     // A clean document reload uses the production reconciliation path rather than an editor edit.
@@ -221,11 +222,12 @@ fn delivered_markdown_preview_tracks_unsaved_native_edits_and_reclaims_split(
     cx.run_until_parked();
     for _ in 0..2 {
         pump(&mut manager, &app, cx);
-        publish(&manager, &mut renderer, &app, cx);
+        publish(&mut manager, &mut renderer, &app, cx);
     }
     let old_tree = manager.live["markdown"].views["preview"].clone();
     let old_source = old_tree.source.clone().unwrap();
-    let replacement = "# Reloaded heading\n\n![fallback](missing.png)\n";
+    // The delivered image node replaces the historical text-only fallback; empty URIs stay local text.
+    let replacement = "# Reloaded heading\n\n![fallback](missing.png)\n\n![empty]()\n";
     std::fs::write(&reload_path, replacement).unwrap();
     cx.update(|window, cx| {
         app.update(cx, |app, cx| {
@@ -248,7 +250,7 @@ fn delivered_markdown_preview_tracks_unsaved_native_edits_and_reclaims_split(
     cx.run_until_parked();
     for _ in 0..2 {
         pump(&mut manager, &app, cx);
-        publish(&manager, &mut renderer, &app, cx);
+        publish(&mut manager, &mut renderer, &app, cx);
     }
     assert!(
         serde_json::to_string(&manager.live["markdown"].views["preview"])
@@ -285,12 +287,17 @@ fn delivered_markdown_preview_tracks_unsaved_native_edits_and_reclaims_split(
             }),
         )
         .unwrap();
-    publish(&manager, &mut renderer, &app, cx);
+    publish(&mut manager, &mut renderer, &app, cx);
     assert!(
         serde_json::to_string(&manager.live["markdown"].views["preview"])
             .unwrap()
-            .contains("Image: fallback")
+            .contains("empty: The image reference has no source.")
     );
+    let mut declared_image = false;
+    manager.live["markdown"].views["preview"].root.visit(&mut |node| {
+        declared_image |= matches!(&node.kind, protocol::ui::Kind::Image { source, alt } if source == "missing.png" && alt == "fallback");
+    });
+    assert!(declared_image);
     let closed_tree = manager.live["markdown"].views["preview"].clone();
     cx.update(|window, cx| {
         app.update(cx, |app, cx| {
@@ -300,13 +307,13 @@ fn delivered_markdown_preview_tracks_unsaved_native_edits_and_reclaims_split(
     cx.run_until_parked();
     for _ in 0..2 {
         pump(&mut manager, &app, cx);
-        publish(&manager, &mut renderer, &app, cx);
+        publish(&mut manager, &mut renderer, &app, cx);
     }
     cx.update(|window, cx| app.update(cx, |app, cx| app.open_file(reload_path, window, cx)));
     cx.run_until_parked();
     for _ in 0..2 {
         pump(&mut manager, &app, cx);
-        publish(&manager, &mut renderer, &app, cx);
+        publish(&mut manager, &mut renderer, &app, cx);
     }
     assert_ne!(
         closed_tree.source.as_ref().unwrap().id,
@@ -346,7 +353,7 @@ fn delivered_markdown_preview_tracks_unsaved_native_edits_and_reclaims_split(
             .native_ui
             .is_none()
     }));
-    publish(&manager, &mut renderer, &app, cx);
+    publish(&mut manager, &mut renderer, &app, cx);
     assert!(cx.update(|_, cx| {
         app.read(cx).plugin_panels["markdown/preview"]
             .read(cx)
@@ -354,10 +361,10 @@ fn delivered_markdown_preview_tracks_unsaved_native_edits_and_reclaims_split(
             .is_some()
     }));
     manager.disable("markdown").unwrap();
-    publish(&manager, &mut renderer, &app, cx);
+    publish(&mut manager, &mut renderer, &app, cx);
     assert!(cx.debug_bounds("editor-preview-pane").is_none());
     manager.uninstall("markdown", false).unwrap();
-    publish(&manager, &mut renderer, &app, cx);
+    publish(&mut manager, &mut renderer, &app, cx);
     assert!(cx.update(|_, cx| app.read(cx).plugin_panels.is_empty()));
 }
 

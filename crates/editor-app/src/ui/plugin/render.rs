@@ -4,7 +4,7 @@ use crate::ui::controls::{Button, ButtonCustomVariant, Input, vertical_scrollbar
 use gpui_base::{Checkbox, CheckboxState, Dialog, Progress, Radio, RadioGroup, Tab, Tabs};
 use gpui_kit::{
     AnyElement, InteractiveElement, ParentElement, SharedString, StatefulInteractiveElement,
-    Styled, div, prelude::FluentBuilder as _, px, relative,
+    Styled, StyledImage as _, div, prelude::FluentBuilder as _, px, relative,
 };
 use plugin_runtime::plugin_protocol::ui::Node;
 
@@ -182,6 +182,70 @@ impl PluginView {
                     .into_any_element()
             }
             Kind::Text { text } => div().child(text.clone()).into_any_element(),
+            Kind::Image { source, alt } => {
+                // Direct retained pixels bypass GPUI's ambient file/URL loader. Height follows the image ratio.
+                let photo = self.photos.get(&node.id).filter(|photo| {
+                    self.document.source.as_ref() == Some(&photo.resource.source)
+                        && source == &photo.resource.uri
+                });
+                if let Some(photo) = photo
+                    && let Ok(Some(bitmap)) = &photo.decoded
+                {
+                    let image_id = format!("plugin-image-{}", node.id);
+                    let pixels_id = format!("plugin-image-pixels-{}", node.id);
+                    div()
+                        .debug_selector(move || image_id.clone())
+                        .flex()
+                        .flex_col()
+                        .w_full()
+                        .min_w_0()
+                        .child(
+                            div()
+                                .debug_selector(move || pixels_id.clone())
+                                .flex_shrink_0()
+                                .w_full()
+                                .max_w(px(bitmap.width as f32))
+                                .aspect_ratio(bitmap.width as f32 / bitmap.height as f32)
+                                .child(
+                                    gpui_kit::img(bitmap.image.clone())
+                                        .size_full()
+                                        .object_fit(gpui_kit::ObjectFit::Contain),
+                                ),
+                        )
+                        .when(!alt.is_empty(), |view| {
+                            view.child(div().text_size(px(12.)).child(alt.clone()))
+                        })
+                        .into_any_element()
+                } else {
+                    let key = match photo.map(|photo| &photo.decoded) {
+                        Some(Err(error)) => match error.code {
+                            plugin_runtime::plugin_protocol::api::ErrorCode::PermissionDenied => "preview.image_denied",
+                            plugin_runtime::plugin_protocol::api::ErrorCode::InvalidPath => "preview.image_path",
+                            plugin_runtime::plugin_protocol::api::ErrorCode::NotFound => "preview.image_missing",
+                            plugin_runtime::plugin_protocol::api::ErrorCode::TimedOut => "preview.image_timeout",
+                            plugin_runtime::plugin_protocol::api::ErrorCode::LimitExceeded => "preview.image_limit",
+                            plugin_runtime::plugin_protocol::api::ErrorCode::UnsupportedOperation => "preview.image_unsupported",
+                            _ => "preview.image_failed",
+                        },
+                        _ => "preview.image_loading",
+                    };
+                    let label = rust_i18n::t!(key, locale = self.environment.locale.as_str());
+                    let status_id = format!("plugin-image-status-{}-{key}", node.id);
+                    div()
+                        .debug_selector(move || status_id.clone())
+                        .w_full()
+                        .border_1()
+                        .border_color(colors.border)
+                        .rounded(px(4.))
+                        .p_2()
+                        .child(if alt.is_empty() {
+                            label.to_string()
+                        } else {
+                            format!("{alt} · {label}")
+                        })
+                        .into_any_element()
+                }
+            }
             Kind::RichText { html } => crate::ui::controls::rich_text_view(
                 native_id.clone(),
                 html.clone(),

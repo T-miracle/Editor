@@ -92,6 +92,8 @@ impl Manager {
             }
             return Err(error);
         }
+        // Replacing or withdrawing a declaration cancels its resource before returning to publication.
+        self.reconcile_images();
         Ok(())
     }
 }

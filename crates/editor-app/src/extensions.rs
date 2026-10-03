@@ -256,7 +256,7 @@ impl ExtensionPanel {
             entries,
             startup,
             views: HashMap::new(),
-            images: BTreeMap::new(),
+            images: Default::default(),
             active: None,
             surface_id: None,
             editor_preview: false,
@@ -353,7 +353,7 @@ impl ExtensionPanel {
             entries,
             startup: BTreeMap::new(),
             views,
-            images: BTreeMap::new(),
+            images: Default::default(),
             active: Some(id),
             surface_id: Some(panel.id),
             editor_preview: panel.position == "editor",
@@ -459,6 +459,7 @@ impl ExtensionPanel {
                 }
             }
             changed |= self.views.len() != state.views.len()
+                || self.images.changed(&state.images)
                 || state.views.iter().any(|(id, scene)| {
                     self.views
                         .get(id)
