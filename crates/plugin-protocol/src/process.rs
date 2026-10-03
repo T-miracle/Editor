@@ -67,7 +67,14 @@ pub enum Stream {
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Transport {
     Stdio,
-    Pty { columns: u16, rows: u16 },
+    Pty {
+        columns: u16,
+        rows: u16,
+        /// process 1.3: Windows asks the byte-stream consumer for its existing cursor position.
+        /// The caller must answer the VT query through Write; other platforms reject true.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        inherit_cursor: bool,
+    },
 }
 
 /// Lifecycle completion follows all output. Termination never implies rollback of native side effects.
@@ -106,4 +113,33 @@ pub enum Operation {
     Terminate {
         handle: crate::api::ResourceHandle,
     },
+}
+
+/// Omitted/default options retain compatibility with older strict process decoders.
+#[cfg(test)]
+mod tests {
+    use super::Transport;
+
+    #[test]
+    fn default_pty_omits_cursor_extension_and_opt_in_is_explicit() {
+        let old = serde_json::json!({"kind":"pty", "columns":80, "rows":24});
+        let value: Transport = serde_json::from_value(old.clone()).unwrap();
+        assert!(matches!(
+            value,
+            Transport::Pty {
+                inherit_cursor: false,
+                ..
+            }
+        ));
+        assert_eq!(serde_json::to_value(value).unwrap(), old);
+        let requested = Transport::Pty {
+            columns: 80,
+            rows: 24,
+            inherit_cursor: true,
+        };
+        assert_eq!(
+            serde_json::to_value(requested).unwrap()["inherit_cursor"],
+            true
+        );
+    }
 }

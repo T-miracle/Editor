@@ -16,11 +16,7 @@ pub(super) fn document(document: &Document) -> Result<(), String> {
     validator.node(&document.root, 0)?;
     if let Some(menu) = &document.menu {
         validator.id(&menu.id)?;
-        CanvasControls {
-            menu: Some(menu.clone()),
-            ..Default::default()
-        }
-        .validate()?;
+        menu.validate()?;
         validator.budget(menu.items.len())?;
         for item in &menu.items {
             validator.text(&item.label)?;
@@ -108,11 +104,7 @@ impl Validator {
                 if tabs.id != node.id {
                     return Err("Item list identity differs from its node".into());
                 }
-                CanvasControls {
-                    sidebar: Some(tabs.clone()),
-                    ..Default::default()
-                }
-                .validate()?;
+                tabs.validate()?;
                 self.budget(tabs.items.len())?;
                 for item in &tabs.items {
                     self.text(&item.label)?;

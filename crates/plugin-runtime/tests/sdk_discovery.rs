@@ -124,13 +124,7 @@ fn probe_for(
     manager
         .invoke_command(id, "scope-probe", serde_json::to_value(operation).unwrap())
         .unwrap();
-    let Kind::Text { text } = &manager.live[id].scenes["welcome"]
-        .ui
-        .as_ref()
-        .unwrap()
-        .root
-        .kind
-    else {
+    let Kind::Text { text } = &manager.live[id].views["welcome"].as_ref().root.kind else {
         panic!("expected the guest's diagnostic view");
     };
     serde_json::from_str(text).unwrap()

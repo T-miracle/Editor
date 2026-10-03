@@ -82,12 +82,11 @@ fn upgrades_private_data_on_an_isolated_copy() {
         .invoke_command("capability-example", "scope-read", json!(null))
         .unwrap();
     let Kind::Text { text } = &manager.live["capability-example"]
-        .scene
-        .as_ref()
+        .views
+        .values()
+        .next()
         .unwrap()
-        .ui
         .as_ref()
-        .unwrap()
         .root
         .kind
     else {
@@ -118,12 +117,11 @@ fn private_text(manager: &mut Manager) -> String {
         .invoke_command("capability-example", "scope-read", json!(null))
         .unwrap();
     let Kind::Text { text } = &manager.live["capability-example"]
-        .scene
-        .as_ref()
+        .views
+        .values()
+        .next()
         .unwrap()
-        .ui
         .as_ref()
-        .unwrap()
         .root
         .kind
     else {

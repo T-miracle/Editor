@@ -88,8 +88,8 @@ fn capability_package_consent_displays_native_text_and_uninstall_reclaims_panel(
             state.entries = manager.installed.values().cloned().collect();
             state.progress = None;
             for (id, instance) in &manager.live {
-                for (panel, scene) in &instance.scenes {
-                    state.scenes.insert(format!("{id}/{panel}"), scene.clone());
+                for (panel, scene) in &instance.views {
+                    state.views.insert(format!("{id}/{panel}"), scene.clone());
                 }
             }
             drop(state);
@@ -130,7 +130,7 @@ fn capability_package_consent_displays_native_text_and_uninstall_reclaims_panel(
         app.read(cx).extensions.clone().update(cx, |owner, cx| {
             let mut state = owner.worker.state.lock().unwrap();
             state.entries = manager.installed.values().cloned().collect();
-            state.scenes.clear();
+            state.views.clear();
             drop(state);
             owner.poll(cx);
         });

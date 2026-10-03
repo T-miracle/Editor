@@ -66,7 +66,7 @@ impl Manager {
                 .map(Instance::resource_count)
                 .sum::<usize>()
     }
-    /// New API private files never share the legacy global settings or opaque snapshot directory.
+    /// Private files are isolated by instance scope; old layouts are handled only by the data importer.
     pub(super) fn instance_data_directory(&self, manifest: &Manifest) -> PathBuf {
         self.data_directory_for(manifest, &self.environment)
     }
@@ -77,9 +77,6 @@ impl Manager {
         environment: &Environment,
     ) -> PathBuf {
         let root = self.root.join("data").join(&manifest.id);
-        if manifest.protocol != 7 {
-            return root;
-        }
         let root = match manifest.scope {
             api::InstanceScope::Application => root.join("application"),
             api::InstanceScope::Workspace => root
@@ -235,12 +232,7 @@ impl Manager {
             "Plugin snapshot exceeds declared quota"
         );
         let data = self.data_directory_for(manifest, environment);
-        let path = if manifest.protocol == 7 {
-            data.parent().unwrap().join("state.json")
-        } else {
-            let digest = format!("{:x}", Sha256::digest(environment.workspace.as_bytes()));
-            data.join(format!("state-{}.json", &digest[..16]))
-        };
+        let path = data.parent().unwrap().join("state.json");
         atomic_write(&path, &serde_json::to_vec(snapshot)?)
     }
 

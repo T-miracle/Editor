@@ -49,7 +49,7 @@ fn run_preparation(restrict: bool) {
     drop(manager);
     let worker = Worker::start_background(root, environment, true);
     wait_for(&worker, |state| {
-        state.scenes.contains_key("capability-example/welcome")
+        state.views.contains_key("capability-example/welcome")
     });
 
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
@@ -104,7 +104,7 @@ fn run_preparation(restrict: bool) {
         })
         .unwrap();
     wait_for(&worker, |state| {
-        state.scenes.get("capability-example/welcome").and_then(|scene|scene.ui.as_ref())
+        state.views.get("capability-example/welcome").map(|document| document.as_ref())
             .is_some_and(|ui| matches!(&ui.root.kind, ui::Kind::Text{text} if text == "workspace|during preparation"))
     });
     assert!(worker.state.lock().unwrap().progress.is_some());
@@ -130,7 +130,7 @@ fn run_preparation(restrict: bool) {
         path: "still-responsive".into(),
     }));
     wait_for(&worker, |state| {
-        state.scenes.get("capability-example/welcome").and_then(|scene|scene.ui.as_ref())
+        state.views.get("capability-example/welcome").map(|document| document.as_ref())
             .is_some_and(|ui| matches!(&ui.root.kind, ui::Kind::Text{text} if text.contains("still-responsive")))
     });
     let old_epoch = worker.state.lock().unwrap().instance_epochs["capability-example"];
@@ -138,7 +138,7 @@ fn run_preparation(restrict: bool) {
         worker.tx.send(Work::SetTrust(true)).unwrap();
         worker.tx.send(Work::SetTrust(false)).unwrap();
         // Revocation takes effect while the network is still paused, not after background cleanup.
-        wait_for(&worker, |state| state.scenes.is_empty());
+        wait_for(&worker, |state| state.views.is_empty());
     }
     release.send(()).unwrap();
     download.join().unwrap();
@@ -170,7 +170,7 @@ fn run_preparation(restrict: bool) {
                 .is_some_and(|message| message.contains("Plugin is not running"))
         });
         let state = worker.state.lock().unwrap();
-        assert!(state.scenes.is_empty());
+        assert!(state.views.is_empty());
         assert_eq!(state.entries[0].manifest.version, old.manifest.version);
     } else {
         assert!(
@@ -188,10 +188,9 @@ fn run_preparation(restrict: bool) {
             .send(Work::Event(
                 "capability-example".into(),
                 old_epoch,
-                Event::Command {
+                None,
+                api::Notification::Command {
                     id: "scope-write".into(),
-                    cwd: None,
-                    text: None,
                     arguments: Some(json!({"text":"stale callback"})),
                 },
             ))
@@ -205,7 +204,7 @@ fn run_preparation(restrict: bool) {
             })
             .unwrap();
         wait_for(&worker, |state| {
-            state.scenes.get("capability-example/welcome").and_then(|scene|scene.ui.as_ref())
+            state.views.get("capability-example/welcome").map(|document| document.as_ref())
             .is_some_and(|ui| matches!(&ui.root.kind, ui::Kind::Text{text} if text == "workspace|during preparation"))
         });
     }

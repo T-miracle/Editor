@@ -7,11 +7,10 @@ use protocol::ui::{Action, Canvas, CanvasEvent, Document, Kind, Node};
 /// Inspect the public protocol-seven source notification without relying on a legacy serialization shape.
 fn preview_text(event: &PluginEvent) -> Option<&str> {
     match event {
-        PluginEvent::Surface { event, .. } => preview_text(event),
-        PluginEvent::Capability(protocol::api::Notification::Preview {
+        protocol::api::Notification::Preview {
             document: Some(_),
             text,
-        }) => Some(text),
+        } => Some(text),
         _ => None,
     }
 }
@@ -27,10 +26,10 @@ fn publish_preview_source(app: &Entity<EditorApp>, cx: &mut App) {
     owner.update(cx, |owner, cx| {
         {
             let mut state = owner.worker.state.lock().unwrap();
-            if let Some(scene) = state.scenes.get("svg/preview") {
+            if let Some(scene) = state.views.get("svg/preview") {
                 let mut next = scene.as_ref().clone();
-                next.ui.as_mut().unwrap().source = version;
-                state.scenes.insert("svg/preview".into(), Arc::new(next));
+                next.source = version;
+                state.views.insert("svg/preview".into(), Arc::new(next));
             }
         }
         owner.poll(cx);
@@ -85,19 +84,12 @@ fn svg_preview_follows_open_documents_and_unsaved_edits(cx: &mut TestAppContext)
                 global_enabled: None,
                 error: None,
             }];
-            state.scenes.insert(
+            state.views.insert(
                 "svg/preview".into(),
-                Arc::new(Scene {
-                    panel: "preview".into(),
-                    font: "Segoe UI".into(),
-                    font_size: 14.,
-                    // The current composable surface owns input; the host never falls back to the legacy scene path.
-                    ui: Some(Document::new(Node::column("root", vec![
-                        Node::text("heading", "SVG preview").height(32.),
-                        Node::new("viewport", Kind::Canvas(Canvas { focusable: true, ..Default::default() })).grow(),
-                    ]).grow()).revision(1)),
-                    ..Default::default()
-                }),
+                Arc::new(Document::new(Node::column("root", vec![
+    Node::text("heading", "SVG preview").height(32.),
+    Node::new("viewport", Kind::Canvas(Canvas { focusable: true, ..Default::default() })).grow(),
+]).grow()).revision(1)),
             );
             drop(state);
             owner.poll(cx);
@@ -162,7 +154,7 @@ fn svg_preview_follows_open_documents_and_unsaved_edits(cx: &mut TestAppContext)
             .unwrap()
             .try_iter()
             .filter_map(|work| {
-                if let Work::Event(_, _, event) = work {
+                if let Work::Event(_, _, _, event) = work {
                     Some(event)
                 } else {
                     None
@@ -177,7 +169,7 @@ fn svg_preview_follows_open_documents_and_unsaved_edits(cx: &mut TestAppContext)
         assert!(
             events
                 .iter()
-                .any(|event| matches!(event, PluginEvent::Surface { event, .. } if matches!(event.as_ref(), PluginEvent::Ui(protocol::ui::UiEvent { node, action: Action::Canvas(CanvasEvent::Wheel { delta_y, x, y, .. }), .. }) if node == "viewport" && *delta_y > 0. && *x >= 0. && *y >= 0.)))
+                .any(|event| matches!(event, PluginEvent::Ui(protocol::ui::UiEvent { node, action: Action::Canvas(CanvasEvent::Wheel { delta_y, x, y, .. }), .. }) if node == "viewport" && *delta_y > 0. && *x >= 0. && *y >= 0.))
         );
     });
     // The public input action must synchronize the in-memory document before it is saved.
@@ -203,7 +195,7 @@ fn svg_preview_follows_open_documents_and_unsaved_edits(cx: &mut TestAppContext)
                 .unwrap()
                 .try_iter()
                 .any(|work| {
-                    let Work::Event(_, _, event) = work else {
+                    let Work::Event(_, _, Some(_), event) = work else {
                         return false;
                     };
                     preview_text(&event).is_some_and(|text| text.starts_with("<!-- draft -->"))
@@ -262,7 +254,7 @@ fn svg_preview_follows_open_documents_and_unsaved_edits(cx: &mut TestAppContext)
                 .unwrap()
                 .try_iter()
                 .any(|work| {
-                    let Work::Event(_, _, event) = work else {
+                    let Work::Event(_, _, Some(_), event) = work else {
                         return false;
                     };
                     preview_text(&event).is_some_and(|text| text.starts_with("<!-- draft -->"))
@@ -326,7 +318,7 @@ fn svg_preview_follows_open_documents_and_unsaved_edits(cx: &mut TestAppContext)
                 .unwrap()
                 .try_iter()
                 .any(|work| {
-                    let Work::Event(_, _, event) = work else {
+                    let Work::Event(_, _, Some(_), event) = work else {
                         return false;
                     };
                     preview_text(&event) == Some(replacement)

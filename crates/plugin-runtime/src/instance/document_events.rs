@@ -17,11 +17,7 @@ impl State {
                 "Workspace document read authority required",
             ));
         }
-        if !self
-            .api
-            .as_ref()
-            .is_some_and(|api| api.capabilities.contains_key("editor.documents"))
-        {
+        if !self.api.capabilities.contains_key("editor.documents") {
             return Err(Failure::new(
                 ErrorCode::CapabilityUnavailable,
                 "editor.documents was not negotiated",
@@ -95,21 +91,25 @@ impl Instance {
                         {
                             break;
                         }
-                        self.call(Message::Event(Event::Capability(Notification::Document {
-                            subscription: handle.clone(),
-                            change,
-                        })))?;
+                        self.call(api::Input::Event {
+                            panel: None,
+                            event: Notification::Document {
+                                subscription: handle.clone(),
+                                change,
+                            },
+                        })?;
                     }
                 }
                 Err(error) => {
                     self.store.data_mut().subscriptions.remove(&handle.resource);
                     self.store.data_mut().roots.remove(&handle);
-                    self.call(Message::Event(Event::Capability(
-                        Notification::SubscriptionFailed {
+                    self.call(api::Input::Event {
+                        panel: None,
+                        event: Notification::SubscriptionFailed {
                             subscription: handle,
                             error,
                         },
-                    )))?;
+                    })?;
                 }
             }
         }

@@ -52,14 +52,9 @@ fn delivered_ui_packages_follow_native_input_and_reclaim_layout(cx: &mut TestApp
     pump(&mut manager, &app, cx);
     publish(&manager, &mut renderer, &app, cx);
     assert!(
-        serde_json::to_string(
-            manager.live["example"].scenes["counter"]
-                .ui
-                .as_ref()
-                .unwrap()
-        )
-        .unwrap()
-        .contains("点击次数：1")
+        serde_json::to_string(manager.live["example"].views["counter"].as_ref())
+            .unwrap()
+            .contains("点击次数：1")
     );
     let note = cx.debug_bounds("plugin-ui-note").unwrap();
     cx.simulate_click(note.center(), Default::default());
@@ -68,7 +63,7 @@ fn delivered_ui_packages_follow_native_input_and_reclaim_layout(cx: &mut TestApp
     pump(&mut manager, &app, cx);
     publish(&manager, &mut renderer, &app, cx);
     assert!(
-        serde_json::to_string(manager.live["example"].scenes["notes"].ui.as_ref().unwrap())
+        serde_json::to_string(manager.live["example"].views["notes"].as_ref())
             .unwrap()
             .contains("中文 notes with spaces")
     );
@@ -82,12 +77,8 @@ fn delivered_ui_packages_follow_native_input_and_reclaim_layout(cx: &mut TestApp
     assert!(cx.debug_bounds("editor-preview-pane").is_some());
     let canvas = cx.debug_bounds("plugin-ui-preview-canvas").unwrap();
     let drawing = |manager: &plugin_runtime::Manager| {
-        let protocol::ui::Kind::Canvas(canvas) = &manager.live["svg"].scenes["preview"]
-            .ui
-            .as_ref()
-            .unwrap()
-            .root
-            .kind
+        let protocol::ui::Kind::Canvas(canvas) =
+            &manager.live["svg"].views["preview"].as_ref().root.kind
         else {
             panic!("canvas required")
         };
@@ -118,7 +109,7 @@ fn delivered_ui_packages_follow_native_input_and_reclaim_layout(cx: &mut TestApp
     cx.run_until_parked();
     pump(&mut manager, &app, cx);
     publish(&manager, &mut renderer, &app, cx);
-    let tree = manager.live["svg"].scenes["preview"].ui.as_ref().unwrap();
+    let tree = manager.live["svg"].views["preview"].as_ref();
     assert!(serde_json::to_string(tree).unwrap().contains("未保存"));
     assert!(tree.source.is_some());
     assert_eq!(std::fs::read_to_string(&path).unwrap(), original);

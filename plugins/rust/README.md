@@ -1,6 +1,6 @@
 # Rust 插件
 
-版本 0.2.0 使用协议 7。语言识别、Tree-sitter 高亮和图标由资源声明提供；独立 WASM 钩子负责 Rust Analyzer 的 SDK 配置和项目发现，宿主不识别 Rust 名称。
+版本 0.2.1 使用协议 7。语言识别、Tree-sitter 高亮和图标由资源声明提供；独立 WASM 钩子负责 Rust Analyzer 的 SDK 配置和项目发现，宿主不识别 Rust 名称。
 
 Rust Analyzer 服务使用包内固定声明：优先检查 HOME 下 Scoop、VS Code 和 VS Code Insiders 的扩展目录，再检查系统 PATH。候选程序必须通过 `--version` 探测；缺少可用程序时报告服务准备失败。仅按声明路径查找工具，不自动安装工具，也不申请任意进程执行权限。
 

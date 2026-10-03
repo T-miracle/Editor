@@ -23,13 +23,7 @@ fn terminal() -> Package {
         .unwrap()
 }
 fn text(manager: &Manager, id: &str) -> String {
-    let Kind::Text { text } = &manager.live[id].scenes["welcome"]
-        .ui
-        .as_ref()
-        .unwrap()
-        .root
-        .kind
-    else {
+    let Kind::Text { text } = &manager.live[id].views["welcome"].as_ref().root.kind else {
         panic!("native status expected")
     };
     text.clone()
@@ -37,10 +31,8 @@ fn text(manager: &Manager, id: &str) -> String {
 /// Grid paint uses individual cells; concatenate displayed glyphs instead of searching serialized JSON.
 fn output(manager: &Manager) -> String {
     let mut result = String::new();
-    manager.live["terminal"].scenes["terminal"]
-        .ui
+    manager.live["terminal"].views["terminal"]
         .as_ref()
-        .unwrap()
         .root
         .visit(&mut |node| {
             if let Kind::Canvas(canvas) = &node.kind {
@@ -132,9 +124,15 @@ fn consumer_executes_argv_in_a_visible_terminal_session() {
         output(manager).contains("SERVICE_ARGV_OK")
     });
     assert!(
-        serde_json::to_string(&manager.live["terminal"].scene.as_deref())
-            .unwrap()
-            .contains("构建输出")
+        serde_json::to_string(
+            &manager.live["terminal"]
+                .views
+                .values()
+                .next()
+                .map(|document| document.as_ref())
+        )
+        .unwrap()
+        .contains("构建输出")
     );
     assert_eq!(manager.live["terminal"].process_count(), 2);
     // Source retirement must terminate delegated work while retaining the terminal's private shell.
@@ -142,10 +140,8 @@ fn consumer_executes_argv_in_a_visible_terminal_session() {
     manager.poll();
     assert_eq!(manager.live["terminal"].process_count(), 1);
     let mut exited = false;
-    manager.live["terminal"].scenes["terminal"]
-        .ui
+    manager.live["terminal"].views["terminal"]
         .as_ref()
-        .unwrap()
         .root
         .visit(&mut |node| {
             if let Kind::SideTabs(tabs) = &node.kind {
@@ -329,7 +325,11 @@ fn execution_authority_and_hot_update_never_replay_delegated_programs() {
     assert_eq!(manager.live["terminal"].process_count(), 2);
     execute(&mut manager, "execution-client", args);
     let mut manifest: Value = serde_json::from_slice(&package.files["manifest.json"]).unwrap();
-    manifest["version"] = json!("0.7.1");
+    // Advance from the built package so this remains a real update after SDK releases.
+    let mut candidate_version =
+        semver::Version::parse(manifest["version"].as_str().unwrap()).unwrap();
+    candidate_version.patch += 1;
+    manifest["version"] = json!(candidate_version.to_string());
     install(&mut manager, &packages::archive(package.files, manifest));
     manager.poll();
     assert!(text(&manager, "execution-client").contains("invalid_handle"));

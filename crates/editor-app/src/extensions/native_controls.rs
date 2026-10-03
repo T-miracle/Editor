@@ -6,10 +6,7 @@ impl ExtensionPanel {
     pub(super) fn hide(&mut self) {
         self.visible.set(false);
         self.native_ui = None;
-        self.canvas_controls = None;
-        self.editing = None;
         self.command_popup = None;
-        self.composition.clear();
     }
     pub(super) fn command_popup(
         &mut self,

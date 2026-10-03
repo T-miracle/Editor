@@ -63,7 +63,7 @@ fn install(manager: &mut Manager, package: Package) {
         .unwrap();
 }
 fn text(manager: &Manager, id: &str) -> String {
-    let document = manager.live[id].scenes["welcome"].ui.as_ref().unwrap();
+    let document = manager.live[id].views["welcome"].as_ref();
     let Kind::Text { text } = &document.root.kind else {
         panic!("Expected native status")
     };
@@ -270,8 +270,8 @@ fn service_calls_preserve_source_and_cannot_borrow_provider_authority_or_reenter
     call(&mut manager, "trap", json!(""), 30000);
     manager.poll();
     assert!(text(&manager, "service-consumer").contains("operation_failed"));
-    assert!(manager.live["provider-a"].scenes.is_empty());
-    assert!(!manager.live["service-consumer"].scenes.is_empty());
+    assert!(manager.live["provider-a"].views.is_empty());
+    assert!(!manager.live["service-consumer"].views.is_empty());
     manager.uninstall("service-consumer", true).unwrap();
     manager.uninstall("provider-a", true).unwrap();
     assert_eq!(manager.resource_count(), 0);

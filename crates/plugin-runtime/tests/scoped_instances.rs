@@ -7,8 +7,8 @@ use serde_json::json;
 
 /// Read only the public native text output emitted by the fixture's declared command.
 fn text(manager: &Manager, id: &str) -> String {
-    let scene = manager.live[id].scene.as_ref().unwrap();
-    let Kind::Text { text } = &scene.ui.as_ref().unwrap().root.kind else {
+    let scene = manager.live[id].views.values().next().unwrap();
+    let Kind::Text { text } = &scene.as_ref().root.kind else {
         panic!("native text expected")
     };
     text.clone()

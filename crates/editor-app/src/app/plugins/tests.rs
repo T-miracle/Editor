@@ -211,23 +211,15 @@ fn stale_rust_timeout_after_project_reenable(cx: &mut TestAppContext) {
     cx.update(|_, cx| {
         view.update(cx, |app, cx| {
             // An unfamiliar identity exercises the same callback lifetime guard without starting native code.
-            let language =
-                serde_json::from_value::<plugin_schema::LanguageContribution>(serde_json::json!({
-                    "id":"rust", "grammar":"fixture.wasm", "highlights":"fixture.scm",
-                    "tree_sitter_abi":15, "lsp_command":"fixture"
-                }))
-                .unwrap();
-            let old_server = Arc::new(
-                language_navigation::LanguageServer::new(directory.path(), language.clone())
-                    .unwrap(),
-            );
+            let (_manager, plan) = crate::tests::declared_language_service(directory.path());
+            let old_server =
+                Arc::new(language_navigation::LanguageServer::from_service(plan.clone()).unwrap());
             app.language_servers
                 .insert("rust".into(), old_server.clone());
             // Global disable removes this instance; a pending startup still owns its Arc.
             app.language_servers.remove("rust");
-            let new_server = Arc::new(
-                language_navigation::LanguageServer::new(directory.path(), language).unwrap(),
-            );
+            let new_server =
+                Arc::new(language_navigation::LanguageServer::from_service(plan).unwrap());
             app.language_servers
                 .insert("rust".into(), new_server.clone());
             app.language_service_states

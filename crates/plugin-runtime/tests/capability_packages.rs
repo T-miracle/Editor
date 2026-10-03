@@ -77,11 +77,12 @@ fn capability_guest_installs_reads_assets_displays_fallback_and_uninstalls() {
     manager
         .install(&package, package.manifest.permissions.clone())
         .unwrap();
-    let scene = manager.live[&package.manifest.id].scene.as_ref().unwrap();
-    let document = scene
-        .ui
-        .as_ref()
-        .expect("native document, no canvas adapter");
+    let scene = manager.live[&package.manifest.id]
+        .views
+        .values()
+        .next()
+        .unwrap();
+    let document = scene.as_ref();
     let plugin_runtime::plugin_protocol::ui::Kind::Text { text } = &document.root.kind else {
         panic!("expected native text");
     };
@@ -94,10 +95,12 @@ fn capability_guest_installs_reads_assets_displays_fallback_and_uninstalls() {
             serde_json::Value::Null,
         )
         .unwrap();
-    let scene = manager.live[&package.manifest.id].scene.as_ref().unwrap();
-    let plugin_runtime::plugin_protocol::ui::Kind::Text { text } =
-        &scene.ui.as_ref().unwrap().root.kind
-    else {
+    let scene = manager.live[&package.manifest.id]
+        .views
+        .values()
+        .next()
+        .unwrap();
+    let plugin_runtime::plugin_protocol::ui::Kind::Text { text } = &scene.as_ref().root.kind else {
         panic!("expected diagnostic text");
     };
     assert_eq!(text, "Typed errors and request IDs verified.");
@@ -114,9 +117,16 @@ fn capability_guest_cannot_borrow_undeclared_permissions_or_interfaces() {
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../target/plugin-api-test/capability-example.zip");
     let original = Package::read(&path).unwrap();
-    for (remove_permission, expected) in
-        [(true, "PermissionDenied"), (false, "CapabilityUnavailable")]
-    {
+    for (remove_permission, expected) in [
+        (
+            true,
+            plugin_runtime::plugin_protocol::api::ErrorCode::PermissionDenied,
+        ),
+        (
+            false,
+            plugin_runtime::plugin_protocol::api::ErrorCode::CapabilityUnavailable,
+        ),
+    ] {
         let mut manifest = original.manifest.clone();
         if remove_permission {
             manifest.permissions.clear();
@@ -147,7 +157,10 @@ fn capability_guest_cannot_borrow_undeclared_permissions_or_interfaces() {
             .install(&package, package.manifest.permissions.clone())
             .unwrap_err();
         assert!(
-            error.to_string().contains(expected),
+            // Structured failure survives contextual plugin/scope diagnostics.
+            error
+                .downcast_ref::<plugin_runtime::plugin_protocol::api::Failure>()
+                .is_some_and(|failure| failure.code == expected),
             "unexpected rejection: {error:#}"
         );
         assert!(manager.installed.is_empty());

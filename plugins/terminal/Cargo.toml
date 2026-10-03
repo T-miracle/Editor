@@ -1,6 +1,6 @@
 [package]
 name = "terminal-guest"
-version = "0.7.0"
+version = "0.7.1"
 edition = "2024"
 rust-version = "1.95"
 license = "MIT"
@@ -12,7 +12,7 @@ crate-type = ["cdylib", "rlib"]
 # Upstream owns VT parsing and resize reflow; a pinned revision builds without native OS APIs.
 vt100 = { package = "term-wm-vt100", git = "https://github.com/jzombie/term-wm-vt100", rev = "5ffcf205c709b2378dc91cfa4637ae0f819d6c74" }
 vte = "0.15"
-plugin-protocol = { version = "=0.1.0", features = ["guest"] }
+plugin-protocol = { version = "=0.2.0", features = ["guest"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 anyhow = "1.0"

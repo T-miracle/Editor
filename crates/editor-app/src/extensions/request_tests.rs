@@ -51,8 +51,8 @@ fn typed_editor_requests_read_selection_and_save_without_switching_documents(
             let mut state = owner.worker.state.lock().unwrap();
             state.entries = manager.published_entries();
             for (id, instance) in &manager.live {
-                for (panel, scene) in &instance.scenes {
-                    state.scenes.insert(format!("{id}/{panel}"), scene.clone());
+                for (panel, scene) in &instance.views {
+                    state.views.insert(format!("{id}/{panel}"), scene.clone());
                 }
             }
             drop(state);
@@ -304,8 +304,12 @@ fn typed_editor_requests_read_selection_and_save_without_switching_documents(
         manager.document_changed(change);
     }
     manager.poll();
-    let scene = manager.live[&package.manifest.id].scene.as_ref().unwrap();
-    let protocol::ui::Kind::Text { text } = &scene.ui.as_ref().unwrap().root.kind else {
+    let scene = manager.live[&package.manifest.id]
+        .views
+        .values()
+        .next()
+        .unwrap();
+    let protocol::ui::Kind::Text { text } = &scene.as_ref().root.kind else {
         panic!("text expected")
     };
     assert!(text.contains("Document"));

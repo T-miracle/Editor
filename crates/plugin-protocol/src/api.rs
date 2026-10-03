@@ -399,7 +399,7 @@ impl<T> RequestUpdate<T> {
     }
 }
 
-/// A native view is separate from canvas and character-grid data.
+/// One declared panel's document may compose native controls, canvases and optional grids.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct View {
     pub panel: String,

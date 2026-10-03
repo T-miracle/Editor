@@ -135,13 +135,8 @@ fn native_service_provider_selection_routes_the_same_consumer_to_a_different_pac
         .unwrap();
     manager.poll();
     assert!(
-        serde_json::to_string(
-            manager.live["service-consumer"].scenes["welcome"]
-                .ui
-                .as_ref()
-                .unwrap()
-        )
-        .unwrap()
-        .contains("provider-b:from UI")
+        serde_json::to_string(manager.live["service-consumer"].views["welcome"].as_ref())
+            .unwrap()
+            .contains("provider-b:from UI")
     );
 }

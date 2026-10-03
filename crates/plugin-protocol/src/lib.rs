@@ -3,7 +3,7 @@
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 
-/// Capability-based API; legacy messages remain only during the staged migration.
+/// Capability-based lifecycle, notifications and correlated host operations.
 pub mod api;
 pub mod dependencies;
 pub mod language;
@@ -86,7 +86,7 @@ pub struct Panel {
     pub id: String,
     pub title: String,
     pub position: String,
-    /// Protocol 6 editor-local previews match these case-insensitive extensions without dots.
+    /// Editor-local previews match these case-insensitive extensions without dots.
     /// Other panel positions leave this list empty and retain their independent dock behavior.
     #[serde(default)]
     pub file_extensions: Vec<String>,
@@ -155,7 +155,7 @@ pub struct Environment {
     pub ui_font: FontStyle,
     #[serde(default)]
     pub mono_font: FontStyle,
-    /// Plugin-owned text roles, updated together with colors by Event::Theme.
+    /// Plugin-owned text roles, updated together with colors by api::Notification::Theme.
     #[serde(default)]
     pub theme_text_styles: std::collections::BTreeMap<String, FontStyle>,
 }
@@ -215,7 +215,7 @@ impl Rect {
 /// A declarative drawing list; text is shaped by the native host text system.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum Paint {
-    /// Protocol 6 draws a full-color vector above preceding operations, preserving transparency.
+    /// Draw a full-color vector above preceding operations, preserving transparency.
     /// The explicit clip bounds raster allocation when the image is zoomed beyond its viewport.
     Svg {
         rect: Rect,
@@ -241,248 +241,9 @@ pub enum Paint {
     },
 }
 
-/// Standard widgets add native text editing and click semantics to a drawing list.
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct Widget {
-    pub id: String,
-    pub rect: Rect,
-    pub label: String,
-    pub edit: bool,
-    #[serde(default)]
-    pub style: WidgetStyle,
-}
-
-/// Optional native-control styling resolved by the plugin from its current theme.
-#[derive(Clone, Debug, Default, Serialize, Deserialize)]
-pub struct WidgetStyle {
-    #[serde(default)]
-    pub font: FontStyle,
-    #[serde(default)]
-    pub foreground: Option<u32>,
-    #[serde(default)]
-    pub background: Option<u32>,
-    #[serde(default)]
-    pub hover_background: Option<u32>,
-    #[serde(default)]
-    pub active_background: Option<u32>,
-}
-
-/// Scrollbars are rendered with the same host control used by the file explorer.
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct ScrollInfo {
-    pub id: String,
-    pub rect: Rect,
-    pub content: f32,
-    pub offset: f32,
-    /// Optional idle timeout for a native overlay; scrolling remains available while hidden.
-    #[serde(default)]
-    pub hide_after_ms: Option<u64>,
-}
-
-#[derive(Clone, Debug, Default, Serialize, Deserialize)]
-pub struct Scene {
-    /// Protocol 2 native view tree. Omit to use the legacy canvas surface.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub ui: Option<ui::Document>,
-    /// Protocol 4 canvas controls; accept `chrome` from existing protocol 3 plugins.
-    #[serde(default, alias = "chrome", skip_serializing_if = "Option::is_none")]
-    pub controls: Option<ui::CanvasControls>,
-    /// Declared panel receiving this scene; multiple panels can publish independently.
-    #[serde(default)]
-    pub panel: String,
-    pub paint: Vec<Paint>,
-    pub widgets: Vec<Widget>,
-    /// Invisible guest-defined hit areas that use the native column-resize cursor.
-    #[serde(default)]
-    pub column_resize_regions: Vec<Rect>,
-    pub scroll: Option<ScrollInfo>,
-    pub font: String,
-    pub font_size: f32,
-    pub cursor: Rect,
-}
-
-/// Messages enter one serial guest event loop; prepare must not acquire OS resources.
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub enum Message {
-    Prepare {
-        environment: Environment,
-        snapshot: Option<Snapshot>,
-    },
-    Activate,
-    Event(Event),
-    Snapshot,
-}
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub enum Event {
-    /// Host-only bridge for independently versioned capability notifications during migration.
-    Capability(api::Notification),
-    /// Protocol 6 supplies the active in-memory document to a permission-checked editor preview.
-    /// A missing path clears the previous document when its file no longer matches the panel.
-    Document {
-        path: Option<String>,
-        text: String,
-    },
-    /// Native UI events are scoped by the enclosing Surface message.
-    Ui(ui::UiEvent),
-    /// Native events retain their originating panel when a plugin declares several surfaces.
-    Surface {
-        panel: String,
-        event: Box<Event>,
-    },
-    Resize {
-        width: f32,
-        height: f32,
-        cell_width: f32,
-        cell_height: f32,
-    },
-    Theme(Environment),
-    ProcessOutput {
-        handle: u64,
-        bytes: Vec<u8>,
-    },
-    ProcessExit {
-        handle: u64,
-    },
-    Command {
-        /// Declared command, host reply, or `panel.opened` lifecycle event scoped by Surface.
-        id: String,
-        cwd: Option<String>,
-        text: Option<String>,
-        /// Plugin-owned structured parameters; omitted by older hosts and parameterless actions.
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        arguments: Option<serde_json::Value>,
-    },
-    Key {
-        key: String,
-        ctrl: bool,
-        alt: bool,
-        shift: bool,
-    },
-    Text(String),
-    Paste(String),
-    Pointer {
-        kind: String,
-        x: f32,
-        y: f32,
-        button: u8,
-        clicks: u8,
-        shift: bool,
-    },
-    Wheel {
-        delta: f32,
-        shift: bool,
-        x: f32,
-        y: f32,
-    },
-    Scroll {
-        id: String,
-        offset: f32,
-    },
-    Edit {
-        id: String,
-        text: String,
-    },
-    Focus(bool),
-}
-#[derive(Clone, Debug, Default, Serialize, Deserialize)]
-pub struct Reply {
-    /// Temporary adapter for the capability protocol's validated service result.
-    #[serde(default)]
-    pub service_reply: Option<Result<serde_json::Value, api::Failure>>,
-    #[serde(default)]
-    pub language_service: Option<language::Proposal>,
-    /// Migration adapter only; new guests expose this through api::Output.
-    #[serde(default)]
-    pub configuration: Option<settings::Proposal>,
-    pub scene: Option<Scene>,
-    #[serde(default)]
-    pub scenes: Vec<Scene>,
-    pub snapshot: Option<Snapshot>,
-    pub error: Option<String>,
-}
-
-/// Every privileged call is checked by the host for this plugin and its live handles.
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub enum Request {
-    /// Read a resource shipped inside this exact installed package version.
-    ReadAsset {
-        path: String,
-    },
-    Spawn {
-        program: String,
-        args: Vec<String>,
-        cwd: String,
-        columns: u16,
-        rows: u16,
-    },
-    Write {
-        handle: u64,
-        bytes: Vec<u8>,
-    },
-    Resize {
-        handle: u64,
-        columns: u16,
-        rows: u16,
-    },
-    Close {
-        handle: u64,
-    },
-    ReadWorkspace {
-        path: String,
-    },
-    ReadData {
-        path: String,
-    },
-    WriteData {
-        path: String,
-        text: String,
-    },
-    ClipboardWrite(String),
-    ClipboardRead,
-    /// Native editor operations, including `hide_panel:<declared-panel-id>` for this plugin only.
-    /// Panel hiding is asynchronous and uses the existing `editor.commands` permission.
-    Editor {
-        command: String,
-    },
-}
-impl Request {
-    /// PTY child programs inherit native OS rights; granting this capability is explicit.
-    pub fn permission(&self) -> &'static str {
-        match self {
-            Self::ReadAsset { .. } => "assets",
-            Self::Spawn { .. } | Self::Write { .. } | Self::Resize { .. } | Self::Close { .. } => {
-                "process.pty"
-            }
-            Self::ReadWorkspace { .. } => "workspace.read",
-            Self::ReadData { .. } | Self::WriteData { .. } => "storage",
-            Self::ClipboardWrite(_) | Self::ClipboardRead => "clipboard",
-            Self::Editor { .. } => "editor.commands",
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn scene_accepts_legacy_chrome_but_emits_controls() {
-        // Existing WASM packages may still send `chrome`; newly built plugins emit `controls`.
-        let scene = Scene {
-            controls: Some(ui::CanvasControls::default()),
-            ..Scene::default()
-        };
-        let mut value = serde_json::to_value(&scene).unwrap();
-        assert!(value.get("controls").is_some());
-        assert!(value.get("chrome").is_none());
-        let legacy = value.as_object_mut().unwrap().remove("controls").unwrap();
-        value
-            .as_object_mut()
-            .unwrap()
-            .insert("chrome".into(), legacy);
-        let restored: Scene = serde_json::from_value(value).unwrap();
-        assert!(restored.controls.is_some());
-    }
 
     #[test]
     fn theme_roles_override_only_declared_font_properties() {

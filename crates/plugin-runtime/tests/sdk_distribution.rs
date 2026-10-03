@@ -7,10 +7,7 @@ use std::path::Path;
 
 /// Observe the public native view produced by the real component, not its internal guest state.
 fn panel_text<'a>(manager: &'a Manager, plugin_id: &str) -> &'a str {
-    let document = manager.live[plugin_id].scenes["welcome"]
-        .ui
-        .as_ref()
-        .expect("SDK guest publishes a native document");
+    let document = manager.live[plugin_id].views["welcome"].as_ref();
     let Kind::Text { text } = &document.root.kind else {
         panic!("SDK guest must publish its diagnostic text");
     };

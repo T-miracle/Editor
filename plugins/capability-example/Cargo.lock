@@ -16,7 +16,7 @@ checksum = "3ded4057c258ba199e2d26386d3af3780957ecaee6c4ef4041c6b4b8b97c0b06"
 
 [[package]]
 name = "capability-example-guest"
-version = "0.15.0"
+version = "0.15.1"
 dependencies = [
  "plugin-protocol",
  "serde",
@@ -200,7 +200,7 @@ checksum = "a89322df9ebe1c1578d689c92318e070967d1042b512afbe49518723f4e6d5cd"
 
 [[package]]
 name = "plugin-protocol"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "semver",
  "serde",

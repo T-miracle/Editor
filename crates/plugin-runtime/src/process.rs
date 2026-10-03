@@ -1,5 +1,4 @@
 //! Owned native pipes and PTYs with bounded I/O; no escape parsing or terminal state lives here.
-use plugin_protocol::Event;
 use plugin_protocol::process::{Stream, Update};
 use portable_pty::{Child, MasterPty, PtySize};
 #[cfg(not(windows))]
@@ -20,9 +19,9 @@ struct Process {
     // Drop the job and output receiver before ConPTY: otherwise a full reader queue
     // can block ClosePseudoConsole while it tries to flush the dying process output.
     #[cfg(windows)]
-    _job: Job,
+    _job: std::sync::Arc<Job>,
     output: Receiver<(Stream, Vec<u8>)>,
-    input: mpsc::SyncSender<Vec<u8>>,
+    input: Option<mpsc::SyncSender<Vec<u8>>>,
     child: Box<dyn Child + Send + Sync>,
     master: Option<Box<dyn MasterPty + Send>>,
     applied_size: (u16, u16),
@@ -58,6 +57,9 @@ impl Drop for Process {
 pub(crate) struct Job(windows_sys::Win32::Foundation::HANDLE);
 #[cfg(windows)]
 unsafe impl Send for Job {}
+// Windows job operations are thread safe; Arc keeps the handle alive through asynchronous teardown.
+#[cfg(windows)]
+unsafe impl Sync for Job {}
 #[cfg(windows)]
 impl Job {
     /// Windows job ownership closes descendants even when the shell has exited first.
@@ -158,6 +160,7 @@ impl Processes {
         cols: u16,
         rows: u16,
         inherit_cursor: bool,
+        diagnostics: crate::faults::NativeReporter,
     ) -> anyhow::Result<u64> {
         anyhow::ensure!(self.items.len() < 32, "Plugin process quota exceeded");
         let rows = rows.clamp(1, 500);
@@ -180,9 +183,15 @@ impl Processes {
             &cwd,
             size,
             inherit_cursor,
+            diagnostics,
         )?;
         #[cfg(not(windows))]
         let (child, master) = {
+            let _ = diagnostics;
+            anyhow::ensure!(
+                !inherit_cursor,
+                "Cursor inheritance is only available on Windows"
+            );
             let pair = native_pty_system().openpty(size)?;
             let mut command = CommandBuilder::new(program);
             command.args(args);
@@ -211,7 +220,7 @@ impl Processes {
             self.next,
             Process {
                 master: Some(master),
-                input,
+                input: Some(input),
                 child,
                 output,
                 applied_size: (cols, rows),
@@ -229,6 +238,8 @@ impl Processes {
             .get_mut(&id)
             .ok_or_else(|| anyhow::anyhow!("Unknown process handle"))?
             .input
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("Process has exited"))?
             .try_send(bytes.to_vec())
             .map_err(|e| anyhow::anyhow!("Process input is unavailable: {e}"))?;
         Ok(())
@@ -265,25 +276,21 @@ impl Processes {
             .collect()
     }
     /// Drain a bounded batch so one noisy process cannot starve the UI event queue.
-    pub fn poll(&mut self) -> anyhow::Result<Vec<Event>> {
-        Ok(self
-            .poll_native()?
-            .into_iter()
-            .map(|(handle, update)| match update {
-                Update::Output { bytes, .. } => Event::ProcessOutput { handle, bytes },
-                Update::Exited { .. } | Update::Terminated => Event::ProcessExit { handle },
-            })
-            .collect())
-    }
-    /// EOF, not a temporarily empty queue, is the barrier that makes exit follow every output byte.
     pub fn poll_native(&mut self) -> anyhow::Result<Vec<(u64, Update)>> {
         let mut events = vec![];
         let mut exited = vec![];
         for (&handle, process) in &mut self.items {
+            // Windows resize runs asynchronously so an unanswered VT query cannot stall polling.
+            #[cfg(windows)]
+            if let Some(master) = &process.master {
+                master.get_size()?;
+            }
             if process.exit_code.is_none()
                 && let Some(status) = process.child.try_wait()?
             {
                 process.exit_code = Some(status.exit_code());
+                // Closing input must not depend on output EOF when a native query is unanswered.
+                process.input.take();
                 // Descendants share the owner's lifetime, even if they inherited its output pipes.
                 #[cfg(windows)]
                 process._job.terminate();
@@ -375,14 +382,14 @@ impl Processes {
             self.next,
             Process {
                 output,
-                input,
+                input: Some(input),
                 child: Box::new(child),
                 master: None,
                 applied_size: (0, 0),
                 pending_resize: None,
                 exit_code: None,
                 #[cfg(windows)]
-                _job: job,
+                _job: std::sync::Arc::new(job),
             },
         );
         Ok(self.next)

@@ -40,8 +40,8 @@ pub(crate) struct PluginView {
     scrolls: BTreeMap<String, ScrollHandle>,
     canvases: BTreeMap<String, Entity<canvas::CanvasView>>,
     /// Collection widgets retain native rename/drag state independently of canvas redraws.
-    collections: BTreeMap<String, Entity<controls::CanvasControlsView>>,
-    popup: Option<Entity<controls::CanvasControlsView>>,
+    collections: BTreeMap<String, Entity<controls::CollectionView>>,
+    popup: Option<Entity<controls::CollectionView>>,
     origin: gpui_kit::Point<gpui_kit::Pixels>,
     dialog_focus: FocusHandle,
     previous_focus: Option<FocusHandle>,

@@ -205,6 +205,7 @@ impl Manager {
                     self.host_resources.clone(),
                 )?;
                 instance.configure_settings(manifest, values)?;
+                instance.connect_diagnostics(self.native_diagnostics.clone());
                 if active {
                     instance.connect_services(self.plugin_services.clone())?;
                     instance.activate()?;

@@ -1,7 +1,7 @@
 {
   "id": "svg",
   "name": "SVG",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "protocol": 7,
   "api": {"base":"^1","required":{"ui.native":"^1","ui.canvas":">=1.1, <2","editor.documents":"^1"}},
   "component": "svg.wasm",

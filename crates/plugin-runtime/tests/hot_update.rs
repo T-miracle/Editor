@@ -46,7 +46,7 @@ fn mixed_package(executable: &Path, log: &Path, version: u32, policy: &str) -> P
 
 /// Observe public guest views instead of inspecting its WASM memory or private host implementation.
 fn text(manager: &Manager, id: &str) -> String {
-    let document = manager.live[id].scenes["welcome"].ui.as_ref().unwrap();
+    let document = manager.live[id].views["welcome"].as_ref();
     let Kind::Text { text } = &document.root.kind else {
         panic!("expected guest status view")
     };

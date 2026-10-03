@@ -24,8 +24,9 @@ fn host_command_reveals_hidden_terminal_and_preserves_arguments(cx: &mut TestApp
     cx.update(|window, cx| {
         let owner = app.read(cx).extensions.clone();
         owner.update(cx, |owner, cx| {
-            let manifest: protocol::Manifest =
-                crate::extensions::test_manifest(include_str!("../../../../plugins/terminal/manifest.json"));
+            let manifest: protocol::Manifest = crate::extensions::test_manifest(include_str!(
+                "../../../../plugins/terminal/manifest.json"
+            ));
             let mut state = owner.worker.state.lock().unwrap();
             state.entries = vec![Installed {
                 grants: manifest.permissions.clone(),
@@ -36,12 +37,11 @@ fn host_command_reveals_hidden_terminal_and_preserves_arguments(cx: &mut TestApp
                 global_enabled: None,
                 error: None,
             }];
-            state.scenes.insert(
+            state.views.insert(
                 "terminal/terminal".into(),
-                Arc::new(Scene {
-                    panel: "terminal".into(),
-                    ..Default::default()
-                }),
+                Arc::new(protocol::ui::Document::new(protocol::ui::Node::text(
+                    "empty", "",
+                ))),
             );
             drop(state);
             owner.poll(cx);
@@ -61,9 +61,9 @@ fn host_command_reveals_hidden_terminal_and_preserves_arguments(cx: &mut TestApp
         )));
         // Opening is explicit even when focus did not change, so an empty guest can initialize.
         assert!(owner.read(cx).worker.recorded.lock().unwrap().try_iter().any(|work| matches!(work,
-            Work::Event(plugin, _, PluginEvent::Surface { panel, event })
+            Work::Event(plugin, _, Some(panel), event)
                 if plugin == "terminal" && panel == "terminal"
-                    && matches!(event.as_ref(), PluginEvent::Command { id, .. } if id == "panel.opened")
+                    && matches!(&event, PluginEvent::Command { id, .. } if id == "panel.opened")
         )));
         owner.update(cx, |owner, _| {
             let mut state = owner.worker.state.lock().unwrap();
@@ -137,14 +137,11 @@ fn plugin_hide_requests_are_scoped_and_reclaim_the_empty_dock(cx: &mut TestAppCo
                     global_enabled: None,
                     error: None,
                 });
-                state.scenes.insert(
+                state.views.insert(
                     format!("{plugin}/terminal"),
-                    Arc::new(Scene {
-                        panel: "terminal".into(),
-                        font: "Cascadia Mono".into(),
-                        font_size: 14.,
-                        ..Default::default()
-                    }),
+                    Arc::new(protocol::ui::Document::new(protocol::ui::Node::text(
+                        "empty", "",
+                    ))),
                 );
             }
             drop(state);
@@ -162,15 +159,10 @@ fn plugin_hide_requests_are_scoped_and_reclaim_the_empty_dock(cx: &mut TestAppCo
     ] {
         cx.update(|_, cx| {
             owner.update(cx, |owner, cx| {
-                owner.worker.state.lock().unwrap().effects.push((
-                    plugin.into(),
-                    Request::Editor {
-                        command: format!("hide_panel:{requested}"),
-                    },
-                ));
                 owner.poll(cx);
             });
         });
+        cx.update(|_, cx| app.update(cx, |app, cx| app.hide_plugin_panel(plugin, requested, cx)));
         cx.run_until_parked();
         cx.update(|window, cx| {
             let app = app.read(cx);
@@ -232,14 +224,8 @@ fn native_panel_clicks_are_scoped_to_the_declared_surface(cx: &mut TestAppContex
     let app = slot.borrow_mut().take().unwrap();
     let manifest: protocol::Manifest =
         crate::extensions::test_manifest(include_str!("../../../../plugins/example/manifest.json"));
-    let scene = Scene {
-        panel: "counter".into(),
-        ui: Some(
-            protocol::ui::Document::new(protocol::ui::Node::button("increment", "增加"))
-                .revision(42),
-        ),
-        ..Default::default()
-    };
+    let scene =
+        protocol::ui::Document::new(protocol::ui::Node::button("increment", "增加")).revision(42);
     let owner = cx.update(|window, cx| {
         let owner = app.read(cx).extensions.clone();
         owner.update(cx, |owner, cx| {
@@ -254,7 +240,7 @@ fn native_panel_clicks_are_scoped_to_the_declared_surface(cx: &mut TestAppContex
                 error: None,
             }];
             state
-                .scenes
+                .views
                 .insert("example/counter".into(), Arc::new(scene));
             drop(state);
             owner.poll(cx);
@@ -270,8 +256,8 @@ fn native_panel_clicks_are_scoped_to_the_declared_surface(cx: &mut TestAppContex
     cx.run_until_parked();
     cx.update(|_, cx| {
         assert!(owner.read(cx).worker.recorded.lock().unwrap().try_iter().any(|work| {
-            matches!(work, Work::Event(plugin, _, PluginEvent::Surface { panel, event })
-                if plugin == "example" && panel == "counter" && matches!(*event, PluginEvent::Ui(protocol::ui::UiEvent {
+            matches!(work, Work::Event(plugin, _, Some(panel), event)
+                if plugin == "example" && panel == "counter" && matches!(event, PluginEvent::Ui(protocol::ui::UiEvent {
                     revision: 42, ref node, action: protocol::ui::Action::Click
                 }) if node == "increment"))
         }));
@@ -301,32 +287,37 @@ fn canvas_controls_sidebar_routes_ui_without_canvas_pointer_events(cx: &mut Test
         "../../../../plugins/terminal/manifest.json"
     ));
     manifest.panels[0].default_visible = true;
-    let scene = Scene {
-        panel: "terminal".into(),
-        font: "Cascadia Mono".into(),
-        font_size: 14.,
-        controls: Some(protocol::ui::CanvasControls {
-            revision: 19,
-            sidebar: Some(protocol::ui::SideTabs {
-                id: "sessions".into(),
-                position: protocol::ui::SideTabsPosition::Right,
-                width: 180.,
-                min_width: 112.,
-                max_width: 480.,
-                selected: Some("one".into()),
-                rename: None,
-                items: vec![protocol::ui::SideTab {
-                    id: "one".into(),
-                    label: "会话".into(),
-                    status: None,
-                    closable: true,
-                    disabled: false,
-                }],
-            }),
-            menu: None,
-        }),
-        ..Default::default()
-    };
+    // The collection is an ordinary tree node; canvas routing remains a separate keyed target.
+    let scene = protocol::ui::Document::new(
+        protocol::ui::Node::row(
+            "root",
+            vec![
+                protocol::ui::Node::new("drawing", protocol::ui::Kind::Canvas(Default::default()))
+                    .grow(),
+                protocol::ui::Node::new(
+                    "sessions",
+                    protocol::ui::Kind::SideTabs(protocol::ui::SideTabs {
+                        id: "sessions".into(),
+                        position: protocol::ui::SideTabsPosition::Right,
+                        width: 180.,
+                        min_width: 112.,
+                        max_width: 480.,
+                        selected: Some("one".into()),
+                        rename: None,
+                        items: vec![protocol::ui::SideTab {
+                            id: "one".into(),
+                            label: "会话".into(),
+                            status: None,
+                            closable: true,
+                            disabled: false,
+                        }],
+                    }),
+                ),
+            ],
+        )
+        .grow(),
+    )
+    .revision(19);
     let owner = cx.update(|window, cx| {
         let owner = app.read(cx).extensions.clone();
         owner.update(cx, |owner, cx| {
@@ -341,7 +332,7 @@ fn canvas_controls_sidebar_routes_ui_without_canvas_pointer_events(cx: &mut Test
                 error: None,
             }];
             state
-                .scenes
+                .views
                 .insert("terminal/terminal".into(), Arc::new(scene));
             drop(state);
             owner.poll(cx);
@@ -372,7 +363,7 @@ fn canvas_controls_sidebar_routes_ui_without_canvas_pointer_events(cx: &mut Test
     cx.run_until_parked();
     cx.update(|_,cx| {
         let messages:Vec<_>=owner.read(cx).worker.recorded.lock().unwrap().try_iter().collect();
-        assert!(messages.iter().any(|work| matches!(work,Work::Event(plugin, _,PluginEvent::Surface{panel,event}) if plugin=="terminal" && panel=="terminal" && matches!(event.as_ref(),PluginEvent::Ui(protocol::ui::UiEvent {node,action:protocol::ui::Action::Select(id),..}) if node=="sessions" && id=="one"))));
-        assert!(!messages.iter().any(|work| matches!(work,Work::Event(_, _,PluginEvent::Surface{event,..}) if matches!(event.as_ref(),PluginEvent::Pointer{..}|PluginEvent::Text(_)))));
+        assert!(messages.iter().any(|work| matches!(work,Work::Event(plugin, _, Some(panel), event) if plugin=="terminal" && panel=="terminal" && matches!(event,PluginEvent::Ui(protocol::ui::UiEvent {node,action:protocol::ui::Action::Select(id),..}) if node=="sessions" && id=="one"))));
+        assert!(!messages.iter().any(|work| matches!(work,Work::Event(_, _, Some(_), event) if matches!(event,PluginEvent::Ui(protocol::ui::UiEvent { action: protocol::ui::Action::Canvas(protocol::ui::CanvasEvent::Pointer { .. } | protocol::ui::CanvasEvent::Text { .. }), .. })))));
     });
 }

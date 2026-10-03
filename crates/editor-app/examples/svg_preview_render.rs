@@ -5,29 +5,23 @@ mod images;
 
 use plugin_runtime::{
     Manager, Package,
-    plugin_protocol::{Environment, Event, Paint, Rect, Scene, api, ui},
+    plugin_protocol::{Environment, Paint, Rect, api, ui},
 };
 use std::{collections::BTreeMap, path::Path, sync::Arc};
 
 /// Inspect the ordinary native document tree used by the production renderer.
-fn drawing(scene: &Scene) -> &ui::Canvas {
-    let ui::Kind::Canvas(canvas) = &scene.ui.as_ref().unwrap().root.kind else {
+fn drawing(scene: &ui::Document) -> &ui::Canvas {
+    let ui::Kind::Canvas(canvas) = &scene.root.kind else {
         panic!("canvas required")
     };
     canvas
 }
 fn send(manager: &mut Manager, event: api::Notification) -> anyhow::Result<()> {
-    manager.event(
-        "svg",
-        Event::Surface {
-            panel: "preview".into(),
-            event: Box::new(Event::Capability(event)),
-        },
-    )
+    manager.event("svg", Some("preview".into()), event)
 }
 
 /// Locate document rasters separately from toolbar SVGs through their public viewport clip.
-fn document_index(scene: &Scene) -> usize {
+fn document_index(scene: &ui::Document) -> usize {
     drawing(scene)
         .paint
         .iter()
@@ -36,10 +30,10 @@ fn document_index(scene: &Scene) -> usize {
 }
 
 /// Render the whole published scene for visual QA, using native vector images for icons and text.
-fn render_panel(scene: &Scene, renderer: &mut images::VectorRenderer) -> image::RgbaImage {
+fn render_panel(scene: &ui::Document, renderer: &mut images::VectorRenderer) -> image::RgbaImage {
     let mut scene = scene.clone();
     // Text uses the same font database as the SVG renderer for this standalone diagnostic PNG.
-    let ui::Kind::Canvas(canvas) = &mut scene.ui.as_mut().unwrap().root.kind else {
+    let ui::Kind::Canvas(canvas) = &mut scene.root.kind else {
         panic!("canvas required")
     };
     let family_default = canvas
@@ -175,7 +169,7 @@ fn main() -> anyhow::Result<()> {
             text: source,
         },
     )?;
-    let scene = manager.live["svg"].scenes["preview"].clone();
+    let scene = manager.live["svg"].views["preview"].clone();
     let scenes = BTreeMap::from([("preview".into(), scene.clone())]);
     let mut renderer = images::VectorRenderer::default();
     let rendered = renderer.prepare(&scenes);
@@ -249,7 +243,7 @@ fn main() -> anyhow::Result<()> {
         document: Some(api::DocumentVersion { id: "alpha".into(), path: "alpha.svg".into(), revision: 1 }),
         text: "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"10\" height=\"10\"><rect width=\"10\" height=\"10\" fill=\"red\" fill-opacity=\"0.5\"/></svg>".into(),
     })?;
-    let alpha_scene = manager.live["svg"].scenes["preview"].clone();
+    let alpha_scene = manager.live["svg"].views["preview"].clone();
     let rendered = renderer.prepare(&BTreeMap::from([("preview".into(), alpha_scene.clone())]));
     let vector = rendered["preview/canvas/preview-canvas"][document_index(&alpha_scene)]
         .as_ref()

@@ -18,13 +18,7 @@ impl EditorApp {
             .entries
             .iter()
             .filter(|entry| {
-                entry.enabled
-                    && entry.error.is_none()
-                    && entry.grants.contains(if entry.manifest.protocol == 7 {
-                        "editor.read"
-                    } else {
-                        "editor.commands"
-                    })
+                entry.enabled && entry.error.is_none() && entry.grants.contains("editor.read")
             })
             .flat_map(|entry| {
                 entry.manifest.panels.iter().filter_map(|descriptor| {
@@ -78,75 +72,47 @@ impl EditorApp {
             }
             let active = selected.as_ref().is_some_and(|selected| selected == panel);
             panel.update(cx, |panel, cx| {
-                let capability = panel.entries.iter().any(|entry| {
-                    Some(&entry.manifest.id) == panel.active.as_ref()
-                        && entry.manifest.protocol == 7
-                });
-                if active
-                    && (panel.preview_document != context
-                        || (capability && panel.preview_version != version))
+                if active && (panel.preview_document != context || panel.preview_version != version)
                 {
-                    if let Some((path, _)) = &context {
+                    if context.is_some() {
                         panel.preview_error = None;
                         let text = self.editor.read(cx).text().to_string();
-                        if capability {
-                            // No source token means the document is outside this workspace's authority.
-                            let Some(version) = &version else {
-                                panel.preview_version = None;
-                                panel.preview_document = context.clone();
-                                panel.native_ui = None;
-                                panel.send(PluginEvent::Capability(
-                                    protocol::api::Notification::Preview {
-                                        document: None,
-                                        text: String::new(),
-                                    },
-                                ));
-                                return;
-                            };
-                            if text.len() > 1024 * 1024 {
-                                // The source token remains current while the oversized text never crosses WASM.
-                                panel.preview_version = Some(version.clone());
-                                panel.preview_document = context.clone();
-                                panel.preview_error = Some("文档超过 1 MiB，无法预览".into());
-                                panel.native_ui = None;
-                                panel.send(PluginEvent::Capability(
-                                    protocol::api::Notification::Preview {
-                                        document: None,
-                                        text: String::new(),
-                                    },
-                                ));
-                                cx.notify();
-                                return;
-                            }
-                            panel.send(PluginEvent::Capability(
-                                protocol::api::Notification::Preview {
-                                    document: Some(version.clone()),
-                                    text,
-                                },
-                            ));
-                            panel.preview_version = Some(version.clone());
-                        } else {
-                            panel.send(PluginEvent::Document {
-                                path: Some(path.to_string_lossy().into_owned()),
-                                text,
+                        // No source token means the document is outside this workspace's authority.
+                        let Some(version) = &version else {
+                            panel.preview_version = None;
+                            panel.preview_document = context.clone();
+                            panel.native_ui = None;
+                            panel.send(protocol::api::Notification::Preview {
+                                document: None,
+                                text: String::new(),
                             });
+                            return;
+                        };
+                        if text.len() > 1024 * 1024 {
+                            // The source token remains current while the oversized text never crosses WASM.
+                            panel.preview_version = Some(version.clone());
+                            panel.preview_document = context.clone();
+                            panel.preview_error = Some("文档超过 1 MiB，无法预览".into());
+                            panel.native_ui = None;
+                            panel.send(protocol::api::Notification::Preview {
+                                document: None,
+                                text: String::new(),
+                            });
+                            cx.notify();
+                            return;
                         }
+                        panel.send(protocol::api::Notification::Preview {
+                            document: Some(version.clone()),
+                            text,
+                        });
+                        panel.preview_version = Some(version.clone());
                         panel.preview_document = context.clone();
                     }
                 } else if !active && panel.preview_document.take().is_some() {
-                    if capability {
-                        panel.send(PluginEvent::Capability(
-                            protocol::api::Notification::Preview {
-                                document: None,
-                                text: String::new(),
-                            },
-                        ));
-                    } else {
-                        panel.send(PluginEvent::Document {
-                            path: None,
-                            text: String::new(),
-                        });
-                    }
+                    panel.send(protocol::api::Notification::Preview {
+                        document: None,
+                        text: String::new(),
+                    });
                     panel.preview_version = None;
                     panel.preview_error = None;
                     panel.native_ui = None;

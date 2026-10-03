@@ -1,5 +1,8 @@
 //! Exercises editor shell interactions through GPUI's test context.
 
+mod language_fixture;
+pub(crate) use language_fixture::declared_language_service;
+
 #[cfg(test)]
 mod settings_dialog_tests {
     use crate::theme::{apply_theme, builtin_theme};

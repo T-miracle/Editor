@@ -115,7 +115,7 @@ fn native_restart_recovers_a_fault_without_blocking_document_input(cx: &mut Test
         })
         .unwrap();
     manager.restart_plugin(&restart).unwrap();
-    assert!(!manager.live["capability-example"].scenes.is_empty());
+    assert!(!manager.live["capability-example"].views.is_empty());
     assert!(editor_cx.update(|_, cx| {
         app.read(cx)
             .editor

@@ -6,9 +6,9 @@ impl Manager {
         if let Some(instance) = self.live.get(id) {
             history.extend(instance.diagnostics.clone());
         }
-        let excess = history.len().saturating_sub(32);
-        history.drain(..excess);
-        history
+        // Background native teardown may finish after disable/uninstall removed the instance.
+        history.extend(self.native_diagnostics.for_plugin(id));
+        crate::faults::latest(history)
     }
     /// Explicit recovery does not replay failed commands or discard the last committed snapshot.
     pub fn restart_plugin(&mut self, id: &str) -> anyhow::Result<()> {
@@ -37,7 +37,13 @@ impl Manager {
                 self.save_snapshot(id, &snapshot)?;
             }
         }
-        let history = self.diagnostics(id);
+        // The shared native sink survives restart itself; do not copy and later duplicate its entries.
+        let mut history = self.diagnostic_history.get(id).cloned().unwrap_or_default();
+        if let Some(instance) = self.live.get(id) {
+            history.extend(instance.diagnostics.clone());
+        }
+        let excess = history.len().saturating_sub(32);
+        history.drain(..excess);
         self.diagnostic_history.insert(id.into(), history);
         if let Some(mut instance) = self.live.remove(id) {
             instance.stop();

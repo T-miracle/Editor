@@ -1,4 +1,4 @@
-//! Capability transport handling, isolated from the legacy request/scene wire format.
+//! Correlated capability requests and atomic validation of typed guest completions.
 use super::*;
 use api::{ErrorCode, Failure};
 
@@ -172,11 +172,7 @@ impl State {
 
     /// Native toolchain metadata grants neither workspace access nor a filesystem root to WASI.
     fn describe_sdk(&self) -> Result<api::Value, Failure> {
-        if !self
-            .api
-            .as_ref()
-            .is_some_and(|api| api.capabilities.contains_key("host.sdk"))
-        {
+        if !self.api.capabilities.contains_key("host.sdk") {
             return Err(Failure::new(
                 ErrorCode::CapabilityUnavailable,
                 "host.sdk was not negotiated",
@@ -219,11 +215,7 @@ impl State {
 
     /// Availability and authorization are separate; preparation can read only immutable assets.
     fn read_capability_asset(&self, path: &str) -> Result<api::Value, Failure> {
-        if !self
-            .api
-            .as_ref()
-            .is_some_and(|api| api.capabilities.contains_key("package.assets"))
-        {
+        if !self.api.capabilities.contains_key("package.assets") {
             return Err(Failure::new(
                 ErrorCode::CapabilityUnavailable,
                 "package.assets was not negotiated",
@@ -275,49 +267,20 @@ impl State {
 }
 
 impl Instance {
-    /// Only the migration adapter sees legacy lifecycle types; new guests receive typed envelopes.
+    /// Invocation IDs belong to one instance and cannot silently match an older response.
     pub(super) fn encode_invocation(
         &mut self,
-        message: Message,
-    ) -> anyhow::Result<Option<(String, Option<u64>)>> {
-        let Some(api) = &self.store.data().api else {
-            return Ok(Some((serde_json::to_string(&message)?, None)));
-        };
-        let message = match message {
-            Message::Prepare {
-                environment,
-                snapshot,
-            } => api::Input::Prepare {
-                environment,
-                snapshot,
-                api: api.clone(),
-            },
-            Message::Activate => api::Input::Activate,
-            Message::Snapshot => api::Input::Snapshot,
-            Message::Event(event) => match native_notification(event, None) {
-                Some(message) => message,
-                None => return Ok(None),
-            },
-        };
+        message: api::Input,
+    ) -> anyhow::Result<(String, u64)> {
         let id = self.next_call;
         self.next_call = id
             .checked_add(1)
             .ok_or_else(|| anyhow::anyhow!("Invocation IDs exhausted"))?;
-        Ok(Some((
-            serde_json::to_string(&api::Invocation { id, message })?,
-            Some(id),
-        )))
+        Ok((serde_json::to_string(&api::Invocation { id, message })?, id))
     }
 
-    /// Convert a validated new UI result to the existing native renderer without exposing canvas fields.
-    pub(super) fn decode_completion(
-        &self,
-        payload: &str,
-        id: Option<u64>,
-    ) -> anyhow::Result<Reply> {
-        let Some(id) = id else {
-            return Ok(serde_json::from_str(payload)?);
-        };
+    /// Validate every capability and source revision before publishing any document.
+    pub(super) fn decode_completion(&self, payload: &str, id: u64) -> anyhow::Result<api::Output> {
         let completion: api::Completion = serde_json::from_str(payload)?;
         anyhow::ensure!(completion.id == id, "Plugin completion ID mismatch");
         let output = completion.result?;
@@ -341,12 +304,7 @@ impl Instance {
                     && output.configuration.is_none()),
             "LSP hook can return only a language proposal"
         );
-        let api = self
-            .store
-            .data()
-            .api
-            .as_ref()
-            .expect("capability invocation");
+        let api = &self.store.data().api;
         anyhow::ensure!(
             output.views.is_empty() || api.capabilities.contains_key("ui.native"),
             "ui.native was not negotiated"
@@ -411,36 +369,6 @@ impl Instance {
                 }
             }
         }
-        Ok(Reply {
-            service_reply: output.service_reply,
-            language_service: output.language_service,
-            configuration: output.configuration,
-            snapshot: output.snapshot,
-            scenes: output
-                .views
-                .into_iter()
-                .map(|view| Scene {
-                    panel: view.panel,
-                    ui: Some(view.document),
-                    ..Default::default()
-                })
-                .collect(),
-            ..Default::default()
-        })
+        Ok(output)
     }
-}
-
-/// Translate the migration-era editor routing seam into native-only public notifications.
-fn native_notification(event: Event, panel: Option<String>) -> Option<api::Input> {
-    let event = match event {
-        Event::Capability(notification) => notification,
-        Event::Surface { panel, event } => return native_notification(*event, Some(panel)),
-        Event::Ui(event) => api::Notification::Ui(event),
-        Event::Theme(environment) => api::Notification::Theme(environment),
-        Event::Command { id, arguments, .. } => api::Notification::Command { id, arguments },
-        Event::Focus(focused) => api::Notification::Focus(focused),
-        Event::Resize { width, height, .. } => api::Notification::Resize { width, height },
-        _ => return None,
-    };
-    Some(api::Input::Event { panel, event })
 }

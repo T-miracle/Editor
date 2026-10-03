@@ -43,7 +43,7 @@ fn wasm_fault_is_scoped_visible_and_independently_restartable() {
     manager
         .install(&peer, peer.manifest.permissions.clone())
         .unwrap();
-    let healthy_view = manager.live["healthy-peer"].scene.clone().unwrap();
+    let healthy_view = manager.live["healthy-peer"].views["welcome"].clone();
     manager
         .invoke_command("capability-example", "active-directory", json!(null))
         .unwrap();
@@ -69,11 +69,11 @@ fn wasm_fault_is_scoped_visible_and_independently_restartable() {
             .any(|report| report.operation.contains("fault-spin")
                 && report.message.contains("budget"))
     );
-    assert!(manager.live["capability-example"].scenes.is_empty());
+    assert!(manager.live["capability-example"].views.is_empty());
     assert!(!pending.enter_side_effect());
     assert!(std::sync::Arc::ptr_eq(
         &healthy_view,
-        manager.live["healthy-peer"].scene.as_ref().unwrap()
+        manager.live["healthy-peer"].views.values().next().unwrap()
     ));
     assert_eq!(manager.live["capability-example"].resource_count(), 0);
     manager.restart_plugin("capability-example").unwrap();
@@ -93,12 +93,11 @@ fn wasm_fault_is_scoped_visible_and_independently_restartable() {
         .invoke_command("capability-example", "active-directory", json!(null))
         .unwrap();
     let document = manager.live["capability-example"]
-        .scene
-        .as_ref()
+        .views
+        .values()
+        .next()
         .unwrap()
-        .ui
-        .as_ref()
-        .unwrap();
+        .as_ref();
     let Kind::Text { text } = &document.root.kind else {
         panic!("native text expected")
     };
@@ -134,12 +133,11 @@ fn wasm_fault_is_scoped_visible_and_independently_restartable() {
         .invoke_command("capability-example", "scope-read", json!(null))
         .unwrap();
     let Kind::Text { text } = &manager.live["capability-example"]
-        .scene
-        .as_ref()
+        .views
+        .values()
+        .next()
         .unwrap()
-        .ui
         .as_ref()
-        .unwrap()
         .root
         .kind
     else {

@@ -2,7 +2,8 @@
 use plugin_runtime::{
     Manager, Package,
     plugin_protocol::{
-        Environment, Event, api,
+        Environment, api,
+        api::Notification as Event,
         ui::{self, Kind},
     },
 };
@@ -38,15 +39,9 @@ fn installed_terminal_uses_current_capabilities_and_reclaims_processes() {
         instance.process_count(),
         1,
         "published view: {:?}",
-        instance.scene
+        instance.views
     );
-    let document = instance
-        .scene
-        .as_ref()
-        .unwrap()
-        .ui
-        .as_ref()
-        .expect("terminal publishes a composed native document");
+    let document = instance.views.values().next().unwrap().as_ref();
     assert!(matches!(document.root.kind, Kind::Row { .. }));
     let mut canvases = 0;
     document.root.visit(&mut |node| {
@@ -70,14 +65,12 @@ fn installed_terminal_uses_current_capabilities_and_reclaims_processes() {
         manager
             .event(
                 "terminal",
-                Event::Surface {
-                    panel: "terminal".into(),
-                    event: Box::new(Event::Ui(ui::UiEvent {
-                        revision,
-                        node: "output".into(),
-                        action: ui::Action::Canvas(action),
-                    })),
-                },
+                Some("terminal".into()),
+                Event::Ui(ui::UiEvent {
+                    revision,
+                    node: "output".into(),
+                    action: ui::Action::Canvas(action),
+                }),
             )
             .expect("same-frame input must remain accepted");
     }
@@ -237,14 +230,12 @@ fn input(manager: &mut Manager, revision: u64, event: ui::CanvasEvent) {
     manager
         .event(
             "terminal",
-            Event::Surface {
-                panel: "terminal".into(),
-                event: Box::new(Event::Ui(ui::UiEvent {
-                    revision,
-                    node: "output".into(),
-                    action: ui::Action::Canvas(event),
-                })),
-            },
+            Some("terminal".into()),
+            Event::Ui(ui::UiEvent {
+                revision,
+                node: "output".into(),
+                action: ui::Action::Canvas(event),
+            }),
         )
         .unwrap();
 }
@@ -268,25 +259,22 @@ fn action(manager: &mut Manager, node: &str, action: ui::Action) {
     manager
         .event(
             "terminal",
-            Event::Surface {
-                panel: "terminal".into(),
-                event: Box::new(Event::Ui(ui::UiEvent {
-                    revision,
-                    node: node.into(),
-                    action,
-                })),
-            },
+            Some("terminal".into()),
+            Event::Ui(ui::UiEvent {
+                revision,
+                node: node.into(),
+                action,
+            }),
         )
         .unwrap();
 }
 fn document(manager: &Manager) -> &ui::Document {
     manager.live["terminal"]
-        .scene
-        .as_ref()
+        .views
+        .values()
+        .next()
         .unwrap()
-        .ui
         .as_ref()
-        .unwrap()
 }
 fn session_ids(manager: &Manager) -> Vec<String> {
     let mut ids = Vec::new();

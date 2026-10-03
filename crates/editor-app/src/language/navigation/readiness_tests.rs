@@ -12,7 +12,7 @@ fn host_sdk_completes_terminal_from_editor_workspace() {
     let uri = file_uri(&path.canonicalize().unwrap()).unwrap();
     for name in [
         "Action",
-        "CanvasControls",
+        "Canvas",
         "MenuItem",
         "PopupMenu",
         "SideTab",
@@ -65,7 +65,7 @@ name = "sdk-guest-fixture"
 version = "0.1.0"
 edition = "2024"
 [dependencies]
-plugin-protocol = { version = "=0.1.0", features = ["guest"] }
+plugin-protocol = { version = "=0.2.0", features = ["guest"] }
 "#;
     std::fs::write(plugin.join("Cargo.toml"), manifest_source).unwrap();
     let path = plugin.join("src/lib.rs");

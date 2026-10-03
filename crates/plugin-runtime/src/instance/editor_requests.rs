@@ -60,11 +60,7 @@ impl State {
             EditorOperation::SaveDocument { .. } => ("editor.documents", "editor.write"),
             _ => ("editor.documents", "editor.read"),
         };
-        if !self
-            .api
-            .as_ref()
-            .is_some_and(|api| api.capabilities.contains_key(capability))
-        {
+        if !self.api.capabilities.contains_key(capability) {
             return Err(Failure::new(
                 ErrorCode::CapabilityUnavailable,
                 format!("{capability} was not negotiated"),
@@ -159,7 +155,10 @@ impl Instance {
             }
             self.call_with_service_context(
                 context,
-                Message::Event(Event::Capability(Notification::Request { handle, update })),
+                api::Input::Event {
+                    panel: None,
+                    event: Notification::Request { handle, update },
+                },
             )?;
         }
         Ok(())

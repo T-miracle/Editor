@@ -331,11 +331,6 @@ impl Package {
                 contributions.plugin.version == manifest.version,
                 "Contribution manifest version differs from package version"
             );
-            for language in &contributions.languages {
-                let grammar = package_bytes(&files, &language.grammar.to_string_lossy())?;
-                anyhow::ensure!(grammar.starts_with(b"\0asm"), "Invalid grammar module");
-                package_text(&files, &language.highlights.to_string_lossy())?;
-            }
             if let Some(theme) = &contributions.theme {
                 ThemeFile::parse(package_text(&files, &theme.file.to_string_lossy())?)?;
                 if let Some(path) = &theme.file_icons {
@@ -349,28 +344,22 @@ impl Package {
         for permission in &manifest.permissions {
             anyhow::ensure!(
                 [
-                    "process.pty",
                     "workspace.read",
                     "storage",
                     "clipboard",
-                    "editor.commands"
+                    "assets.read",
+                    "editor.read",
+                    "editor.write",
+                    "ui.panels",
+                    "services.call",
+                    "process.exec",
+                    "dependencies.prepare",
+                    "dependencies.install"
                 ]
                 .contains(&permission.as_str())
-                    || (manifest.protocol == 7
-                        && ([
-                            "assets.read",
-                            "editor.read",
-                            "editor.write",
-                            "ui.panels",
-                            "services.call",
-                            "process.exec",
-                            "dependencies.prepare",
-                            "dependencies.install"
-                        ]
-                        .contains(&permission.as_str())
-                            || permission
-                                .strip_prefix("process.service.")
-                                .is_some_and(|id| manifest.services.contains_key(id)))),
+                    || permission
+                        .strip_prefix("process.service.")
+                        .is_some_and(|id| manifest.services.contains_key(id)),
                 "Unsupported capability {permission}"
             );
         }
@@ -391,19 +380,15 @@ impl Package {
                 ["left", "right", "bottom", "editor"].contains(&panel.position.as_str()),
                 "Unsupported dock position"
             );
-            // Older hosts do not know how to scope a preview to the current in-memory document.
+            // Preview ingress is workspace-owned and explicitly requires document read authority.
             anyhow::ensure!(
                 if panel.position == "editor" {
-                    manifest.protocol >= 6
-                        && if manifest.protocol == 7 {
-                            manifest.permissions.contains("editor.read")
-                                && manifest.scope == plugin_protocol::api::InstanceScope::Workspace
-                                && manifest.api.as_ref().is_some_and(|api| {
-                                    api.required.contains_key("editor.documents")
-                                })
-                        } else {
-                            manifest.permissions.contains("editor.commands")
-                        }
+                    manifest.permissions.contains("editor.read")
+                        && manifest.scope == plugin_protocol::api::InstanceScope::Workspace
+                        && manifest
+                            .api
+                            .as_ref()
+                            .is_some_and(|api| api.required.contains_key("editor.documents"))
                         && !panel.file_extensions.is_empty()
                         && panel.file_extensions.len() <= 32
                         && panel.file_extensions.iter().all(|extension| {

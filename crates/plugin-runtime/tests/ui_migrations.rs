@@ -1,7 +1,7 @@
 //! Delivered UI packages cross the same installed-package and addressed-event boundary as third parties.
 use plugin_runtime::{
     Manager, Package,
-    plugin_protocol::{Environment, Event, Paint, api, ui},
+    plugin_protocol::{Environment, Paint, api, ui},
 };
 use std::path::Path;
 
@@ -23,18 +23,10 @@ fn manager(root: &Path) -> Manager {
 }
 /// Events retain their declared panel; tests cannot reach guest internals or bypass permissions.
 fn notify(manager: &mut Manager, id: &str, panel: &str, event: api::Notification) {
-    manager
-        .event(
-            id,
-            Event::Surface {
-                panel: panel.into(),
-                event: Box::new(Event::Capability(event)),
-            },
-        )
-        .unwrap();
+    manager.event(id, Some(panel.into()), event).unwrap();
 }
 fn tree<'a>(manager: &'a Manager, id: &str, panel: &str) -> &'a ui::Document {
-    manager.live[id].scenes[panel].ui.as_ref().unwrap()
+    manager.live[id].views[panel].as_ref()
 }
 fn action(manager: &mut Manager, id: &str, panel: &str, node: &str, action: ui::Action) {
     let revision = tree(manager, id, panel).revision;
@@ -174,15 +166,13 @@ fn svg_uses_versioned_memory_and_discards_obsolete_content() {
     let error = manager
         .event(
             "svg",
-            Event::Surface {
-                panel: "preview".into(),
-                event: Box::new(Event::Capability(api::Notification::Preview {
-                    document: Some(api::DocumentVersion {
-                        revision: 6,
-                        ..version.clone()
-                    }),
-                    text: "obsolete".into(),
-                })),
+            Some("preview".into()),
+            api::Notification::Preview {
+                document: Some(api::DocumentVersion {
+                    revision: 6,
+                    ..version.clone()
+                }),
+                text: "obsolete".into(),
             },
         )
         .unwrap_err();

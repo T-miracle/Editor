@@ -82,12 +82,11 @@ fn installed_settings_have_declared_defaults_and_sources() {
         .update_setting(id, Scope::User, "enabled", Some(serde_json::json!(false)))
         .unwrap();
     let plugin_runtime::plugin_protocol::ui::Kind::Text { text } = &manager.live[id]
-        .scene
-        .as_ref()
+        .views
+        .values()
+        .next()
         .unwrap()
-        .ui
         .as_ref()
-        .unwrap()
         .root
         .kind
     else {

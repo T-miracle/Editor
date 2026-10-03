@@ -69,11 +69,7 @@ impl State {
                 "Service calls require an active instance",
             ));
         }
-        if !self
-            .api
-            .as_ref()
-            .is_some_and(|api| api.capabilities.contains_key("plugin.services"))
-        {
+        if !self.api.capabilities.contains_key("plugin.services") {
             return Err(Failure::new(
                 ErrorCode::CapabilityUnavailable,
                 "plugin.services was not negotiated",
@@ -355,12 +351,13 @@ impl Instance {
                 .plugin_services
                 .context
                 .replace(context);
-            let result = self.call(Message::Event(Event::Capability(
-                api::Notification::Process {
+            let result = self.call(api::Input::Event {
+                panel: None,
+                event: api::Notification::Process {
                     handle,
                     update: process::Update::Terminated,
                 },
-            )));
+            });
             self.store.data_mut().plugin_services.context = previous;
             result?;
         }
@@ -370,8 +367,8 @@ impl Instance {
     pub(super) fn call_with_service_context(
         &mut self,
         context: Option<CallContext>,
-        message: Message,
-    ) -> anyhow::Result<Reply> {
+        message: api::Input,
+    ) -> anyhow::Result<api::Output> {
         if context.as_ref().is_some_and(|context| {
             !self
                 .store
@@ -382,7 +379,7 @@ impl Instance {
                 .unwrap()
                 .context_alive(context)
         }) {
-            return Ok(Reply::default());
+            return Ok(api::Output::default());
         }
         let previous =
             std::mem::replace(&mut self.store.data_mut().plugin_services.context, context);
@@ -424,14 +421,15 @@ impl Instance {
         self.store.data_mut().plugin_services.context = Some(call.context.clone());
         let mut caller = call.context.caller.clone();
         caller.permissions = call.context.permissions.clone();
-        let result = self.call(Message::Event(Event::Capability(
-            api::Notification::Service(service::Notification::Invoke(service::Invocation {
+        let result = self.call(api::Input::Event {
+            panel: None,
+            event: api::Notification::Service(service::Notification::Invoke(service::Invocation {
                 caller,
                 contract: call.reference.contract.clone(),
                 method: call.method.clone(),
                 arguments: call.arguments.clone(),
             })),
-        )));
+        });
         self.store.data_mut().plugin_services.context = None;
         self.store.data_mut().plugin_services.invoking = false;
         match result {
@@ -495,9 +493,13 @@ impl Instance {
             }
             self.call_with_service_context(
                 context,
-                Message::Event(Event::Capability(api::Notification::Service(
-                    service::Notification::Request { handle, update },
-                ))),
+                api::Input::Event {
+                    panel: None,
+                    event: api::Notification::Service(service::Notification::Request {
+                        handle,
+                        update,
+                    }),
+                },
             )?;
         }
         Ok(())

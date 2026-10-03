@@ -12,13 +12,14 @@ impl Instance {
     ) -> anyhow::Result<Option<Snapshot>> {
         let checkpoint = self.store.data().roots.checkpoint();
         self.store.data_mut().migrating = true;
-        let result = self.call(Message::Event(Event::Capability(
-            api::Notification::MigrateData {
+        let result = self.call(api::Input::Event {
+            panel: None,
+            event: api::Notification::MigrateData {
                 from,
                 to,
                 snapshot: snapshot.clone(),
             },
-        )));
+        });
         self.store.data_mut().migrating = false;
         self.store.data_mut().roots.release_since(checkpoint);
         Ok(result?.snapshot.or(snapshot))
@@ -35,18 +36,16 @@ impl Instance {
         let checkpoint = self.store.data().roots.checkpoint();
         self.store.data_mut().language_hook = true;
         self.store.data_mut().language_hook_checkpoint = Some(checkpoint);
-        let reply = self.call(Message::Event(Event::Capability(
-            api::Notification::LanguageService(context),
-        )));
+        let reply = self.call(api::Input::Event {
+            panel: None,
+            event: api::Notification::LanguageService(context),
+        });
         self.store.data_mut().language_hook = false;
         self.store.data_mut().language_hook_checkpoint = None;
         self.store.data_mut().roots.release_since(checkpoint);
         let reply = reply?;
         anyhow::ensure!(
-            reply.scene.is_none()
-                && reply.scenes.is_empty()
-                && reply.snapshot.is_none()
-                && reply.configuration.is_none(),
+            reply.views.is_empty() && reply.snapshot.is_none() && reply.configuration.is_none(),
             "LSP hook can return only a language proposal"
         );
         reply
@@ -66,8 +65,8 @@ impl Instance {
             self.store
                 .data()
                 .api
-                .as_ref()
-                .is_some_and(|api| api.capabilities.contains_key("configuration")),
+                .capabilities
+                .contains_key("configuration"),
             "configuration was not negotiated"
         );
         anyhow::ensure!(
@@ -75,14 +74,15 @@ impl Instance {
             "Configuration requires a prepared candidate"
         );
         if manifest.settings_hook {
-            let reply = self.call(Message::Event(Event::Capability(
-                api::Notification::Configuration {
+            let reply = self.call(api::Input::Event {
+                panel: None,
+                event: api::Notification::Configuration {
                     phase: Phase::Validate,
                     values: values.clone(),
                 },
-            )))?;
+            })?;
             anyhow::ensure!(
-                reply.scene.is_none() && reply.scenes.is_empty() && reply.snapshot.is_none(),
+                reply.views.is_empty() && reply.snapshot.is_none(),
                 "Configuration validation cannot publish UI or snapshots"
             );
             let proposal = reply
@@ -127,12 +127,13 @@ impl Instance {
     /// Rollback reinitializes guest memory, so the previous resolved configuration must be delivered again.
     pub(super) fn reapply_settings(&mut self) -> anyhow::Result<()> {
         if !self.configuration.is_empty() {
-            self.call(Message::Event(Event::Capability(
-                api::Notification::Configuration {
+            self.call(api::Input::Event {
+                panel: None,
+                event: api::Notification::Configuration {
                     phase: Phase::Apply,
                     values: self.configuration.clone(),
                 },
-            )))?;
+            })?;
         }
         Ok(())
     }

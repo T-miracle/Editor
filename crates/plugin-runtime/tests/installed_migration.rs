@@ -141,12 +141,11 @@ fn private_text(manager: &mut Manager) -> String {
         .invoke_command(ID, "scope-read", json!(null))
         .unwrap();
     let Kind::Text { text } = &manager.live[ID]
-        .scene
-        .as_ref()
+        .views
+        .values()
+        .next()
         .unwrap()
-        .ui
         .as_ref()
-        .unwrap()
         .root
         .kind
     else {

@@ -111,10 +111,7 @@ impl Worker {
                             | Work::Uninstall(id, _)
                             | Work::SetProjectEnabled(id, false),
                         ) => vec![id.clone()],
-                        Some(Work::Install(package))
-                            if package.manifest.protocol != 7
-                                || package.manifest.component.is_none() =>
-                        {
+                        Some(Work::Install(package)) if package.manifest.component.is_none() => {
                             vec![package.manifest.id.clone()]
                         }
                         Some(Work::SetTrust(false) | Work::Shutdown(_)) => {
@@ -194,9 +191,7 @@ impl Worker {
                                 .install_control
                                 .clone()
                                 .unwrap_or_default();
-                            if package.manifest.protocol == 7
-                                && package.manifest.component.is_some()
-                            {
+                            if package.manifest.component.is_some() {
                                 let started = manager
                                     .begin_installation(
                                         &package,
@@ -235,7 +230,7 @@ impl Worker {
                             manager.set_project_enabled(&id, enabled)
                         }
                         Some(Work::Uninstall(id, delete)) => manager.uninstall(&id, delete),
-                        Some(Work::Event(id, epoch, event)) => {
+                        Some(Work::Event(id, epoch, panel, event)) => {
                             let current = output
                                 .lock()
                                 .unwrap()
@@ -244,7 +239,7 @@ impl Worker {
                                 .copied()
                                 .unwrap_or(0);
                             if epoch == current {
-                                manager.event(&id, event)
+                                manager.event(&id, panel, event)
                             } else {
                                 // Late native callbacks belong to an older surface, never to its replacement.
                                 Ok(())
@@ -267,8 +262,7 @@ impl Worker {
                     Err(error) => manager.document_events_failed(error),
                 }
                 manager.poll();
-                let mut effects = vec![];
-                let mut scenes = BTreeMap::new();
+                let mut views = BTreeMap::new();
                 let mut processes = BTreeMap::new();
                 let mut editor_requests = Vec::new();
                 for (id, instance) in &mut manager.live {
@@ -278,16 +272,10 @@ impl Worker {
                             .into_iter()
                             .map(|request| (id.clone(), request)),
                     );
-                    for (panel, scene) in &instance.scenes {
-                        scenes.insert(format!("{id}/{panel}"), scene.clone());
+                    for (panel, scene) in &instance.views {
+                        views.insert(format!("{id}/{panel}"), scene.clone());
                     }
                     processes.insert(id.clone(), instance.process_count());
-                    effects.extend(
-                        instance
-                            .effects()
-                            .into_iter()
-                            .map(|effect| (id.clone(), effect)),
-                    );
                 }
                 if last_save.elapsed() > Duration::from_secs(3) {
                     if let Err(e) = manager.checkpoint() {
@@ -296,7 +284,7 @@ impl Worker {
                     last_save = Instant::now();
                 }
                 // Vector parsing and rendering stay on this worker, outside the shared-state lock.
-                let images = vectors.prepare(&scenes);
+                let images = vectors.prepare(&views);
                 let configurations = manager
                     .installed
                     .keys()
@@ -440,10 +428,9 @@ impl Worker {
                     .keys()
                     .map(|id| (id.clone(), manager.diagnostics(id)))
                     .collect();
-                published.scenes = scenes;
+                published.views = views;
                 published.images = images;
                 published.processes = processes;
-                published.effects.extend(effects);
                 published.generation += 1;
             }
             // Manager drop atomically saves plugin snapshots and closes owned process trees.
@@ -458,8 +445,7 @@ impl Worker {
     }
 }
 
-/// Queued legacy effects retain their original owner; they must never acquire a replacement's epoch.
+/// Native callbacks retain their original owner; replacement advances the publication epoch.
 fn retire_publication(published: &mut Published, id: &str) {
     *published.instance_epochs.entry(id.to_owned()).or_default() += 1;
-    published.effects.retain(|(owner, _)| owner != id);
 }

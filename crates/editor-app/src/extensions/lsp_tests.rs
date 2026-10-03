@@ -352,9 +352,9 @@ fn installed_hook_starts_unknown_lsp_for_unsaved_open_document_and_retires_it(
     // Invalid hook output may fault and withdraw the instance, but must never publish the forbidden view.
     assert!(
         manager.live["capability-example"]
-            .scene
-            .as_ref()
-            .is_none_or(|scene| {
+            .views
+            .values()
+            .all(|scene| {
                 !serde_json::to_string(scene.as_ref())
                     .unwrap()
                     .contains("forbidden hook view")

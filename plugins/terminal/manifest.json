@@ -1,12 +1,12 @@
 {
   "id": "terminal",
   "name": "终端",
-  "version": "0.7.0",
+  "version": "0.7.1",
   "protocol": 7,
   "api": {
     "base": "^1",
     "required": {
-      "process": ">=1.2, <2", "ui.native": "^1", "ui.canvas": ">=1.1, <2", "ui.grid": "^1",
+      "process": ">=1.3, <2", "ui.native": "^1", "ui.canvas": ">=1.1, <2", "ui.grid": "^1",
       "ui.collections": "^1", "ui.panels": "^1", "ui.clipboard": "^1", "editor.documents": "^1",
       "workspace.files": "^1", "storage.private": "^1", "storage.editor": "^1", "storage.migration": "^1", "plugin.services": "^1"
     }

@@ -13,11 +13,7 @@ impl State {
                 "Instance is not active",
             ));
         }
-        if !self
-            .api
-            .as_ref()
-            .is_some_and(|api| api.capabilities.contains_key("process"))
-        {
+        if !self.api.capabilities.contains_key("process") {
             return Err(Failure::new(
                 ErrorCode::CapabilityUnavailable,
                 "process was not negotiated",
@@ -124,6 +120,32 @@ impl State {
         permission: String,
         cwd: Option<String>,
     ) -> Result<Value, Failure> {
+        // Cursor inheritance is a negotiated transport option, independent of package identity.
+        if matches!(
+            transport,
+            Transport::Pty {
+                inherit_cursor: true,
+                ..
+            }
+        ) {
+            if !self
+                .api
+                .capabilities
+                .get("process")
+                .is_some_and(|version| *version >= semver::Version::new(1, 3, 0))
+            {
+                return Err(Failure::new(
+                    ErrorCode::CapabilityUnavailable,
+                    "process 1.3 is required for cursor inheritance",
+                ));
+            }
+            if !cfg!(windows) {
+                return Err(Failure::new(
+                    ErrorCode::UnsupportedOperation,
+                    "Cursor inheritance is only available for Windows PTYs",
+                ));
+            }
+        }
         if self.processes.len() >= 32 {
             return Err(Failure::new(
                 ErrorCode::LimitExceeded,
@@ -169,11 +191,12 @@ impl State {
         // Arbitrary execution already grants native filesystem authority; service-only calls cannot set cwd.
         let cwd = match cwd {
             Some(cwd) => {
-                if !self.api.as_ref().is_some_and(|api| {
-                    api.capabilities
-                        .get("process")
-                        .is_some_and(|version| *version >= semver::Version::new(1, 2, 0))
-                }) {
+                if !self
+                    .api
+                    .capabilities
+                    .get("process")
+                    .is_some_and(|version| *version >= semver::Version::new(1, 2, 0))
+                {
                     return Err(Failure::new(
                         ErrorCode::CapabilityUnavailable,
                         "process 1.2 is required for cwd",
@@ -195,13 +218,21 @@ impl State {
         };
         let id = match transport {
             Transport::Stdio => self.processes.spawn_stdio(&program, &args, &cwd),
-            Transport::Pty { columns, rows } => self.processes.spawn(
+            Transport::Pty {
+                columns,
+                rows,
+                inherit_cursor,
+            } => self.processes.spawn(
                 program.display().to_string(),
                 args,
                 cwd.display().to_string(),
                 columns,
                 rows,
-                false,
+                inherit_cursor,
+                self.native_diagnostics.reporter(
+                    &self.plugin_services.principal.plugin,
+                    &self.plugin_services.principal.scope,
+                ),
             ),
         }
         .map_err(process_failure)?;
@@ -223,25 +254,19 @@ impl State {
     }
 
     /// Native output is drained before exit, and notifications expose no transferable OS handles.
-    pub(super) fn poll_processes(&mut self) -> anyhow::Result<Vec<Event>> {
-        if self.api.is_none() {
-            return self.processes.poll();
-        }
+    pub(super) fn poll_processes(&mut self) -> anyhow::Result<Vec<api::Notification>> {
         let mut events = Vec::new();
         for (id, update) in self.processes.poll_native()? {
             if let Some((handle, _)) = self.process_handles.get(&id).cloned() {
-                events.push(Event::Capability(api::Notification::Process {
-                    handle,
-                    update,
-                }));
+                events.push(api::Notification::Process { handle, update });
             }
         }
         Ok(events)
     }
 
     /// Revalidate each delivery because a previous output callback can close this same handle.
-    pub(super) fn accept_process_event(&mut self, event: &Event) -> bool {
-        let Event::Capability(api::Notification::Process { handle, update }) = event else {
+    pub(super) fn accept_process_event(&mut self, event: &api::Notification) -> bool {
+        let api::Notification::Process { handle, update } = event else {
             return true;
         };
         let Ok(RootKind::Process(id)) = self.roots.resolve(handle) else {

@@ -1,4 +1,4 @@
-# 原生进程能力 1.2
+# 原生进程能力 1.3
 
 独立协商 `process: ^1`。通过普通 SDK `request` 发送
 `api::Operation::Process { operation }`；能力不由插件名称决定。
@@ -32,12 +32,14 @@
 
 - 声明服务固定使用 **Stdio**，stdout/stderr 是独立字节流，适合 LSP/JSON-RPC，
   不引入终端转义和行转换。
-- 显式执行可以选择 Stdio 或 **Pty { columns, rows }**。PTY 合并输出，可能包含
+- 显式执行可以选择 Stdio 或 **Pty { columns, rows, inherit_cursor }**。PTY 合并输出，可能包含
   终端转义；宿主不解释终端画面。
+- `inherit_cursor` 默认 `false`，序列化时省略默认值，保留旧能力消费者的行为。设为 `true` 需要 `process >=1.3`，且仅 Windows 支持；其他平台在创建进程前返回 `UnsupportedOperation`。Windows 使用标准 `PSEUDOCONSOLE_INHERIT_CURSOR`，将光标查询原样交给字节流消费者，由插件通过 `Write` 异步回答。宿主不解析提示符、快照或光标回复；不会根据插件 ID 自动启用。协议依据见 [CreatePseudoConsole](https://learn.microsoft.com/en-us/windows/console/createpseudoconsole)。
 - 启动返回 `Value::Resource`，句柄绑定实例和作用域。其他插件、已销毁实例及进程
   退出后的旧句柄无法使用它。
 - `Write` 返回 `Unit` 表示进入有界输入队列，不代表程序已消费或执行这些输入。
 - `Resize` 仅用于 PTY，限制尺寸并在 150 ms 内合并连续调整；标准管道不能调整尺寸。
+  Windows 原生调整在独立工作线程执行，最多保留一个待执行的最新尺寸；返回表示接受请求。插件不回复光标查询也不能阻塞宿主的输入、轮询和终止；后续轮询报告原生调整错误。退役或启动失败时，宿主先异步终止并确认整个 Job 内进程全部退出，才向已请求握手的 OS 管道发送固定中性光标回复以解除等待；该清理回复不会交给存活程序，也不读取插件的终端状态。待原生调整结束后唯一关闭控制台，回收所属管道和 Job。
 - `Notification::Process { handle, update }` 提供带流类别的输出和数字退出码。
   读到 EOF 并排空输出后才发送 Exited，不因暂时空队列丢掉退出前的大段输出。
 - `Terminate` 和 `CloseResource` 释放句柄并向 OS 发出终止进程树请求，分别返回

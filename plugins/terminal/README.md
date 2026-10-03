@@ -1,6 +1,6 @@
 # 终端 WebAssembly 插件
 
-当前版本 0.7.0 使用清单 protocol 7 和类型化能力接口。插件通过通用布局树组合 `SideTabs`、`Canvas` 和原生菜单；终端解析、网格、历史、会话与 Shell 配置由 WASM 插件持有。宿主仅提供授权后的进程、文件、剪贴板、文档和 UI 能力。架构与包格式见 [运行时插件说明](../../docs/runtime-plugins.md)。
+当前版本 0.7.1 使用清单 protocol 7 和类型化能力接口。插件通过通用布局树组合 `SideTabs`、`Canvas` 和原生菜单；终端解析、网格、历史、会话与 Shell 配置由 WASM 插件持有。宿主仅提供授权后的进程、文件、剪贴板、文档和 UI 能力。架构与包格式见 [运行时插件说明](../../docs/runtime-plugins.md)。
 
 ## 安装与更新
 
@@ -10,7 +10,7 @@
 
 同 ID 包执行更新。更新前保存会话并关闭旧 Shell 及其子进程；恢复 Tab、配置和旧输出后，仅为之前仍运行的会话启动新 Shell；已退出会话保留历史，不重启，不重放旧命令。恢复保留原有网格尺寸、文字样式、软换行、光标位置与历史滚动位置，不插入提示文字或新增命令行；旧格式中自动生成的恢复分隔行会在迁移时清除。验证失败保留旧版；切换后失败会重新启用旧版。正常关闭编辑器后再次打开也会恢复这些数据。
 
-修改插件源码或替换编辑器 EXE 不会自动更新已经安装的 WASM。需在插件管理中安装新生成的 `dist/plugins/terminal.zip`，并确认版本为 0.7.0。旧配置和 schema 1 快照会迁移；schema 2 额外记录已退出会话。
+修改插件源码或替换编辑器 EXE 不会自动更新已经安装的 WASM。需在插件管理中安装新生成的 `dist/plugins/terminal.zip`，并确认版本为 0.7.1。旧配置和 schema 1 快照会迁移；schema 2 额外记录已退出会话。
 
 ## 界面与操作
 
@@ -171,7 +171,7 @@ ANSI 颜色 0–15 同时可用于前景或背景；加粗、弱化属性将标�
 
 ## 验证范围
 
-`./target/release/editor-app.exe --plugin-cargo plugins/terminal/Cargo.toml test --lib` 验证输入编码、Tab 与快照、目录追踪、边框和滚动。`cargo test -p editor-app extensions::tests` 验证动态停靠、中文输入与原生编辑提交。实际 ZIP 包 + ConPTY 测试为 `cargo run -p plugin-runtime --example smoke -- dist/plugins/terminal.zip`。
+`./target/release/editor-app.exe --plugin-cargo plugins/terminal/Cargo.toml test --lib` 验证输入编码、Tab 与快照、目录追踪、边框和滚动。`cargo test -p editor-app extensions::dock_tests -- --test-threads=1` 验证动态停靠尺寸；`cargo test -p editor-app ui::plugin::tests -- --test-threads=1` 验证中文输入与原生提交。实际 ZIP 包 + ConPTY 生命周期测试为 `cargo test -p plugin-runtime --test terminal_migration -- --ignored --test-threads=1`。
 
 Windows 恢复提示符间距回归测试为 `cargo run -p plugin-runtime --example terminal_startup -- dist/plugins/terminal.zip`，使用实际 ConPTY、PowerShell 和磁盘快照，检查启动前后调整尺寸、恢复时高度缩小及宽度变化，确保不出现多余空行或同一行重复提示符。
 
@@ -182,7 +182,7 @@ Windows 已进行实际运行验证。图片协议、kitty 扩展键盘协议和
 0.4.0 恢复 Alacritty 终端核心，保持 WASM 架构及 schema 1 快照兼容。调整历史容量后，当前主屏历史立即受限。
 
 
-0.4.1 修复较长滚动历史在定期保存或卸载时耗尽 WASM 执行预算的问题。可在构建插件包后执行 `cargo run -p plugin-runtime --example diagnose_snapshot`；设置 `DIAG_WIDE=1` 可验证长行历史。
+0.4.1 修复较长滚动历史在定期保存或卸载时耗尽 WASM 执行预算的问题。历史容量与宽行快照由终端 guest 单元测试覆盖。
 
 0.4.2 将用户提供的终端 SVG 用于面板标题和底部切换按钮；浅色主题显示黑色图形，深色主题显示白色图形。更新已安装的插件时，选择新生成的 `terminal.zip`。
 
@@ -202,7 +202,7 @@ Windows 已进行实际运行验证。图片协议、kitty 扩展键盘协议和
 
 ## 公开能力与验证
 
-- `process >=1.2`：执行配置中的工具和 argv、显式工作目录、PTY 输入输出、尺寸变化及进程终止；必须授权 `process.exec`。
+- `process >=1.3`：执行配置中的工具和 argv、显式工作目录、PTY 输入输出、尺寸变化及进程终止；Windows 会话使用公开光标握手恢复历史画面。必须授权 `process.exec`。
 - `ui.native`、`ui.collections`、`ui.canvas >=1.1`、`ui.grid`：组合布局、会话栏、菜单、输入、字体和滚动条；`ui.panels` 仅控制本插件的面板。
 - `ui.clipboard`：异步读写剪贴板；粘贴请求绑定原进程，切换会话不会改变目标，关闭或重启原进程后丢弃响应。
 - `editor.documents`：读取选区、当前目录、按文档 revision 保存；项目命令只在保存成功后执行，取消或失败不会执行。

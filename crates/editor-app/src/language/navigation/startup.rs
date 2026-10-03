@@ -3,70 +3,39 @@ use super::*;
 impl LanguageServerConnection {
     /// Starts the plugin's server and completes the LSP handshake.
     pub(super) fn start(
-        root: &Path,
         root_uri: &Uri,
-        language: &LanguageContribution,
-        service: Option<&Arc<plugin_runtime::LanguageService>>,
+        service: &Arc<plugin_runtime::LanguageService>,
         retired: &std::sync::atomic::AtomicBool,
     ) -> anyhow::Result<Self> {
-        let configuration = if let Some(service) = service {
-            service.provider.initialization_options.clone()
-        } else {
-            Value::Null
-        };
-        let (child, input, stdout) = if let Some(service) = service {
-            let (child, input, output) = service.spawn_for_owner(retired)?;
-            (OwnedServer::Service(child), input, output)
-        } else {
-            let executable = resolve_server_executable(language)?;
-            let mut child = Command::new(&executable)
-                .args(&language.lsp_args)
-                .current_dir(root)
-                .stdin(Stdio::piped())
-                .stdout(Stdio::piped())
-                .stderr(Stdio::null())
-                .spawn()
-                .with_context(|| format!("start language server {}", executable.display()))?;
-            let input = child.stdin.take().context("open language server stdin")?;
-            let stdout = child.stdout.take().context("open language server stdout")?;
-            (OwnedServer::Legacy(child), input, stdout)
-        };
+        // Every server is launched by its permission-checked runtime owner.
+        let configuration = service.provider.initialization_options.clone();
+        let (child, input, stdout) = service.spawn_for_owner(retired)?;
         let output = transport::reader(stdout)?;
         let mut connection = Self {
             documents: Default::default(),
             child,
-            service: service.cloned(),
+            service: service.clone(),
             input: transport::Writer::new(input),
             output,
             root_uri: root_uri.as_str().to_owned(),
-            language_id: language.id.clone(),
+            language_id: service.provider.language.clone(),
             next_id: 1,
             diagnostics: diagnostics::DiagnosticsStore::default(),
             save_notifications: None,
             pull_diagnostics: false,
-            readiness: language.lsp_readiness.clone(),
             ready: None,
             configuration,
         };
 
-        connection.initialize(root_uri, language)?;
+        connection.initialize(root_uri)?;
         Ok(connection)
     }
 
     /// Server capabilities control optional notifications; initialization options stay opaque plugin data.
-    fn initialize(
-        &mut self,
-        root_uri: &Uri,
-        language: &LanguageContribution,
-    ) -> anyhow::Result<()> {
+    fn initialize(&mut self, root_uri: &Uri) -> anyhow::Result<()> {
         let root_uri = root_uri.as_str();
         // Experimental capability names are data supplied by the language plugin.
-        let mut experimental = serde_json::Map::new();
-        if let Some(service) = &self.service {
-            experimental.extend(service.provider.client_experimental.clone());
-        } else if let Some(readiness) = &language.lsp_readiness {
-            experimental.insert(readiness.client_capability.clone(), Value::Bool(true));
-        }
+        let experimental = self.service.provider.client_experimental.clone();
         let initialized = self.request(
             "initialize",
             json!({

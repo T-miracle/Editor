@@ -7,13 +7,21 @@ use gpui_kit::component::ActiveTheme as _;
 use gpui_kit::*;
 use plugin_runtime::plugin_protocol::{
     Environment,
-    ui::{CanvasControls, SideTabsPosition, UiEvent},
+    ui::{SideTabs, SideTabsPosition, UiEvent},
 };
 use std::{cell::Cell, rc::Rc};
 
-pub(crate) struct CanvasControlsView {
+/// Native reconciliation state only; the wire protocol exposes ordinary document nodes.
+#[derive(Clone, Default, PartialEq)]
+pub(super) struct CollectionModel {
+    pub revision: u64,
+    pub sidebar: Option<SideTabs>,
+    pub menu: Option<plugin_runtime::plugin_protocol::ui::PopupMenu>,
+}
+
+pub(crate) struct CollectionView {
     plugin: String,
-    model: CanvasControls,
+    model: CollectionModel,
     environment: Environment,
     sidebar: Option<Entity<SideTabBar>>,
     menu: Option<Entity<PopupMenu>>,
@@ -22,7 +30,7 @@ pub(crate) struct CanvasControlsView {
     sidebar_width: Rc<Cell<Option<f32>>>,
     sink: Rc<dyn Fn(UiEvent, &mut App)>,
 }
-impl CanvasControlsView {
+impl CollectionView {
     pub fn new(
         plugin: String,
         focus: FocusHandle,
@@ -32,7 +40,7 @@ impl CanvasControlsView {
             plugin,
             focus,
             sink: Rc::new(sink),
-            model: CanvasControls::default(),
+            model: CollectionModel::default(),
             environment: Environment::default(),
             sidebar: None,
             menu: None,
@@ -101,7 +109,7 @@ impl CanvasControlsView {
     }
     pub fn update(
         &mut self,
-        model: CanvasControls,
+        model: CollectionModel,
         environment: Environment,
         origin: Point<Pixels>,
         window: &mut Window,
@@ -221,7 +229,7 @@ impl CanvasControlsView {
         cx.notify();
     }
 }
-impl Render for CanvasControlsView {
+impl Render for CollectionView {
     fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
         let mut view = div().size_full().relative();
         if let (Some(tabs), Some(sidebar)) = (&self.model.sidebar, &self.sidebar) {
@@ -247,11 +255,11 @@ impl Render for CanvasControlsView {
 
 #[cfg(test)]
 mod tests {
-    use super::CanvasControlsView;
+    use super::{CollectionModel, CollectionView};
     use gpui_kit::{AppContext as _, TestAppContext, component::Root, gpui, point, px, rgb, size};
     use plugin_runtime::plugin_protocol::{
         Environment, FontStyle,
-        ui::{CanvasControls, SideTabs, SideTabsPosition},
+        ui::{SideTabs, SideTabsPosition},
     };
     use std::{cell::RefCell, rc::Rc};
 
@@ -267,7 +275,7 @@ mod tests {
         let capture = slot.clone();
         let (_, cx) = cx.add_window_view(move |window, cx| {
             let view =
-                cx.new(|cx| CanvasControlsView::new("plugin".into(), cx.focus_handle(), |_, _| {}));
+                cx.new(|cx| CollectionView::new("plugin".into(), cx.focus_handle(), |_, _| {}));
             *capture.borrow_mut() = Some(view.clone());
             Root::new(view, window, cx)
         });
@@ -282,7 +290,7 @@ mod tests {
             min_width: 80.,
             max_width: 480.,
         };
-        let model = CanvasControls {
+        let model = CollectionModel {
             revision: 1,
             sidebar: Some(tabs),
             menu: None,
@@ -352,12 +360,12 @@ mod tests {
         let capture = slot.clone();
         let (_, cx) = cx.add_window_view(move |window, cx| {
             let view =
-                cx.new(|cx| CanvasControlsView::new("plugin".into(), cx.focus_handle(), |_, _| {}));
+                cx.new(|cx| CollectionView::new("plugin".into(), cx.focus_handle(), |_, _| {}));
             *capture.borrow_mut() = Some(view.clone());
             Root::new(view, window, cx)
         });
         let view = slot.borrow_mut().take().unwrap();
-        let mut controls = CanvasControls {
+        let mut controls = CollectionModel {
             revision: 1,
             sidebar: Some(SideTabs {
                 id: "tabs".into(),
@@ -407,7 +415,7 @@ mod tests {
             gpui_kit::init(cx);
             crate::ui::typography::init(cx);
             crate::ui::theme::apply_theme(crate::ui::theme::builtin_theme(false), cx);
-            let mut view = CanvasControlsView::new("plugin".into(), cx.focus_handle(), |_, _| {});
+            let mut view = CollectionView::new("plugin".into(), cx.focus_handle(), |_, _| {});
             // Defaults are stable across host themes; explicit plugin roles take precedence.
             let tabs = view.tabs_style(cx);
             assert_eq!(tabs.background, rgb(0xf7f8fa).into());

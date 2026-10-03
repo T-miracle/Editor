@@ -2,41 +2,39 @@
 use super::*;
 
 #[test]
-fn canvas_controls_rejects_ambiguous_items_and_unbounded_geometry() {
-    let mut controls = CanvasControls {
-        sidebar: Some(SideTabs {
-            id: "tabs".into(),
-            position: SideTabsPosition::Right,
-            items: vec![SideTab {
-                id: "one".into(),
-                label: "One".into(),
-                status: None,
-                disabled: false,
-                closable: true,
-            }],
-            selected: Some("one".into()),
-            rename: None,
-            width: 180.,
-            min_width: 80.,
-            max_width: 480.,
-        }),
-        ..Default::default()
+fn side_tabs_rejects_ambiguous_items_and_unbounded_geometry() {
+    // Collection validation is independent of its location in a document.
+    let mut controls = SideTabs {
+        id: "tabs".into(),
+        position: SideTabsPosition::Right,
+        items: vec![SideTab {
+            id: "one".into(),
+            label: "One".into(),
+            status: None,
+            disabled: false,
+            closable: true,
+        }],
+        selected: Some("one".into()),
+        rename: None,
+        width: 180.,
+        min_width: 80.,
+        max_width: 480.,
     };
     assert!(controls.validate().is_ok());
-    controls.sidebar.as_mut().unwrap().width = f32::NAN;
+    controls.width = f32::NAN;
     assert!(controls.validate().is_err());
-    controls.sidebar.as_mut().unwrap().width = 180.;
-    controls.sidebar.as_mut().unwrap().selected = Some("removed".into());
+    controls.width = 180.;
+    controls.selected = Some("removed".into());
     assert!(controls.validate().is_err());
-    controls.sidebar.as_mut().unwrap().selected = None;
-    let duplicate = controls.sidebar.as_ref().unwrap().items[0].clone();
-    controls.sidebar.as_mut().unwrap().items.push(duplicate);
+    controls.selected = None;
+    let duplicate = controls.items[0].clone();
+    controls.items.push(duplicate);
     assert!(controls.validate().is_err());
 }
 
-/// Older canvas controls retain their right dock; new controls round-trip either edge.
+/// An omitted edge uses the current default; either explicit edge round-trips.
 #[test]
-fn sidebar_position_defaults_for_old_guests_and_round_trips_left() {
+fn sidebar_position_defaults_right_and_round_trips_left() {
     let legacy = serde_json::json!({
         "id": "tabs", "items": [], "selected": null, "rename": null,
         "width": 180., "min_width": 80., "max_width": 480.

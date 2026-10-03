@@ -86,11 +86,12 @@ impl Installed {
         .then_some(bytes)
     }
 }
-/// Run this module on a worker thread; native rendering reads only published scenes.
+/// Run this module on a worker thread; native rendering reads only published documents.
 pub struct Manager {
     /// Executable guests share one private-data owner; metadata/dependency-only managers remain independent.
     _runtime_lock: Option<std::fs::File>,
     diagnostic_history: BTreeMap<String, Vec<crate::faults::Diagnostic>>,
+    native_diagnostics: crate::faults::NativeDiagnostics,
     plugin_services: crate::plugin_services::Shared,
     root: PathBuf,
     environment: Environment,
@@ -151,6 +152,7 @@ impl Manager {
         let mut manager = Self {
             _runtime_lock: None,
             diagnostic_history: BTreeMap::new(),
+            native_diagnostics: Default::default(),
             plugin_services: std::sync::Arc::new(std::sync::Mutex::new(
                 crate::plugin_services::Broker::new(plugin_services::read_preferences(&root)?),
             )),
@@ -194,19 +196,8 @@ impl Manager {
             .unwrap_or_else(|| self.root.join("data").join(id))
     }
     fn snapshot_path(&self, id: &str) -> PathBuf {
-        if self
-            .installed
-            .get(id)
-            .is_some_and(|entry| entry.manifest.protocol == 7)
-        {
-            return self.data_directory(id).parent().unwrap().join("state.json");
-        }
-        let workspace = format!(
-            "{:x}",
-            Sha256::digest(self.environment.workspace.as_bytes())
-        );
-        self.data_directory(id)
-            .join(format!("state-{}.json", &workspace[..16]))
+        // Only admitted instances write snapshots; historical paths belong to the finite importer.
+        self.data_directory(id).parent().unwrap().join("state.json")
     }
     fn save_registry(&self) -> anyhow::Result<()> {
         // Other metadata managers cannot write through an in-flight private-data/registry transaction.
@@ -283,102 +274,8 @@ impl Manager {
             );
             return self.install_declarative(package, grants, control);
         }
-        if package.manifest.protocol == 7 {
-            let prepared = self.prepare_installation(package, grants, control)?;
-            return self.commit_installation(prepared, control);
-        }
-        anyhow::ensure!(
-            self.installed
-                .get(&id)
-                .is_none_or(|old| old.manifest.data_format.is_none()),
-            "Removing a data format requires an explicit migration"
-        );
-        self.acquire_data_owner()?;
-        let snapshot = if let Some(old) = self.live.get_mut(&id) {
-            Some(old.snapshot()?)
-        } else {
-            self.load_snapshot(&id)?
-        };
-        let version = self.root.join("packages").join(&id).join(&package.digest);
-        package.extract(&version)?;
-        control.check()?;
-        if self.engine.is_none() {
-            self.engine = Some(Instance::engine()?);
-        }
-        let mut next = Instance::prepare_with_resources(
-            self.engine.as_ref().unwrap(),
-            package.component().expect("component checked above"),
-            &package.manifest,
-            &grants,
-            self.environment.clone(),
-            self.instance_data_directory(&package.manifest),
-            version,
-            snapshot.clone(),
-            self.host_resources.clone(),
-        )?;
-        self.configure_saved_settings(&mut next, &package.manifest)?;
-        self.refresh_services();
-        next.connect_services(self.plugin_services.clone())?;
-        self.prepare_dependencies(package, Some(&mut next), control)?;
-        if let Some(snapshot) = &snapshot {
-            self.save_snapshot(&id, snapshot)?;
-        }
-        // Cutover stops old process trees. Rollback starts new shells from the old snapshot.
-        control.check()?;
-        let mut old = self.live.remove(&id);
-        if let Some(old) = &mut old {
-            old.stop();
-        }
-        let previous = self.installed.get(&id).cloned();
-        let mut original_data = vec![];
-        let result = (|| {
-            control.check()?;
-            next.activate()?;
-            original_data = next.commit_data()?;
-            self.installed.insert(
-                id.clone(),
-                Installed {
-                    manifest: package.manifest.clone(),
-                    digest: package.digest.clone(),
-                    grants,
-                    enabled: true,
-                    project_enabled: previous
-                        .as_ref()
-                        .map(|entry| entry.project_enabled.clone())
-                        .unwrap_or_default(),
-                    global_enabled: None,
-                    error: None,
-                },
-            );
-            self.save_registry()?;
-            Ok::<_, anyhow::Error>(())
-        })();
-        match result {
-            Ok(()) => {
-                self.live.insert(id.clone(), next);
-                self.restore_install_scope(&id, previous.as_ref())
-            }
-            Err(error) => {
-                next.stop();
-                Instance::rollback_data(&original_data)?;
-                if let Some(previous) = previous {
-                    self.installed.insert(id.clone(), previous);
-                    // Reuse the old compiled instance; a registry I/O failure must not prevent recovery.
-                    if let Some(mut old) = old {
-                        let rollback = old.restart(self.environment.clone(), snapshot);
-                        if let Err(rollback) = rollback {
-                            return Err(anyhow::anyhow!(
-                                "Update failed: {error:#}; rollback failed: {rollback:#}"
-                            ));
-                        }
-                        self.live.insert(id.clone(), old);
-                    }
-                } else {
-                    self.installed.remove(&id);
-                }
-                Err(error)
-            }
-        }
+        let prepared = self.prepare_installation(package, grants, control)?;
+        self.commit_installation(prepared, control)
     }
     /// Commit a resource-only package without starting a redundant WASM instance.
     fn install_declarative(
@@ -560,6 +457,7 @@ impl Manager {
         self.configure_saved_settings(&mut instance, &entry.manifest)?;
         self.refresh_services();
         instance.connect_services(self.plugin_services.clone())?;
+        instance.connect_diagnostics(self.native_diagnostics.clone());
         instance.activate()?;
         let originals = instance.commit_data()?;
         self.installed.get_mut(id).unwrap().enabled = true;
@@ -707,10 +605,9 @@ impl Manager {
         );
         self.event(
             plugin,
-            Event::Command {
+            None,
+            api::Notification::Command {
                 id: command.into(),
-                cwd: None,
-                text: None,
                 arguments: (!arguments.is_null()).then_some(arguments),
             },
         )

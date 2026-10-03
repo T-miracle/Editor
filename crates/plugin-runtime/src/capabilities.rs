@@ -2,7 +2,7 @@
 use plugin_protocol::{Manifest, api};
 use semver::Version;
 
-/// Production package admission has one current baseline; old codecs exist only until their cleanup ticket.
+/// Production admission and instance preparation enforce the same current baseline.
 pub(crate) fn require_current(manifest: &Manifest) -> anyhow::Result<()> {
     anyhow::ensure!(
         manifest.protocol == 7,
@@ -15,14 +15,11 @@ pub(crate) fn require_current(manifest: &Manifest) -> anyhow::Result<()> {
 }
 
 /// Validate compatibility both when inspecting a package and before restoring an instance.
-pub(crate) fn negotiate(manifest: &Manifest) -> anyhow::Result<Option<api::Negotiated>> {
-    if manifest.protocol != 7 {
-        anyhow::ensure!(
-            manifest.api.is_none() && manifest.scope == api::InstanceScope::Workspace,
-            "Capability requirements require protocol 7"
-        );
-        return Ok(None);
-    }
+pub(crate) fn negotiate(manifest: &Manifest) -> anyhow::Result<api::Negotiated> {
+    anyhow::ensure!(
+        manifest.protocol == 7,
+        "Only capability protocol 7 is supported"
+    );
     let requirements = manifest
         .api
         .as_ref()
@@ -43,14 +40,12 @@ pub(crate) fn negotiate(manifest: &Manifest) -> anyhow::Result<Option<api::Negot
         ("configuration".into(), Version::new(1, 0, 0)),
         ("ui.panels".into(), Version::new(1, 0, 0)),
         ("ui.clipboard".into(), Version::new(1, 0, 0)),
-        ("process".into(), Version::new(1, 2, 0)),
+        ("process".into(), Version::new(1, 3, 0)),
         ("language.lsp".into(), Version::new(1, 1, 0)),
         ("dependencies".into(), Version::new(1, 0, 0)),
     ]
     .into();
-    Ok(Some(
-        requirements
-            .negotiate(Version::new(1, 0, 0), &available)
-            .map_err(anyhow::Error::msg)?,
-    ))
+    Ok(requirements
+        .negotiate(Version::new(1, 0, 0), &available)
+        .map_err(anyhow::Error::msg)?)
 }

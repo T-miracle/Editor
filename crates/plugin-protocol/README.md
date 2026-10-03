@@ -16,7 +16,7 @@
 
 新 UI 输出使用 `api::View { panel, document }`，普通表单不要求画布或字符网格字段。宿主检查 `ui.native` 是否已协商、面板是否已声明；`ui.canvas ^1` 允许在同一树任意位置放置画布，`ui.grid ^1` 单独提供可选字符测量。原生通知保留面板和节点作用域。编辑区预览使用 `editor.documents` 与 `editor.read`，以带版本的内存文本通知驱动；旧画布/PTY 消息不会自动成为新基础协议的一部分。组合协议详见 [UI.md](UI.md)。
 
-当前包安装和实例恢复要求 `protocol = 7` 及可协商的基础 API。协议 1–6 的已安装记录保留设置、权限、启用范围和私有数据，并显示需要更新；旧组件不会激活。使用当前 SDK 重建并安装同一插件的新包后恢复使用。协议编解码器和个别旧测试暂留供开发迁移，不能作为运行兼容承诺；最终删除由收缩工单 #21 负责。
+当前包安装和实例恢复要求 `protocol = 7` 及可协商的基础 API。协议 1–6 的已安装记录保留设置、权限、启用范围和私有数据，并显示需要更新；旧组件不会激活。使用当前 SDK 重建并安装同一插件的新包后恢复使用。旧运行协议与转换器已经删除；旧安装记录只参与管理界面展示和有限数据导入，不恢复执行。
 
 独立验证插件为 `capability-example`，不属于正式发行包。先构建开发版宿主，再运行 `scripts/verify-plugin-sdk.ps1`：脚本将示例源文件、清单、README 和资源复制到系统临时目录，从该目录通过实际宿主的公开 `--plugin-cargo` 命令构建，不使用宿主仓库的 Cargo 工作区或业务源码路径。脚本还通过 `--export-plugin-sdk` 验证完整导出与损坏文件恢复。验证命令：
 
@@ -61,11 +61,11 @@ cargo test -p editor-app --bin editor-app capability_package_consent -- --ignore
 
 ## 独立构建与 SDK 分发
 
-本目录是主程序持有的版本化插件接口。`wit/plugin.wit` 定义 WebAssembly Component Model 的导入与导出；Rust crate `plugin-protocol` 定义通过该接口传递的 JSON 消息、场景和权限名称。主程序把这些接口文件编入可执行文件，并自动管理插件编译所需的接口缓存。
+本目录是主程序持有的版本化插件接口。`wit/plugin.wit` 定义 WebAssembly Component Model 的导入与导出；Rust crate `plugin-protocol` 定义通过该接口传递的 JSON 消息、文档和权限名称。主程序把这些接口文件编入可执行文件，并自动管理插件编译所需的接口缓存。
 
 `host.request` 是主程序在运行时提供的导入。当前插件通过 `api::guest` 使用类型化能力请求，主程序逐次检查协商能力、插件权限、实例作用域和句柄。WIT 和 Rust 类型只在编译插件时使用，安装后的 `.wasm` 不读取 SDK 文件。
 
-插件在 `Cargo.toml` 声明 `plugin-protocol = { version = "=0.1.0", features = ["guest"] }`，通过 `plugin_protocol::bindings::{Guest, editor, export}` 使用宿主调用和组件导出，无需自行生成 WIT 绑定。独立编译时直接调用已打包的编辑器：
+插件在 `Cargo.toml` 声明 `plugin-protocol = { version = "=0.2.0", features = ["guest"] }`，通过 `plugin_protocol::bindings::{Guest, editor, export}` 使用宿主调用和组件导出，无需自行生成 WIT 绑定。独立编译时直接调用已打包的编辑器：
 
 ```powershell
 editor-app.exe --plugin-cargo capability-example/Cargo.toml build --target wasm32-wasip2 --release
@@ -88,6 +88,10 @@ editor-app.exe --plugin-cargo capability-example/Cargo.toml check --target wasm3
 
 LSP 提供者可声明 `client_experimental`，传入 `initialize.capabilities.experimental`；标准传输能力仍由宿主维护。最多 64 个非空键，每键最多 256 字节，JSON 深度最多 16，且包含在提供者总计 256 KiB 的限制内。宿主不识别具体服务名称、扩展字段或 Rust 项目结构。
 
-## 开发过渡中的历史类型
+## 当前版本与迁移边界
 
-SDK 暂留的 `Input`、`Event`、`Request` 及旧画布传输类型仅服务于迁移开发与历史数据检查。新插件使用 `api::Input`、`api::Notification`、`api::Operation` 和协商能力；原生 UI 树继续使用共享的 `ui` 模块。保留 Rust 类型不代表允许安装或执行协议 1–6 的组件。
+Rust SDK 0.2.0 删除旧 Message/Event/Reply/Request、Scene/Widget 与 CanvasControls 类型和兼容转换。重新编译时依赖 `plugin-protocol = { version = "=0.2.0", features = ["guest"] }`。当前能力协议的线上格式不变：清单 protocol 7、api.base ^1；WIT 仍是 editor:plugin/plugin@0.1.0，接口能力分别协商版本。
+
+插件只使用 api::Input、api::Notification、api::Output 和 api::Operation；UI 返回 ui::Document，其中 Canvas、SideTabs 是普通节点。宿主嵌入端通过 Manager::event(plugin_id, panel, notification) 路由，读取 Instance::views 获取每个面板的已验证文档，不再经过旧场景转换。
+
+旧协议 1–6 的包拒绝安装和执行，保留安装记录以展示更新/卸载与启用偏好。仅保留有限的历史 ID、私有数据与布局导入；数据导入不会恢复旧代码执行能力。热更新和迁移详情见 [MIGRATION.md](MIGRATION.md)。

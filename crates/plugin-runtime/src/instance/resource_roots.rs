@@ -163,11 +163,7 @@ impl State {
             }
             RootKind::Data => ("storage.private", "storage", self.data.as_path()),
         };
-        if !self
-            .api
-            .as_ref()
-            .is_some_and(|api| api.capabilities.contains_key(capability))
-        {
+        if !self.api.capabilities.contains_key(capability) {
             return Err(Failure::new(
                 ErrorCode::CapabilityUnavailable,
                 format!("{capability} was not negotiated"),
@@ -200,8 +196,8 @@ impl State {
                 let root = self.file_authority(kind, false)?;
                 if !self
                     .api
-                    .as_ref()
-                    .and_then(|api| api.capabilities.get("workspace.files"))
+                    .capabilities
+                    .get("workspace.files")
                     .is_some_and(|version| *version >= semver::Version::new(1, 1, 0))
                 {
                     return Err(Failure::new(

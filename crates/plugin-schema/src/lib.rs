@@ -25,11 +25,11 @@ pub fn canonical_plugin_token(token: &str) -> String {
     }
 }
 
+/// Current independent contributions; obsolete combined declarations are rejected explicitly.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
 pub struct PluginManifest {
     pub plugin: PluginMetadata,
-    #[serde(default)]
-    pub languages: Vec<LanguageContribution>,
     /// Independent recognition and highlighting contributions for the capability protocol.
     #[serde(default)]
     pub language_definitions: Vec<LanguageDefinition>,
@@ -85,54 +85,6 @@ pub struct PluginMetadata {
     pub name: String,
     pub version: String,
     pub host_version: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct LanguageContribution {
-    pub id: String,
-    /// Extensions without a leading dot, matched after exact file names.
-    #[serde(default)]
-    pub extensions: Vec<String>,
-    /// Complete file basenames such as Cargo.lock; a suffix alone is not enough.
-    #[serde(default)]
-    pub filenames: Vec<String>,
-    pub grammar: PathBuf,
-    pub highlights: PathBuf,
-    /// Tree-sitter language ABI version exported by the grammar module.
-    pub tree_sitter_abi: u32,
-    #[serde(default)]
-    pub lsp_command: Option<String>,
-    /// Arguments passed directly to the language server executable.
-    #[serde(default)]
-    pub lsp_args: Vec<String>,
-    /// Optional executable patterns searched before the system PATH.
-    #[serde(default)]
-    pub lsp_search_paths: Vec<String>,
-    /// Arguments used to reject unusable executable shims before startup.
-    #[serde(default)]
-    pub lsp_check_args: Vec<String>,
-    /// Optional notification that marks initial workspace analysis complete.
-    #[serde(default)]
-    pub lsp_readiness: Option<LspReadiness>,
-    /// Punctuation that asks the language server for completion suggestions.
-    #[serde(default)]
-    pub completion_triggers: Vec<String>,
-    /// Line suffixes that trigger completion after a space is entered.
-    #[serde(default)]
-    pub completion_after_whitespace: Vec<String>,
-}
-
-/// Describes a boolean readiness signal emitted by a language server.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(deny_unknown_fields)]
-pub struct LspReadiness {
-    pub notification: String,
-    pub ready_field: String,
-    pub client_capability: String,
-    pub timeout_ms: u64,
-    /// Optional request used to consume readiness notifications while the server is idle.
-    #[serde(default)]
-    pub poll_method: Option<String>,
 }
 
 /// A versioned JSON file containing one or more named editor themes.
@@ -391,39 +343,6 @@ impl PluginManifest {
             return Err(ManifestError::InvalidPluginId);
         }
 
-        for language in &self.languages {
-            if language.extensions.is_empty() && language.filenames.is_empty() {
-                return Err(ManifestError::MissingLanguageSelector(language.id.clone()));
-            }
-            for filename in &language.filenames {
-                // A file name selector is one basename, never a path or a wildcard.
-                if filename.is_empty()
-                    || matches!(filename.as_str(), "." | "..")
-                    || filename
-                        .chars()
-                        .any(|character| matches!(character, '/' | '\\' | '*' | '?' | '[' | ']'))
-                {
-                    return Err(ManifestError::InvalidLanguageFilename(filename.clone()));
-                }
-            }
-            if language.grammar.is_absolute() || language.highlights.is_absolute() {
-                return Err(ManifestError::AbsolutePath(language.id.clone()));
-            }
-            for path in [&language.grammar, &language.highlights] {
-                if path.components().any(|component| {
-                    matches!(
-                        component,
-                        std::path::Component::ParentDir
-                            | std::path::Component::RootDir
-                            | std::path::Component::Prefix(_)
-                    )
-                }) {
-                    return Err(ManifestError::UnsafeAssetPath(
-                        path.to_string_lossy().into_owned(),
-                    ));
-                }
-            }
-        }
         if let Some(file_icons) = &self.file_icons {
             if file_icons.as_os_str().is_empty() {
                 return Err(ManifestError::EmptyFileIconPath);
@@ -758,6 +677,7 @@ impl ThemeComponent {
 mod tests {
     use super::*;
 
+    /// Recognition and highlighting remain independently declared and validated.
     #[test]
     fn parses_a_declarative_language_plugin() {
         let manifest = PluginManifest::parse(
@@ -768,21 +688,25 @@ mod tests {
                 version = "0.1.0"
                 host_version = ">=0.1.0"
 
-                [[languages]]
+                [[language_definitions]]
                 id = "rust"
+                name = "Rust"
                 extensions = ["rs"]
+                [[highlighters]]
+                id = "syntax"
+                language = "rust"
+                grammar_name = "rust"
                 grammar = "grammar/rust.wasm"
                 highlights = "queries/highlights.scm"
                 tree_sitter_abi = 15
-                lsp_command = "rust-analyzer"
             "#,
         )
         .unwrap();
 
         assert_eq!(manifest.plugin.id, "rust");
-        assert_eq!(manifest.languages[0].extensions, ["rs"]);
-        assert!(manifest.languages[0].filenames.is_empty());
-        assert_eq!(manifest.languages[0].tree_sitter_abi, 15);
+        assert_eq!(manifest.language_definitions[0].extensions, ["rs"]);
+        assert!(manifest.language_definitions[0].filenames.is_empty());
+        assert_eq!(manifest.highlighters[0].tree_sitter_abi, 15);
     }
 
     /// Exact filenames can be the only selector, but wildcard lockfile rules are rejected.
@@ -795,20 +719,37 @@ mod tests {
             version = "0.1.0"
             host_version = ">=0.1.0"
 
-            [[languages]]
+            [[language_definitions]]
             id = "toml"
+            name = "TOML"
             filenames = ["Cargo.lock"]
-            grammar = "grammar/toml.wasm"
-            highlights = "queries/highlights.scm"
-            tree_sitter_abi = 15
         "#;
         let manifest = PluginManifest::parse(source).unwrap();
-        assert!(manifest.languages[0].extensions.is_empty());
-        assert_eq!(manifest.languages[0].filenames, ["Cargo.lock"]);
+        assert!(manifest.language_definitions[0].extensions.is_empty());
+        assert_eq!(manifest.language_definitions[0].filenames, ["Cargo.lock"]);
         assert!(matches!(
             PluginManifest::parse(&source.replace("Cargo.lock", "*.lock")),
-            Err(ManifestError::InvalidLanguageFilename(_))
+            Err(ManifestError::Parse(_))
         ));
+    }
+
+    /// Old executable language fields cannot silently bypass the new service declarations.
+    #[test]
+    fn rejects_combined_legacy_language_declarations() {
+        let source = r#"[plugin]
+id = "legacy"
+name = "Legacy"
+version = "1.0.0"
+host_version = "^0.1"
+[[languages]]
+id = "legacy"
+lsp_command = "unmanaged-server"
+"#;
+        let error = PluginManifest::parse(source).unwrap_err().to_string();
+        assert!(
+            error.contains("unknown field") && error.contains("languages"),
+            "{error}"
+        );
     }
 
     /// Nested plugin colors flatten for the runtime and reject malformed overrides.

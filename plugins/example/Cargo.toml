@@ -1,6 +1,6 @@
 [package]
 name = "example-guest"
-version = "0.3.0"
+version = "0.3.1"
 edition = "2024"
 rust-version = "1.95"
 license = "MIT"
@@ -9,5 +9,5 @@ license = "MIT"
 crate-type = ["cdylib"]
 
 [dependencies]
-plugin-protocol = { version = "=0.1.0", features = ["guest"] }
+plugin-protocol = { version = "=0.2.0", features = ["guest"] }
 serde_json = "1.0"

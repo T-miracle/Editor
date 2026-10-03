@@ -78,10 +78,7 @@ impl InstallationPreparation {
                 "Migrated snapshot exceeds quota"
             );
         }
-        next.call(Message::Prepare {
-            environment: self.environment.clone(),
-            snapshot,
-        })?;
+        next.prepare_state(self.environment.clone(), snapshot)?;
         // Flush only into the unpublished candidate and consume the write staging map. A later refresh must
         // never replay these preview writes over the old instance's final data.
         next.commit_data()?;

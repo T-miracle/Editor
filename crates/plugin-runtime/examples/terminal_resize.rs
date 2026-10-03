@@ -1,7 +1,11 @@
 //! Regression for a restored PowerShell transcript that gains a blank row on its first resize.
 use plugin_runtime::{
     Manager, Package,
-    plugin_protocol::{Environment, Event, Paint},
+    plugin_protocol::{
+        Environment, Paint,
+        api::Notification,
+        ui::{self, CanvasEvent},
+    },
 };
 use std::{
     collections::BTreeMap,
@@ -11,7 +15,7 @@ use std::{
 /// Reassemble visible text cells, keeping real row positions so an inserted blank is observable.
 fn rows(manager: &Manager, id: &str) -> Vec<(i32, String)> {
     let mut rows = BTreeMap::<i32, String>::new();
-    for paint in &manager.live[id].scene.as_ref().unwrap().paint {
+    for paint in &canvas(manager, id).paint {
         if let Paint::Text { y, text, .. } = paint {
             rows.entry(y.round() as i32).or_default().push_str(text);
         }
@@ -46,13 +50,16 @@ fn settle(manager: &mut Manager, id: &str) -> anyhow::Result<()> {
 
 /// Send the same logical panel dimensions and font metrics as the editor's native canvas.
 fn resize(manager: &mut Manager, id: &str, height: f32) -> anyhow::Result<()> {
-    manager.event(
+    input(
+        manager,
         id,
-        Event::Resize {
+        CanvasEvent::Resize {
             width: 1600.,
             height,
-            cell_width: 8.4,
-            cell_height: 21.,
+            grid: Some(ui::GridMetrics {
+                cell_width: 8.4,
+                cell_height: 21.,
+            }),
         },
     )
 }
@@ -110,7 +117,13 @@ fn main() -> anyhow::Result<()> {
     resize(&mut manager, id, 310.)?;
     settle(&mut manager, id)?;
     // This built-in command matches node -v's three-row transcript without requiring Node.
-    manager.event(id, Event::Text("Write-Output RESIZE_OUTPUT\r".into()))?;
+    input(
+        &mut manager,
+        id,
+        CanvasEvent::Text {
+            text: "Write-Output RESIZE_OUTPUT\r".into(),
+        },
+    )?;
     settle(&mut manager, id)?;
     check_spacing(&manager, id)?;
     if restore {
@@ -151,7 +164,13 @@ fn main() -> anyhow::Result<()> {
         // Also cover fast drag coalescing, followed by submission of another real command.
         settle(&mut manager, id)?;
         check_spacing(&manager, id)?;
-        manager.event(id, Event::Text("Write-Output RESIZE_OUTPUT\r".into()))?;
+        input(
+            &mut manager,
+            id,
+            CanvasEvent::Text {
+                text: "Write-Output RESIZE_OUTPUT\r".into(),
+            },
+        )?;
         settle(&mut manager, id)?;
         let current = rows(&manager, id);
         anyhow::ensure!(
@@ -162,4 +181,29 @@ fn main() -> anyhow::Result<()> {
     manager.uninstall(id, true)?;
     println!("PASS: real height changes preserve command output and prompt spacing");
     Ok(())
+}
+
+/// Read the current composed canvas without retaining a legacy scene adapter.
+fn canvas<'a>(manager: &'a Manager, id: &str) -> &'a ui::Canvas {
+    let node = manager.live[id].views["terminal"]
+        .active_node("output")
+        .unwrap();
+    let ui::Kind::Canvas(canvas) = &node.kind else {
+        panic!("terminal canvas missing")
+    };
+    canvas
+}
+
+/// Address input with the displayed document revision and owned panel/node identity.
+fn input(manager: &mut Manager, id: &str, event: CanvasEvent) -> anyhow::Result<()> {
+    let revision = manager.live[id].views["terminal"].revision;
+    manager.event(
+        id,
+        Some("terminal".into()),
+        Notification::Ui(ui::UiEvent {
+            revision,
+            node: "output".into(),
+            action: ui::Action::Canvas(event),
+        }),
+    )
 }

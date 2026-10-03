@@ -2,41 +2,25 @@
 
 use plugin_runtime::{
     Manager, Package,
-    plugin_protocol::{Environment, Event, FontStyle, Paint, Rect, api, ui},
+    plugin_protocol::{Environment, FontStyle, Paint, Rect, api, ui},
 };
 use std::path::Path;
 
 /// Deliver native surface events with the same identity used by the editor's inner split.
 fn send(manager: &mut Manager, event: api::Notification) -> anyhow::Result<()> {
-    manager.event(
-        "svg",
-        Event::Surface {
-            panel: "preview".into(),
-            event: Box::new(Event::Capability(event)),
-        },
-    )
+    manager.event("svg", Some("preview".into()), event)
 }
 
 /// Read the ordinary canvas node without relying on a legacy scene drawing slot.
 fn drawing(manager: &Manager) -> &ui::Canvas {
-    let ui::Kind::Canvas(canvas) = &manager.live["svg"].scenes["preview"]
-        .ui
-        .as_ref()
-        .unwrap()
-        .root
-        .kind
-    else {
+    let ui::Kind::Canvas(canvas) = &manager.live["svg"].views["preview"].as_ref().root.kind else {
         panic!("canvas required")
     };
     canvas
 }
 /// Native canvas input uses the revision published by the plugin's current tree.
 fn canvas(manager: &mut Manager, action: ui::CanvasEvent) -> anyhow::Result<()> {
-    let revision = manager.live["svg"].scenes["preview"]
-        .ui
-        .as_ref()
-        .unwrap()
-        .revision;
+    let revision = manager.live["svg"].views["preview"].as_ref().revision;
     send(
         manager,
         api::Notification::Ui(ui::UiEvent {

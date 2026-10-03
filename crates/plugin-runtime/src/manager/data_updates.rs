@@ -137,14 +137,14 @@ impl Manager {
                 snapshot = crate::migration::scope_snapshot(&candidate)?;
             }
             let from = data_version(&candidate, prepared.transaction.source_exists())?;
-            prepared.next.call(Message::Prepare {
-                environment: self.environment.clone(),
-                snapshot: if from == target {
+            prepared.next.prepare_state(
+                self.environment.clone(),
+                if from == target {
                     snapshot.clone()
                 } else {
                     None
                 },
-            })?;
+            )?;
             let migrated = if from != target {
                 anyhow::ensure!(
                     from == 0 || hook,
@@ -165,10 +165,9 @@ impl Manager {
                 );
             }
             // Final discovery sees current data/configuration. Changed plans must be prepared anew, outside cutover.
-            prepared.next.call(Message::Prepare {
-                environment: self.environment.clone(),
-                snapshot: migrated,
-            })?;
+            prepared
+                .next
+                .prepare_state(self.environment.clone(), migrated)?;
             self.configure_saved_settings(&mut prepared.next, manifest)?;
             let values = prepared.next.configuration.clone();
             let plans = dependencies::resolve_dependency_plans(
@@ -185,6 +184,9 @@ impl Manager {
                 .next
                 .connect_services(self.plugin_services.clone())?;
             control.check()?;
+            prepared
+                .next
+                .connect_diagnostics(self.native_diagnostics.clone());
             prepared.next.activate()?;
             prepared.next.commit_data()?;
             let checkpoint = prepared.next.snapshot()?;

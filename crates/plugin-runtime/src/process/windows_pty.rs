@@ -9,7 +9,7 @@ use std::{
         io::{AsRawHandle, FromRawHandle, OwnedHandle},
     },
     ptr,
-    sync::Arc,
+    sync::{Arc, Mutex},
 };
 use windows_sys::Win32::{
     Foundation::*,
@@ -32,9 +32,10 @@ struct Console(HPCON);
 unsafe impl Send for Console {}
 impl Drop for Console {
     fn drop(&mut self) {
-        unsafe {
-            ClosePseudoConsole(self.0);
-        }
+        // A failed spawn can still leave an unanswered query. Close only after stack-owned pipes
+        // can unwind, never synchronously on the instance worker that would close those pipes.
+        let console = self.0;
+        std::thread::spawn(move || unsafe { ClosePseudoConsole(console) });
     }
 }
 
@@ -194,29 +195,20 @@ impl Child for NativeChild {
 
 /// Resize and byte streams implement only the generic PTY contract, without terminal state or UI.
 struct NativePty {
-    console: Console,
+    _shutdown: Shutdown,
+    resize: ResizeQueue,
     reader: File,
     writer: RefCell<Option<File>>,
     size: RefCell<PtySize>,
 }
 impl MasterPty for NativePty {
     fn resize(&self, size: PtySize) -> anyhow::Result<()> {
-        anyhow::ensure!(
-            unsafe {
-                ResizePseudoConsole(
-                    self.console.0,
-                    COORD {
-                        X: size.cols as i16,
-                        Y: size.rows as i16,
-                    },
-                )
-            } >= 0,
-            "Cannot resize console"
-        );
+        self.resize.request(size)?;
         *self.size.borrow_mut() = size;
         Ok(())
     }
     fn get_size(&self) -> anyhow::Result<PtySize> {
+        self.resize.check()?;
         Ok(*self.size.borrow())
     }
     fn try_clone_reader(&self) -> anyhow::Result<Box<dyn Read + Send>> {
@@ -229,6 +221,116 @@ impl MasterPty for NativePty {
     }
 }
 
+/// One native resize may wait for a guest cursor reply; coalesce later sizes without blocking
+/// process input, output, or retirement. Closing the owned pipes lets the worker release ConPTY.
+struct ResizeQueue {
+    pending: Arc<Mutex<Option<PtySize>>>,
+    failure: Arc<Mutex<Option<String>>>,
+    wake: mpsc::SyncSender<()>,
+}
+impl ResizeQueue {
+    fn new(console: Arc<Console>) -> Self {
+        let pending = Arc::new(Mutex::new(None::<PtySize>));
+        let failure = Arc::new(Mutex::new(None));
+        let (wake, events) = mpsc::sync_channel(1);
+        let queued = pending.clone();
+        let error = failure.clone();
+        std::thread::spawn(move || {
+            while events.recv().is_ok() {
+                let Some(size) = queued.lock().unwrap().take() else {
+                    continue;
+                };
+                let result = unsafe {
+                    ResizePseudoConsole(
+                        console.0,
+                        COORD {
+                            X: size.cols as i16,
+                            Y: size.rows as i16,
+                        },
+                    )
+                };
+                if result < 0 {
+                    *error.lock().unwrap() =
+                        Some(format!("Cannot resize console: HRESULT {result:#x}"));
+                    break;
+                }
+            }
+            // Drop on channel closure releases the console after queued native work completes.
+            drop(console);
+        });
+        Self {
+            pending,
+            failure,
+            wake,
+        }
+    }
+
+    /// Native failures become ordinary process errors on the next poll, even without another drag.
+    fn check(&self) -> anyhow::Result<()> {
+        if let Some(error) = self.failure.lock().unwrap().as_ref() {
+            anyhow::bail!("{error}");
+        }
+        Ok(())
+    }
+
+    /// A full wake queue already covers the latest-size slot; no resize threads accumulate.
+    fn request(&self, size: PtySize) -> anyhow::Result<()> {
+        self.check()?;
+        *self.pending.lock().unwrap() = Some(size);
+        match self.wake.try_send(()) {
+            Ok(()) | Err(mpsc::TrySendError::Full(())) => Ok(()),
+            Err(mpsc::TrySendError::Disconnected(())) => {
+                anyhow::bail!("Console resize worker stopped")
+            }
+        }
+    }
+}
+
+/// ConPTY requires a cursor reply even after failed creation or a retired consumer. Keep that
+/// cancellation reply separate from live guest bytes, and send it only after its whole job exits.
+struct Shutdown {
+    console: Arc<Console>,
+    job: Arc<Job>,
+    input: Option<File>,
+    inherit_cursor: bool,
+    process_id: Option<u32>,
+    diagnostics: Option<crate::faults::NativeReporter>,
+}
+impl Drop for Shutdown {
+    fn drop(&mut self) {
+        let console = self.console.clone();
+        let job = self.job.clone();
+        let mut input = self.input.take().expect("owned cancellation pipe");
+        let inherit_cursor = self.inherit_cursor;
+        let process_id = self.process_id;
+        let diagnostics = self.diagnostics.take().expect("owned native diagnostics");
+        // No join on the lifecycle worker: pending native resize and write calls remain isolated.
+        std::thread::spawn(move || {
+            match job.terminate_and_wait() {
+                Err(error) => diagnostics.record(
+                    "pty.retire.wait",
+                    format!("process={process_id:?}: {error:#}"),
+                ),
+                Ok(()) if inherit_cursor => {
+                    // No application survives to interpret this neutral response as user input.
+                    // A closed pipe already completed this channel's teardown; other errors stay diagnosable.
+                    if let Err(error) = input.write_all(b"\x1b[1;1R")
+                        && error.kind() != std::io::ErrorKind::BrokenPipe
+                    {
+                        diagnostics.record(
+                            "pty.retire.cursor",
+                            format!("process={process_id:?}: {error}"),
+                        );
+                    }
+                }
+                Ok(()) => {}
+            }
+            drop(input);
+            drop(console);
+        });
+    }
+}
+
 /// Creation attributes bind the process to both ConPTY and its owning job in a single OS operation.
 pub(super) fn spawn(
     program: &str,
@@ -236,8 +338,13 @@ pub(super) fn spawn(
     cwd: &str,
     size: PtySize,
     inherit_cursor: bool,
-) -> anyhow::Result<(Box<dyn Child + Send + Sync>, Box<dyn MasterPty + Send>, Job)> {
-    let job = Job::empty()?;
+    diagnostics: crate::faults::NativeReporter,
+) -> anyhow::Result<(
+    Box<dyn Child + Send + Sync>,
+    Box<dyn MasterPty + Send>,
+    Arc<Job>,
+)> {
+    let job = Arc::new(Job::empty()?);
     let (input_read, input_write) = pipe()?;
     let (output_read, output_write) = pipe()?;
     let mut console = 0;
@@ -250,14 +357,28 @@ pub(super) fn spawn(
                 },
                 input_read.as_raw_handle(),
                 output_write.as_raw_handle(),
-                // The temporary legacy adapter retains its existing ConPTY cursor/input handshake.
-                if inherit_cursor { 1 | 2 | 4 } else { 0 },
+                // Only opted-in VT consumers receive the OS cursor query; the host never parses it.
+                if inherit_cursor {
+                    PSEUDOCONSOLE_INHERIT_CURSOR
+                } else {
+                    0
+                },
                 &mut console,
             )
         } >= 0,
         "Cannot create console"
     );
-    let console = Console(console);
+    let console = Arc::new(Console(console));
+    // Establish cancellation ownership before any remaining fallible allocation or process call.
+    let mut shutdown = Shutdown {
+        console: console.clone(),
+        job: job.clone(),
+        input: Some(input_write),
+        inherit_cursor,
+        process_id: None,
+        diagnostics: Some(diagnostics),
+    };
+    let input_write = shutdown.input.as_ref().unwrap().try_clone()?;
     drop(input_read);
     drop(output_write);
     let mut attributes = Attributes::new(console.0, &job)?;
@@ -301,11 +422,13 @@ pub(super) fn spawn(
     let child = NativeChild(Arc::new(unsafe {
         OwnedHandle::from_raw_handle(info.hProcess)
     }));
+    shutdown.process_id = Some(info.dwProcessId);
     drop(unsafe { OwnedHandle::from_raw_handle(info.hThread) });
     Ok((
         Box::new(child),
         Box::new(NativePty {
-            console,
+            _shutdown: shutdown,
+            resize: ResizeQueue::new(console),
             reader: output_read,
             writer: RefCell::new(Some(input_write)),
             size: RefCell::new(size),

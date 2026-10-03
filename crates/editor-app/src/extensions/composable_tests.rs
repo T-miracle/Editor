@@ -74,14 +74,9 @@ fn native_input_and_canvas_route_text_to_their_own_nodes_and_hide_reclaims_targe
                 global_enabled: None,
                 error: None,
             }];
-            state.scenes.insert(
-                "capability-example/welcome".into(),
-                Arc::new(Scene {
-                    panel: "welcome".into(),
-                    ui: Some(document),
-                    ..Default::default()
-                }),
-            );
+            state
+                .views
+                .insert("capability-example/welcome".into(), Arc::new(document));
             drop(state);
             owner.poll(cx);
         });
@@ -160,8 +155,8 @@ fn events(
             .unwrap()
             .try_iter()
             .filter_map(|work| {
-                if let Work::Event(_, _, PluginEvent::Surface { event, .. }) = work {
-                    if let PluginEvent::Ui(event) = *event {
+                if let Work::Event(_, _, Some(_), event) = work {
+                    if let PluginEvent::Ui(event) = event {
                         return Some(event);
                     }
                 }
@@ -251,10 +246,7 @@ fn composed_wasm_preview_follows_memory_and_reclaims_the_editor_split(cx: &mut T
     cx.run_until_parked();
     pump(&mut manager, &app, cx);
     publish(&manager, &mut renderer, &app, cx);
-    let tree = manager.live["capability-example"].scenes["welcome"]
-        .ui
-        .as_ref()
-        .unwrap();
+    let tree = manager.live["capability-example"].views["welcome"].as_ref();
     let Kind::Canvas(canvas) = &tree.active_node("viewport").unwrap().kind else {
         unreachable!()
     };
@@ -270,10 +262,7 @@ fn composed_wasm_preview_follows_memory_and_reclaims_the_editor_split(cx: &mut T
     cx.run_until_parked();
     pump(&mut manager, &app, cx);
     publish(&manager, &mut renderer, &app, cx);
-    let tree = manager.live["capability-example"].scenes["welcome"]
-        .ui
-        .as_ref()
-        .unwrap();
+    let tree = manager.live["capability-example"].views["welcome"].as_ref();
     assert!(serde_json::to_string(tree).unwrap().contains("未保存 "));
     assert_eq!(std::fs::read_to_string(&path).unwrap(), svg);
     assert!(tree.source.is_some());
@@ -302,8 +291,8 @@ pub(super) fn pump(
             .collect()
     });
     for work in work {
-        if let Work::Event(id, _, event) = work {
-            if let Err(error) = manager.event(&id, event) {
+        if let Work::Event(id, _, panel, event) = work {
+            if let Err(error) = manager.event(&id, panel, event) {
                 assert!(
                     matches!(error.downcast_ref::<protocol::api::Failure>(), Some(error) if error.code==protocol::api::ErrorCode::StaleRevision),
                     "{error:#}"
@@ -325,7 +314,7 @@ pub(super) fn publish(
         .iter()
         .flat_map(|(id, instance)| {
             instance
-                .scenes
+                .views
                 .iter()
                 .map(move |(panel, scene)| (format!("{id}/{panel}"), scene.clone()))
         })
@@ -335,7 +324,7 @@ pub(super) fn publish(
         app.read(cx).extensions.clone().update(cx, |owner, cx| {
             let mut state = owner.worker.state.lock().unwrap();
             state.entries = manager.published_entries();
-            state.scenes = scenes;
+            state.views = scenes;
             state.images = images;
             drop(state);
             owner.poll(cx);

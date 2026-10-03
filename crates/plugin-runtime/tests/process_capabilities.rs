@@ -3,6 +3,10 @@ use plugin_runtime::Package;
 use serde_json::json;
 use std::io::{Cursor, Write};
 
+#[cfg(windows)]
+#[path = "process_capabilities/cursor.rs"]
+mod cursor;
+
 /// Repackage the independently built SDK guest with a fixed test tool; no implementation mocks.
 fn executable_package(program: &str, exec: bool) -> Package {
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -49,10 +53,8 @@ fn probe(
             json!({"method":"process","operation":operation}),
         )
         .unwrap();
-    let scene = manager.live[id].scene.as_ref().unwrap();
-    let plugin_runtime::plugin_protocol::ui::Kind::Text { text } =
-        &scene.ui.as_ref().unwrap().root.kind
-    else {
+    let scene = manager.live[id].views.values().next().unwrap();
+    let plugin_runtime::plugin_protocol::ui::Kind::Text { text } = &scene.as_ref().root.kind else {
         panic!("text expected")
     };
     serde_json::from_str(text).unwrap()
@@ -145,9 +147,8 @@ fn process_events(manager: &mut plugin_runtime::Manager, id: &str) -> Vec<serde_
         manager
             .invoke_command(id, "process-events", json!(index))
             .unwrap();
-        let scene = manager.live[id].scene.as_ref().unwrap();
-        let plugin_runtime::plugin_protocol::ui::Kind::Text { text } =
-            &scene.ui.as_ref().unwrap().root.kind
+        let scene = manager.live[id].views.values().next().unwrap();
+        let plugin_runtime::plugin_protocol::ui::Kind::Text { text } = &scene.as_ref().root.kind
         else {
             panic!("text expected")
         };

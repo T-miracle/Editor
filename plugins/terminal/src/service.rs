@@ -60,6 +60,8 @@ impl Terminal {
                 transport: process::Transport::Pty {
                     columns: extent.columns as u16,
                     rows: extent.rows as u16,
+                    // New execution views have no existing cursor or transcript to inherit.
+                    inherit_cursor: false,
                 },
             },
         });

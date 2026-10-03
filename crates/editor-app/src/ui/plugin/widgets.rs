@@ -1,6 +1,6 @@
 //! Collections reuse the editor's native tab/menu behavior at arbitrary composed-tree positions.
+use super::controls::CollectionModel;
 use super::*;
-use plugin_runtime::plugin_protocol::ui::CanvasControls;
 
 impl PluginView {
     /// Reconcile stable widget identities; drawing-only revisions never recreate rename inputs or menus.
@@ -26,7 +26,7 @@ impl PluginView {
                 let view = self.widget(cx);
                 self.collections.insert(id.clone(), view);
             }
-            let model = CanvasControls {
+            let model = CollectionModel {
                 revision: self.document.revision,
                 sidebar: Some(tabs),
                 menu: None,
@@ -40,7 +40,7 @@ impl PluginView {
             if self.popup.is_none() {
                 self.popup = Some(self.widget(cx));
             }
-            let model = CanvasControls {
+            let model = CollectionModel {
                 revision: self.document.revision,
                 menu: self.document.menu.clone(),
                 sidebar: None,
@@ -52,7 +52,7 @@ impl PluginView {
             // Let the shared menu adapter return focus before its keyed entity is retired.
             popup.update(cx, |view, cx| {
                 view.update(
-                    CanvasControls::default(),
+                    CollectionModel::default(),
                     self.environment.clone(),
                     self.origin,
                     window,
@@ -63,7 +63,7 @@ impl PluginView {
     }
 
     /// Every callback carries the widget's published revision through the same document gate.
-    fn widget(&self, cx: &mut Context<Self>) -> Entity<controls::CanvasControlsView> {
+    fn widget(&self, cx: &mut Context<Self>) -> Entity<controls::CollectionView> {
         let owner = cx.entity().downgrade();
         let focus = self
             .canvases
@@ -72,7 +72,7 @@ impl PluginView {
             .map(|canvas| canvas.read(cx).focus_handle())
             .unwrap_or_else(|| self.dialog_focus.clone());
         cx.new(|_| {
-            controls::CanvasControlsView::new(self.plugin.clone(), focus, move |event, cx| {
+            controls::CollectionView::new(self.plugin.clone(), focus, move |event, cx| {
                 let _ = owner.update(cx, |this, cx| {
                     this.emit_version(&event.node, event.revision, event.action, cx);
                 });

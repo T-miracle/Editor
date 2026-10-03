@@ -39,7 +39,7 @@ pub(super) enum Work {
     SetTrust(bool),
     Uninstall(String, bool),
     /// Native callbacks retain the incarnation that created them, even if a replacement reuses node IDs.
-    Event(String, u64, Event),
+    Event(String, u64, Option<String>, api::Notification),
     /// Host-originated commands target a plugin directly, even while its panel is hidden.
     Invoke {
         plugin: String,
@@ -129,10 +129,9 @@ pub(super) struct Published {
     pub editor_requests: Vec<(String, plugin_runtime::EditorRequest)>,
     pub entries: Vec<Installed>,
     pub startup: BTreeMap<String, String>,
-    pub scenes: BTreeMap<String, Arc<Scene>>,
+    pub views: BTreeMap<String, Arc<ui::Document>>,
     /// Each scene's full-color image operations are ready before the UI observes that scene.
     pub images: super::images::SceneImages,
-    pub effects: Vec<(String, Request)>,
     pub pending: Option<Package>,
     pub status: Option<String>,
     pub progress: Option<OperationProgress>,
@@ -151,18 +150,6 @@ pub(super) struct Worker {
     pub recorded: Mutex<mpsc::Receiver<Work>>,
 }
 impl Worker {
-    /// Legacy host effects retain publication authority; deferring them cannot renew a retired instance.
-    pub(super) fn accepts_effect(&self, id: &str, epoch: u64) -> bool {
-        if !self.trusted.load(std::sync::atomic::Ordering::Acquire) {
-            return false;
-        }
-        let state = self.state.lock().unwrap();
-        state.instance_epochs.get(id).copied().unwrap_or(0) == epoch
-            && state
-                .entries
-                .iter()
-                .any(|entry| entry.manifest.id == id && entry.enabled)
-    }
     /// This bypasses the serialized command queue so a long download cannot delay shutdown or trust revocation.
     pub fn cancel_installation(&self) {
         if let Some(control) = &self.state.lock().unwrap().install_control {

@@ -1,7 +1,7 @@
 {
   "id":"example",
   "name":"插件示例：计数与笔记",
-  "version":"0.3.0",
+  "version": "0.3.1",
   "protocol":7,
   "api":{"base":"^1","required":{"ui.native":"^1"}},
   "component":"example.wasm",

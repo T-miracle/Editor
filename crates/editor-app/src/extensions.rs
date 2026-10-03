@@ -10,8 +10,9 @@ mod dependency_tests;
 mod editor_requests;
 #[cfg(test)]
 mod execution_service_tests;
-mod legacy_input;
 use crate::ui::plugin::images;
+#[cfg(test)]
+mod dock_tests;
 #[cfg(test)]
 mod hot_update_tests;
 mod installation;
@@ -50,8 +51,9 @@ use gpui_base::input::InputState;
 use gpui_kit::{AnyElement, ClipboardItem, KeyDownEvent, PathPromptOptions, SharedString};
 use plugin_runtime::{
     Installed, Package,
-    plugin_protocol::{self as protocol, Event as PluginEvent, Request, Scene},
+    plugin_protocol::{self as protocol, api::Notification as PluginEvent},
 };
+#[cfg(test)]
 use std::cell::RefCell;
 use std::collections::BTreeMap;
 use worker::{LifecycleAction, OperationProgress, Work, Worker};
@@ -66,12 +68,6 @@ pub fn init(cx: &mut App) {
     )]);
 }
 
-/// Generic editable field lifecycle; values are returned to the owning plugin on commit.
-struct Editing {
-    id: String,
-    input: Entity<InputState>,
-    _subscriptions: Vec<Subscription>,
-}
 pub struct ExtensionPanel {
     /// Form observers redraw only when configuration publication changes.
     configuration_revision: u64,
@@ -82,7 +78,7 @@ pub struct ExtensionPanel {
     worker: Arc<Worker>,
     pub(crate) entries: Vec<Installed>,
     pub(crate) startup: BTreeMap<String, String>,
-    scenes: HashMap<String, Arc<Scene>>,
+    views: HashMap<String, Arc<protocol::ui::Document>>,
     /// Raster images are paired with their exact scene and prepared outside the UI thread.
     images: images::SceneImages,
     active: Option<String>,
@@ -101,14 +97,8 @@ pub struct ExtensionPanel {
     panel_icon_digest: Option<String>,
     focus: FocusHandle,
     bounds: Bounds<Pixels>,
-    composition: String,
-    editing: Option<Editing>,
-    /// Protocol 2 UI owns keyed native input state independently from the legacy canvas.
+    /// Keyed native controls own text editing, canvas input and composition.
     native_ui: Option<Entity<crate::ui::plugin::PluginView>>,
-    canvas_controls: Option<Entity<crate::ui::plugin::controls::CanvasControlsView>>,
-    /// Prevent a just-committed native input from reopening before the guest reply arrives.
-    committed_edit: Option<String>,
-    scroll: surface::PluginScroll,
     manager_open: bool,
     commands_open: bool,
     command_popup: Option<Entity<crate::ui::controls::menu::PopupMenu>>,
@@ -232,7 +222,6 @@ impl ExtensionPanel {
                 let _ = rx.await;
             }
         });
-        let scroll = surface::PluginScroll::new(worker.tx.clone());
         let task = cx.spawn(async move |this, cx| {
             loop {
                 cx.background_executor()
@@ -251,7 +240,7 @@ impl ExtensionPanel {
             worker,
             entries,
             startup,
-            scenes: HashMap::new(),
+            views: HashMap::new(),
             images: BTreeMap::new(),
             active: None,
             surface_id: None,
@@ -264,12 +253,7 @@ impl ExtensionPanel {
             panel_icon_digest: None,
             focus: cx.focus_handle(),
             bounds: Bounds::default(),
-            composition: String::new(),
-            editing: None,
             native_ui: None,
-            canvas_controls: None,
-            committed_edit: None,
-            scroll,
             manager_open: false,
             configuration_revision: 0,
             commands_open: false,
@@ -303,7 +287,7 @@ impl ExtensionPanel {
         root: PathBuf,
         worker: Arc<Worker>,
         entries: Vec<Installed>,
-        scenes: HashMap<String, Arc<Scene>>,
+        views: HashMap<String, Arc<protocol::ui::Document>>,
         id: String,
         panel: protocol::Panel,
         initially_visible: bool,
@@ -337,7 +321,7 @@ impl ExtensionPanel {
             worker: worker.clone(),
             entries,
             startup: BTreeMap::new(),
-            scenes,
+            views,
             images: BTreeMap::new(),
             active: Some(id),
             surface_id: Some(panel.id),
@@ -350,12 +334,7 @@ impl ExtensionPanel {
             panel_icon_digest,
             focus: cx.focus_handle(),
             bounds: Bounds::default(),
-            composition: String::new(),
-            editing: None,
             native_ui: None,
-            canvas_controls: None,
-            committed_edit: None,
-            scroll: surface::PluginScroll::new(worker.tx.clone()),
             manager_open: false,
             configuration_revision: 0,
             commands_open: false,
@@ -383,7 +362,7 @@ impl ExtensionPanel {
         }
     }
     /// Publish worker results and hand native editor/clipboard requests to the UI thread.
-    /// Apply host-local authority before accepting further worker scenes or contributions.
+    /// Apply host-local authority before accepting further worker views or contributions.
     pub(crate) fn set_workspace_trusted(&mut self, trusted: bool, cx: &mut Context<Self>) {
         if !trusted {
             self.worker.cancel_installation();
@@ -400,7 +379,7 @@ impl ExtensionPanel {
     fn poll(&mut self, cx: &mut Context<Self>) {
         let mut changed = false;
         let mut contributions_changed = false;
-        let (effects, editor_requests) = {
+        let editor_requests = {
             let mut state = self.worker.state.lock().unwrap();
             if self.configuration_revision != state.configuration_revision {
                 self.configuration_revision = state.configuration_revision;
@@ -418,9 +397,8 @@ impl ExtensionPanel {
                     entry.enabled = false;
                 }
                 state.startup.clear();
-                state.scenes.clear();
+                state.views.clear();
                 state.images.clear();
-                state.effects.clear();
                 state.processes.clear();
                 state.document_events = Default::default();
                 for (_, request) in state.editor_requests.drain(..) {
@@ -443,9 +421,9 @@ impl ExtensionPanel {
                     }
                 }
             }
-            changed |= self.scenes.len() != state.scenes.len()
-                || state.scenes.iter().any(|(id, scene)| {
-                    self.scenes
+            changed |= self.views.len() != state.views.len()
+                || state.views.iter().any(|(id, scene)| {
+                    self.views
                         .get(id)
                         .is_none_or(|old| !Arc::ptr_eq(old, scene))
                 })
@@ -480,13 +458,7 @@ impl ExtensionPanel {
                     self.preview_version = None;
                     self.preview_error = None;
                     self.native_ui = None;
-                    self.canvas_controls = None;
-                    self.editing = None;
-                    self.committed_edit = None;
-                    self.composition.clear();
                     self._focus_events.clear();
-                    // Old scrollbar callbacks retain their old handle and incarnation.
-                    self.scroll = surface::PluginScroll::new(self.worker.tx.clone());
                     self.command_popup = None;
                     self.commands_open = false;
                     changed = true;
@@ -510,8 +482,8 @@ impl ExtensionPanel {
                 }
             }
             self.startup = state.startup.clone();
-            self.scenes = state
-                .scenes
+            self.views = state
+                .views
                 .iter()
                 .map(|(id, s)| (id.clone(), s.clone()))
                 .collect();
@@ -539,18 +511,9 @@ impl ExtensionPanel {
                 }
             }
             if self.surface_id.is_none() {
-                (
-                    std::mem::take(&mut state.effects)
-                        .into_iter()
-                        .map(|(id, effect)| {
-                            let epoch = state.instance_epochs.get(&id).copied().unwrap_or(0);
-                            (id, epoch, effect)
-                        })
-                        .collect::<Vec<_>>(),
-                    std::mem::take(&mut state.editor_requests),
-                )
+                std::mem::take(&mut state.editor_requests)
             } else {
-                (vec![], vec![])
+                vec![]
             }
         };
         if !editor_requests.is_empty() {
@@ -581,86 +544,6 @@ impl ExtensionPanel {
                 });
             });
         }
-        for (id, epoch, effect) in effects {
-            // A worker cutover can publish while this UI batch is waiting to run.
-            if !self.worker.accepts_effect(&id, epoch) {
-                continue;
-            }
-            match effect {
-                Request::ClipboardWrite(text) => {
-                    cx.write_to_clipboard(ClipboardItem::new_string(text))
-                }
-                Request::ClipboardRead => {
-                    if let Some(text) = cx.read_from_clipboard().and_then(|item| item.text()) {
-                        let _ = self.worker.tx.send(Work::Event(
-                            id.clone(),
-                            epoch,
-                            PluginEvent::Paste(text),
-                        ));
-                    }
-                }
-                Request::Editor { command } => {
-                    let parent = self.parent.clone();
-                    let worker = self.worker.clone();
-                    let tx = self.worker.tx.clone();
-                    let root = self.root.clone();
-                    cx.defer(move |cx| {
-                        // Admission must happen at execution, before save/hide/open side effects.
-                        if !worker.accepts_effect(&id, epoch) {
-                            return;
-                        }
-                        let _ = parent.update(cx, |app, cx| {
-                            // Scope panel operations to the plugin that emitted this host request.
-                            if let Some(panel) = command.strip_prefix("hide_panel:") {
-                                app.hide_plugin_panel(&id, panel, cx);
-                                return;
-                            }
-                            let mut cwd = None;
-                            let mut text = None;
-                            match command.as_str() {
-                                "selection" => {
-                                    text = Some(app.editor.read(cx).selected_text().to_string())
-                                }
-                                "active_directory" => {
-                                    cwd = Some(
-                                        app.active_path
-                                            .as_deref()
-                                            .and_then(Path::parent)
-                                            .unwrap_or(app.workspace.root())
-                                            .display()
-                                            .to_string(),
-                                    )
-                                }
-                                "save" => app.save_current(cx),
-                                _ => {}
-                            }
-                            let _ = tx.send(Work::Event(
-                                id.clone(),
-                                epoch,
-                                PluginEvent::Command {
-                                    id: format!("{command}.result"),
-                                    cwd,
-                                    text,
-                                    arguments: None,
-                                },
-                            ));
-                            if let Some(relative) = command.strip_prefix("open_data:") {
-                                if !relative.contains(['/', '\\', ':'])
-                                    && !relative.starts_with('.')
-                                {
-                                    let path = root.join("data").join(&id).join(relative);
-                                    app.status = format!("插件配置：{}", path.display());
-                                    app.pending_plugin_file = Some(path);
-                                    cx.notify();
-                                }
-                            }
-                        });
-                    });
-                }
-                _ => {}
-            }
-        }
-        changed |= self.scroll.visibility_changed();
         if changed {
             cx.notify();
             if self.surface_id.is_none() {
@@ -679,7 +562,7 @@ impl ExtensionPanel {
             }
         }
     }
-    fn send_to(&self, id: &str, event: PluginEvent) {
+    fn send_to(&self, id: &str, panel: Option<String>, event: PluginEvent) {
         // Surface state belongs to its last observed publication, never the worker's newer incarnation.
         let epoch = if self.active.as_deref() == Some(id) {
             self.instance_epoch
@@ -693,7 +576,10 @@ impl ExtensionPanel {
                 .copied()
                 .unwrap_or(0)
         };
-        let _ = self.worker.tx.send(Work::Event(id.into(), epoch, event));
+        let _ = self
+            .worker
+            .tx
+            .send(Work::Event(id.into(), epoch, panel, event));
     }
     /// Queue a plugin lifecycle operation and expose its waiting state on this frame.
     fn queue_lifecycle(&mut self, work: Work) -> bool {
@@ -711,22 +597,12 @@ impl ExtensionPanel {
     }
     fn send(&self, event: PluginEvent) {
         if let Some(id) = &self.active {
-            let event = if let Some(panel) = &self.surface_id {
-                PluginEvent::Surface {
-                    panel: panel.clone(),
-                    event: Box::new(event),
-                }
-            } else {
-                event
-            };
-            self.send_to(id, event);
+            self.send_to(id, self.surface_id.clone(), event);
         }
     }
     fn command(&self, id: String) {
         self.send(PluginEvent::Command {
             id,
-            cwd: None,
-            text: None,
             arguments: None,
         });
     }
@@ -740,22 +616,16 @@ impl ExtensionPanel {
         self.command("panel.opened".into());
         self.focus(window, cx);
     }
-    fn current_scene(&self) -> Option<Arc<Scene>> {
+    fn current_document(&self) -> Option<Arc<protocol::ui::Document>> {
         self.active
             .as_ref()
             .and_then(|id| {
-                self.scenes.get(&format!(
+                self.views.get(&format!(
                     "{id}/{}",
                     self.surface_id.as_deref().unwrap_or_default()
                 ))
             })
-            .filter(|scene| {
-                !self.editor_preview
-                    || scene
-                        .ui
-                        .as_ref()
-                        .is_none_or(|document| document.source == self.preview_version)
-            })
+            .filter(|document| !self.editor_preview || document.source == self.preview_version)
             .cloned()
     }
     /// Dispatch manifest shortcuts without registering terminal-specific native actions.
@@ -819,68 +689,6 @@ impl ExtensionPanel {
         })
         .detach();
     }
-    fn commit_edit(&mut self, cx: &mut Context<Self>) {
-        if let Some(editing) = self.editing.take() {
-            self.committed_edit = Some(editing.id.clone());
-            self.send(PluginEvent::Edit {
-                id: editing.id,
-                text: editing.input.read(cx).value().to_string(),
-            });
-            cx.notify();
-        }
-    }
-    /// Plugin fields use the same native input control as the rest of the editor.
-    fn sync_edit(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.editing.is_some() {
-            return;
-        }
-        let Some(widget) = self
-            .current_scene()
-            .and_then(|s| s.widgets.iter().find(|w| w.edit).cloned())
-        else {
-            self.committed_edit = None;
-            return;
-        };
-        if self.committed_edit.as_ref() == Some(&widget.id) {
-            return;
-        }
-        let input = cx.new(|cx| InputState::new(window, cx).default_value(widget.label));
-        // Deferred input submission cannot target a replacement instance.
-        let epoch = self.instance_epoch;
-        let enter = cx.subscribe_in(
-            &input,
-            window,
-            move |this, _, event: &InputEvent, window, cx| {
-                if this.instance_epoch != epoch {
-                    return;
-                }
-                if matches!(event, InputEvent::PressEnter { .. }) {
-                    this.commit_edit(cx);
-                    this.focus(window, cx);
-                }
-            },
-        );
-        let blur = cx.on_focus_out(&input.focus_handle(cx), window, move |this, _, _, cx| {
-            if this.instance_epoch != epoch {
-                return;
-            }
-            this.commit_edit(cx)
-        });
-        let focus = input.focus_handle(cx);
-        let weak_input = input.downgrade();
-        self.editing = Some(Editing {
-            id: widget.id,
-            input,
-            _subscriptions: vec![enter, blur],
-        });
-        // Focus after the native input is mounted, then select its original tab name.
-        window.defer(cx, move |window, cx| {
-            let _ = weak_input.update(cx, |input, cx| {
-                focus.focus(window, cx);
-                input.select_all(window, cx);
-            });
-        });
-    }
 }
 /// Convert current host palette into explicit plugin context.
 fn environment(workspace: &Path, cx: &App) -> protocol::Environment {
@@ -891,7 +699,8 @@ fn environment(workspace: &Path, cx: &App) -> protocol::Environment {
         byte(c.r) << 16 | byte(c.g) << 8 | byte(c.b)
     }
     let typography = theme::typography(cx);
-    let mut environment = protocol::Environment {
+    // Legacy theme files are normalized on import; active guests see only current namespaces.
+    protocol::Environment {
         workspace: workspace.display().to_string(),
         os: std::env::consts::OS.into(),
         background: color(cx.theme().background),
@@ -926,21 +735,7 @@ fn environment(workspace: &Path, cx: &App) -> protocol::Environment {
                 )
             })
             .collect(),
-    };
-    // Installed older WASM guests keep their original theme namespace until the package is updated.
-    for (key, value) in environment.theme_colors.clone() {
-        environment
-            .theme_colors
-            .entry(format!("me.{key}"))
-            .or_insert(value);
     }
-    for (key, value) in environment.theme_text_styles.clone() {
-        environment
-            .theme_text_styles
-            .entry(format!("me.{key}"))
-            .or_insert(value);
-    }
-    environment
 }
 fn key_matches(shortcut: &str, event: &KeyDownEvent) -> bool {
     let parts: Vec<_> = shortcut.split('-').collect();
@@ -1245,14 +1040,14 @@ impl EditorApp {
                 let root = owner.root.clone();
                 let worker = owner.worker.clone();
                 let entries = owner.entries.clone();
-                let scenes = owner.scenes.clone();
+                let views = owner.views.clone();
                 ExtensionPanel::viewer_parts(
                     parent,
                     workspace,
                     root,
                     worker,
                     entries,
-                    scenes,
+                    views,
                     id,
                     descriptor,
                     initially_visible,

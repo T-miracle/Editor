@@ -8,12 +8,11 @@ use serde_json::json;
 /// Observe the independently compiled guest's native output, without reading its internal state.
 fn text(manager: &Manager, id: &str) -> String {
     let Kind::Text { text } = &manager.live[id]
-        .scene
-        .as_ref()
+        .views
+        .values()
+        .next()
         .unwrap()
-        .ui
         .as_ref()
-        .unwrap()
         .root
         .kind
     else {

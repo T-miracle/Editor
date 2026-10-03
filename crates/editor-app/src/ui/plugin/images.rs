@@ -1,7 +1,7 @@
 //! Rasterize clipped plugin vectors off the UI thread and reuse unchanged scene images.
 
 use gpui_kit::RenderImage;
-use plugin_runtime::plugin_protocol::{Paint, Rect, Scene};
+use plugin_runtime::plugin_protocol::{Paint, Rect, ui::Document};
 use resvg::{tiny_skia, usvg};
 use sha2::{Digest, Sha256};
 use std::{
@@ -23,82 +23,73 @@ pub(crate) type SceneImages = BTreeMap<String, Arc<Vec<Option<VectorImage>>>>;
 #[derive(Default)]
 pub(crate) struct VectorRenderer {
     /// Derived canvas surfaces retain their identities while the owning native document stays unchanged.
-    nested: BTreeMap<String, (Arc<Scene>, Arc<Scene>)>,
-    scenes: BTreeMap<String, (Arc<Scene>, Arc<Vec<Option<VectorImage>>>)>,
+    nested: BTreeMap<String, (Arc<Document>, Arc<Vec<Paint>>)>,
+    drawings: BTreeMap<String, (Arc<Vec<Paint>>, Arc<Vec<Option<VectorImage>>>)>,
     trees: BTreeMap<[u8; 32], Arc<usvg::Tree>>,
     fonts: Option<Arc<usvg::fontdb::Database>>,
 }
 
 impl VectorRenderer {
     /// Repaint only changed scene vectors, retaining native image IDs across idle worker polls.
-    pub fn prepare(&mut self, scenes: &BTreeMap<String, Arc<Scene>>) -> SceneImages {
-        let mut surfaces = scenes.clone();
+    pub fn prepare(&mut self, documents: &BTreeMap<String, Arc<Document>>) -> SceneImages {
+        let mut surfaces = BTreeMap::new();
         let mut nested_keys = BTreeSet::new();
-        for (key, scene) in scenes {
-            if let Some(document) = &scene.ui {
-                let mut visit = |node: &plugin_runtime::plugin_protocol::ui::Node| {
-                    if let plugin_runtime::plugin_protocol::ui::Kind::Canvas(drawing) = &node.kind {
-                        let key = format!("{key}/canvas/{}", node.id);
-                        nested_keys.insert(key.clone());
-                        if self
-                            .nested
-                            .get(&key)
-                            .is_none_or(|(owner, _)| !Arc::ptr_eq(owner, scene))
-                        {
-                            self.nested.insert(
-                                key.clone(),
-                                (
-                                    scene.clone(),
-                                    Arc::new(Scene {
-                                        paint: drawing.paint.clone(),
-                                        ..Default::default()
-                                    }),
-                                ),
-                            );
-                        }
-                        surfaces.insert(key.clone(), self.nested[&key].1.clone());
+        for (key, document) in documents {
+            let mut visit = |node: &plugin_runtime::plugin_protocol::ui::Node| {
+                if let plugin_runtime::plugin_protocol::ui::Kind::Canvas(drawing) = &node.kind {
+                    let key = format!("{key}/canvas/{}", node.id);
+                    nested_keys.insert(key.clone());
+                    if self
+                        .nested
+                        .get(&key)
+                        .is_none_or(|(owner, _)| !Arc::ptr_eq(owner, document))
+                    {
+                        self.nested.insert(
+                            key.clone(),
+                            (document.clone(), Arc::new(drawing.paint.clone())),
+                        );
                     }
-                };
-                document.root.visit(&mut visit);
-                if let Some(dialog) = &document.dialog {
-                    dialog.content.visit(&mut visit);
+                    surfaces.insert(key.clone(), self.nested[&key].1.clone());
                 }
+            };
+            document.root.visit(&mut visit);
+            if let Some(dialog) = &document.dialog {
+                dialog.content.visit(&mut visit);
             }
         }
         self.nested.retain(|key, _| nested_keys.contains(key));
         let scenes = &surfaces;
-        self.scenes.retain(|key, _| scenes.contains_key(key));
+        self.drawings.retain(|key, _| scenes.contains_key(key));
         let mut used = BTreeSet::new();
         for (key, scene) in scenes {
             if !scene
-                .paint
                 .iter()
                 .any(|operation| matches!(operation, Paint::Svg { .. }))
             {
                 // Ordinary text/terminal scenes need no parallel array of empty image slots.
-                self.scenes.remove(key);
+                self.drawings.remove(key);
                 continue;
             }
-            for operation in &scene.paint {
+            for operation in scene.iter() {
                 if let Paint::Svg { source, .. } = operation {
                     used.insert(<[u8; 32]>::from(Sha256::digest(source.as_bytes())));
                 }
             }
             if self
-                .scenes
+                .drawings
                 .get(key)
                 .is_some_and(|(old, _)| Arc::ptr_eq(old, scene))
             {
                 continue;
             }
-            let mut images = Vec::with_capacity(scene.paint.len());
-            for (index, operation) in scene.paint.iter().enumerate() {
+            let mut images = Vec::with_capacity(scene.len());
+            for (index, operation) in scene.iter().enumerate() {
                 let image = if let Paint::Svg { source, rect, clip } = operation {
                     // A focus or theme update can change labels without changing the vector itself.
                     let cached =
-                        self.scenes
+                        self.drawings
                             .get(key)
-                            .and_then(|(old, images)| match old.paint.get(index) {
+                            .and_then(|(old, images)| match old.get(index) {
                                 Some(Paint::Svg {
                                     source: old_source,
                                     rect: old_rect,
@@ -117,12 +108,12 @@ impl VectorRenderer {
                 };
                 images.push(image);
             }
-            self.scenes
+            self.drawings
                 .insert(key.clone(), (scene.clone(), Arc::new(images)));
         }
         // Removed documents and plugin packages must not retain their decoded resources forever.
         self.trees.retain(|digest, _| used.contains(digest));
-        self.scenes
+        self.drawings
             .iter()
             .map(|(key, (_, images))| (key.clone(), images.clone()))
             .collect()

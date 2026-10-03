@@ -8,17 +8,14 @@ mod service;
 mod startup;
 mod transport;
 
-use super::toolchains::resolve_server_executable;
 use anyhow::{Context as _, anyhow, ensure};
 use gpui_base::input::{DefinitionProvider, Rope};
 use gpui_kit::gpui::{App, Task, Window};
 use lsp_types::{CompletionResponse, Hover, Location, LocationLink, Position, Uri};
-use plugin_schema::{LanguageContribution, LspReadiness};
 use serde_json::{Value, json};
 use std::{
     collections::HashMap,
     path::{Path, PathBuf},
-    process::{Child, Command, Stdio},
     str::FromStr,
     sync::{Arc, Mutex},
     time::{Duration, Instant},
@@ -35,33 +32,12 @@ pub struct LanguageServer {
     documents: Mutex<HashMap<String, DocumentLease>>,
     root: PathBuf,
     root_uri: Uri,
-    language: LanguageContribution,
-    service: Option<Arc<plugin_runtime::LanguageService>>,
+    service: Arc<plugin_runtime::LanguageService>,
     retired: std::sync::atomic::AtomicBool,
     connection: Mutex<Option<LanguageServerConnection>>,
 }
 
 impl LanguageServer {
-    /// Creates a lazy language-server session for a project root.
-    #[cfg(test)]
-    pub fn new(root: &Path, language: LanguageContribution) -> Option<Self> {
-        language.lsp_command.as_ref()?;
-        let root = root.canonicalize().ok()?;
-        let root_uri = file_uri(&root)?;
-        Some(Self {
-            recovery: Default::default(),
-            attempt: Mutex::new(()),
-            started: Instant::now(),
-            documents: Default::default(),
-            root,
-            root_uri,
-            language,
-            service: None,
-            retired: Default::default(),
-            connection: Mutex::new(None),
-        })
-    }
-
     /// Starts and initializes a shared server before the first navigation request.
     fn prepare_once(&self) -> anyhow::Result<()> {
         ensure!(self.is_active(), "LSP provider has been retired");
@@ -72,10 +48,8 @@ impl LanguageServer {
         ensure!(self.is_active(), "LSP provider has been retired");
         if connection.is_none() {
             *connection = Some(LanguageServerConnection::start(
-                &self.root,
                 &self.root_uri,
-                &self.language,
-                self.service.as_ref(),
+                &self.service,
                 &self.retired,
             )?);
         }
@@ -92,42 +66,19 @@ impl LanguageServer {
         let connection = connection
             .as_mut()
             .context("LSP provider has been retired")?;
-        if let Some(service) = &connection.service {
-            let Some(readiness) = &service.provider.readiness else {
-                return Ok(());
-            };
-            let deadline = Instant::now() + Duration::from_millis(readiness.timeout_ms.into());
-            while connection.ready != Some(true) {
-                let remaining = deadline.saturating_duration_since(Instant::now());
-                ensure!(!remaining.is_zero(), "language server readiness timed out");
-                let message = connection
-                    .output
-                    .recv_timeout(remaining)
-                    .context("wait for LSP readiness")??;
-                connection.handle_server_message(&message)?;
-            }
-            return Ok(());
-        }
-        let Some(readiness) = connection.readiness.clone() else {
+        let Some(readiness) = &connection.service.provider.readiness else {
             return Ok(());
         };
-        let Some(poll_method) = readiness.poll_method else {
-            return Ok(());
-        };
-        // Initial workspace indexing needs a larger budget than interactive navigation.
-        let timeout = Duration::from_millis(readiness.timeout_ms.min(300_000));
-        let started = Instant::now();
-        while connection.ready != Some(true) && started.elapsed() < timeout {
-            // A request drives the existing JSON-RPC reader and consumes status notifications.
-            connection.request(&poll_method, json!({}))?;
-            if connection.ready != Some(true) {
-                std::thread::sleep(Duration::from_millis(250));
-            }
+        let deadline = Instant::now() + Duration::from_millis(readiness.timeout_ms.into());
+        while connection.ready != Some(true) {
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            ensure!(!remaining.is_zero(), "language server readiness timed out");
+            let message = connection
+                .output
+                .recv_timeout(remaining)
+                .context("wait for LSP readiness")??;
+            connection.handle_server_message(&message)?;
         }
-        ensure!(
-            connection.ready == Some(true),
-            "language server readiness timed out"
-        );
         Ok(())
     }
 
@@ -217,12 +168,12 @@ impl LanguageServer {
 
     /// Supplies the plugin's automatic completion punctuation to the UI bridge.
     pub(super) fn completion_triggers(&self) -> &[String] {
-        &self.language.completion_triggers
+        &self.service.provider.completion_triggers
     }
 
     /// Exposes plugin-declared whitespace contexts without embedding Rust syntax in the host.
     pub(super) fn completion_after_whitespace(&self) -> &[String] {
-        &self.language.completion_after_whitespace
+        &self.service.provider.completion_after_whitespace
     }
 }
 
@@ -273,8 +224,8 @@ impl DefinitionProvider for LanguageDefinitionProvider {
 /// Owns the language-server process and its framed JSON-RPC streams.
 struct LanguageServerConnection {
     documents: HashMap<String, DocumentLease>,
-    child: OwnedServer,
-    service: Option<Arc<plugin_runtime::LanguageService>>,
+    child: plugin_runtime::ServiceProcess,
+    service: Arc<plugin_runtime::LanguageService>,
     input: transport::Writer,
     output: transport::Messages,
     root_uri: String,
@@ -285,7 +236,6 @@ struct LanguageServerConnection {
     save_notifications: Option<bool>,
     /// Prefer standard pull diagnostics when advertised, including for unsaved buffers.
     pull_diagnostics: bool,
-    readiness: Option<LspReadiness>,
     ready: Option<bool>,
     /// Keep host-injected options available for subsequent workspace/configuration requests.
     configuration: Value,
@@ -304,19 +254,7 @@ impl LanguageServerConnection {
             "textDocument": { "uri": uri_text },
             "position": position
         });
-        let mut response = self.request("textDocument/definition", params.clone())?;
-        if let Some(readiness) = &self.readiness {
-            let timeout = Duration::from_millis(readiness.timeout_ms.min(60_000));
-            let started = Instant::now();
-            // An empty answer during startup can precede workspace indexing.
-            while definition_is_empty(&response)
-                && self.ready != Some(true)
-                && started.elapsed() < timeout
-            {
-                std::thread::sleep(Duration::from_millis(250));
-                response = self.request("textDocument/definition", params.clone())?;
-            }
-        }
+        let response = self.request("textDocument/definition", params)?;
         decode_definitions(response)
     }
 
@@ -398,12 +336,7 @@ impl LanguageServerConnection {
 
     /// Wait for the matching response while preserving every diagnostic push.
     fn request(&mut self, method: &str, params: Value) -> anyhow::Result<Value> {
-        ensure!(
-            self.service
-                .as_ref()
-                .is_none_or(|service| service.is_active()),
-            "LSP provider has been retired"
-        );
+        ensure!(self.service.is_active(), "LSP provider has been retired");
         let id = self.next_id;
         self.next_id += 1;
         let deadline = Instant::now() + Duration::from_secs(30);
@@ -436,12 +369,7 @@ impl LanguageServerConnection {
                 if let Some(error) = message.get("error") {
                     anyhow::bail!("language server {method} request failed: {error}");
                 }
-                ensure!(
-                    self.service
-                        .as_ref()
-                        .is_none_or(|service| service.is_active()),
-                    "LSP provider has been retired"
-                );
+                ensure!(self.service.is_active(), "LSP provider has been retired");
                 return Ok(message.get("result").cloned().unwrap_or(Value::Null));
             }
         }
@@ -458,37 +386,10 @@ impl LanguageServerConnection {
     }
 }
 
-/// Distinguishes a pending empty definition result from a resolved location.
-fn definition_is_empty(response: &Value) -> bool {
-    response.is_null() || response.as_array().is_some_and(Vec::is_empty)
-}
-
 impl Drop for LanguageServerConnection {
     fn drop(&mut self) {
         // Closing the editor session must not leave its language-server process behind.
         self.child.stop();
-    }
-}
-
-/// The compatibility transport disappears with legacy language packages; new services have runtime owners.
-enum OwnedServer {
-    Legacy(Child),
-    Service(plugin_runtime::ServiceProcess),
-}
-impl OwnedServer {
-    fn stop(&mut self) {
-        match self {
-            Self::Legacy(child) => {
-                let _ = child.kill();
-                let _ = child.wait();
-            }
-            Self::Service(child) => child.stop(),
-        }
-    }
-}
-impl Drop for OwnedServer {
-    fn drop(&mut self) {
-        self.stop();
     }
 }
 
@@ -524,8 +425,7 @@ fn decode_definitions(value: Value) -> anyhow::Result<Vec<LocationLink>> {
 pub(crate) fn file_uri(path: &Path) -> Option<Uri> {
     let uri = url::Url::from_file_path(path).ok()?;
     let text = uri.to_string();
-    // Keep workspace roots and document URIs identical to rust-analyzer's
-    // Windows VFS convention; mismatched drive casing can make buffers read-only.
+    // Normalize workspace and document URIs to the same Windows drive spelling; mismatched drive casing can make buffers read-only.
     #[cfg(windows)]
     let text = {
         let mut text = text;

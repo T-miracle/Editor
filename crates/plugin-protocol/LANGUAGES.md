@@ -40,4 +40,4 @@ The native **Settings → Language providers** page selects user or confirmed lo
 
 Choices live in the host plugin management directory, outside guest private data and project files. They grant no permissions or workspace trust. Disabled, failed or untrusted contributions are withdrawn; lifecycle changes refresh open editors without reopening files. Background loading only prepares grammar data. Registration follows checks of the active task generation and selected package version, so retired work cannot reinstall a parser.
 
-File icons and themes retain their existing declarations. Legacy `languages` packages remain temporarily supported during migration; dynamic choices own their grammar while present, and an available legacy grammar is revalidated when the override is removed. New packages should use the independent arrays above.
+File icons and themes retain their existing declarations. Combined legacy `languages` declarations are rejected; use the independent arrays above and declare language servers through the versioned LSP capability. Recognition and highlighting never launch a native process.

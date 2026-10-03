@@ -155,9 +155,7 @@ impl LanguageServer {
         };
         Some(format!(
             "{} [{}] {state}（{}/{}）：{message}",
-            self.service
-                .as_ref()
-                .map_or(self.language.id.as_str(), |service| service.owner.as_str()),
+            self.service.owner.as_str(),
             self.root.display(),
             recovery.failures,
             MAX_FAILURES
@@ -165,10 +163,7 @@ impl LanguageServer {
     }
     /// Structured bounded logs identify the owner and operation without serializing document or request payloads.
     fn log_failure(&self, operation: &str, message: &str) {
-        let plugin = self
-            .service
-            .as_ref()
-            .map_or(self.language.id.as_str(), |service| service.owner.as_str());
+        let plugin = self.service.owner.as_str();
         tracing::warn!(plugin, scope=%self.root.display(), operation, message, "language service failure");
     }
 }

@@ -102,10 +102,7 @@ fn composed_native_and_canvas_tree_requires_no_editor_or_process_grants() {
     manager
         .install(&package, package.manifest.permissions.clone())
         .unwrap();
-    let document = manager.live["capability-example"].scenes["welcome"]
-        .ui
-        .as_ref()
-        .unwrap();
+    let document = manager.live["capability-example"].views["welcome"].as_ref();
     let mut ids = Vec::new();
     document.root.visit(&mut |node| ids.push(node.id.clone()));
     assert_eq!(ids, ["root", "zoom", "caption", "viewport"]);
@@ -116,8 +113,7 @@ fn composed_native_and_canvas_tree_requires_no_editor_or_process_grants() {
 #[ignore = "build capability-example through the host SDK first"]
 fn stale_and_missing_native_nodes_return_typed_errors_without_retiring_the_instance() {
     use plugin_runtime::plugin_protocol::{
-        Event,
-        api::{ErrorCode, Failure},
+        api::{ErrorCode, Failure, Notification as Event},
         ui::{Action, UiEvent},
     };
     let package = package(|manifest| {
@@ -148,14 +144,12 @@ fn stale_and_missing_native_nodes_return_typed_errors_without_retiring_the_insta
         let error = manager
             .event(
                 "capability-example",
-                Event::Surface {
-                    panel: "welcome".into(),
-                    event: Box::new(Event::Ui(UiEvent {
-                        revision,
-                        node: node.into(),
-                        action,
-                    })),
-                },
+                Some("welcome".into()),
+                Event::Ui(UiEvent {
+                    revision,
+                    node: node.into(),
+                    action,
+                }),
             )
             .unwrap_err();
         assert_eq!(
@@ -164,7 +158,7 @@ fn stale_and_missing_native_nodes_return_typed_errors_without_retiring_the_insta
         );
         assert!(
             manager.live["capability-example"]
-                .scenes
+                .views
                 .contains_key("welcome")
         );
     }
@@ -174,10 +168,7 @@ fn stale_and_missing_native_nodes_return_typed_errors_without_retiring_the_insta
 #[test]
 #[ignore = "build current capability-example through the host SDK first"]
 fn preview_notifications_require_read_grants_and_preserve_document_identity() {
-    use plugin_runtime::plugin_protocol::{
-        Event,
-        api::{self, DocumentVersion},
-    };
+    use plugin_runtime::plugin_protocol::api::{self, DocumentVersion};
     let package = package(|manifest| {
         manifest["panels"][0]["position"] = json!("editor");
         manifest["panels"][0]["file_extensions"] = json!(["drawing"]);
@@ -192,12 +183,9 @@ fn preview_notifications_require_read_grants_and_preserve_document_identity() {
         path: "sample.drawing".into(),
         revision: 4,
     };
-    let event = Event::Surface {
-        panel: "welcome".into(),
-        event: Box::new(Event::Capability(api::Notification::Preview {
-            document: Some(version.clone()),
-            text: "unsaved drawing".into(),
-        })),
+    let event = api::Notification::Preview {
+        document: Some(version.clone()),
+        text: "unsaved drawing".into(),
     };
     manager
         .installed
@@ -205,18 +193,21 @@ fn preview_notifications_require_read_grants_and_preserve_document_identity() {
         .unwrap()
         .grants
         .remove("editor.read");
-    assert!(manager.event("capability-example", event.clone()).is_err());
+    assert!(
+        manager
+            .event("capability-example", Some("welcome".into()), event.clone())
+            .is_err()
+    );
     manager
         .installed
         .get_mut("capability-example")
         .unwrap()
         .grants
         .insert("editor.read".into());
-    manager.event("capability-example", event).unwrap();
-    let document = manager.live["capability-example"].scenes["welcome"]
-        .ui
-        .as_ref()
+    manager
+        .event("capability-example", Some("welcome".into()), event)
         .unwrap();
+    let document = manager.live["capability-example"].views["welcome"].as_ref();
     assert_eq!(document.source, Some(version));
     assert!(
         serde_json::to_string(document)
@@ -248,9 +239,9 @@ fn native_canvas_preview_negotiates_without_legacy_editor_commands() {
         .install(&package, package.manifest.permissions.clone())
         .unwrap();
     assert!(
-        manager.live["capability-example"].scenes["welcome"]
-            .ui
-            .is_some()
+        manager.live["capability-example"]
+            .views
+            .contains_key("welcome")
     );
 }
 
@@ -259,7 +250,8 @@ fn native_canvas_preview_negotiates_without_legacy_editor_commands() {
 #[ignore = "build current capability-example through the host SDK first"]
 fn toolbar_updates_unsaved_vector_preview_and_all_three_layouts() {
     use plugin_runtime::plugin_protocol::{
-        Event, Paint,
+        Paint,
+        api::Notification as Event,
         api::{self, DocumentVersion},
         ui::{Action, Kind, UiEvent},
     };
@@ -280,31 +272,23 @@ fn toolbar_updates_unsaved_vector_preview_and_all_three_layouts() {
         path: "unsaved.drawing".into(),
         revision: 42,
     };
-    manager.event("capability-example", Event::Surface {panel:"welcome".into(), event:Box::new(Event::Capability(api::Notification::Preview {
+    manager.event("capability-example", Some("welcome".into()), api::Notification::Preview {
         document:Some(source.clone()), text:r#"<svg xmlns="http://www.w3.org/2000/svg" width="160" height="100"><rect width="160" height="100" fill="red"/></svg>"#.into()
-    }))}).unwrap();
-    let before = manager.live["capability-example"].scenes["welcome"]
-        .ui
-        .clone()
-        .unwrap();
+    }).unwrap();
+    let before = manager.live["capability-example"].views["welcome"].clone();
     assert_eq!(before.source, Some(source));
     manager
         .event(
             "capability-example",
-            Event::Surface {
-                panel: "welcome".into(),
-                event: Box::new(Event::Ui(UiEvent {
-                    revision: before.revision,
-                    node: "zoom".into(),
-                    action: Action::Click,
-                })),
-            },
+            Some("welcome".into()),
+            Event::Ui(UiEvent {
+                revision: before.revision,
+                node: "zoom".into(),
+                action: Action::Click,
+            }),
         )
         .unwrap();
-    let after = manager.live["capability-example"].scenes["welcome"]
-        .ui
-        .as_ref()
-        .unwrap();
+    let after = manager.live["capability-example"].views["welcome"].as_ref();
     let Kind::Canvas(canvas) = &after.active_node("viewport").unwrap().kind else {
         panic!("Missing canvas")
     };
@@ -314,35 +298,29 @@ fn toolbar_updates_unsaved_vector_preview_and_all_three_layouts() {
         manager
             .invoke_command("capability-example", "ui-layout", json!(mode))
             .unwrap();
-        let tree = manager.live["capability-example"].scenes["welcome"]
-            .ui
-            .as_ref()
-            .unwrap();
+        let tree = manager.live["capability-example"].views["welcome"].as_ref();
         assert_eq!(tree.active_node("caption").is_some(), mode != "canvas");
         assert_eq!(tree.active_node("viewport").is_some(), mode != "form");
     }
     // Theme notifications alter guest drawing content without restarting the instance.
-    let revision = manager.live["capability-example"].scenes["welcome"]
-        .ui
+    let revision = manager.live["capability-example"].views["welcome"]
         .as_ref()
-        .unwrap()
         .revision;
     manager
         .event(
             "capability-example",
-            Event::Surface {
-                panel: "welcome".into(),
-                event: Box::new(Event::Ui(UiEvent {
-                    revision,
-                    node: "caption".into(),
-                    action: Action::Change("Caption".into()),
-                })),
-            },
+            Some("welcome".into()),
+            Event::Ui(UiEvent {
+                revision,
+                node: "caption".into(),
+                action: Action::Change("Caption".into()),
+            }),
         )
         .unwrap();
     manager
         .event(
             "capability-example",
+            None,
             Event::Theme(Environment {
                 foreground: 0xabcdef,
                 ui_font: plugin_runtime::plugin_protocol::FontStyle {
@@ -353,10 +331,7 @@ fn toolbar_updates_unsaved_vector_preview_and_all_three_layouts() {
             }),
         )
         .unwrap();
-    let tree = manager.live["capability-example"].scenes["welcome"]
-        .ui
-        .as_ref()
-        .unwrap();
+    let tree = manager.live["capability-example"].views["welcome"].as_ref();
     let Kind::Canvas(canvas) = &tree.active_node("viewport").unwrap().kind else {
         unreachable!()
     };

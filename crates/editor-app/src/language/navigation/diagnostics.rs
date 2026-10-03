@@ -208,7 +208,7 @@ impl LanguageServerConnection {
             match serde_json::from_value::<PublishDiagnosticsParams>(message["params"].clone()) {
                 Ok(params) => {
                     // Unversioned pushes cannot prove freshness; generic services use versioned push or pull.
-                    if self.service.is_none() || params.version.is_some() {
+                    if params.version.is_some() {
                         self.diagnostics.publish(params);
                     }
                 }
@@ -217,19 +217,7 @@ impl LanguageServerConnection {
                 }
             }
         }
-        if let Some(readiness) = &self.readiness
-            && message.get("method").and_then(Value::as_str)
-                == Some(readiness.notification.as_str())
-        {
-            self.ready = message
-                .get("params")
-                .and_then(|params| params.get(&readiness.ready_field))
-                .and_then(Value::as_bool);
-        }
-        if let Some(readiness) = self
-            .service
-            .as_ref()
-            .and_then(|service| service.provider.readiness.as_ref())
+        if let Some(readiness) = self.service.provider.readiness.as_ref()
             && message.get("method").and_then(Value::as_str)
                 == Some(readiness.notification.as_str())
         {
@@ -253,20 +241,15 @@ impl LanguageServerConnection {
                             items
                                 .iter()
                                 .map(|item| {
-                                    if let Some(service) = &self.service {
-                                        return item
-                                            .get("section")
-                                            .and_then(Value::as_str)
-                                            .map_or_else(
-                                                || service.provider.configuration.get(""),
-                                                |section| {
-                                                    service.provider.configuration.get(section)
-                                                },
-                                            )
-                                            .cloned()
-                                            .unwrap_or(Value::Null);
-                                    }
-                                    Value::Null
+                                    let service = &self.service;
+                                    item.get("section")
+                                        .and_then(Value::as_str)
+                                        .map_or_else(
+                                            || service.provider.configuration.get(""),
+                                            |section| service.provider.configuration.get(section),
+                                        )
+                                        .cloned()
+                                        .unwrap_or(Value::Null)
                                 })
                                 .collect(),
                         )

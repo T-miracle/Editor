@@ -1,18 +1,10 @@
-//! Native controls composed around a canvas; left/right sidebars use manifest protocol 5.
+//! Portable collection and popup models used by native documents.
 use super::*;
-
-/// The canvas keeps its full panel coordinates; the sidebar occupies the declared edge.
-#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
-pub struct CanvasControls {
-    pub revision: u64,
-    pub sidebar: Option<SideTabs>,
-    pub menu: Option<PopupMenu>,
-}
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct SideTabs {
     pub id: String,
-    /// Omitted by older guests, which always placed their sidebar on the right.
+    /// The default edge is right; both edges share the same resizing semantics.
     #[serde(default)]
     pub position: SideTabsPosition,
     pub items: Vec<SideTab>,
@@ -63,81 +55,86 @@ pub struct MenuItem {
     pub separator_before: bool,
 }
 
-impl CanvasControls {
-    /// Validate the complete native workload before creating entities or replacing a scene.
+fn identity(id: &str) -> bool {
+    !id.is_empty() && id.len() <= 128 && !id.chars().any(char::is_control)
+}
+fn items<'a>(items: impl Iterator<Item = (&'a str, &'a str)>) -> Result<(), String> {
+    let mut ids = std::collections::BTreeSet::new();
+    let mut bytes = 0;
+    for (id, label) in items {
+        bytes += label.len();
+        if !identity(id)
+            || !ids.insert(id)
+            || ids.len() > 512
+            || label.len() > 4096
+            || bytes > 65536
+        {
+            return Err("Invalid canvas controls items or quota exceeded".into());
+        }
+    }
+    Ok(())
+}
+impl SideTabs {
+    /// Validate collection identities, selection and geometry before creating native controls.
     pub fn validate(&self) -> Result<(), String> {
-        fn identity(id: &str) -> bool {
-            !id.is_empty() && id.len() <= 128 && !id.chars().any(char::is_control)
+        let tabs = self;
+
+        if !identity(&tabs.id)
+            || ![tabs.width, tabs.min_width, tabs.max_width]
+                .iter()
+                .all(|v| v.is_finite() && *v >= 0. && *v <= 1200.)
+            || tabs.min_width > tabs.width
+            || tabs.width > tabs.max_width
+        {
+            return Err("Invalid sidebar geometry".into());
         }
-        fn items<'a>(items: impl Iterator<Item = (&'a str, &'a str)>) -> Result<(), String> {
-            let mut ids = std::collections::BTreeSet::new();
-            let mut bytes = 0;
-            for (id, label) in items {
-                bytes += label.len();
-                if !identity(id)
-                    || !ids.insert(id)
-                    || ids.len() > 512
-                    || label.len() > 4096
-                    || bytes > 65536
-                {
-                    return Err("Invalid canvas controls items or quota exceeded".into());
-                }
-            }
-            Ok(())
-        }
-        if let Some(tabs) = &self.sidebar {
-            if !identity(&tabs.id)
-                || ![tabs.width, tabs.min_width, tabs.max_width]
-                    .iter()
-                    .all(|v| v.is_finite() && *v >= 0. && *v <= 1200.)
-                || tabs.min_width > tabs.width
-                || tabs.width > tabs.max_width
-            {
-                return Err("Invalid sidebar geometry".into());
-            }
-            items(
-                tabs.items
-                    .iter()
-                    .map(|item| (item.id.as_str(), item.label.as_str())),
-            )?;
-            if tabs
+        items(
+            tabs.items
+                .iter()
+                .map(|item| (item.id.as_str(), item.label.as_str())),
+        )?;
+        if tabs
+            .items
+            .iter()
+            .any(|item| item.status.as_ref().is_some_and(|s| s.len() > 4096))
+            || tabs
                 .items
                 .iter()
-                .any(|item| item.status.as_ref().is_some_and(|s| s.len() > 4096))
-                || tabs
-                    .items
-                    .iter()
-                    .map(|item| item.label.len() + item.status.as_ref().map_or(0, |s| s.len()))
-                    .sum::<usize>()
-                    > 65536
+                .map(|item| item.label.len() + item.status.as_ref().map_or(0, |s| s.len()))
+                .sum::<usize>()
+                > 65536
+        {
+            return Err("Sidebar status quota exceeded".into());
+        }
+        for selected in [&tabs.selected, &tabs.rename].into_iter().flatten() {
+            if !tabs
+                .items
+                .iter()
+                .any(|item| &item.id == selected && !item.disabled)
             {
-                return Err("Sidebar status quota exceeded".into());
-            }
-            for selected in [&tabs.selected, &tabs.rename].into_iter().flatten() {
-                if !tabs
-                    .items
-                    .iter()
-                    .any(|item| &item.id == selected && !item.disabled)
-                {
-                    return Err("Unknown/disabled sidebar item".into());
-                }
+                return Err("Unknown/disabled sidebar item".into());
             }
         }
-        if let Some(menu) = &self.menu {
-            if !identity(&menu.id)
-                || ![menu.x, menu.y]
-                    .iter()
-                    .all(|v| v.is_finite() && *v >= 0. && *v <= 10000.)
-                || self.sidebar.as_ref().is_some_and(|s| s.id == menu.id)
-            {
-                return Err("Invalid popup identity/anchor".into());
-            }
-            items(
-                menu.items
-                    .iter()
-                    .map(|item| (item.id.as_str(), item.label.as_str())),
-            )?;
+        Ok(())
+    }
+}
+impl PopupMenu {
+    /// Bound popup anchors and item workload before native layout.
+    pub fn validate(&self) -> Result<(), String> {
+        let menu = self;
+
+        if !identity(&menu.id)
+            || ![menu.x, menu.y]
+                .iter()
+                .all(|v| v.is_finite() && *v >= 0. && *v <= 10000.)
+        {
+            return Err("Invalid popup identity/anchor".into());
         }
+        items(
+            menu.items
+                .iter()
+                .map(|item| (item.id.as_str(), item.label.as_str())),
+        )?;
         Ok(())
     }
 }

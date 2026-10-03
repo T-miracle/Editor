@@ -1,7 +1,11 @@
 //! Run the packaged terminal through startup, resize and restore, checking prompt spacing.
 use plugin_runtime::{
     Manager, Package,
-    plugin_protocol::{Environment, Event, Paint},
+    plugin_protocol::{
+        Environment, Paint,
+        api::Notification,
+        ui::{self, CanvasEvent},
+    },
 };
 use std::{
     collections::BTreeMap,
@@ -10,9 +14,9 @@ use std::{
 
 /// Reassemble the guest's cell drawing operations into prompt rows, without recording commands.
 fn prompt_rows(manager: &Manager, id: &str) -> Vec<(i32, String)> {
-    let scene = manager.live[id].scene.as_ref().unwrap();
+    let canvas = canvas(manager, id);
     let mut rows = BTreeMap::<i32, String>::new();
-    for paint in &scene.paint {
+    for paint in &canvas.paint {
         if let Paint::Text { y, text, .. } = paint {
             rows.entry(y.round() as i32).or_default().push_str(text);
         }
@@ -44,20 +48,14 @@ fn check_prompts(manager: &Manager, id: &str) -> anyhow::Result<Vec<i32>> {
 /// Pump real ConPTY output until the prompt has settled, with a finite startup timeout.
 fn settle(manager: &mut Manager, id: &str) {
     let deadline = Instant::now() + Duration::from_secs(4);
-    let mut revision = 0;
+    let mut previous = Vec::new();
     let mut changed = Instant::now();
     while Instant::now() < deadline {
         manager.poll();
-        let next = manager.live[id]
-            .scene
-            .as_ref()
-            .unwrap()
-            .controls
-            .as_ref()
-            .unwrap()
-            .revision;
-        if next != revision {
-            revision = next;
+        // Interaction revisions do not change on PTY repaint; observe all visible drawing content.
+        let next = canvas(manager, id).paint.clone();
+        if next != previous {
+            previous = next;
             changed = Instant::now();
         }
         if !prompt_rows(manager, id).is_empty() && changed.elapsed() > Duration::from_millis(400) {
@@ -69,18 +67,21 @@ fn settle(manager: &mut Manager, id: &str) {
 
 /// Opening uses the same full-panel resize event as the editor's native canvas.
 fn resize(manager: &mut Manager, id: &str, width: f32, height: f32) -> anyhow::Result<()> {
-    manager.event(
+    input(
+        manager,
         id,
-        Event::Resize {
+        CanvasEvent::Resize {
             width,
             height,
-            cell_width: 8.4,
-            cell_height: 21.,
+            grid: Some(ui::GridMetrics {
+                cell_width: 8.4,
+                cell_height: 21.,
+            }),
         },
     )
 }
 
-/// Check the Windows inherited-cursor handshake before and after several viewport changes.
+/// Check Windows native startup before and after several viewport changes.
 fn main() -> anyhow::Result<()> {
     if !cfg!(windows) {
         println!("SKIP: this regression exercises Windows ConPTY and PowerShell");
@@ -113,7 +114,7 @@ fn main() -> anyhow::Result<()> {
             "Expected one fresh prompt"
         );
         // Retain one previous prompt and one current prompt, as an ordinary Enter would.
-        manager.event(id, Event::Text("\r".into()))?;
+        input(&mut manager, id, CanvasEvent::Text { text: "\r".into() })?;
         settle(&mut manager, id);
         let fresh = check_prompts(&manager, id)?;
         println!("saved immediate_resize={immediate_resize}: {fresh:?}");
@@ -135,4 +136,29 @@ fn main() -> anyhow::Result<()> {
     }
     println!("PASS: fresh and restored prompt spacing");
     Ok(())
+}
+
+/// Read the current composed canvas without retaining a legacy scene adapter.
+fn canvas<'a>(manager: &'a Manager, id: &str) -> &'a ui::Canvas {
+    let node = manager.live[id].views["terminal"]
+        .active_node("output")
+        .unwrap();
+    let ui::Kind::Canvas(canvas) = &node.kind else {
+        panic!("terminal canvas missing")
+    };
+    canvas
+}
+
+/// Address input with the displayed document revision and owned panel/node identity.
+fn input(manager: &mut Manager, id: &str, event: CanvasEvent) -> anyhow::Result<()> {
+    let revision = manager.live[id].views["terminal"].revision;
+    manager.event(
+        id,
+        Some("terminal".into()),
+        Notification::Ui(ui::UiEvent {
+            revision,
+            node: "output".into(),
+            action: ui::Action::Canvas(event),
+        }),
+    )
 }

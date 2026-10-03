@@ -395,7 +395,12 @@ impl Terminal {
             program: tab.profile.program.clone(),
             args: shell::arguments(&tab.profile),
             cwd: (!tab.cwd.is_empty()).then(|| tab.cwd.clone()),
-            transport: process::Transport::Pty { columns, rows },
+            transport: process::Transport::Pty {
+                columns,
+                rows,
+                // The emulator answers ConPTY's query using its restored logical cursor.
+                inherit_cursor: self.env.os == "windows",
+            },
         }) {
             Ok(api::Value::Resource(handle)) => {
                 tab.handle = Some(handle);
