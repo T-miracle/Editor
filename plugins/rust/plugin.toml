@@ -1,35 +1,22 @@
+# Recognition and highlighting are independent providers; the host has no fixed language table.
 file_icons = "icons.json"
 
 [plugin]
 id = "rust"
 name = "Rust"
-version = "0.1.1"
+version = "0.2.0"
 host_version = ">=0.1.0"
 
-[[languages]]
+[[language_definitions]]
 id = "rust"
+name = "Rust"
 extensions = ["rs"]
+
+[[highlighters]]
+id = "syntax"
+language = "rust"
+grammar_name = "rust"
 grammar = "grammar/rust.wasm"
 highlights = "queries/highlights.scm"
+# Keep the ABI exported by the bundled upstream grammar.
 tree_sitter_abi = 15
-lsp_command = "rust-analyzer"
-# Rust member paths request completion after their punctuation is typed.
-completion_triggers = [".", ":"]
-# A space after a type annotation or return arrow completes Rust type names.
-completion_after_whitespace = [":", "->"]
-lsp_check_args = ["--version"]
-lsp_search_paths = [
-    "${HOME}/scoop/persist/vscode/data/extensions/rust-lang.rust-analyzer-*/server/rust-analyzer.exe",
-    "${HOME}/.vscode/extensions/rust-lang.rust-analyzer-*/server/rust-analyzer.exe",
-    "${HOME}/.vscode-insiders/extensions/rust-lang.rust-analyzer-*/server/rust-analyzer.exe",
-]
-
-# Rust Analyzer can answer before its workspace has finished loading.
-[languages.lsp_readiness]
-notification = "experimental/serverStatus"
-ready_field = "quiescent"
-client_capability = "serverStatusNotification"
-# Workspace loading and cache priming can exceed a minute while builds are running.
-timeout_ms = 120000
-# Polling consumes server status notifications before the first definition request.
-poll_method = "rust-analyzer/analyzerStatus"

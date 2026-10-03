@@ -395,6 +395,44 @@ pub(crate) struct Spawned {
     #[cfg(windows)]
     pub(crate) job: Job,
 }
+
+/// Probe literal argv under the same process-tree ownership as services, with a hard deadline.
+pub(crate) fn probe(
+    program: &std::path::Path,
+    args: &[String],
+    timeout: Duration,
+) -> anyhow::Result<bool> {
+    anyhow::ensure!(!timeout.is_zero(), "Tool probe deadline exceeded");
+    let cwd = program
+        .parent()
+        .ok_or_else(|| anyhow::anyhow!("Missing tool directory"))?;
+    let mut spawned = spawn_piped(program, args, cwd)?;
+    drop(spawned.child.stdin.take());
+    // Discard output continuously: noisy probes cannot fill a pipe or allocate an unbounded buffer.
+    let stdout = spawned.child.stdout.take().expect("piped stdout");
+    let stderr = spawned.child.stderr.take().expect("piped stderr");
+    std::thread::spawn(move || {
+        let _ = std::io::copy(&mut { stdout }, &mut std::io::sink());
+    });
+    std::thread::spawn(move || {
+        let _ = std::io::copy(&mut { stderr }, &mut std::io::sink());
+    });
+    let deadline = Instant::now() + timeout;
+    let result = loop {
+        match spawned.child.try_wait() {
+            Ok(Some(status)) => break Ok(status.success()),
+            Err(error) => break Err(error.into()),
+            Ok(None) if Instant::now() >= deadline => break Ok(false),
+            Ok(None) => std::thread::sleep(Duration::from_millis(10)),
+        }
+    };
+    // Also stop descendants after a successful parent exit; probe resources never survive selection.
+    #[cfg(windows)]
+    spawned.job.terminate();
+    let _ = spawned.child.kill();
+    let _ = spawned.child.wait();
+    result
+}
 pub(crate) fn spawn_piped(
     program: &std::path::Path,
     args: &[String],

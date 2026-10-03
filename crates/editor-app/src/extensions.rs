@@ -16,7 +16,7 @@ mod installation;
 #[cfg(test)]
 mod installer_tests;
 #[cfg(test)]
-mod language_tests;
+pub(crate) mod language_tests;
 #[cfg(test)]
 pub(crate) mod lsp_tests;
 mod native_controls;

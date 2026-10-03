@@ -259,9 +259,11 @@ impl State {
             ));
         }
         let permission = match operation {
-            api::Operation::ReadAsset { .. } | api::Operation::Service { .. } => return Ok(()),
+            api::Operation::ReadAsset { .. }
+            | api::Operation::Service { .. }
+            | api::Operation::DescribeSdk => return Ok(()),
             api::Operation::OpenWorkspace => "workspace.read",
-            api::Operation::ReadFile { handle, .. }
+            api::Operation::ReadFile { handle, .. } | api::Operation::FindFiles { handle, .. }
                 if matches!(self.roots.resolve(handle)?, RootKind::Workspace) =>
             {
                 "workspace.read"

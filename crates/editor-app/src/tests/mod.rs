@@ -200,35 +200,48 @@ mod file_highlight_tests {
             cx.set_reduce_motion(true);
         });
         let directory = tempfile::tempdir().unwrap();
-        // Use a built-in language so frame ordering is independent of installed plugin packages.
-        let path = directory.path().join("example.css");
-        std::fs::write(&path, "body { color: red; }\n").unwrap();
+        // Install an independent declaration; editor defaults must never supply a hidden parser.
+        let path = directory.path().join("example.novel");
+        std::fs::write(&path, "answer = 42\n").unwrap();
         let workspace = Workspace::open(directory.path()).unwrap();
+        let mut manager = plugin_runtime::Manager::open(
+            workspace.root().join(".runtime-plugin-test"),
+            plugin_runtime::plugin_protocol::Environment {
+                workspace: workspace.root().display().to_string(),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let package =
+            crate::extensions::language_tests::packages::language_package("frame-fixture");
+        manager.install(&package, Default::default()).unwrap();
         let view_slot = Rc::new(RefCell::new(None));
         let capture = view_slot.clone();
         let (_, cx) = cx.add_window_view(move |window, cx| {
-            let view = cx.new(|cx| EditorApp::new(workspace, Some(path), window, cx));
+            let view = cx.new(|cx| EditorApp::new(workspace, None, window, cx));
             *capture.borrow_mut() = Some(view.clone());
             Root::new(view, window, cx)
         });
         let view = view_slot.borrow_mut().take().unwrap();
-
+        // Finish package startup before observing the separate file-open frame boundary.
+        cx.run_until_parked();
+        cx.update(|window, cx| view.update(cx, |app, cx| app.open_file(path, window, cx)));
         cx.update(|_, cx| {
             let app = view.read(cx);
-            let editor = app.tabs[0].editor.read(cx);
-            assert_eq!(editor.text().to_string(), "body { color: red; }\n");
+            let editor = app.editor.read(cx);
+            assert_eq!(editor.text().to_string(), "answer = 42\n");
             assert_eq!(editor.language_name().as_ref(), "text");
         });
 
         cx.update(|window, cx| window.draw(cx).clear(cx));
         cx.update(|_, cx| {
             let app = view.read(cx);
-            assert_eq!(app.tabs[0].editor.read(cx).language_name().as_ref(), "text");
+            assert_eq!(app.editor.read(cx).language_name().as_ref(), "text");
         });
         cx.update(|window, cx| window.simulate_next_frame(cx));
         cx.update(|_, cx| {
             let app = view.read(cx);
-            assert_eq!(app.tabs[0].editor.read(cx).language_name().as_ref(), "css");
+            assert_eq!(app.editor.read(cx).language_name().as_ref(), "novel");
         });
     }
 }

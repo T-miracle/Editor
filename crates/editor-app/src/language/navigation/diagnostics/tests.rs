@@ -135,12 +135,8 @@ fn rust_semantic_fixture(save: bool) {
     let broken = "// Valid syntax with three semantic errors.\nfn main() { let value: bool = 42; missing_function(); let _: Typoo = value; }\n";
     let corrected = "// Corrected fixture.\nfn main() { let _value: bool = true; }\n";
     std::fs::write(&path, corrected).unwrap();
-    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../plugins/rust");
-    let manifest = plugin_schema::PluginManifest::parse(
-        &std::fs::read_to_string(root.join("plugin.toml")).unwrap(),
-    )
-    .unwrap();
-    let server = LanguageServer::new(directory.path(), manifest.languages[0].clone()).unwrap();
+    let (_storage, _manager, server) =
+        crate::language::navigation::readiness_tests::installed_rust_server(directory.path());
     server.prepare_until_ready().unwrap();
     let uri = file_uri(&path).unwrap();
     // First synchronize valid text so the next analysis must follow didChange.

@@ -1,7 +1,7 @@
 //! Window shell, layout, settings, dialogs, and persisted app state.
 
 pub(crate) mod dialog;
-mod language_servers;
+pub(crate) mod language_servers;
 pub(crate) mod languages;
 mod layout;
 pub(crate) mod plugins;

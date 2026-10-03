@@ -54,7 +54,7 @@ use std::{
 #[cfg(target_os = "windows")]
 use app::WindowsTimerResolution;
 use app::dialog as app_dialog;
-use app::plugins::{PluginLoadEntry, PluginPopupKind};
+use app::plugins::PluginPopupKind;
 use app::session as session_state;
 use app::{EditorDockPanel, EditorDockPanelKind};
 use assets::AppAssets;
@@ -166,11 +166,12 @@ struct EditorApp {
     /// A local nonmodal card replaces informational dialogs and never owns the editor's focus.
     notification: Option<Entity<ui::controls::Notification>>,
     definition_request_id: u64,
-    plugin_loads: Vec<PluginLoadEntry>,
-    /// Runtime-defined languages are independent of the transitional bundled-language enum.
+    /// LSP readiness is tracked by declared language, independently from grammar loading.
+    language_service_states: HashMap<String, app::language_servers::ServiceLoadState>,
+    /// Every grammar belongs to an installed, dynamically selected provider.
     dynamic_languages: app::languages::DynamicLanguages,
     dynamic_language_ids: std::collections::BTreeSet<String>,
-    /// Rejects completion from a grammar task belonging to an older package version.
+    /// Reject diagnostic results captured before a provider or scope publication changed.
     plugin_loading_generation: u64,
     /// Apply package lifecycle changes on the next frame with access to the editor window.
     pending_contribution_sync: bool,
@@ -394,10 +395,10 @@ impl EditorApp {
             definition_notice: None,
             notification: None,
             definition_request_id: 0,
-            plugin_loads: PluginLoadEntry::initial(),
+            language_service_states: HashMap::new(),
+            plugin_loading_generation: 0,
             dynamic_languages: Default::default(),
             dynamic_language_ids: Default::default(),
-            plugin_loading_generation: 0,
             pending_contribution_sync: false,
             pending_editor_requests: Vec::new(),
             plugin_saves: Default::default(),
@@ -445,7 +446,7 @@ impl EditorApp {
 
         let focus = this.editor.focus_handle(cx);
         window.defer(cx, move |window, cx| focus.focus(window, cx));
-        this.start_plugin_loading(cx);
+        this.sync_dynamic_languages(cx);
         // The window observer repairs missed events after sleep or another app had focus.
         this._activation_subscription =
             Some(cx.observe_window_activation(window, |this, window, _cx| {
@@ -704,7 +705,6 @@ fn main() -> anyhow::Result<()> {
 
     let (workspace, initial_file) = resolve_startup_target()?;
     // Plain entries prevent bundled host grammars from running before plugin validation.
-    language_plugins::prepare_bundled_plugins();
     let startup_state = SessionState::load(workspace.root());
     gpui_kit::application()
         .with_assets(AppAssets)

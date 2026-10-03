@@ -257,16 +257,16 @@ impl LanguageServerConnection {
                                         return item
                                             .get("section")
                                             .and_then(Value::as_str)
-                                            .and_then(|section| {
-                                                service.provider.configuration.get(section)
-                                            })
+                                            .map_or_else(
+                                                || service.provider.configuration.get(""),
+                                                |section| {
+                                                    service.provider.configuration.get(section)
+                                                },
+                                            )
                                             .cloned()
                                             .unwrap_or(Value::Null);
                                     }
-                                    super::super::sdk::configuration_section(
-                                        &self.configuration,
-                                        item.get("section").and_then(Value::as_str),
-                                    )
+                                    Value::Null
                                 })
                                 .collect(),
                         )

@@ -1,4 +1,4 @@
-//! Legacy tool integration tests remain separate from generic protocol transport.
+//! Actual installed Rust policy and native analysis verify the public SDK discovery path.
 use super::*;
 
 /// Exercise the terminal import from the full editor workspace without a local SDK.
@@ -6,11 +6,7 @@ use super::*;
 #[ignore = "requires local Rust Analyzer and the editor workspace dependencies"]
 fn host_sdk_completes_terminal_from_editor_workspace() {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
-    let manifest = plugin_schema::PluginManifest::parse(
-        &std::fs::read_to_string(root.join("plugins/rust/plugin.toml")).unwrap(),
-    )
-    .unwrap();
-    let server = LanguageServer::new(&root, manifest.languages[0].clone()).unwrap();
+    let (_storage, _manager, server) = installed_rust_server(&root);
     server.prepare_until_ready().unwrap();
     let path = root.join("plugins/terminal/src/controls.rs");
     let uri = file_uri(&path.canonicalize().unwrap()).unwrap();
@@ -75,12 +71,7 @@ plugin-protocol = { version = "=0.1.0", features = ["guest"] }
     let path = plugin.join("src/lib.rs");
     let source = "// Host protocol import.\nuse plugin_protocol::ui::{Act};\n".to_owned();
     std::fs::write(&path, &source).unwrap();
-    let repo = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
-    let manifest = plugin_schema::PluginManifest::parse(
-        &std::fs::read_to_string(repo.join("plugins/rust/plugin.toml")).unwrap(),
-    )
-    .unwrap();
-    let server = LanguageServer::new(root.path(), manifest.languages[0].clone()).unwrap();
+    let (_storage, _manager, server) = installed_rust_server(root.path());
     server.prepare_until_ready().unwrap();
     // Include the server's loaded-workspace report when diagnosing integration failures.
     let analysis_status = server
@@ -105,6 +96,11 @@ plugin-protocol = { version = "=0.1.0", features = ["guest"] }
         "missing Action: {items:?}; server status: {analysis_status}"
     );
     let source = source.replace("{Act}", "{Action}");
+    let hover = server.hover(uri.clone(), source.clone(), position).unwrap();
+    assert!(
+        hover.is_some(),
+        "public SDK imports must retain hover documentation"
+    );
     let definitions = server.definitions(uri, source, position).unwrap();
     assert!(
         definitions
@@ -125,10 +121,39 @@ plugin-protocol = { version = "=0.1.0", features = ["guest"] }
 #[ignore = "run scripts/rust-readiness-smoke.ps1 with a local Rust language server"]
 fn local_rust_server_readiness() {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
-    let manifest = plugin_schema::PluginManifest::parse(
-        &std::fs::read_to_string(root.join("plugins/rust/plugin.toml")).unwrap(),
+    let (_storage, _manager, server) = installed_rust_server(&root);
+    server.prepare_until_ready().unwrap();
+}
+
+/// Keep the installed owner alive so both guest hooks and native leases use production lifecycle rules.
+pub(super) fn installed_rust_server(
+    root: &Path,
+) -> (tempfile::TempDir, plugin_runtime::Manager, LanguageServer) {
+    let storage = tempfile::tempdir().unwrap();
+    let package = plugin_runtime::Package::read(
+        &PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../dist/plugins/rust.zip"),
+    )
+    .expect("build the Rust package with scripts/build-plugins.ps1");
+    let resources = plugin_runtime::HostResources {
+        sdk: Some(crate::sdk_export::descriptor().map_err(|error| format!("{error:#}"))),
+    };
+    let mut manager = plugin_runtime::Manager::open_with_resources(
+        storage.path().join("plugins"),
+        plugin_runtime::plugin_protocol::Environment {
+            workspace: root.canonicalize().unwrap().display().to_string(),
+            ..Default::default()
+        },
+        true,
+        resources,
     )
     .unwrap();
-    let server = LanguageServer::new(&root, manifest.languages[0].clone()).unwrap();
-    server.prepare_until_ready().unwrap();
+    manager
+        .install(&package, package.manifest.permissions.clone())
+        .unwrap();
+    let plan = manager.language_services()["rust/analysis"]
+        .as_ref()
+        .unwrap()
+        .clone();
+    let server = LanguageServer::from_service(plan).unwrap();
+    (storage, manager, server)
 }

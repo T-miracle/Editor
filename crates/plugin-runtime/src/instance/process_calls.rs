@@ -55,6 +55,8 @@ impl State {
                     Service {
                         program,
                         args,
+                        search_paths: Vec::new(),
+                        check_args: Vec::new(),
                         installation: None,
                     },
                     transport,
@@ -153,7 +155,8 @@ impl State {
         let program = if let Some(prepared) = &prepared {
             prepared.program.clone()
         } else {
-            crate::toolchains::resolve(&command.program).map_err(process_failure)?
+            crate::toolchains::resolve_service_until(&command, self.call_deadline)
+                .map_err(process_failure)?
         };
         let args = if let Some(prepared) = &prepared {
             prepared.args(&command.args).map_err(process_failure)?

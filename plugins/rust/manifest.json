@@ -1,9 +1,72 @@
 {
   "id": "rust",
   "name": "Rust",
-  "version": "0.1.1",
-  "protocol": 1,
+  "version": "0.2.0",
+  "protocol": 7,
   "contributions": "plugin.toml",
-  "permissions": [],
-  "storage_limit": 1024
+  "permissions": [
+    "workspace.read",
+    "process.service.analysis"
+  ],
+  "storage_limit": 1024,
+  "api": {
+    "base": "^1",
+    "required": {
+      "language.lsp": ">=1.1,<2",
+      "workspace.files": ">=1.1,<2",
+      "host.sdk": "^1",
+      "configuration": "^1",
+      "process": ">=1.1,<2"
+    }
+  },
+  "component": "rust.wasm",
+  "settings": {
+    "executable": {
+      "title": "Rust Analyzer 可执行文件（留空默认值时自动查找）",
+      "value_type": {"kind": "string", "max_length": 4096},
+      "default": "",
+      "scope": "project"
+    }
+  },
+  "services": {
+    "analysis": {
+      "program": "rust-analyzer",
+      "args": [],
+      "search_paths": [
+        "${HOME}/scoop/persist/vscode/data/extensions/rust-lang.rust-analyzer-*/server/rust-analyzer.exe",
+        "${HOME}/.vscode/extensions/rust-lang.rust-analyzer-*/server/rust-analyzer.exe",
+        "${HOME}/.vscode-insiders/extensions/rust-lang.rust-analyzer-*/server/rust-analyzer.exe"
+      ],
+      "check_args": [
+        "--version"
+      ]
+    }
+  },
+  "language_servers": [
+    {
+      "id": "analysis",
+      "language": "rust",
+      "service": "analysis",
+      "hook": true,
+      "executable_setting": "executable",
+      "initialization_options": {},
+      "client_experimental": {
+        "serverStatusNotification": true
+      },
+      "readiness": {
+        "notification": "experimental/serverStatus",
+        "pointer": "/quiescent",
+        "expected": true,
+        "timeout_ms": 120000
+      },
+      "completion_triggers": [
+        ".",
+        ":"
+      ],
+      "completion_after_whitespace": [
+        ":",
+        "->"
+      ]
+    }
+  ]
 }

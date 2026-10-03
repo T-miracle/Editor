@@ -39,9 +39,6 @@ impl LanguageServer {
             .as_ref()
             .is_some_and(|current| Arc::ptr_eq(current, service))
     }
-    pub(crate) fn is_dynamic(&self) -> bool {
-        self.service.is_some()
-    }
     pub(crate) fn is_active(&self) -> bool {
         !self.retired.load(std::sync::atomic::Ordering::Acquire)
             && self

@@ -1,9 +1,7 @@
 # HTML 插件
 
-为 `.html`、`.htm` 文件提供 Tree-sitter WASM 解析、语法高亮和深浅色文件图标。高亮覆盖标签、属性名、带引号及不带引号的属性值、注释、DOCTYPE 和字符实体；解析器报告的语法错误由编辑器显示。
+版本 0.2.0 使用协议 7，为 `.html` 和 `.htm` 提供独立的语言识别、Tree-sitter 高亮和文件图标。语法 provider 与语言服务选择独立；安装、停用、替换及卸载后已打开文件会重新选择可用 provider。
 
-此插件是由宿主管理的声明式资源包，无额外权限或独立组件。运行仓库根目录的 `./scripts/build-plugins.ps1` 后，在插件管理中安装 `dist/plugins/html.zip`；启用、停用和卸载会同步更新已打开文件。
+本包只有声明与资源，不包含生命周期 WASM 组件或语言服务。`grammar/html.wasm` 是语法资源，不是动态插件组件。
 
-本版本仅提供 HTML 语法层支持，不包含 LSP 补全、格式化或 HTML 规范校验；`script`、`style` 内容按原始文本解析，暂不注入 JavaScript/CSS 高亮。解析器允许 HTML 的部分省略标签写法，因此语法诊断不等同于完整的 HTML 校验器。
-
-语法来源、固定版本、校验值和 MIT 许可见 [grammar/README.md](grammar/README.md)。
+通过 `scripts/build-plugins.ps1 -HostExe <editor-app.exe>` 打包；ZIP 保留本 README、清单、查询、图标和原始 grammar。

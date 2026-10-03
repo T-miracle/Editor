@@ -38,6 +38,8 @@ impl State {
             if ![
                 "read_asset",
                 "open_workspace",
+                "find_files",
+                "describe_sdk",
                 "open_data",
                 "read_file",
                 "write_file",
@@ -92,14 +94,29 @@ impl State {
                     "Migration has private-copy authority only",
                 ));
             }
-            // Discovery may read granted roots but cannot create side effects or subscriptions.
+            // Cleanup is confined to roots allocated by this hook, never an older process or request.
+            let hook_cleanup = if let api::Operation::CloseResource { handle } = &request.operation
+            {
+                self.language_hook_checkpoint
+                    .is_some_and(|start| handle.resource >= start)
+                    && matches!(
+                        self.roots.resolve(handle),
+                        Ok(resource_roots::RootKind::Workspace | resource_roots::RootKind::Data)
+                    )
+            } else {
+                false
+            };
+            // Discovery may read granted roots and immutable host metadata, without native side effects.
             if self.language_hook
+                && !hook_cleanup
                 && !matches!(
                     &request.operation,
                     api::Operation::ReadAsset { .. }
                         | api::Operation::OpenWorkspace { .. }
                         | api::Operation::OpenData { .. }
                         | api::Operation::ReadFile { .. }
+                        | api::Operation::FindFiles { .. }
+                        | api::Operation::DescribeSdk
                 )
             {
                 return Err(Failure::new(
@@ -131,6 +148,7 @@ impl State {
                         .map(api::Value::Cancellation)
                 }
                 api::Operation::ReadAsset { path } => self.read_capability_asset(&path),
+                api::Operation::DescribeSdk => self.describe_sdk(),
                 api::Operation::Editor {
                     operation,
                     timeout_ms,
@@ -150,6 +168,53 @@ impl State {
             result
         })();
         serde_json::to_string(&api::Response { id, result }).map_err(|error| error.to_string())
+    }
+
+    /// Native toolchain metadata grants neither workspace access nor a filesystem root to WASI.
+    fn describe_sdk(&self) -> Result<api::Value, Failure> {
+        if !self
+            .api
+            .as_ref()
+            .is_some_and(|api| api.capabilities.contains_key("host.sdk"))
+        {
+            return Err(Failure::new(
+                ErrorCode::CapabilityUnavailable,
+                "host.sdk was not negotiated",
+            ));
+        }
+        if !self.active && !self.language_hook {
+            return Err(Failure::new(
+                ErrorCode::InvalidState,
+                "SDK discovery requires an active instance or language hook",
+            ));
+        }
+        let sdk = self
+            .host_resources
+            .sdk
+            .as_ref()
+            .ok_or_else(|| {
+                Failure::new(
+                    ErrorCode::NotFound,
+                    "This host did not provide a plugin SDK",
+                )
+            })?
+            .as_ref()
+            .map_err(|error| {
+                Failure::new(
+                    ErrorCode::OperationFailed,
+                    error.chars().take(4096).collect::<String>(),
+                )
+            })?;
+        if !Path::new(&sdk.root).is_absolute()
+            || !Path::new(&sdk.cargo_config).is_absolute()
+            || !serde_json::to_vec(sdk).is_ok_and(|bytes| bytes.len() <= 64 * 1024)
+        {
+            return Err(Failure::new(
+                ErrorCode::OperationFailed,
+                "Invalid host SDK descriptor",
+            ));
+        }
+        Ok(api::Value::Sdk(sdk.clone()))
     }
 
     /// Availability and authorization are separate; preparation can read only immutable assets.

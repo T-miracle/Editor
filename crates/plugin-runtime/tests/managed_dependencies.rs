@@ -328,19 +328,20 @@ fn explicit_local_executable_wins_and_bad_explicit_paths_do_not_fallback() {
             Some(json!(temp.path().join("missing.exe"))),
         )
         .unwrap();
+    // Discovery may reject a missing or unusable executable; the explicit path must remain the failure.
     assert!(
         manager.language_services()["private-analysis/analysis"]
             .as_ref()
             .err()
             .unwrap()
-            .contains("Native tool not found")
+            .contains("missing.exe")
     );
     assert!(
         manager
             .install(&offline, offline.manifest.permissions.clone())
             .unwrap_err()
             .to_string()
-            .contains("Native tool not found")
+            .contains("missing.exe")
     );
 }
 

@@ -33,14 +33,15 @@ pub(crate) fn negotiate(manifest: &Manifest) -> anyhow::Result<Option<api::Negot
         ("ui.canvas".into(), Version::new(1, 0, 0)),
         ("ui.grid".into(), Version::new(1, 0, 0)),
         ("plugin.services".into(), Version::new(1, 0, 0)),
-        ("workspace.files".into(), Version::new(1, 0, 0)),
+        ("workspace.files".into(), Version::new(1, 1, 0)),
+        ("host.sdk".into(), Version::new(1, 0, 0)),
         ("storage.private".into(), Version::new(1, 0, 0)),
         ("storage.migration".into(), Version::new(1, 0, 0)),
         ("editor.documents".into(), Version::new(1, 0, 0)),
         ("configuration".into(), Version::new(1, 0, 0)),
         ("ui.panels".into(), Version::new(1, 0, 0)),
-        ("process".into(), Version::new(1, 0, 0)),
-        ("language.lsp".into(), Version::new(1, 0, 0)),
+        ("process".into(), Version::new(1, 1, 0)),
+        ("language.lsp".into(), Version::new(1, 1, 0)),
         ("dependencies".into(), Version::new(1, 0, 0)),
     ]
     .into();

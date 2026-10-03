@@ -121,6 +121,40 @@ impl std::fmt::Display for Failure {
 }
 impl std::error::Error for Failure {}
 
+/// Workspace-relative glob inputs are data; no filesystem path expansion is implied.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FileQuery {
+    /// Root-relative globs; `**/` also matches zero directory levels.
+    pub include: Vec<String>,
+    /// Excluded subtrees are pruned before their children are inspected.
+    #[serde(default)]
+    pub exclude: Vec<String>,
+    /// The host additionally bounds traversal work and encoded response size.
+    pub max_results: u32,
+}
+
+/// A bounded discovery result contains workspace-relative paths, never new file authority.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FileMatches {
+    pub paths: Vec<String>,
+    /// Unreadable branches are visible to the caller instead of silently claiming completeness.
+    pub skipped: Vec<String>,
+}
+
+/// Public native toolchain inputs; these paths cannot be used as workspace file handles.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SdkDescriptor {
+    /// Content identity of the exact SDK compiled into this host.
+    pub digest: String,
+    /// Absolute native path for external interface tools, with no WASI filesystem grant.
+    pub root: String,
+    /// The same Cargo override used by the public --plugin-cargo entry point.
+    pub cargo_config: String,
+}
+
 /// Typed resource operations expand per capability, not per consuming plugin.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "method", rename_all = "snake_case", deny_unknown_fields)]
@@ -145,6 +179,13 @@ pub enum Operation {
         path: String,
     },
     OpenWorkspace,
+    /// Requires workspace.files 1.1 and the workspace handle's existing read permission.
+    FindFiles {
+        handle: ResourceHandle,
+        query: FileQuery,
+    },
+    /// Describe a host-owned SDK without accepting a guest-chosen native path.
+    DescribeSdk,
     OpenData,
     ReadFile {
         handle: ResourceHandle,
@@ -171,6 +212,8 @@ pub struct Request {
 /// Result variants carry structured values, never JSON hidden inside a string result.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum Value {
+    Files(FileMatches),
+    Sdk(SdkDescriptor),
     Process(crate::process::Update),
     Cancellation(CancellationEffect),
     Accepted(ResourceHandle),

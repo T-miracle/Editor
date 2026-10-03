@@ -78,6 +78,7 @@ impl Manager {
         Ok(InstallationPreparation {
             root: self.root.clone(),
             environment: self.environment.clone(),
+            host_resources: self.host_resources.clone(),
             previous_digest: self.installed.get(id).map(|entry| entry.digest.clone()),
             package: package.clone(),
             grants,

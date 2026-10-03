@@ -1,16 +1,24 @@
+# Recognition and highlighting are independent providers; the host has no fixed language table.
 file_icons = "icons.json"
 
 [plugin]
 id = "toml"
 name = "TOML"
-version = "0.1.1"
+version = "0.2.0"
 host_version = ">=0.1.0"
 
-[[languages]]
+[[language_definitions]]
 id = "toml"
+name = "TOML"
 extensions = ["toml"]
-# These known lockfiles use TOML; other .lock files remain unclassified.
+# Only these lockfiles contain TOML; unrelated .lock files remain unclassified.
 filenames = ["Cargo.lock", "uv.lock"]
+
+[[highlighters]]
+id = "syntax"
+language = "toml"
+grammar_name = "toml"
 grammar = "grammar/toml.wasm"
 highlights = "queries/highlights.scm"
+# Keep the ABI exported by the bundled upstream grammar.
 tree_sitter_abi = 15

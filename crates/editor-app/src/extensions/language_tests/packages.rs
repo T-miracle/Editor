@@ -3,7 +3,7 @@ use super::*;
 use std::io::{Cursor, Write};
 
 /// The language identity is unfamiliar to the host; only the grammar export name is reused.
-pub(in crate::extensions) fn language_package(id: &str) -> Package {
+pub(crate) fn language_package(id: &str) -> Package {
     let source = format!(
         r#"[plugin]
 id = "{id}"
@@ -36,11 +36,11 @@ tree_sitter_abi = 15
         ("plugin.toml", source.into_bytes()),
         (
             "grammar.wasm",
-            std::fs::read(root.join(&legacy.languages[0].grammar)).unwrap(),
+            std::fs::read(root.join(&legacy.highlighters[0].grammar)).unwrap(),
         ),
         (
             "highlights.scm",
-            std::fs::read(root.join(&legacy.languages[0].highlights)).unwrap(),
+            std::fs::read(root.join(&legacy.highlighters[0].highlights)).unwrap(),
         ),
     ] {
         zip.start_file(name, zip::write::SimpleFileOptions::default())
@@ -78,8 +78,8 @@ pub(in crate::extensions) fn repack(files: BTreeMap<String, Vec<u8>>) -> anyhow:
     Package::from_bytes(&zip.finish()?.into_inner())
 }
 
-/// A current resource-only package retains the established grammar declaration without a lifecycle component.
-pub(super) fn legacy_rust_package() -> Package {
+/// A current resource-only package retains the current grammar declaration without a lifecycle component.
+pub(super) fn rust_resource_package() -> Package {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../plugins/rust");
     let source = std::fs::read_to_string(root.join("plugin.toml")).unwrap();
     let source = source
@@ -88,7 +88,7 @@ pub(super) fn legacy_rust_package() -> Package {
         .collect::<Vec<_>>()
         .join("\n");
     let declaration = plugin_schema::PluginManifest::parse(&source).unwrap();
-    let language = &declaration.languages[0];
+    let language = &declaration.highlighters[0];
     let manifest = serde_json::json!({"id":"rust","name":"Rust","version":declaration.plugin.version,
         "protocol":7,"api":{"base":"^1"},"contributions":"plugin.toml","storage_limit":1024});
     repack(BTreeMap::from([

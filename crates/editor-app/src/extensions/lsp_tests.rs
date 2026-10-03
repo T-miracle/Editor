@@ -4,6 +4,62 @@ use gpui_kit::{TestAppContext, gpui};
 use serde_json::json;
 use std::time::Instant;
 
+/// Experimental plugin data reaches the real initialize request without overriding host transport capabilities.
+#[test]
+#[ignore = "build SDK capability-example and lsp_fixture first"]
+fn arbitrary_client_capabilities_reach_the_native_lsp_handshake() {
+    let directory = tempfile::tempdir().unwrap();
+    let exe = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../target/debug/examples/lsp_fixture.exe")
+        .canonicalize()
+        .unwrap();
+    let log = directory.path().join("wire.jsonl");
+    let mut files = package(&exe, &log).files;
+    let mut manifest: serde_json::Value = serde_json::from_slice(&files["manifest.json"]).unwrap();
+    manifest["language_servers"][0]["client_experimental"] =
+        json!({"unfamiliarFeature":{"version":2}});
+    files.insert(
+        "manifest.json".into(),
+        serde_json::to_vec(&manifest).unwrap(),
+    );
+    let package = super::language_tests::packages::repack(files).unwrap();
+    let mut manager = plugin_runtime::Manager::open(
+        directory.path().join("installed"),
+        protocol::Environment {
+            workspace: directory.path().display().to_string(),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    manager
+        .install(&package, package.manifest.permissions.clone())
+        .unwrap();
+    let plan = manager.language_services()["capability-example/analysis"]
+        .as_ref()
+        .unwrap()
+        .clone();
+    let server = crate::language::navigation::LanguageServer::from_service(plan).unwrap();
+    server.prepare_until_ready().unwrap();
+    let wire = std::fs::read_to_string(log).unwrap();
+    let initialize = wire
+        .lines()
+        .map(|line| serde_json::from_str::<serde_json::Value>(line).unwrap())
+        .find(|message| message["method"] == "initialize")
+        .unwrap();
+    assert_eq!(
+        initialize["params"]["capabilities"]["experimental"],
+        json!({"unfamiliarFeature":{"version":2}})
+    );
+    assert_eq!(
+        initialize["params"]["capabilities"]["general"]["positionEncodings"],
+        json!(["utf-16"])
+    );
+    assert_eq!(
+        initialize["params"]["capabilities"]["textDocument"]["completion"]["completionItem"]["snippetSupport"],
+        false
+    );
+}
+
 /// Preserve package inspection and explicit grants while supplying the user-selected local fixture.
 pub(crate) fn package(exe: &Path, log: &Path) -> Package {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -106,6 +162,51 @@ fn installed_hook_starts_unknown_lsp_for_unsaved_open_document_and_retires_it(
         app.language_servers["novel"].clone()
     });
     server.prepare_until_ready().unwrap();
+    // Recognition can change while both LSP plans remain exactly the same published instances.
+    let mut other_files =
+        super::language_tests::packages::language_package("other-recognition").files;
+    let other_source = String::from_utf8(other_files["plugin.toml"].clone())
+        .unwrap()
+        .replace("id = \"novel\"", "id = \"other\"")
+        .replace("language = \"novel\"", "language = \"other\"");
+    other_files.insert("plugin.toml".into(), other_source.into_bytes());
+    let other = super::language_tests::packages::repack(other_files).unwrap();
+    manager.install(&other, Default::default()).unwrap();
+    publish(&app, &mut manager, cx);
+    let original_document = server
+        .document(&language_navigation::file_uri(&path).unwrap())
+        .unwrap();
+    crate::language::providers::choose(
+        protocol::settings::Scope::User,
+        "recognition:ext:novel",
+        Some("other-recognition/other"),
+    )
+    .unwrap();
+    cx.update(|_, cx| app.update(cx, |app, cx| app.sync_dynamic_languages(cx)));
+    cx.run_until_parked();
+    assert!(
+        !original_document.is_active(),
+        "recognition change must retire in-flight document requests"
+    );
+    cx.update(|_, cx| {
+        let app = app.read(cx);
+        assert!(
+            app.editor.read(cx).lsp().definition_provider.is_none(),
+            "recognition change must revoke old document providers"
+        );
+        assert!(
+            Arc::ptr_eq(&server, &app.language_servers["novel"]),
+            "unaffected service must retain its instance"
+        );
+    });
+    crate::language::providers::choose(
+        protocol::settings::Scope::User,
+        "recognition:ext:novel",
+        Some("novel-recognition/novel"),
+    )
+    .unwrap();
+    cx.update(|_, cx| app.update(cx, |app, cx| app.sync_dynamic_languages(cx)));
+    cx.run_until_parked();
     let navigation = cx.update(|window, cx| {
         let (provider, text) = {
             let editor = app.read(cx).editor.read(cx);
@@ -248,12 +349,19 @@ fn installed_hook_starts_unknown_lsp_for_unsaved_open_document_and_retires_it(
         .unwrap()
         .clone();
     assert!(error.contains("only a language proposal"), "{error}");
-    let scene = manager.live["capability-example"].scene.as_ref().unwrap();
+    // Invalid hook output may fault and withdraw the instance, but must never publish the forbidden view.
     assert!(
-        !serde_json::to_string(scene.as_ref())
-            .unwrap()
-            .contains("forbidden hook view")
+        manager.live["capability-example"]
+            .scene
+            .as_ref()
+            .is_none_or(|scene| {
+                !serde_json::to_string(scene.as_ref())
+                    .unwrap()
+                    .contains("forbidden hook view")
+            })
     );
+    // Protocol-invalid output uses the same explicit recovery gate as any other paused instance.
+    manager.restart_plugin("capability-example").unwrap();
     manager
         .update_setting(
             "capability-example",

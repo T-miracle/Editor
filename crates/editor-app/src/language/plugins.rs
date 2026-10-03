@@ -5,98 +5,15 @@ use gpui_kit::{
     SharedString,
     component::highlighter::{GrammarConfig, LanguageParserFactory, LanguageRegistry},
 };
-use plugin_schema::{LanguageContribution, PluginManifest};
+use plugin_schema::Highlighter;
+#[cfg(test)]
+use plugin_schema::PluginManifest;
 use std::{
     fs,
     path::{Path, PathBuf},
     sync::Arc,
 };
 use tree_sitter::{Parser, WasmStore, wasmtime::Engine};
-
-/// Finds the plugin contribution responsible for a source file's extension.
-pub fn language_for_path(path: &Path) -> Option<LanguageContribution> {
-    if super::providers::handles_path(path) {
-        return None;
-    }
-    crate::extensions::contributions::language_for_path(path).map(|(_, language)| language)
-}
-
-/// The bundled plugins are individually tracked so one failure cannot hide another result.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum BundledPlugin {
-    Rust,
-    Toml,
-    /// HTML and HTM files use the bundled upstream HTML grammar.
-    Html,
-    /// JavaScript and JSX share the package's WASM grammar.
-    JavaScript,
-}
-
-impl BundledPlugin {
-    pub const ALL: [Self; 4] = [Self::Rust, Self::Toml, Self::Html, Self::JavaScript];
-
-    pub fn name(self) -> &'static str {
-        match self {
-            Self::Rust => "Rust",
-            Self::Toml => "TOML",
-            Self::Html => "HTML",
-            Self::JavaScript => "JavaScript",
-        }
-    }
-
-    pub fn language_id(self) -> &'static str {
-        match self {
-            Self::Rust => "rust",
-            Self::Toml => "toml",
-            Self::Html => "html",
-            Self::JavaScript => "javascript",
-        }
-    }
-
-    pub fn manifest_id(self) -> &'static str {
-        match self {
-            Self::Rust => "rust",
-            Self::Toml => "toml",
-            Self::Html => "html",
-            Self::JavaScript => "javascript",
-        }
-    }
-}
-
-/// Mask host grammars before restored files can request a parser.
-pub fn prepare_bundled_plugins() {
-    let registry = LanguageRegistry::singleton();
-    for plugin in BundledPlugin::ALL {
-        // Explicit IDs keep host grammars inert even if a manifest cannot be parsed.
-        registry.register(
-            plugin.language_id(),
-            &GrammarConfig::plain(plugin.language_id().to_owned()),
-        );
-    }
-}
-
-/// Prepare legacy grammar bytes without publishing before the owning UI generation is checked.
-pub(crate) fn prepare_bundled_plugin(
-    plugin: BundledPlugin,
-) -> anyhow::Result<(Arc<LoadedGrammar>, String)> {
-    let root = crate::extensions::contributions::plugin_root(plugin.manifest_id())
-        .ok_or_else(|| anyhow::anyhow!("{} plugin is not installed and enabled", plugin.name()))?;
-    let source = fs::read_to_string(root.join("plugin.toml"))?;
-    let manifest = PluginManifest::parse(&source)?;
-    let contribution = manifest
-        .languages
-        .iter()
-        .find(|language| language.id == plugin.language_id())
-        .ok_or_else(|| anyhow::anyhow!("{} grammar is missing from its package", plugin.name()))?;
-    let (grammar, query) = load_plugin_language(&root, contribution)?;
-    // A disabled or replaced package must not publish a parser after its worker finishes.
-    ensure!(
-        crate::extensions::contributions::plugin_root(plugin.manifest_id()).as_deref()
-            == Some(root.as_path()),
-        "plugin changed while its grammar was loading"
-    );
-    Ok((grammar, query))
-}
 
 /// Remove a plugin parser immediately when its installed package is disabled or uninstalled.
 pub fn mask_language(language_id: &str) {
@@ -109,51 +26,22 @@ pub fn mask_language(language_id: &str) {
     );
 }
 
-/// Load every grammar declared by a plugin directory and register its parser and query.
+/// Test fixtures validate packaged declarations through the same dynamic loader used by the UI.
+#[cfg(test)]
 pub fn register_plugin(plugin_root: &Path) -> anyhow::Result<()> {
-    let root = plugin_root
-        .canonicalize()
-        .with_context(|| format!("resolve plugin directory {}", plugin_root.display()))?;
-    let manifest_source = fs::read_to_string(root.join("plugin.toml"))
-        .with_context(|| format!("read plugin manifest in {}", root.display()))?;
-    let manifest =
-        PluginManifest::parse(&manifest_source).context("parse language plugin manifest")?;
-    let registry = LanguageRegistry::singleton();
-    let mut failures = Vec::new();
-
-    for contribution in &manifest.languages {
-        let result = load_plugin_language(root.as_path(), contribution);
-        match result {
-            Ok((grammar, query)) => {
-                register_language_config(registry, contribution, grammar, query)
-            }
-            Err(error) => {
-                register_plain_language(registry, contribution);
-                // The plain registration intentionally prevents fallback to a host grammar.
-                tracing::warn!(
-                    language = %contribution.id,
-                    plugin = %manifest.plugin.id,
-                    %error,
-                    "language plugin grammar could not be loaded"
-                );
-                failures.push(format!("{}: {error:#}", contribution.id));
-            }
-        }
+    let root = plugin_root.canonicalize()?;
+    let manifest = PluginManifest::parse(&fs::read_to_string(root.join("plugin.toml"))?)?;
+    for definition in &manifest.highlighters {
+        let (grammar, query) = load_plugin_language(&root, definition)?;
+        publish_dynamic(&definition.language, grammar, query);
     }
-
-    ensure!(
-        failures.is_empty(),
-        "plugin {} failed to load: {}",
-        manifest.plugin.id,
-        failures.join("; ")
-    );
     Ok(())
 }
 
 /// Load a grammar and query from a plugin directory before registering them.
 fn load_plugin_language(
     plugin_root: &Path,
-    contribution: &LanguageContribution,
+    contribution: &Highlighter,
 ) -> anyhow::Result<(Arc<LoadedGrammar>, String)> {
     let grammar_path = plugin_asset(plugin_root, &contribution.grammar)?;
     let highlights_path = plugin_asset(plugin_root, &contribution.highlights)?;
@@ -162,27 +50,6 @@ fn load_plugin_language(
     let query = fs::read_to_string(&highlights_path)
         .with_context(|| format!("read highlights {}", highlights_path.display()))?;
     load_language(contribution, grammar_bytes, query)
-}
-
-/// Replace a static language entry with an inert one before plugin validation.
-fn register_plain_language(registry: &LanguageRegistry, contribution: &LanguageContribution) {
-    registry.register(
-        &contribution.id,
-        &GrammarConfig::plain(contribution.id.clone()),
-    );
-}
-
-/// Attach the plugin query and WASM-backed parser factory to the host registry.
-fn register_language_config(
-    registry: &LanguageRegistry,
-    contribution: &LanguageContribution,
-    grammar: Arc<LoadedGrammar>,
-    query: String,
-) {
-    let mut config = GrammarConfig::plain(contribution.id.clone());
-    config.highlights = SharedString::from(query);
-    registry.register(&contribution.id, &config);
-    registry.register_parser_factory(&contribution.id, parser_factory(grammar));
 }
 
 /// Owns the WASM store for as long as parsers can use its language handle.
@@ -196,14 +63,7 @@ pub(crate) struct LoadedGrammar {
 pub(crate) fn prepare_dynamic(
     provider: &super::providers::GrammarProvider,
 ) -> anyhow::Result<(Arc<LoadedGrammar>, String)> {
-    let definition = &provider.declaration;
-    let mut contribution: LanguageContribution = serde_json::from_value(serde_json::json!({
-        "id": definition.grammar_name, "grammar": definition.grammar,
-        "highlights": definition.highlights, "tree_sitter_abi": definition.tree_sitter_abi
-    }))?;
-    // Loading uses the exported grammar name; publication uses the declared language identity.
-    contribution.extensions.clear();
-    load_plugin_language(&provider.root, &contribution)
+    load_plugin_language(&provider.root, &provider.declaration)
 }
 
 /// Only the UI owner may publish a generation-checked successful load.
@@ -217,7 +77,7 @@ pub(crate) fn publish_dynamic(language: &str, grammar: Arc<LoadedGrammar>, query
 
 /// Read and validate a grammar module and its highlight query from one plugin root.
 fn load_language(
-    contribution: &LanguageContribution,
+    contribution: &Highlighter,
     grammar_bytes: Vec<u8>,
     query: String,
 ) -> anyhow::Result<(Arc<LoadedGrammar>, String)> {
@@ -226,12 +86,12 @@ fn load_language(
     let engine = Engine::default();
     let mut store = WasmStore::new(&engine).context("create Tree-sitter WASM store")?;
     let language = store
-        .load_language(&contribution.id, &grammar_bytes)
-        .with_context(|| format!("load WASM grammar for {}", contribution.id))?;
+        .load_language(&contribution.grammar_name, &grammar_bytes)
+        .with_context(|| format!("load WASM grammar for {}", contribution.grammar_name))?;
     ensure!(
         language.abi_version() == expected_abi as usize,
         "grammar ABI mismatch for {}: manifest declares {}, module exports {}",
-        contribution.id,
+        contribution.grammar_name,
         expected_abi,
         language.abi_version()
     );
@@ -240,14 +100,14 @@ fn load_language(
             .contains(&language.abi_version()),
         "grammar ABI {} for {} is unsupported by this Tree-sitter runtime",
         language.abi_version(),
-        contribution.id
+        contribution.grammar_name
     );
     tree_sitter::Query::new(&language, &query)
-        .with_context(|| format!("compile highlight query for {}", contribution.id))?;
+        .with_context(|| format!("compile highlight query for {}", contribution.grammar_name))?;
 
     let grammar = Arc::new(LoadedGrammar {
         engine,
-        language_id: contribution.id.clone(),
+        language_id: contribution.grammar_name.clone(),
         bytes: grammar_bytes.into(),
     });
     let (mut parser, language) = create_parser(&grammar)?;
@@ -260,7 +120,7 @@ fn load_language(
     ensure!(
         !tree.root_node().has_error(),
         "WASM grammar rejected the validation sample for {}",
-        contribution.id
+        contribution.grammar_name
     );
     Ok((grammar, query))
 }
@@ -316,10 +176,8 @@ mod tests {
     /// Source plugin assets still validate independently before packaging.
     #[test]
     fn source_plugins_load_independently() {
-        prepare_bundled_plugins();
-        for plugin in BundledPlugin::ALL {
-            let name = plugin.name();
-            let directory = plugin.language_id();
+        for directory in ["rust", "toml", "html", "javascript"] {
+            let name = directory;
             let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
                 .join("../../plugins")
                 .join(directory);
@@ -340,9 +198,10 @@ name = "Missing test"
 version = "0.1.0"
 host_version = ">=0.1.0"
 
-[[languages]]
-id = "missing-test"
-extensions = ["missing-test"]
+[[highlighters]]
+id = "syntax"
+language = "missing-test"
+grammar_name = "missing-test"
 grammar = "grammar/missing.wasm"
 highlights = "queries/missing.scm"
 tree_sitter_abi = 15
@@ -350,7 +209,7 @@ tree_sitter_abi = 15
         )
         .unwrap();
         let error = register_plugin(directory.path()).unwrap_err();
-        assert!(error.to_string().contains("missing-test failed to load"));
+        assert!(format!("{error:#}").contains("missing.wasm"));
     }
 
     /// The shipped HTML WASM and query must parse real markup and capture its tokens.
@@ -362,7 +221,7 @@ tree_sitter_abi = 15
         let manifest =
             PluginManifest::parse(&fs::read_to_string(root.join("plugin.toml")).unwrap()).unwrap();
         let (grammar, query) =
-            load_plugin_language(&root.canonicalize().unwrap(), &manifest.languages[0]).unwrap();
+            load_plugin_language(&root.canonicalize().unwrap(), &manifest.highlighters[0]).unwrap();
         let (mut parser, language) = create_parser(&grammar).unwrap();
         parser.set_language(&language).unwrap();
         let source = r#"<!DOCTYPE html>
@@ -427,7 +286,7 @@ tree_sitter_abi = 15
         let manifest =
             PluginManifest::parse(&fs::read_to_string(root.join("plugin.toml")).unwrap()).unwrap();
         let (grammar, query) =
-            load_plugin_language(&root.canonicalize().unwrap(), &manifest.languages[0]).unwrap();
+            load_plugin_language(&root.canonicalize().unwrap(), &manifest.highlighters[0]).unwrap();
         let (mut parser, language) = create_parser(&grammar).unwrap();
         parser.set_language(&language).unwrap();
         let source = r#"// Unicode text and modern syntax remain valid in JavaScript.
@@ -492,9 +351,9 @@ export async function greet(user) {
         let manifest =
             PluginManifest::parse(&fs::read_to_string(root.join("plugin.toml")).unwrap()).unwrap();
         let contribution = manifest
-            .languages
+            .highlighters
             .iter()
-            .find(|language| language.id == "rust")
+            .find(|language| language.language == "rust")
             .unwrap();
         let (grammar, _) =
             load_plugin_language(&root.canonicalize().unwrap(), contribution).unwrap();

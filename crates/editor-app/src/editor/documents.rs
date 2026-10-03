@@ -266,30 +266,8 @@ impl EditorApp {
         match DocumentSession::open(&self.file_store, path) {
             Ok(opened) => {
                 let language = language_for_path(opened.session.path());
-                let mut newly_created_server = None;
-                // Plugin manifests supply the language server for every matching source file.
-                let server = self
-                    .language_servers
-                    .get(&language_for_path(opened.session.path()))
-                    .cloned()
-                    .or_else(|| {
-                        language_plugins::language_for_path(opened.session.path())
-                            .filter(|contribution| self.language_plugin_enabled(&contribution.id))
-                            .filter(|contribution| contribution.lsp_command.is_some())
-                            .and_then(|contribution| {
-                                if let Some(server) = self.language_servers.get(&contribution.id) {
-                                    return Some(server.clone());
-                                }
-                                let server = Arc::new(language_navigation::LanguageServer::new(
-                                    self.workspace.root(),
-                                    contribution.clone(),
-                                )?);
-                                self.language_servers
-                                    .insert(contribution.id.clone(), server.clone());
-                                newly_created_server = Some(server.clone());
-                                Some(server)
-                            })
-                    });
+                // Only the selected, permission-checked runtime service can attach to a document.
+                let server = self.language_servers.get(&language).cloned();
                 let document_path = opened.session.path().to_path_buf();
                 let contents = opened.contents;
                 let disk_digest = Sha256::digest(contents.as_bytes()).into();
@@ -317,28 +295,6 @@ impl EditorApp {
                 let definition_highlight = editor.update(cx, |editor, cx| {
                     editor.create_decorations_collection(Vec::new(), cx)
                 });
-                if let Some(server) = newly_created_server {
-                    // Keep the plugin loading through the handshake and first workspace analysis.
-                    self.begin_server_loading(&language, cx);
-                    let server_language = language.clone();
-                    cx.spawn_in(window, async move |this, cx| {
-                        let loading_server = server.clone();
-                        let result = cx
-                            .background_executor()
-                            .scheduler_executor()
-                            .spawn_dedicated(move |_| async move { server.prepare_until_ready() })
-                            .await;
-                        let _ = this.update_in(cx, |app, _, cx| {
-                            app.finish_server_loading(
-                                &server_language,
-                                &loading_server,
-                                result,
-                                cx,
-                            );
-                        });
-                    })
-                    .detach();
-                }
                 let subscription =
                     cx.subscribe(&editor, |this, changed_editor, event: &InputEvent, cx| {
                         if matches!(event, InputEvent::Change) {
@@ -884,24 +840,8 @@ pub(crate) fn language_for_path(path: &Path) -> String {
     if crate::language::providers::handles_path(path) {
         return "text".into();
     }
-    // Installed plugin manifests own their extensions and language identities.
-    if let Some(language) = language_plugins::language_for_path(path) {
-        return language.id;
-    }
-    match path
-        .extension()
-        .and_then(|extension| extension.to_str())
-        .unwrap_or("")
-    {
-        "ts" | "tsx" => "typescript",
-        "vue" => "vue",
-        "css" => "css",
-        "json" => "json",
-        "md" | "markdown" => "markdown",
-        "yaml" | "yml" => "yaml",
-        _ => "text",
-    }
-    .to_owned()
+    // Recognition is exclusively provided by installed declarations; upstream defaults stay inert.
+    "text".to_owned()
 }
 
 /// Centers the painted caret using upstream viewport APIs; scrolling is clamped by the editor.

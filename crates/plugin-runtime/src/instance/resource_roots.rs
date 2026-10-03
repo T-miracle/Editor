@@ -189,6 +189,28 @@ impl State {
                 self.file_authority(RootKind::Workspace, false)?;
                 self.roots.open(RootKind::Workspace)
             }
+            api::Operation::FindFiles { handle, query } => {
+                let kind = self.roots.resolve(&handle)?;
+                if !matches!(kind, RootKind::Workspace) {
+                    return Err(Failure::new(
+                        ErrorCode::InvalidHandle,
+                        "File discovery requires a workspace handle",
+                    ));
+                }
+                let root = self.file_authority(kind, false)?;
+                if !self
+                    .api
+                    .as_ref()
+                    .and_then(|api| api.capabilities.get("workspace.files"))
+                    .is_some_and(|version| *version >= semver::Version::new(1, 1, 0))
+                {
+                    return Err(Failure::new(
+                        ErrorCode::CapabilityUnavailable,
+                        "File discovery requires workspace.files 1.1",
+                    ));
+                }
+                super::file_discovery::find(root, &query, self.call_deadline).map(Value::Files)
+            }
             api::Operation::OpenData => {
                 self.file_authority(RootKind::Data, false)?;
                 self.roots.open(RootKind::Data)
@@ -290,6 +312,7 @@ impl State {
                 Ok(Value::Unit)
             }
             api::Operation::ReadAsset { .. }
+            | api::Operation::DescribeSdk
             | api::Operation::Service { .. }
             | api::Operation::Process { .. }
             | api::Operation::SubscribeDocuments

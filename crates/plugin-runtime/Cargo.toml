@@ -6,6 +6,11 @@ license.workspace = true
 
 [dependencies]
 anyhow.workspace = true
+# Native tool discovery and bounded workspace discovery reuse existing dependency families.
+dirs.workspace = true
+glob = "0.3"
+ignore.workspace = true
+globset = "0.4"
 plugin-protocol = { path = "../plugin-protocol" }
 plugin-schema = { path = "../plugin-schema" }
 serde.workspace = true

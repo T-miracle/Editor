@@ -6,6 +6,7 @@ use plugin_protocol::{
 };
 use std::cell::RefCell;
 mod composition;
+mod discovery;
 mod service_demo;
 
 #[derive(Default)]
@@ -132,6 +133,10 @@ impl State {
                     .get("label")
                     .map(|value| value.value.clone())
                     .unwrap_or_default();
+                if label == "sdk-discovery" {
+                    // Discovery remains guest behavior and uses only negotiated public SDK operations.
+                    return discovery::language_service();
+                }
                 if label == "emit-ui" {
                     // Negative fixture: the host must reject this before touching the current panel.
                     return Ok(api::Output {

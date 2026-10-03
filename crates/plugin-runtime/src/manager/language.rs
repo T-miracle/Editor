@@ -29,9 +29,13 @@ impl Manager {
                 let values = self
                     .effective_settings(&entry.manifest.id)
                     .map_err(|error| format!("{error:#}"));
-                let fingerprint =
-                    serde_json::to_vec(&(&entry.digest, &self.environment.workspace, &values))
-                        .unwrap();
+                let fingerprint = serde_json::to_vec(&(
+                    &entry.digest,
+                    &self.environment.workspace,
+                    &values,
+                    &self.host_resources.sdk,
+                ))
+                .unwrap();
                 if self
                     .language_services
                     .get(&key)
@@ -125,6 +129,7 @@ impl Manager {
             if let Some(program) = proposal.program {
                 service.program = program;
                 service.installation = None;
+                service.search_paths.clear();
             }
             if let Some(args) = proposal.args {
                 service.args = args;
@@ -145,6 +150,8 @@ impl Manager {
                     .ok_or_else(|| anyhow::anyhow!("Invalid explicit executable"))?
                     .into();
                 service.installation = None;
+                // An explicit user selection must fail visibly instead of silently falling back.
+                service.search_paths.clear();
                 anyhow::ensure!(
                     Path::new(&service.program).is_absolute(),
                     "Explicit executable must be an absolute path"
@@ -180,7 +187,7 @@ impl Manager {
         let program = if let Some(prepared) = &prepared {
             prepared.program.clone()
         } else {
-            crate::toolchains::resolve(&service.program)?
+            crate::toolchains::resolve_service(&service)?
         };
         let args = if let Some(prepared) = &prepared {
             prepared.args(&service.args)?

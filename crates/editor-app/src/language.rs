@@ -6,5 +6,4 @@ pub(crate) mod hover;
 pub(crate) mod navigation;
 pub mod plugins;
 pub(crate) mod providers;
-mod sdk;
 pub(crate) mod toolchains;

@@ -5508,6 +5508,10 @@ name = "plugin-runtime"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "dirs 6.0.0",
+ "glob",
+ "globset",
+ "ignore",
  "plugin-protocol",
  "plugin-schema",
  "portable-pty",

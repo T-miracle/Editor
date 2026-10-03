@@ -8,6 +8,12 @@ pub struct Service {
     pub program: String,
     #[serde(default)]
     pub args: Vec<String>,
+    /// Ordered absolute globs (or `${HOME}/...`) locate approved tool distributions before PATH.
+    #[serde(default)]
+    pub search_paths: Vec<String>,
+    /// Optional argument vector checks a candidate's exit status before selecting it; never a shell.
+    #[serde(default)]
+    pub check_args: Vec<String>,
     /// Approved dependency preparation supplies the private executable instead of searching PATH.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub installation: Option<crate::dependencies::Plan>,
@@ -21,13 +27,30 @@ impl Service {
             && !self.program.contains('\0')
             && (std::path::Path::new(&self.program).is_absolute()
                 || !self.program.contains(['/', '\\', ':']))
-            && self.args.len() <= 128
-            && self
-                .args
-                .iter()
-                .all(|arg| arg.len() <= 32768 && !arg.contains('\0'))
-            && self.args.iter().map(String::len).sum::<usize>() <= 65536
+            && valid_args(&self.args)
+            && valid_args(&self.check_args)
+            && self.search_paths.len() <= 32
+            && self.search_paths.iter().all(|pattern| {
+                !pattern.is_empty()
+                    && pattern.len() <= 4096
+                    && !pattern.chars().any(char::is_control)
+                    && !pattern.contains("**")
+                    && !pattern.split(['/', '\\']).any(|part| part == "..")
+                    && (pattern
+                        .strip_prefix("${HOME}/")
+                        .is_some_and(|tail| !tail.is_empty() && !tail.contains("${"))
+                        || (std::path::Path::new(pattern).is_absolute() && !pattern.contains("${")))
+            })
     }
+}
+
+/// Both startup and probe arguments share the same bounded, literal argv contract.
+fn valid_args(args: &[String]) -> bool {
+    args.len() <= 128
+        && args
+            .iter()
+            .all(|arg| arg.len() <= 32768 && !arg.contains('\0'))
+        && args.iter().map(String::len).sum::<usize>() <= 65536
 }
 
 /// Byte streams keep stdout and stderr separate; PTY output is explicitly merged.

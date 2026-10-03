@@ -33,13 +33,7 @@ impl EditorApp {
             return;
         };
         let path = self.tabs[index].session.path().to_path_buf();
-        let language = if crate::language::providers::handles_path(&path) {
-            crate::language::providers::language_for_path(&path)
-        } else {
-            language_plugins::language_for_path(&path)
-                .filter(|language| self.language_plugin_enabled(&language.id))
-                .map(|language| language.id)
-        };
+        let language = crate::language::providers::language_for_path(&path);
         let server = language
             .as_ref()
             .and_then(|language| self.language_servers.get(language))

@@ -6,7 +6,6 @@
 #[path = "../src/language"]
 mod language {
     mod navigation;
-    mod sdk;
     mod toolchains;
 }
 #[allow(dead_code)]

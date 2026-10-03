@@ -1,9 +1,7 @@
 //! Loads installed declarative resources through the same registry as WASM plugins.
 
 use plugin_runtime::{Installed, Manager};
-use plugin_schema::{
-    FileIconConfig, LanguageContribution, PluginManifest, ThemeDefinition, ThemeFile, ThemeMode,
-};
+use plugin_schema::{FileIconConfig, PluginManifest, ThemeDefinition, ThemeFile, ThemeMode};
 use std::{
     collections::BTreeMap,
     path::{Path, PathBuf},
@@ -31,6 +29,7 @@ static CATALOG: LazyLock<RwLock<Arc<Catalog>>> =
     LazyLock::new(|| RwLock::new(Arc::new(Catalog::default())));
 
 /// Rebuild from enabled packages after a lifecycle change; failed assets stay unavailable.
+#[cfg(test)]
 pub fn refresh(root: &Path) -> anyhow::Result<()> {
     let installed = Manager::read_registry(root)?
         .into_values()
@@ -209,38 +208,42 @@ fn read_asset(root: &Path, path: &Path) -> anyhow::Result<Vec<u8>> {
     Ok(std::fs::read(resolved)?)
 }
 
-/// Return the owning package and configuration for a matching source file.
-pub fn language_for_path(path: &Path) -> Option<(String, LanguageContribution)> {
-    let catalog = CATALOG.read().unwrap().clone();
-    language_for_path_in_catalog(&catalog, path)
-}
-
-/// Exact basenames win over extension selectors across all installed plugins.
+/// Verify packaged selector resources independently from UI rendering.
+#[cfg(test)]
 fn language_for_path_in_catalog(
     catalog: &Catalog,
     path: &Path,
-) -> Option<(String, LanguageContribution)> {
+) -> Option<(String, plugin_schema::LanguageDefinition)> {
     let filename = path.file_name()?.to_str()?;
     for (id, contribution) in &catalog.plugins {
-        if let Some(language) = contribution.manifest.languages.iter().find(|language| {
-            language
-                .filenames
-                .iter()
-                .any(|candidate| candidate.eq_ignore_ascii_case(filename))
-        }) {
+        if let Some(language) = contribution
+            .manifest
+            .language_definitions
+            .iter()
+            .find(|language| {
+                language
+                    .filenames
+                    .iter()
+                    .any(|candidate| candidate.eq_ignore_ascii_case(filename))
+            })
+        {
             return Some((id.clone(), language.clone()));
         }
     }
 
-    // A generic .lock extension is deliberately absent from the TOML contribution.
     let extension = path.extension()?.to_str()?;
     for (id, contribution) in &catalog.plugins {
-        if let Some(language) = contribution.manifest.languages.iter().find(|language| {
-            language
-                .extensions
-                .iter()
-                .any(|candidate| candidate.eq_ignore_ascii_case(extension))
-        }) {
+        if let Some(language) = contribution
+            .manifest
+            .language_definitions
+            .iter()
+            .find(|language| {
+                language
+                    .extensions
+                    .iter()
+                    .any(|candidate| candidate.eq_ignore_ascii_case(extension))
+            })
+        {
             return Some((id.clone(), language.clone()));
         }
     }
@@ -248,6 +251,7 @@ fn language_for_path_in_catalog(
 }
 
 /// Locate an enabled package so its grammar can be validated off the UI thread.
+#[cfg(test)]
 pub fn plugin_root(id: &str) -> Option<PathBuf> {
     CATALOG
         .read()
@@ -363,11 +367,11 @@ mod tests {
         let digest = "a".repeat(64);
         let rust =
             Contribution::read(&plugins.join("rust"), "plugin.toml", "rust", &digest).unwrap();
-        assert_eq!(rust.manifest.languages[0].id, "rust");
+        assert_eq!(rust.manifest.language_definitions[0].id, "rust");
         assert!(!rust.assets.is_empty());
         let toml =
             Contribution::read(&plugins.join("toml"), "plugin.toml", "toml", &digest).unwrap();
-        assert_eq!(toml.manifest.languages[0].id, "toml");
+        assert_eq!(toml.manifest.language_definitions[0].id, "toml");
         assert!(rust.theme.is_none() && toml.theme.is_none());
 
         // Both HTML suffixes resolve to one language and ship valid theme-specific icons.

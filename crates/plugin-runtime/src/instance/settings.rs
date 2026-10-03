@@ -34,10 +34,12 @@ impl Instance {
     ) -> anyhow::Result<language::Proposal> {
         let checkpoint = self.store.data().roots.checkpoint();
         self.store.data_mut().language_hook = true;
+        self.store.data_mut().language_hook_checkpoint = Some(checkpoint);
         let reply = self.call(Message::Event(Event::Capability(
             api::Notification::LanguageService(context),
         )));
         self.store.data_mut().language_hook = false;
+        self.store.data_mut().language_hook_checkpoint = None;
         self.store.data_mut().roots.release_since(checkpoint);
         let reply = reply?;
         anyhow::ensure!(

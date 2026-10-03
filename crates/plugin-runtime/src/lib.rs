@@ -22,3 +22,10 @@ pub use instance::Instance;
 pub use manager::{InstallationPreparation, Installed, Manager, PreparedInstallation};
 pub use package::Package;
 pub use plugin_protocol;
+
+/// Host-owned immutable inputs travel with every candidate; guests only see negotiated descriptions.
+#[derive(Clone, Debug, Default)]
+pub struct HostResources {
+    /// No SDK is a supported host configuration; an export failure affects only a requesting guest.
+    pub sdk: Option<Result<plugin_protocol::api::SdkDescriptor, String>>,
+}

@@ -1,12 +1,12 @@
 //! Real resource packages must change an already-open editor through the installed contribution path.
 use super::*;
 use gpui_kit::{TestAppContext, gpui};
-pub(super) mod packages;
-use packages::{language_package, legacy_rust_package, repack};
+pub(crate) mod packages;
+use packages::{language_package, repack, rust_resource_package};
 
-/// A delayed legacy load must not overwrite a dynamic choice using the same public language ID.
+/// A delayed primary load must not overwrite a dynamic choice using the same public language ID.
 #[gpui::test]
-fn dynamic_selection_survives_legacy_load_and_legacy_returns_after_removal(
+fn dynamic_selection_survives_primary_load_and_primary_returns_after_removal(
     cx: &mut TestAppContext,
 ) {
     cx.update(|cx| {
@@ -34,14 +34,14 @@ fn dynamic_selection_survives_legacy_load_and_legacy_returns_after_removal(
         },
     )
     .unwrap();
-    let legacy = legacy_rust_package();
-    manager.install(&legacy, Default::default()).unwrap();
+    let primary = rust_resource_package();
+    manager.install(&primary, Default::default()).unwrap();
     queue_languages(&app, &manager, cx);
     let mut files = language_package("rust-alternative").files;
     let source = String::from_utf8(files["plugin.toml"].clone())
         .unwrap()
         .replace("\"novel\"", "\"rust\"");
-    // Contribute only highlighting; recognition must continue to come from the legacy package.
+    // Contribute only highlighting; recognition must continue to come from the primary package.
     let source = format!(
         "{}[[highlighters]]{}",
         source.split("[[language_definitions]]").next().unwrap(),
@@ -51,6 +51,14 @@ fn dynamic_selection_survives_legacy_load_and_legacy_returns_after_removal(
     let alternate = repack(files).unwrap();
     manager.install(&alternate, Default::default()).unwrap();
     queue_languages(&app, &manager, cx);
+    // A second highlighter never overrides an existing provider without an explicit choice.
+    crate::language::providers::choose(
+        protocol::settings::Scope::User,
+        "highlight:rust",
+        Some("rust-alternative/syntax"),
+    )
+    .unwrap();
+    cx.update(|_, cx| app.update(cx, |app, cx| app.sync_dynamic_languages(cx)));
     cx.run_until_parked();
     let registry = gpui_kit::component::highlighter::LanguageRegistry::singleton();
     assert_eq!(
@@ -69,17 +77,17 @@ fn dynamic_selection_survives_legacy_load_and_legacy_returns_after_removal(
         registry.language("rust").unwrap().highlights.as_ref(),
         std::str::from_utf8(&alternate.files["highlights.scm"]).unwrap()
     );
-    // Removing a dynamic owner revalidates the legacy parser instead of leaving its stale loaded flag.
+    // Removing a dynamic owner revalidates the primary parser instead of leaving its stale loaded flag.
     manager.uninstall("rust-alternative", false).unwrap();
     publish_languages(&app, &manager, cx);
     let manifest = plugin_schema::PluginManifest::parse(
-        std::str::from_utf8(&legacy.files["plugin.toml"]).unwrap(),
+        std::str::from_utf8(&primary.files["plugin.toml"]).unwrap(),
     )
     .unwrap();
-    let query_path = manifest.languages[0].highlights.to_string_lossy();
+    let query_path = manifest.highlighters[0].highlights.to_string_lossy();
     assert_eq!(
         registry.language("rust").unwrap().highlights.as_ref(),
-        std::str::from_utf8(&legacy.files[query_path.as_ref()]).unwrap()
+        std::str::from_utf8(&primary.files[query_path.as_ref()]).unwrap()
     );
     // Retiring the old package while a dynamic override remains must not mask the surviving grammar.
     manager.install(&alternate, Default::default()).unwrap();

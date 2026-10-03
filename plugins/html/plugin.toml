@@ -1,16 +1,22 @@
+# Recognition and highlighting are independent providers; the host has no fixed language table.
 file_icons = "icons.json"
 
 [plugin]
 id = "html"
 name = "HTML"
-version = "0.1.1"
+version = "0.2.0"
 host_version = ">=0.1.0"
 
-[[languages]]
+[[language_definitions]]
 id = "html"
-# Both common HTML suffixes share the same parser and highlight query.
+name = "HTML"
 extensions = ["html", "htm"]
+
+[[highlighters]]
+id = "syntax"
+language = "html"
+grammar_name = "html"
 grammar = "grammar/html.wasm"
 highlights = "queries/highlights.scm"
-# The pinned upstream 0.23.2 grammar exports ABI 14, supported by the host.
+# Keep the ABI exported by the bundled upstream grammar.
 tree_sitter_abi = 14

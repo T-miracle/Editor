@@ -152,6 +152,23 @@ pub(crate) fn cargo_args() -> anyhow::Result<Vec<String>> {
     ])
 }
 
+/// Describe the same immutable public contract used by Cargo, without granting guests filesystem handles.
+pub(crate) fn descriptor() -> anyhow::Result<plugin_runtime::plugin_protocol::api::SdkDescriptor> {
+    let config = cargo_config()?;
+    let root = config
+        .parent()
+        .context("SDK configuration has no directory")?;
+    let digest = root
+        .file_name()
+        .and_then(|name| name.to_str())
+        .context("SDK cache identity is not Unicode")?;
+    Ok(plugin_runtime::plugin_protocol::api::SdkDescriptor {
+        digest: digest.to_owned(),
+        root: root.display().to_string(),
+        cargo_config: config.display().to_string(),
+    })
+}
+
 /// Keep Cargo configuration beside the host cache, shared by metadata, checks and builds.
 pub(crate) fn cargo_config() -> anyhow::Result<PathBuf> {
     let cache_root = dirs::cache_dir()

@@ -14,15 +14,20 @@ impl Worker {
         )));
         let output = state.clone();
         std::thread::spawn(move || {
-            let mut manager = match Manager::open_with_trust(root, environment, trusted) {
-                Ok(m) => m,
-                Err(e) => {
-                    let mut published = output.lock().unwrap();
-                    published.startup.clear();
-                    published.status = Some(format!("{e:#}"));
-                    return;
-                }
+            // Prepare the public SDK off the UI thread. A failure is delivered only to guests that request it.
+            let resources = plugin_runtime::HostResources {
+                sdk: Some(crate::sdk_export::descriptor().map_err(|error| format!("{error:#}"))),
             };
+            let mut manager =
+                match Manager::open_with_resources(root, environment, trusted, resources) {
+                    Ok(m) => m,
+                    Err(e) => {
+                        let mut published = output.lock().unwrap();
+                        published.startup.clear();
+                        published.status = Some(format!("{e:#}"));
+                        return;
+                    }
+                };
             let mut last_save = Instant::now();
             let mut vectors = super::super::images::VectorRenderer::default();
             let mut preparation: Option<BackgroundPreparation> = None;

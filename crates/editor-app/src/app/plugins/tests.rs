@@ -1,8 +1,54 @@
 //! Replays plugin scope changes and delayed startup results without external processes.
 
 use super::*;
+use crate::app::language_servers::ServiceLoadState;
 use gpui_kit::{TestAppContext, component::Root, gpui, px, size};
 use std::{cell::RefCell, collections::BTreeMap, rc::Rc};
+
+/// Recognition and parsers require installed declarations, even for extensions GPUI knows internally.
+#[gpui::test]
+fn documents_without_installed_providers_stay_plain(cx: &mut TestAppContext) {
+    cx.update(|cx| {
+        gpui_kit::init(cx);
+        typography::init(cx);
+        apply_theme(builtin_theme(false), cx);
+    });
+    let directory = tempfile::tempdir().unwrap();
+    let workspace = Workspace::open(directory.path()).unwrap();
+    let slot = Rc::new(RefCell::new(None));
+    let capture = slot.clone();
+    let (_, cx) = cx.add_window_view(move |window, cx| {
+        let app = cx.new(|cx| EditorApp::new(workspace, None, window, cx));
+        *capture.borrow_mut() = Some(app.clone());
+        Root::new(app, window, cx)
+    });
+    let app = slot.borrow_mut().take().unwrap();
+    for name in [
+        "main.rs",
+        "Cargo.toml",
+        "index.html",
+        "main.jsx",
+        "style.css",
+        "data.json",
+        "view.vue",
+        "readme.md",
+    ] {
+        let path = directory.path().join(name);
+        std::fs::write(&path, "sample").unwrap();
+        cx.update(|window, cx| app.update(cx, |app, cx| app.open_file(path.clone(), window, cx)));
+        cx.run_until_parked();
+        cx.update(|_, cx| {
+            let app = app.read(cx);
+            assert_eq!(
+                app.editor.read(cx).language_name().as_ref(),
+                "text",
+                "{name}"
+            );
+            assert!(app.editor.read(cx).lsp().definition_provider.is_none());
+            assert!(app.language_servers.is_empty());
+        });
+    }
+}
 
 #[gpui::test]
 fn status_popup_blocks_title_bar_until_dismissed(cx: &mut TestAppContext) {
@@ -130,7 +176,7 @@ fn incompatible_installed_plugin_preserves_data_without_starting(cx: &mut TestAp
 fn initial_state_requires_installed_plugins() {
     let directory = tempfile::tempdir().unwrap();
     extensions::contributions::refresh(directory.path()).unwrap();
-    assert!(PluginLoadEntry::initial().is_empty());
+    assert!(crate::language::providers::languages().is_empty());
 }
 
 /// Installed package enablement is the source of truth for language availability.
@@ -138,7 +184,7 @@ fn initial_state_requires_installed_plugins() {
 fn missing_plugin_does_not_start_its_language_server() {
     let directory = tempfile::tempdir().unwrap();
     extensions::contributions::refresh(directory.path()).unwrap();
-    assert!(PluginLoadEntry::initial().is_empty());
+    assert!(crate::language::providers::languages().is_empty());
 }
 
 /// A retired startup cannot report its timeout against a project-enabled replacement.
@@ -162,11 +208,13 @@ fn stale_rust_timeout_after_project_reenable(cx: &mut TestAppContext) {
     cx.run_until_parked();
     cx.update(|_, cx| {
         view.update(cx, |app, cx| {
-            let manifest = plugin_schema::PluginManifest::parse(include_str!(
-                "../../../../../plugins/rust/plugin.toml"
-            ))
-            .unwrap();
-            let language = manifest.languages[0].clone();
+            // An unfamiliar identity exercises the same callback lifetime guard without starting native code.
+            let language =
+                serde_json::from_value::<plugin_schema::LanguageContribution>(serde_json::json!({
+                    "id":"rust", "grammar":"fixture.wasm", "highlights":"fixture.scm",
+                    "tree_sitter_abi":15, "lsp_command":"fixture"
+                }))
+                .unwrap();
             let old_server = Arc::new(
                 language_navigation::LanguageServer::new(directory.path(), language.clone())
                     .unwrap(),
@@ -180,13 +228,8 @@ fn stale_rust_timeout_after_project_reenable(cx: &mut TestAppContext) {
             );
             app.language_servers
                 .insert("rust".into(), new_server.clone());
-            app.plugin_loads = vec![PluginLoadEntry {
-                plugin: language_plugins::BundledPlugin::Rust,
-                package_root: PathBuf::new(),
-                state: PluginLoadState::Loading,
-                grammar_loaded: true,
-                server_loading: true,
-            }];
+            app.language_service_states
+                .insert("rust".into(), ServiceLoadState::Loading);
             // Replay the retired startup's timeout after the project override has activated.
             app.finish_server_loading(
                 "rust",
@@ -194,21 +237,24 @@ fn stale_rust_timeout_after_project_reenable(cx: &mut TestAppContext) {
                 Err(anyhow::anyhow!("language server readiness timed out")),
                 cx,
             );
-            assert_eq!(app.plugin_loads[0].state, PluginLoadState::Loading);
-            assert!(app.plugin_loads[0].server_loading);
+            assert_eq!(
+                app.language_service_states["rust"],
+                ServiceLoadState::Loading
+            );
             app.finish_server_loading("rust", &old_server, Ok(()), cx);
-            assert_eq!(app.plugin_loads[0].state, PluginLoadState::Loading);
-            assert!(app.plugin_loads[0].server_loading);
+            assert_eq!(
+                app.language_service_states["rust"],
+                ServiceLoadState::Loading
+            );
             app.finish_server_loading("rust", &new_server, Ok(()), cx);
-            assert_eq!(app.plugin_loads[0].state, PluginLoadState::Enabled);
-            assert!(!app.plugin_loads[0].server_loading);
+            assert_eq!(app.language_service_states["rust"], ServiceLoadState::Ready);
             app.finish_server_loading(
                 "rust",
                 &old_server,
                 Err(anyhow::anyhow!("late timeout")),
                 cx,
             );
-            assert_eq!(app.plugin_loads[0].state, PluginLoadState::Enabled);
+            assert_eq!(app.language_service_states["rust"], ServiceLoadState::Ready);
             app.finish_server_loading(
                 "rust",
                 &new_server,
@@ -216,13 +262,13 @@ fn stale_rust_timeout_after_project_reenable(cx: &mut TestAppContext) {
                 cx,
             );
             assert_eq!(
-                app.plugin_loads[0].state,
-                PluginLoadState::Error("current server failure".into())
+                app.language_service_states["rust"],
+                ServiceLoadState::Failed("current server failure".into())
             );
             app.language_servers.remove("rust");
-            app.plugin_loads[0].state = PluginLoadState::Disabled;
+            app.language_service_states.remove("rust");
             app.finish_server_loading("rust", &new_server, Ok(()), cx);
-            assert_eq!(app.plugin_loads[0].state, PluginLoadState::Disabled);
+            assert!(!app.language_service_states.contains_key("rust"));
         });
     });
 }
@@ -282,21 +328,21 @@ fn restricting_startup_withdraws_declarations_before_worker_publication(cx: &mut
     let app = slot.borrow_mut().take().unwrap();
     cx.update(|window, cx| {
         app.update(cx, |app, cx| {
-            assert!(language_plugins::language_for_path(Path::new("main.rs")).is_some());
+            assert!(crate::language::providers::language_for_path(Path::new("main.rs")).is_some());
             assert!(app.extensions.read(cx).entries.is_empty());
             app.set_workspace_trusted(false, cx);
             app.sync_runtime_contributions(window, cx);
-            assert!(language_plugins::language_for_path(Path::new("main.rs")).is_none());
-            assert!(app.plugin_loads.is_empty());
+            assert!(crate::language::providers::language_for_path(Path::new("main.rs")).is_none());
+            assert!(app.dynamic_languages.entries.is_empty());
             assert!(app.language_servers.is_empty());
             assert!(!SessionState::load(app.workspace.root()).workspace_trusted);
         })
     });
 }
 
-/// Restored project overrides retain the server when the worker publishes the same package.
+/// Project-only language recognition survives repeated publication and disappears when its exception is removed.
 #[gpui::test]
-fn project_only_rust_startup_survives_registry_refresh(cx: &mut TestAppContext) {
+fn project_only_language_survives_registry_refresh(cx: &mut TestAppContext) {
     cx.update(|cx| {
         gpui_kit::init(cx);
         typography::init(cx);
@@ -305,72 +351,26 @@ fn project_only_rust_startup_survives_registry_refresh(cx: &mut TestAppContext) 
     let directory = tempfile::tempdir().unwrap();
     let workspace = Workspace::open(directory.path()).unwrap();
     let root = project_rust_registry(&workspace);
-    let view_slot = Rc::new(RefCell::new(None));
-    let capture = view_slot.clone();
+    let slot = Rc::new(RefCell::new(None));
+    let capture = slot.clone();
     let (_, cx) = cx.add_window_view(move |window, cx| {
-        let view = cx.new(|cx| EditorApp::new(workspace, None, window, cx));
-        *capture.borrow_mut() = Some(view.clone());
-        Root::new(view, window, cx)
+        let app = cx.new(|cx| EditorApp::new(workspace, None, window, cx));
+        *capture.borrow_mut() = Some(app.clone());
+        Root::new(app, window, cx)
     });
-    let view = view_slot.borrow_mut().take().unwrap();
-    cx.run_until_parked();
+    let app = slot.borrow_mut().take().unwrap();
     cx.update(|window, cx| {
-        view.update(cx, |app, cx| {
-            extensions::contributions::refresh_for_workspace(&root, app.workspace.root()).unwrap();
-            let language = language_plugins::language_for_path(Path::new("main.rs")).unwrap();
-            let server = Arc::new(
-                language_navigation::LanguageServer::new(app.workspace.root(), language).unwrap(),
-            );
-            app.language_servers.insert("rust".into(), server.clone());
-            app.plugin_loads = PluginLoadEntry::initial();
-            assert_eq!(
-                app.plugin_loads.len(),
-                1,
-                "project override must expose Rust"
-            );
-            app.plugin_loads[0].grammar_loaded = true;
-            app.begin_server_loading("rust", cx);
-            // The worker republishes the same effective registry after startup restoration.
-            app.sync_runtime_contributions(window, cx);
-            assert!(
-                app.language_servers
-                    .get("rust")
-                    .is_some_and(|active| Arc::ptr_eq(active, &server)),
-                "unchanged project-only Rust must keep its in-flight startup"
-            );
-            assert!(app.plugin_loads[0].server_loading);
-            app.finish_server_loading("rust", &server, Ok(()), cx);
-            assert_eq!(app.plugin_loads[0].state, PluginLoadState::Enabled);
-            app.sync_runtime_contributions(window, cx);
-            assert_eq!(app.plugin_loads[0].state, PluginLoadState::Enabled);
-
-            // A real package replacement must still invalidate the previous instance.
+        app.update(cx, |app, cx| {
+            for _ in 0..2 {
+                extensions::contributions::refresh_for_workspace(&root, app.workspace.root())
+                    .unwrap();
+                app.sync_runtime_contributions(window, cx);
+                assert_eq!(
+                    crate::language::providers::language_for_path(Path::new("main.rs")),
+                    Some("rust".into())
+                );
+            }
             let mut registry = plugin_runtime::Manager::read_registry(&root).unwrap();
-            let replacement = root.join("packages/rust").join("b".repeat(64));
-            std::fs::create_dir_all(&replacement).unwrap();
-            std::fs::copy(
-                app.plugin_loads[0].package_root.join("plugin.toml"),
-                replacement.join("plugin.toml"),
-            )
-            .unwrap();
-            registry.get_mut("rust").unwrap().digest = "b".repeat(64);
-            std::fs::write(
-                root.join("registry.json"),
-                serde_json::to_vec(&registry).unwrap(),
-            )
-            .unwrap();
-            extensions::contributions::refresh_for_workspace(&root, app.workspace.root()).unwrap();
-            app.sync_runtime_contributions(window, cx);
-            assert!(!app.language_servers.contains_key("rust"));
-            assert!(!app.plugin_loads[0].grammar_loaded);
-            assert_eq!(
-                app.plugin_loads[0].package_root,
-                replacement.canonicalize().unwrap()
-            );
-            app.finish_server_loading("rust", &server, Err(anyhow::anyhow!("retired timeout")), cx);
-            assert_eq!(app.plugin_loads[0].state, PluginLoadState::Loading);
-
-            // Removing the project exception must remove Rust despite the retained-state optimization.
             registry.get_mut("rust").unwrap().project_enabled.clear();
             std::fs::write(
                 root.join("registry.json"),
@@ -379,15 +379,15 @@ fn project_only_rust_startup_survives_registry_refresh(cx: &mut TestAppContext) 
             .unwrap();
             extensions::contributions::refresh_for_workspace(&root, app.workspace.root()).unwrap();
             app.sync_runtime_contributions(window, cx);
-            assert!(app.plugin_loads.is_empty());
-            assert!(language_plugins::language_for_path(Path::new("main.rs")).is_none());
+            assert!(crate::language::providers::language_for_path(Path::new("main.rs")).is_none());
+            assert!(app.dynamic_languages.entries.is_empty());
         })
     });
 }
 
-/// Removing HTML resets every open alias while leaving built-in CSS active.
+/// Removing a provider resets its open aliases without altering unrelated loaded editor state.
 #[gpui::test]
-fn removed_html_plugin_resets_aliases_and_preserves_builtin_languages(cx: &mut TestAppContext) {
+fn removed_html_plugin_resets_aliases_and_preserves_unrelated_state(cx: &mut TestAppContext) {
     cx.update(|cx| {
         gpui_kit::init(cx);
         typography::init(cx);
@@ -430,16 +430,10 @@ fn removed_html_plugin_resets_aliases_and_preserves_builtin_languages(cx: &mut T
             app.tabs[2]
                 .editor
                 .update(cx, |editor, cx| editor.set_highlighter("css", cx));
-            app.plugin_loads = vec![PluginLoadEntry {
-                plugin: language_plugins::BundledPlugin::Html,
-                package_root: PathBuf::new(),
-                state: PluginLoadState::Enabled,
-                grammar_loaded: true,
-                server_loading: false,
-            }];
+            app.dynamic_language_ids.insert("html".into());
             // The registry no longer includes HTML after disable/uninstall.
             app.sync_runtime_contributions(window, cx);
-            assert!(app.plugin_loads.is_empty());
+            assert!(app.dynamic_languages.entries.is_empty());
             for tab in &app.tabs[..2] {
                 assert_eq!(tab.editor.read(cx).language_name().as_ref(), "text");
             }
@@ -472,18 +466,11 @@ fn status_indicators_open_plugin_lists(cx: &mut TestAppContext) {
     cx.update(|window, cx| {
         view.update(cx, |app, cx| {
             // The status UI also renders failures from packages loaded after startup.
-            app.plugin_loads.push(PluginLoadEntry {
-                plugin: language_plugins::BundledPlugin::Rust,
-                package_root: PathBuf::new(),
-                state: PluginLoadState::Loading,
-                grammar_loaded: false,
-                server_loading: false,
-            });
-            app.set_plugin_state(
-                language_plugins::BundledPlugin::Rust,
-                PluginLoadState::Error("missing grammar".to_owned()),
-                cx,
+            app.language_service_states.insert(
+                "custom-language".into(),
+                ServiceLoadState::Failed("missing service".into()),
             );
+            cx.notify();
         });
         window.draw(cx).clear(cx);
     });
@@ -499,11 +486,9 @@ fn status_indicators_open_plugin_lists(cx: &mut TestAppContext) {
 
     cx.update(|window, cx| {
         view.update(cx, |app, cx| {
-            app.set_plugin_state(
-                language_plugins::BundledPlugin::Rust,
-                PluginLoadState::Loading,
-                cx,
-            );
+            app.language_service_states
+                .insert("custom-language".into(), ServiceLoadState::Loading);
+            cx.notify();
         });
         window.draw(cx).clear(cx);
     });

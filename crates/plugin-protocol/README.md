@@ -31,6 +31,18 @@ cargo test -p editor-app --bin editor-app capability_package_consent -- --ignore
 
 真实组件测试显式忽略默认运行，需要先生成测试包；不是跳过验收。脚本将同一 ZIP 输出至 `target/plugin-sdk-test/capability-example.zip` 与既有测试使用的 `target/plugin-api-test/capability-example.zip`，包内仅有清单、README、组件和声明资源。`sdk_distribution` 通过公开 `Package` / `Manager` 接口读取 README、安装真实组件并调用类型化错误诊断命令。日常快速构建仍可使用 `scripts/build-capability-example.ps1`，但仓库外分发验收以 `verify-plugin-sdk.ps1` 为准。
 
+## workspace.files 1.1 与 host.sdk 1.0
+
+`api::guest::find_files(&workspace, FileQuery { include, exclude, max_results })` 使用 `open_workspace` 返回的工作区根句柄，并在每次调用时重新检查 `workspace.files >=1.1` 与 `workspace.read`。私有数据、其他实例、已释放和已退役的句柄不能用于发现。应用作用域插件不拥有工作区根；调用不会跟随当前选中的其他工作区。
+
+查询使用根相对、`/` 分隔的 glob；`**/` 可以匹配零级目录，`*` 不跨目录。绝对路径、驱动器前缀、反斜杠、空段、`.` 和 `..` 段无效。`include` 至少一项，include/exclude 合计最多 32 项，每项最多 1024 字节；`max_results` 为 1–4096。exclude 在目录入口剪枝，例如 `**/generated/**` 不会进入 generated 目录。宿主不内置语言项目或构建目录名称，由插件声明选择规则。
+
+发现遵循根内 `.gitignore` 和 `.ignore` 的嵌套与否定规则，`.ignore` 优先；不读取工作区外的父级或全局 ignore，不跟随符号链接、Windows junction 或其他 reparse point。`FileMatches.paths` 是去重、排序的 UTF-8 工作区相对路径；`skipped` 是无法读取或解析的相对路径，调用者据此决定是否接受不完整发现。受限预算包括 50,000 个目录条目（含忽略项）、64 级目录深度、512 KiB 编码结果及最多 64 项 skipped；ignore 文件单个最多 64 KiB、合计 512 KiB/2048 行。超限返回 `LimitExceeded`，不会成功返回截断列表；遍历在文件系统调用之间检查当前插件调用期限，超时返回 `TimedOut`。
+
+`api::guest::describe_sdk()` 需要协商 `host.sdk`，返回 `SdkDescriptor { digest, root, cargo_config }`，无需工作区读取权限。它描述宿主持有的同一份接口缓存：digest 是内容标识，root 与 cargo_config 是供原生语言工具使用的绝对路径。它不创建文件句柄、WASI preopen 或额外文件读取权限；将这些路径交给工作区 `read_file` 仍会被拒绝。宿主未提供 SDK 返回 `NotFound`，导出失败返回 `OperationFailed`，未协商返回 `CapabilityUnavailable`。
+
+这两个操作可在活动实例及只读 `LanguageService` 准备钩子中调用。钩子可以关闭本次创建的文件句柄，其余临时句柄在返回时统一撤销；它不能通过发现发起写入、进程或编辑器操作。迁移钩子仍只有私有副本权限。宿主经 `Manager::open_with_resources` 提供不可变 `HostResources`，同一资源快照传入后台安装、设置替换、工作区切换及失败回滚后的实例。公开集成回归通过 `cargo test -p plugin-runtime --test sdk_discovery -- --ignored` 运行，先执行上面的独立 SDK 构建脚本。
+
 ## configuration 1.0
 
 协议 7 清单的 `settings` 以插件内部键声明 `title`、`value_type`、`default`、`scope` 和 `apply`。类型为 boolean、string（max_length）、integer（min/max）、enum（choices）；作用域为 user 或 project，后者允许明确确认的项目覆盖。此版本的生效方式为 `restart_instance`。最多 64 个字段、字符串最多 4096 字节、枚举最多 32 个不重复选项；无效默认值在包检查时拒绝。可执行包需声明必需能力 `configuration: ^1`。
@@ -58,7 +70,15 @@ editor-app.exe --plugin-cargo capability-example/Cargo.toml check --target wasm3
 
 开发机器需安装 Rust/Cargo 与 `wasm32-wasip2` 目标；使用已编译插件的用户无需这些工具。`--plugin-cargo` 执行开发者提供的 Cargo 项目，属于本机开发工具，不是运行时沙箱。为其他语言工具链或接口检查保留显式 `--export-plugin-sdk <目录>`，常规构建与发行不调用它。
 
-在本编辑器内开发插件时，Rust 语言服务自动使用与 `--plugin-cargo` 相同的宿主 SDK 缓存。编辑器通过 Rust Analyzer 的 `cargo.configPath` 注入依赖覆盖，并通过 `linkedProjects` 加入工作区内同时包含 `manifest.json` 与 `Cargo.toml` 的独立插件项目；发现过程遵循忽略规则，跳过构建产物和 vendor 目录。输入 `plugin_protocol::api::` 可以获取类型补全、悬浮说明和定义跳转。插件目录无需增加 SDK、Cargo 配置或指向宿主源码的路径；定义跳转会打开宿主缓存中的协议源码。需要已启用 Rust 语言插件并安装 Rust Analyzer。
+在本编辑器内开发插件时，Rust 插件通过 `host.sdk` 获取与 `--plugin-cargo` 相同的宿主 SDK 缓存，通过 `workspace.files` 发现独立插件项目。插件的 WASM 钩子生成 Rust Analyzer 的 `cargo.configPath`、`linkedProjects` 和配置节；宿主按通用 LSP 协议传递这些数据。项目发现遵循忽略规则，并由 Rust 插件声明排除构建产物和 vendor 目录。输入 `plugin_protocol::api::` 可以获取类型补全、悬浮说明和定义跳转。插件目录无需增加 SDK、Cargo 配置或指向宿主源码的路径；定义跳转会打开宿主缓存中的协议源码。需要已启用 Rust 语言插件并安装 Rust Analyzer。
+
+## process 1.1 与 language.lsp 1.1
+
+原生服务可声明 `search_paths` 与 `check_args`。前者最多 32 个绝对路径 glob，唯一支持的变量为 `${HOME}/` 前缀；不得包含 `..`、控制字符或递归 `**`。按声明顺序搜索，同一模式的候选按路径倒序排列，然后查找绝对 PATH 目录。搜索最多访问 20,000 个目录条目，中间候选和发现结果各最多 256 个，整个发现最多五秒；访客请求同时受本次调用的更短期限约束。`check_args` 作为字面参数数组运行，不使用 Shell；探测最多两秒并共享发现剩余期限，退出失败的候选被跳过。所有探测使用宿主进程所有权和清理规则。
+
+服务 `program` 或 `executable_setting` 的显式绝对路径只有一个候选，错误会直接呈现，不回退到搜索结果。安装服务权限批准该声明的查找和探测行为；这些字段不授予动态可执行程序权限。
+
+LSP 提供者可声明 `client_experimental`，传入 `initialize.capabilities.experimental`；标准传输能力仍由宿主维护。最多 64 个非空键，每键最多 256 字节，JSON 深度最多 16，且包含在提供者总计 256 KiB 的限制内。宿主不识别具体服务名称、扩展字段或 Rust 项目结构。
 
 ## 开发过渡中的历史类型
 

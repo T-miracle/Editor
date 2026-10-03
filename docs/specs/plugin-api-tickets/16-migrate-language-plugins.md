@@ -1,6 +1,6 @@
 # 16 — 迁移现有语言包并移除 Rust 专属宿主配置
 
-**Status:** ready-for-agent — 已发布，未开始实现；须等待全部阻塞项完成
+**Status:** completed — 已完成实现、双轴审查与实际组件回归，详见[验证记录](../plugin-api-language-migration-verification.md)
 
 **GitHub:** [#17](https://github.com/T-miracle/Editor/issues/17)
 
@@ -14,12 +14,12 @@ Rust、TOML、HTML 和 JavaScript 通过新声明与钩子工作；Rust 的语�
 
 ## Acceptance criteria
 
-- [ ] 四类语言包迁移声明、grammar、图标及适用服务定义，版本和打包产物同步更新。
-- [ ] 按需为 Rust 提供 WASM 钩子，迁移 rust-analyzer 初始化、配置节及项目发现逻辑到插件。
-- [ ] 宿主 SDK 缓存仍为公开能力，Rust 插件通过它维持独立插件项目的补全、悬浮和跳转体验。
-- [ ] 无 LSP 的资源包保持声明式，不人为增加动态组件或服务依赖。
-- [ ] 运行时安装、作用域切换、提供者变更及卸载正确影响已打开文件与语法/LSP 结果。
-- [ ] 删除这批迁移完成的固定语言枚举和 Rust 宿主分支，保留其行为回归，不能仅改名掩盖专属逻辑。
+- [x] 四类语言包迁移声明、grammar、图标及适用服务定义，版本和打包产物同步更新。
+- [x] 按需为 Rust 提供 WASM 钩子，迁移 rust-analyzer 初始化、配置节及项目发现逻辑到插件。
+- [x] 宿主 SDK 缓存仍为公开能力，Rust 插件通过它维持独立插件项目的补全、悬浮和跳转体验。
+- [x] 无 LSP 的资源包保持声明式，不人为增加动态组件或服务依赖。
+- [x] 运行时安装、作用域切换、提供者变更及卸载正确影响已打开文件与语法/LSP 结果。
+- [x] 删除这批迁移完成的固定语言枚举和 Rust 宿主分支，保留其行为回归，不能仅改名掩盖专属逻辑。
 
 ## Blocked by
 

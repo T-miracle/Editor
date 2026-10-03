@@ -1,15 +1,22 @@
+# Recognition and highlighting are independent providers; the host has no fixed language table.
 file_icons = "icons.json"
 
 [plugin]
 id = "javascript"
 name = "JavaScript"
-version = "0.1.1"
+version = "0.2.0"
 host_version = ">=0.1.0"
 
-[[languages]]
+[[language_definitions]]
 id = "javascript"
-# The JavaScript grammar also parses JSX and both module filename conventions.
+name = "JavaScript"
 extensions = ["js", "mjs", "cjs", "jsx"]
+
+[[highlighters]]
+id = "syntax"
+language = "javascript"
+grammar_name = "javascript"
 grammar = "grammar/javascript.wasm"
 highlights = "queries/highlights.scm"
+# Keep the ABI exported by the bundled upstream grammar.
 tree_sitter_abi = 15

@@ -23,6 +23,9 @@ pub struct Provider {
     /// Section names are opaque protocol data; the host never prefixes a concrete server name.
     #[serde(default)]
     pub configuration: BTreeMap<String, Value>,
+    /// Experimental protocol flags are plugin data; standard transport capabilities stay host-owned.
+    #[serde(default)]
+    pub client_experimental: BTreeMap<String, Value>,
     #[serde(default)]
     pub readiness: Option<Readiness>,
     #[serde(default)]
@@ -83,6 +86,11 @@ impl Provider {
             && self.alternatives.iter().all(|value| id(value))
             && self.configuration.len() <= 64
             && self.configuration.keys().all(|key| key.len() <= 256)
+            && self.client_experimental.len() <= 64
+            && self
+                .client_experimental
+                .iter()
+                .all(|(key, value)| !key.is_empty() && key.len() <= 256 && bounded_json(value, 0))
             && self.readiness.as_ref().is_none_or(|ready| {
                 !ready.notification.is_empty()
                     && ready.notification.len() <= 256
@@ -99,4 +107,14 @@ impl Provider {
                 .all(|value| value.len() <= 256)
             && serde_json::to_vec(self).is_ok_and(|bytes| bytes.len() <= 256 * 1024)
     }
+}
+
+/// The overall encoded budget limits breadth; a separate depth budget prevents pathological nested flags.
+fn bounded_json(value: &Value, depth: usize) -> bool {
+    depth <= 16
+        && match value {
+            Value::Array(values) => values.iter().all(|value| bounded_json(value, depth + 1)),
+            Value::Object(values) => values.values().all(|value| bounded_json(value, depth + 1)),
+            _ => true,
+        }
 }

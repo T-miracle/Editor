@@ -94,6 +94,8 @@ pub struct Manager {
     plugin_services: crate::plugin_services::Shared,
     root: PathBuf,
     environment: Environment,
+    /// Resource identity is fixed for this manager and every asynchronous preparation it owns.
+    host_resources: crate::HostResources,
     engine: Option<wasmtime::Engine>,
     pub installed: BTreeMap<String, Installed>,
     pub live: BTreeMap<String, Instance>,
@@ -135,6 +137,15 @@ impl Manager {
         environment: Environment,
         trusted: bool,
     ) -> anyhow::Result<Self> {
+        Self::open_with_resources(root, environment, trusted, Default::default())
+    }
+    /// Supply host SDK metadata without granting a guest any additional filesystem authority.
+    pub fn open_with_resources(
+        root: PathBuf,
+        environment: Environment,
+        trusted: bool,
+        host_resources: crate::HostResources,
+    ) -> anyhow::Result<Self> {
         std::fs::create_dir_all(&root)?;
         let installed = Self::read_registry(&root)?;
         let mut manager = Self {
@@ -145,6 +156,7 @@ impl Manager {
             )),
             root,
             environment,
+            host_resources,
             // Resource-only packages need no Wasmtime engine during startup.
             engine: None,
             installed,
@@ -293,7 +305,7 @@ impl Manager {
         if self.engine.is_none() {
             self.engine = Some(Instance::engine()?);
         }
-        let mut next = Instance::prepare(
+        let mut next = Instance::prepare_with_resources(
             self.engine.as_ref().unwrap(),
             package.component().expect("component checked above"),
             &package.manifest,
@@ -302,6 +314,7 @@ impl Manager {
             self.instance_data_directory(&package.manifest),
             version,
             snapshot.clone(),
+            self.host_resources.clone(),
         )?;
         self.configure_saved_settings(&mut next, &package.manifest)?;
         self.refresh_services();
@@ -533,7 +546,7 @@ impl Manager {
         if self.engine.is_none() {
             self.engine = Some(Instance::engine()?);
         }
-        let mut instance = Instance::prepare(
+        let mut instance = Instance::prepare_with_resources(
             self.engine.as_ref().unwrap(),
             &component,
             &entry.manifest,
@@ -542,6 +555,7 @@ impl Manager {
             self.data_directory(id),
             self.root.join("packages").join(id).join(&entry.digest),
             self.load_snapshot(id)?,
+            self.host_resources.clone(),
         )?;
         self.configure_saved_settings(&mut instance, &entry.manifest)?;
         self.refresh_services();

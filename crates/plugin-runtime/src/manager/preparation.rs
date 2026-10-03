@@ -6,6 +6,8 @@ use crate::{InstallControl, data_transaction::Transaction};
 pub struct InstallationPreparation {
     pub(super) root: PathBuf,
     pub(super) environment: Environment,
+    /// Background preparation cannot substitute different native SDK inputs for the owner manager.
+    pub(super) host_resources: crate::HostResources,
     pub(super) previous_digest: Option<String>,
     pub(super) package: Package,
     pub(super) grants: BTreeSet<String>,
@@ -33,7 +35,7 @@ impl InstallationPreparation {
             &self.environment,
             &candidate,
         )?;
-        let mut next = Instance::prepare(
+        let mut next = Instance::prepare_with_resources(
             &self.engine,
             self.package
                 .component()
@@ -44,6 +46,7 @@ impl InstallationPreparation {
             candidate.join("files"),
             version,
             None,
+            self.host_resources,
         )?;
         // Discovery sees the new private format. This preview is disposable; cutover migrates the final copy again.
         let from = data_updates::data_version(&candidate, self.transaction.source_exists())?;

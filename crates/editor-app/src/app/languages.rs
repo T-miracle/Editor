@@ -162,6 +162,7 @@ fn select(
 
 impl EditorApp {
     pub(crate) fn sync_dynamic_languages(&mut self, cx: &mut Context<Self>) {
+        self.plugin_loading_generation = self.plugin_loading_generation.wrapping_add(1);
         self.sync_dynamic_language_servers(cx);
         self.dynamic_languages.generation += 1;
         let generation = self.dynamic_languages.generation;

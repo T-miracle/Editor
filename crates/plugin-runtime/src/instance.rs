@@ -13,6 +13,7 @@ use wasmtime_wasi::{ResourceTable, WasiCtx, WasiCtxView, WasiView};
 mod capability_calls;
 mod document_events;
 mod editor_requests;
+mod file_discovery;
 mod plugin_services;
 mod process_calls;
 mod resource_roots;
@@ -24,6 +25,10 @@ struct State {
     plugin_services: plugin_services::Services,
     /// None selects the temporary legacy transport, never a fallback for a new guest.
     api: Option<api::Negotiated>,
+    /// Immutable metadata never becomes a preopened directory or guest-controlled file root.
+    host_resources: crate::HostResources,
+    /// Native discovery shares the enclosing WASM call deadline instead of refreshing it per request.
+    call_deadline: std::time::Instant,
     roots: ResourceRoots,
     /// Slots and pending completions are owned by this exact WASM instance.
     editor_requests: std::collections::BTreeMap<u64, crate::editor_requests::PendingRequest>,
@@ -45,6 +50,8 @@ struct State {
     active: bool,
     /// A bounded discovery invocation can read granted resources without launching native work.
     language_hook: bool,
+    /// Read-only discovery can release only the file roots allocated by its own hook.
+    language_hook_checkpoint: Option<u64>,
     /// Migration grants access exclusively to a transaction's isolated private-data copy.
     migrating: bool,
     effects: Vec<Request>,
@@ -339,6 +346,8 @@ mod tests {
         let mut state = State {
             plugin_services: Default::default(),
             api: None,
+            host_resources: Default::default(),
+            call_deadline: std::time::Instant::now(),
             roots: ResourceRoots::new("", false, 64 * 1024 * 1024),
             editor_requests: Default::default(),
             declared_panels: Default::default(),
@@ -356,6 +365,7 @@ mod tests {
             assets,
             active: true,
             language_hook: false,
+            language_hook_checkpoint: None,
             migrating: false,
             effects: vec![],
             staged_writes: None,
@@ -491,6 +501,8 @@ mod tests {
         let mut state = State {
             plugin_services: Default::default(),
             api: None,
+            host_resources: Default::default(),
+            call_deadline: std::time::Instant::now(),
             roots: ResourceRoots::new("", false, 64 * 1024 * 1024),
             editor_requests: Default::default(),
             declared_panels: Default::default(),
@@ -508,6 +520,7 @@ mod tests {
             assets: root.path().into(),
             active: true,
             language_hook: false,
+            language_hook_checkpoint: None,
             migrating: false,
             effects: vec![],
             staged_writes: Some(Default::default()),
@@ -581,7 +594,31 @@ impl Instance {
             })?;
         Ok(engine)
     }
+    /// Embedders without host SDK metadata retain the ordinary component preparation entry point.
     pub fn prepare(
+        engine: &Engine,
+        bytes: &[u8],
+        manifest: &Manifest,
+        grants: &BTreeSet<String>,
+        environment: Environment,
+        data: PathBuf,
+        assets: PathBuf,
+        snapshot: Option<Snapshot>,
+    ) -> anyhow::Result<Self> {
+        Self::prepare_with_resources(
+            engine,
+            bytes,
+            manifest,
+            grants,
+            environment,
+            data,
+            assets,
+            snapshot,
+            Default::default(),
+        )
+    }
+    /// Every candidate receives the same immutable host inputs before any lifecycle callback.
+    pub(crate) fn prepare_with_resources(
         engine: &Engine,
         bytes: &[u8],
         manifest: &Manifest,
@@ -590,6 +627,7 @@ impl Instance {
         data: PathBuf,
         assets: PathBuf,
         snapshot: Option<Snapshot>,
+        host_resources: crate::HostResources,
     ) -> anyhow::Result<Self> {
         let api = super::capabilities::negotiate(manifest)?;
         manifest
@@ -613,6 +651,8 @@ impl Instance {
         let mut state = State {
             plugin_services: Default::default(),
             api,
+            host_resources,
+            call_deadline: std::time::Instant::now(),
             roots: ResourceRoots::new(&environment.workspace, application, manifest.storage_limit),
             editor_requests: Default::default(),
             subscriptions: Default::default(),
@@ -634,6 +674,7 @@ impl Instance {
             assets,
             active: false,
             language_hook: false,
+            language_hook_checkpoint: None,
             migrating: false,
             effects: vec![],
             staged_writes: Some(Default::default()),
@@ -748,6 +789,8 @@ impl Instance {
         };
         self.store
             .set_epoch_deadline(timeout / crate::faults::EPOCH_TICK_MS);
+        self.store.data_mut().call_deadline =
+            std::time::Instant::now() + std::time::Duration::from_millis(timeout);
         let Some((payload, invocation_id)) = self.encode_invocation(message)? else {
             // A capability guest receives only events belonging to this implemented native interface.
             return Ok(Reply::default());

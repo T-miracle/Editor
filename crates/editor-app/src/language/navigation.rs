@@ -43,6 +43,7 @@ pub struct LanguageServer {
 
 impl LanguageServer {
     /// Creates a lazy language-server session for a project root.
+    #[cfg(test)]
     pub fn new(root: &Path, language: LanguageContribution) -> Option<Self> {
         language.lsp_command.as_ref()?;
         let root = root.canonicalize().ok()?;

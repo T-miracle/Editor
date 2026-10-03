@@ -193,7 +193,7 @@ impl Manager {
             }
             for (owner, environment, snapshot, active) in owners {
                 let values = saved.resolve(manifest, &environment.workspace)?;
-                let mut instance = Instance::prepare(
+                let mut instance = Instance::prepare_with_resources(
                     self.engine.as_ref().unwrap(),
                     &wasm,
                     manifest,
@@ -202,6 +202,7 @@ impl Manager {
                     self.data_directory_for(manifest, &environment),
                     assets.clone(),
                     snapshot,
+                    self.host_resources.clone(),
                 )?;
                 instance.configure_settings(manifest, values)?;
                 if active {

@@ -27,6 +27,25 @@ pub fn open_workspace() -> Result<ResourceHandle, Failure> {
     }
 }
 
+/// Find ignored-rule-aware relative files beneath this caller's workspace handle.
+pub fn find_files(handle: &ResourceHandle, query: FileQuery) -> Result<FileMatches, Failure> {
+    match request(Operation::FindFiles {
+        handle: handle.clone(),
+        query,
+    })? {
+        Value::Files(files) => Ok(files),
+        _ => Err(wire_error("Unexpected file discovery result")),
+    }
+}
+
+/// Describe immutable host SDK inputs for a separately authorized native toolchain.
+pub fn describe_sdk() -> Result<SdkDescriptor, Failure> {
+    match request(Operation::DescribeSdk)? {
+        Value::Sdk(sdk) => Ok(sdk),
+        _ => Err(wire_error("Unexpected SDK description")),
+    }
+}
+
 /// Open this instance scope's private files, distinct from user configuration and snapshots.
 pub fn open_data() -> Result<ResourceHandle, Failure> {
     match request(Operation::OpenData)? {

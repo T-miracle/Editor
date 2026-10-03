@@ -12,7 +12,7 @@ impl LanguageServerConnection {
         let configuration = if let Some(service) = service {
             service.provider.initialization_options.clone()
         } else {
-            super::super::sdk::initialization_options(root, &language.id)?
+            Value::Null
         };
         let (child, input, stdout) = if let Some(service) = service {
             let (child, input, output) = service.spawn_for_owner(retired)?;
@@ -62,7 +62,9 @@ impl LanguageServerConnection {
         let root_uri = root_uri.as_str();
         // Experimental capability names are data supplied by the language plugin.
         let mut experimental = serde_json::Map::new();
-        if let Some(readiness) = &language.lsp_readiness {
+        if let Some(service) = &self.service {
+            experimental.extend(service.provider.client_experimental.clone());
+        } else if let Some(readiness) = &language.lsp_readiness {
             experimental.insert(readiness.client_capability.clone(), Value::Bool(true));
         }
         let initialized = self.request(

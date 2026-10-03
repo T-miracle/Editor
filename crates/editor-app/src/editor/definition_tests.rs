@@ -103,15 +103,12 @@ fn exercise_definition_click(
         )
     });
     // Install the production host callback without starting a real language server.
-    let manifest = plugin_schema::PluginManifest::parse(include_str!(concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/../../plugins/rust/plugin.toml"
-    )))
-    .unwrap();
-    let server = Arc::new(
-        language_navigation::LanguageServer::new(directory.path(), manifest.languages[0].clone())
-            .unwrap(),
-    );
+    let language =
+        serde_json::from_value(serde_json::json!({"id":"fixture", "grammar":"fixture.wasm",
+        "highlights":"fixture.scm", "tree_sitter_abi":15, "lsp_command":"fixture"}))
+        .unwrap();
+    let server =
+        Arc::new(language_navigation::LanguageServer::new(directory.path(), language).unwrap());
     let uri = lsp_types::Uri::from_str(url::Url::from_file_path(&path).unwrap().as_str()).unwrap();
     cx.update(|_, cx| {
         view.update(cx, |app, cx| {
