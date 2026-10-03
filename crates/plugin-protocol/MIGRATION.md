@@ -27,11 +27,29 @@ by configuration and activation. It never receives an old-format snapshot as its
 initialization state before the hook. Ordinary execution budgets apply.
 
 Preparation compiles and validates the candidate while retaining the old instance.
-The runtime's `prepare_installation` token may be held while dispatching old commands;
+The host captures a `begin_installation` job and runs it on a background thread;
+the existing actor continues commands, editor completions and document events.
+`prepare_installation` is the synchronous convenience form of the same path.
+The preparation token may be held while dispatching old commands;
 `commit_installation` takes a fresh copy and final snapshot under the owning worker's
 exclusive turn. Thus the initial preparation copy cannot overwrite newer writes.
 Dropping a preparation token discards its unpublished copy. Tokens are bound to the
 manager root, workspace and previous package digest.
+
+Migration may run first on a disposable preview so dependency discovery can read the
+new format. It runs again on the final copy after the old owner stops. Hooks must
+convert the supplied copy, not assume a single invocation. The final dependency
+selection must match the prepared plans; a change fails the update and restores the
+old version so the user can prepare again. Downloads and installer consent do not
+occur during cutover.
+
+Cutover seals pending editor/service requests before collecting the final snapshot,
+retires old language-service leases, and stops the old owner. Recovery creates a new
+instance identity even when the package digest is unchanged. Native callbacks and
+panel events retain the originating instance epoch; delayed events are discarded.
+The host republishes fresh language-service leases and resynchronizes open in-memory
+documents after both successful replacement and recovery. Ordinary protocol 7 WASM
+packages without an explicit data format use this same path at format version one.
 
 The candidate activates against its isolated directory. After successful activation,
 the host flushes a journal containing the prior registry, swaps the data scope while

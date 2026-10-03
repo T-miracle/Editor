@@ -62,7 +62,7 @@ fn host_command_reveals_hidden_terminal_and_preserves_arguments(cx: &mut TestApp
         )));
         // Opening is explicit even when focus did not change, so an empty guest can initialize.
         assert!(owner.read(cx).worker.recorded.lock().unwrap().try_iter().any(|work| matches!(work,
-            Work::Event(plugin, PluginEvent::Surface { panel, event })
+            Work::Event(plugin, _, PluginEvent::Surface { panel, event })
                 if plugin == "terminal" && panel == "terminal"
                     && matches!(event.as_ref(), PluginEvent::Command { id, .. } if id == "panel.opened")
         )));
@@ -271,7 +271,7 @@ fn native_panel_clicks_are_scoped_to_the_declared_surface(cx: &mut TestAppContex
     cx.run_until_parked();
     cx.update(|_, cx| {
         assert!(owner.read(cx).worker.recorded.lock().unwrap().try_iter().any(|work| {
-            matches!(work, Work::Event(plugin, PluginEvent::Surface { panel, event })
+            matches!(work, Work::Event(plugin, _, PluginEvent::Surface { panel, event })
                 if plugin == "example" && panel == "counter" && matches!(*event, PluginEvent::Ui(protocol::ui::UiEvent {
                     revision: 42, ref node, action: protocol::ui::Action::Click
                 }) if node == "increment"))
@@ -372,7 +372,7 @@ fn canvas_controls_sidebar_routes_ui_without_canvas_pointer_events(cx: &mut Test
     cx.run_until_parked();
     cx.update(|_,cx| {
         let messages:Vec<_>=owner.read(cx).worker.recorded.lock().unwrap().try_iter().collect();
-        assert!(messages.iter().any(|work| matches!(work,Work::Event(plugin,PluginEvent::Surface{panel,event}) if plugin=="terminal" && panel=="terminal" && matches!(event.as_ref(),PluginEvent::Ui(protocol::ui::UiEvent {node,action:protocol::ui::Action::Select(id),..}) if node=="sessions" && id=="one"))));
-        assert!(!messages.iter().any(|work| matches!(work,Work::Event(_,PluginEvent::Surface{event,..}) if matches!(event.as_ref(),PluginEvent::Pointer{..}|PluginEvent::Text(_)))));
+        assert!(messages.iter().any(|work| matches!(work,Work::Event(plugin, _,PluginEvent::Surface{panel,event}) if plugin=="terminal" && panel=="terminal" && matches!(event.as_ref(),PluginEvent::Ui(protocol::ui::UiEvent {node,action:protocol::ui::Action::Select(id),..}) if node=="sessions" && id=="one"))));
+        assert!(!messages.iter().any(|work| matches!(work,Work::Event(_, _,PluginEvent::Surface{event,..}) if matches!(event.as_ref(),PluginEvent::Pointer{..}|PluginEvent::Text(_)))));
     });
 }

@@ -637,7 +637,7 @@ fn plugin_panel_registration_input_and_ime(cx: &mut TestAppContext) {
             .collect::<Vec<_>>()
     });
     fn event(work: &Work) -> Option<&PluginEvent> {
-        if let Work::Event(_, event) = work {
+        if let Work::Event(_, _, event) = work {
             if let PluginEvent::Surface { event, .. } = event {
                 Some(event)
             } else {
@@ -811,4 +811,81 @@ fn plugin_panel_registration_input_and_ime(cx: &mut TestAppContext) {
         full_editor,
         "uninstalling the last plugin must not leave an empty bottom dock"
     );
+}
+
+/// A deferred legacy editor action cannot open data after replacement or trust revocation.
+#[gpui::test]
+fn deferred_legacy_effects_recheck_epoch_and_trust(cx: &mut TestAppContext) {
+    cx.update(|cx| {
+        gpui_kit::init(cx);
+        typography::init(cx);
+        apply_theme(builtin_theme(false), cx);
+    });
+    let directory = tempfile::tempdir().unwrap();
+    let workspace = Workspace::open(directory.path()).unwrap();
+    let slot = Rc::new(RefCell::new(None));
+    let capture = slot.clone();
+    let (_, cx) = cx.add_window_view(move |window, cx| {
+        let app = cx.new(|cx| EditorApp::new(workspace, None, window, cx));
+        *capture.borrow_mut() = Some(app.clone());
+        Root::new(app, window, cx)
+    });
+    let app = slot.borrow_mut().take().unwrap();
+    for revoked in [false, true] {
+        cx.update(|_, cx| {
+            let owner = app.read(cx).extensions.clone();
+            owner.update(cx, |owner, cx| {
+                let manifest: protocol::Manifest = serde_json::from_str(include_str!(
+                    "../../../../plugins/terminal/manifest.json"
+                ))
+                .unwrap();
+                owner
+                    .worker
+                    .trusted
+                    .store(true, std::sync::atomic::Ordering::Release);
+                {
+                    let mut state = owner.worker.state.lock().unwrap();
+                    state.entries = vec![Installed {
+                        grants: manifest.permissions.clone(),
+                        manifest,
+                        digest: "fixture".into(),
+                        enabled: true,
+                        project_enabled: Default::default(),
+                        global_enabled: None,
+                        error: None,
+                    }];
+                    state.instance_epochs.insert("terminal".into(), 7);
+                    state.effects.push((
+                        "terminal".into(),
+                        Request::Editor {
+                            command: "open_data:late.json".into(),
+                        },
+                    ));
+                }
+                // Poll captures the old effect and queues its deferred native side effect.
+                owner.poll(cx);
+                if revoked {
+                    owner
+                        .worker
+                        .trusted
+                        .store(false, std::sync::atomic::Ordering::Release);
+                } else {
+                    owner
+                        .worker
+                        .state
+                        .lock()
+                        .unwrap()
+                        .instance_epochs
+                        .insert("terminal".into(), 8);
+                }
+            });
+        });
+        cx.run_until_parked();
+        cx.update(|_, cx| {
+            assert!(!app.read(cx).status.contains("late.json"));
+            assert!(app.read(cx).pending_plugin_file.is_none());
+            let owner = app.read(cx).extensions.read(cx);
+            assert!(!owner.worker.recorded.lock().unwrap().try_iter().any(|work| matches!(work, Work::Event(_, _, PluginEvent::Command { id, .. }) if id == "open_data:late.json.result")));
+        });
+    }
 }

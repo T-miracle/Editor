@@ -8,7 +8,10 @@ pub(crate) mod contributions;
 #[cfg(test)]
 mod dependency_tests;
 mod editor_requests;
+mod legacy_input;
 use crate::ui::plugin::images;
+#[cfg(test)]
+mod hot_update_tests;
 mod installation;
 #[cfg(test)]
 mod installer_tests;
@@ -469,6 +472,12 @@ impl ExtensionPanel {
                     self.preview_version = None;
                     self.native_ui = None;
                     self.canvas_controls = None;
+                    self.editing = None;
+                    self.committed_edit = None;
+                    self.composition.clear();
+                    self._focus_events.clear();
+                    // Old scrollbar callbacks retain their old handle and incarnation.
+                    self.scroll = surface::PluginScroll::new(self.worker.tx.clone());
                     self.command_popup = None;
                     self.commands_open = false;
                     changed = true;
@@ -522,7 +531,13 @@ impl ExtensionPanel {
             }
             if self.surface_id.is_none() {
                 (
-                    std::mem::take(&mut state.effects),
+                    std::mem::take(&mut state.effects)
+                        .into_iter()
+                        .map(|(id, effect)| {
+                            let epoch = state.instance_epochs.get(&id).copied().unwrap_or(0);
+                            (id, epoch, effect)
+                        })
+                        .collect::<Vec<_>>(),
                     std::mem::take(&mut state.editor_requests),
                 )
             } else {
@@ -557,21 +572,34 @@ impl ExtensionPanel {
                 });
             });
         }
-        for (id, effect) in effects {
+        for (id, epoch, effect) in effects {
+            // A worker cutover can publish while this UI batch is waiting to run.
+            if !self.worker.accepts_effect(&id, epoch) {
+                continue;
+            }
             match effect {
                 Request::ClipboardWrite(text) => {
                     cx.write_to_clipboard(ClipboardItem::new_string(text))
                 }
                 Request::ClipboardRead => {
                     if let Some(text) = cx.read_from_clipboard().and_then(|item| item.text()) {
-                        self.send_to(&id, PluginEvent::Paste(text));
+                        let _ = self.worker.tx.send(Work::Event(
+                            id.clone(),
+                            epoch,
+                            PluginEvent::Paste(text),
+                        ));
                     }
                 }
                 Request::Editor { command } => {
                     let parent = self.parent.clone();
+                    let worker = self.worker.clone();
                     let tx = self.worker.tx.clone();
                     let root = self.root.clone();
                     cx.defer(move |cx| {
+                        // Admission must happen at execution, before save/hide/open side effects.
+                        if !worker.accepts_effect(&id, epoch) {
+                            return;
+                        }
                         let _ = parent.update(cx, |app, cx| {
                             // Scope panel operations to the plugin that emitted this host request.
                             if let Some(panel) = command.strip_prefix("hide_panel:") {
@@ -599,6 +627,7 @@ impl ExtensionPanel {
                             }
                             let _ = tx.send(Work::Event(
                                 id.clone(),
+                                epoch,
                                 PluginEvent::Command {
                                     id: format!("{command}.result"),
                                     cwd,
@@ -642,7 +671,20 @@ impl ExtensionPanel {
         }
     }
     fn send_to(&self, id: &str, event: PluginEvent) {
-        let _ = self.worker.tx.send(Work::Event(id.into(), event));
+        // Surface state belongs to its last observed publication, never the worker's newer incarnation.
+        let epoch = if self.active.as_deref() == Some(id) {
+            self.instance_epoch
+        } else {
+            self.worker
+                .state
+                .lock()
+                .unwrap()
+                .instance_epochs
+                .get(id)
+                .copied()
+                .unwrap_or(0)
+        };
+        let _ = self.worker.tx.send(Work::Event(id.into(), epoch, event));
     }
     /// Queue a plugin lifecycle operation and expose its waiting state on this frame.
     fn queue_lifecycle(&mut self, work: Work) -> bool {
@@ -794,13 +836,25 @@ impl ExtensionPanel {
             return;
         }
         let input = cx.new(|cx| InputState::new(window, cx).default_value(widget.label));
-        let enter = cx.subscribe_in(&input, window, |this, _, event: &InputEvent, window, cx| {
-            if matches!(event, InputEvent::PressEnter { .. }) {
-                this.commit_edit(cx);
-                this.focus(window, cx);
+        // Deferred input submission cannot target a replacement instance.
+        let epoch = self.instance_epoch;
+        let enter = cx.subscribe_in(
+            &input,
+            window,
+            move |this, _, event: &InputEvent, window, cx| {
+                if this.instance_epoch != epoch {
+                    return;
+                }
+                if matches!(event, InputEvent::PressEnter { .. }) {
+                    this.commit_edit(cx);
+                    this.focus(window, cx);
+                }
+            },
+        );
+        let blur = cx.on_focus_out(&input.focus_handle(cx), window, move |this, _, _, cx| {
+            if this.instance_epoch != epoch {
+                return;
             }
-        });
-        let blur = cx.on_focus_out(&input.focus_handle(cx), window, |this, _, _, cx| {
             this.commit_edit(cx)
         });
         let focus = input.focus_handle(cx);
@@ -920,6 +974,8 @@ impl DockPanel for ExtensionPanel {
     /// Toolbar labels and commands come from installed manifests.
     fn title(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let title = self.panel_title.clone();
+        // Toolbar callbacks retain the incarnation that declared their commands.
+        let epoch = self.instance_epoch;
         let icon = self.panel_icon(cx.theme().is_dark());
         let mut controls = h_flex().items_center();
         if let Some(entry) = self
@@ -938,12 +994,13 @@ impl DockPanel for ExtensionPanel {
                     } else {
                         button.label(command.toolbar.clone().unwrap_or_default())
                     };
-                    controls =
-                        controls.child(
-                            button.small().compact().ghost().on_click(
-                                cx.listener(move |this, _, _, _| this.command(id.clone())),
-                            ),
-                        );
+                    controls = controls.child(button.small().compact().ghost().on_click(
+                        cx.listener(move |this, _, _, _| {
+                            if this.instance_epoch == epoch {
+                                this.command(id.clone());
+                            }
+                        }),
+                    ));
                 }
             }
         }

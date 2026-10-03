@@ -1,5 +1,9 @@
 //! A single worker owns plugin stores; the UI thread never compiles or executes WASM.
 use plugin_runtime::{Installed, Manager, Package, plugin_protocol::*};
+mod preparation;
+mod runner;
+#[cfg(test)]
+mod worker_tests;
 use std::{
     collections::BTreeMap,
     path::PathBuf,
@@ -34,7 +38,8 @@ pub(super) enum Work {
     /// Only an explicit host-local choice can lift workspace restrictions.
     SetTrust(bool),
     Uninstall(String, bool),
-    Event(String, Event),
+    /// Native callbacks retain the incarnation that created them, even if a replacement reuses node IDs.
+    Event(String, u64, Event),
     /// Host-originated commands target a plugin directly, even while its panel is hidden.
     Invoke {
         plugin: String,
@@ -146,6 +151,18 @@ pub(super) struct Worker {
     pub recorded: Mutex<mpsc::Receiver<Work>>,
 }
 impl Worker {
+    /// Legacy host effects retain publication authority; deferring them cannot renew a retired instance.
+    pub(super) fn accepts_effect(&self, id: &str, epoch: u64) -> bool {
+        if !self.trusted.load(std::sync::atomic::Ordering::Acquire) {
+            return false;
+        }
+        let state = self.state.lock().unwrap();
+        state.instance_epochs.get(id).copied().unwrap_or(0) == epoch
+            && state
+                .entries
+                .iter()
+                .any(|entry| entry.manifest.id == id && entry.enabled)
+    }
     /// This bypasses the serialized command queue so a long download cannot delay shutdown or trust revocation.
     pub fn cancel_installation(&self) {
         if let Some(control) = &self.state.lock().unwrap().install_control {
@@ -242,300 +259,7 @@ impl Worker {
     }
     #[cfg(not(test))]
     pub fn start(root: PathBuf, environment: Environment, trusted: bool) -> Self {
-        let (tx, rx) = mpsc::channel();
-        let state = Arc::new(Mutex::new(Self::initial_state(
-            &root,
-            &environment,
-            trusted,
-        )));
-        let output = state.clone();
-        std::thread::spawn(move || {
-            let mut manager = match Manager::open_with_trust(root, environment, trusted) {
-                Ok(m) => m,
-                Err(e) => {
-                    let mut published = output.lock().unwrap();
-                    published.startup.clear();
-                    published.status = Some(format!("{e:#}"));
-                    return;
-                }
-            };
-            let mut last_save = Instant::now();
-            let mut vectors = super::images::VectorRenderer::default();
-            loop {
-                let work = match rx.recv_timeout(Duration::from_millis(30)) {
-                    Ok(work) => Some(work),
-                    Err(mpsc::RecvTimeoutError::Timeout) => None,
-                    Err(_) => break,
-                };
-                let lifecycle = work.as_ref().and_then(Work::lifecycle);
-                // A successful replacement needs a fresh surface Resize event.
-                let restarted_plugin = match work.as_ref() {
-                    Some(Work::SetSetting { plugin, .. }) => Some(plugin.clone()),
-                    Some(Work::Install(package)) => Some(package.manifest.id.clone()),
-                    Some(Work::Enable(id)) => Some(id.clone()),
-                    Some(Work::Restart(id)) => Some(id.clone()),
-                    _ => None,
-                };
-                let result = match work {
-                    Some(Work::SetServiceProvider {
-                        request,
-                        owner,
-                        scope,
-                        contract,
-                        provider,
-                    }) => {
-                        let result = manager.set_service_provider(
-                            owner,
-                            scope,
-                            &contract,
-                            provider.as_deref(),
-                        );
-                        let mut published = output.lock().unwrap();
-                        published.configuration_result = Some((
-                            request,
-                            result
-                                .as_ref()
-                                .map(|_| ())
-                                .map_err(|error| format!("{error:#}")),
-                        ));
-                        published.configuration_revision += 1;
-                        result
-                    }
-                    Some(Work::SetSetting {
-                        request,
-                        plugin,
-                        scope,
-                        key,
-                        value,
-                    }) => {
-                        let result = manager.update_setting(&plugin, scope, &key, value);
-                        let mut published = output.lock().unwrap();
-                        published.configuration_result = Some((
-                            request,
-                            result
-                                .as_ref()
-                                .map(|_| ())
-                                .map_err(|error| format!("{error:#}")),
-                        ));
-                        published.configuration_revision += 1;
-                        result
-                    }
-                    Some(Work::Shutdown(ack)) => {
-                        drop(manager);
-                        if let Some(ack) = ack {
-                            let _ = ack.send(());
-                        }
-                        return;
-                    }
-                    Some(Work::Inspect(path)) => Package::read(&path)
-                        .map(|package| output.lock().unwrap().pending = Some(package)),
-                    Some(Work::Install(package)) => {
-                        let control = output
-                            .lock()
-                            .unwrap()
-                            .install_control
-                            .clone()
-                            .unwrap_or_default();
-                        manager.install_with_control(
-                            &package,
-                            package.manifest.permissions.clone(),
-                            &control,
-                        )
-                    }
-                    Some(Work::Enable(id)) => manager.enable(&id),
-                    Some(Work::Restart(id)) => manager.restart_plugin(&id),
-                    Some(Work::SetTrust(trusted)) => manager.set_workspace_trust(trusted),
-                    Some(Work::Disable(id)) => manager.disable(&id),
-                    Some(Work::SetProjectEnabled(id, enabled)) => {
-                        manager.set_project_enabled(&id, enabled)
-                    }
-                    Some(Work::Uninstall(id, delete)) => manager.uninstall(&id, delete),
-                    Some(Work::Event(id, event)) => manager.event(&id, event),
-                    Some(Work::Invoke {
-                        plugin,
-                        command,
-                        arguments,
-                    }) => manager.invoke_command(&plugin, &command, arguments),
-                    None => Ok(()),
-                };
-                match output.lock().unwrap().document_events.take_batch(64) {
-                    Ok(changes) => {
-                        for change in changes {
-                            manager.document_changed(change);
-                        }
-                    }
-                    Err(error) => manager.document_events_failed(error),
-                }
-                manager.poll();
-                let mut effects = vec![];
-                let mut scenes = BTreeMap::new();
-                let mut processes = BTreeMap::new();
-                let mut editor_requests = Vec::new();
-                for (id, instance) in &mut manager.live {
-                    editor_requests.extend(
-                        instance
-                            .take_editor_requests()
-                            .into_iter()
-                            .map(|request| (id.clone(), request)),
-                    );
-                    for (panel, scene) in &instance.scenes {
-                        scenes.insert(format!("{id}/{panel}"), scene.clone());
-                    }
-                    processes.insert(id.clone(), instance.process_count());
-                    effects.extend(
-                        instance
-                            .effects()
-                            .into_iter()
-                            .map(|effect| (id.clone(), effect)),
-                    );
-                }
-                if last_save.elapsed() > Duration::from_secs(3) {
-                    if let Err(e) = manager.checkpoint() {
-                        output.lock().unwrap().status = Some(format!("保存插件状态失败：{e:#}"));
-                    }
-                    last_save = Instant::now();
-                }
-                // Vector parsing and rendering stay on this worker, outside the shared-state lock.
-                let images = vectors.prepare(&scenes);
-                let configurations = manager
-                    .installed
-                    .keys()
-                    .map(|id| {
-                        (
-                            id.clone(),
-                            manager
-                                .effective_settings(id)
-                                .map_err(|error| format!("{error:#}")),
-                        )
-                    })
-                    .collect::<BTreeMap<_, _>>();
-                let language_services = manager.language_services();
-                for service in language_services
-                    .values()
-                    .filter_map(|service| service.as_ref().ok())
-                {
-                    *processes.entry(service.owner.clone()).or_default() += service.process_count();
-                }
-                let plugin_service_choices = manager.service_choices();
-                let mut published = output.lock().unwrap();
-                if published.plugin_service_choices != plugin_service_choices {
-                    published.plugin_service_choices = plugin_service_choices;
-                    published.configuration_revision += 1;
-                }
-                let services_changed = language_services.len() != published.language_services.len()
-                    || language_services.iter().any(|(key, value)| {
-                        match (value, published.language_services.get(key)) {
-                            (Ok(current), Some(Ok(old))) => !Arc::ptr_eq(current, old),
-                            (Err(current), Some(Err(old))) => current != old,
-                            _ => true,
-                        }
-                    });
-                if services_changed {
-                    // Retired providers must not leave a previous version's ready badge behind.
-                    let unchanged = published.language_services.iter().filter_map(|(key, old)| {
-                        matches!((old, language_services.get(key)), (Ok(old), Some(Ok(new))) if Arc::ptr_eq(old,new)).then_some(key.clone())
-                    }).collect::<std::collections::BTreeSet<_>>();
-                    published
-                        .service_states
-                        .retain(|key, _| unchanged.contains(key));
-                    published.language_services = language_services;
-                    published.configuration_revision += 1;
-                }
-                if published.configurations != configurations {
-                    published.configurations = configurations;
-                    published.configuration_revision += 1;
-                }
-                published
-                    .editor_requests
-                    .retain(|(_, request)| !request.status().is_terminal());
-                for request in editor_requests {
-                    if published.editor_requests.len() < 256 {
-                        published.editor_requests.push(request);
-                    } else {
-                        request.1.finish(Err(api::Failure::new(
-                            api::ErrorCode::LimitExceeded,
-                            "Editor publication queue is full",
-                        )));
-                    }
-                }
-                let replacement_succeeded = result.is_ok();
-                if lifecycle
-                    .as_ref()
-                    .is_some_and(|operation| operation.action == LifecycleAction::Install)
-                {
-                    if let Some(report) = &mut published.installation {
-                        report.cancellable = false;
-                        report.installed = result.is_ok();
-                        report.message = match &result {
-                            Err(error) => {
-                                format!("安装失败：{error:#}\n可关闭此窗口后重新点击安装重试。")
-                            }
-                            Ok(())
-                                if manager.installed.get(&report.id).is_some_and(|entry| {
-                                    !entry.manifest.language_servers.is_empty()
-                                }) =>
-                            {
-                                "插件已安装；等待语言服务选择与启动…".into()
-                            }
-                            Ok(()) => "插件安装完成。".into(),
-                        };
-                    }
-                    published.install_control = None;
-                    let failures = published
-                        .language_services
-                        .iter()
-                        .filter_map(|(key, service)| {
-                            service
-                                .as_ref()
-                                .err()
-                                .map(|error| format!("{key}：准备失败：{error}"))
-                        })
-                        .collect::<Vec<_>>();
-                    if let Some(report) = &mut published.installation {
-                        for failure in failures
-                            .iter()
-                            .filter(|line| line.starts_with(&format!("{}/", report.id)))
-                        {
-                            report.message.push_str(&format!("\n{failure}"));
-                        }
-                    }
-                }
-                // Startup loading ends only after Manager::open has restored every enabled plugin.
-                published.startup.clear();
-                if let Err(e) = result {
-                    published.status = Some(if let Some(operation) = &lifecycle {
-                        format!("{}失败：{e:#}", operation.action.label())
-                    } else {
-                        format!("{e:#}")
-                    });
-                }
-                if lifecycle.is_some() {
-                    published.progress = None;
-                }
-                if replacement_succeeded {
-                    if let Some(id) = restarted_plugin {
-                        *published.instance_epochs.entry(id).or_default() += 1;
-                    }
-                }
-                published.entries = manager.published_entries();
-                published.diagnostics = manager
-                    .installed
-                    .keys()
-                    .map(|id| (id.clone(), manager.diagnostics(id)))
-                    .collect();
-                published.scenes = scenes;
-                published.images = images;
-                published.processes = processes;
-                published.effects.extend(effects);
-                published.generation += 1;
-            }
-            // Manager drop atomically saves plugin snapshots and closes owned process trees.
-        });
-        Self {
-            tx,
-            state,
-            trusted: std::sync::atomic::AtomicBool::new(trusted),
-        }
+        Self::start_background(root, environment, trusted)
     }
 }
 impl LifecycleAction {

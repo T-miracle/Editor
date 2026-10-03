@@ -57,6 +57,25 @@ impl State {
             }
             let request: api::Request = serde_json::from_value(value)
                 .map_err(|error| Failure::new(ErrorCode::InvalidRequest, error.to_string()))?;
+            // Cutover snapshots may serialize private files, but cannot enqueue new native side effects.
+            if !self
+                .plugin_services
+                .alive
+                .load(std::sync::atomic::Ordering::Acquire)
+                && !matches!(
+                    &request.operation,
+                    api::Operation::ReadAsset { .. }
+                        | api::Operation::OpenData
+                        | api::Operation::ReadFile { .. }
+                        | api::Operation::WriteFile { .. }
+                        | api::Operation::CloseResource { .. }
+                )
+            {
+                return Err(Failure::new(
+                    ErrorCode::InvalidState,
+                    "Instance is switching versions",
+                ));
+            }
             // A migration may not borrow workspace, editor, service or process authority from its normal grants.
             if self.migrating
                 && !matches!(

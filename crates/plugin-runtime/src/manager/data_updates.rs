@@ -8,13 +8,15 @@ use crate::{
 /// Opaque, manager-bound preparation token; callers may continue dispatching old-version commands before commit.
 pub struct PreparedInstallation {
     pub(super) enable_requested: bool,
-    root: PathBuf,
-    workspace: String,
-    previous_digest: Option<String>,
-    package: Package,
-    grants: BTreeSet<String>,
-    transaction: Transaction,
-    next: Instance,
+    pub(super) root: PathBuf,
+    pub(super) workspace: String,
+    pub(super) previous_digest: Option<String>,
+    pub(super) package: Package,
+    pub(super) grants: BTreeSet<String>,
+    pub(super) transaction: Transaction,
+    pub(super) next: Instance,
+    /// Final discovery must match the plans already prepared and authorized off the actor thread.
+    pub(super) dependency_plans: BTreeMap<String, plugin_protocol::dependencies::Plan>,
 }
 impl Manager {
     /// Private-data writers have one owner across processes; declarative dependency managers need no such lease.
@@ -44,13 +46,22 @@ impl Manager {
         grants: BTreeSet<String>,
         control: &InstallControl,
     ) -> anyhow::Result<PreparedInstallation> {
+        self.begin_installation(package, grants, control)?
+            .run(control)
+    }
+
+    /// Capture bounded owner/configuration state; extraction, compilation and downloads belong to the job.
+    pub fn begin_installation(
+        &mut self,
+        package: &Package,
+        grants: BTreeSet<String>,
+        control: &InstallControl,
+    ) -> anyhow::Result<InstallationPreparation> {
         drop(crate::data_transaction::recover(&self.root)?);
         self.acquire_data_owner()?;
         self.validate_data_update(package, &grants)?;
         control.check()?;
         let id = &package.manifest.id;
-        let version = self.root.join("packages").join(id).join(&package.digest);
-        package.extract(&version)?;
         let scope = self
             .instance_data_directory(&package.manifest)
             .parent()
@@ -61,32 +72,18 @@ impl Manager {
         if let Some(bytes) = transaction.registry()? {
             self.installed = serde_json::from_slice(&bytes)?;
         }
-        transaction.refresh()?;
         if self.engine.is_none() {
             self.engine = Some(Instance::engine()?);
         }
-        let mut next = Instance::prepare(
-            self.engine.as_ref().unwrap(),
-            package.component().unwrap(),
-            &package.manifest,
-            &grants,
-            self.environment.clone(),
-            transaction.candidate().join("files"),
-            version,
-            // Old-format snapshots belong only to the migration hook, never to new-version initialization.
-            None,
-        )?;
-        self.configure_saved_settings(&mut next, &package.manifest)?;
-        self.prepare_dependencies(package, Some(&mut next), control)?;
-        Ok(PreparedInstallation {
-            enable_requested: false,
+        Ok(InstallationPreparation {
             root: self.root.clone(),
-            workspace: self.environment.workspace.clone(),
+            environment: self.environment.clone(),
             previous_digest: self.installed.get(id).map(|entry| entry.digest.clone()),
             package: package.clone(),
             grants,
             transaction,
-            next,
+            engine: self.engine.as_ref().unwrap().clone(),
+            configuration: self.saved_settings(&package.manifest)?,
         })
     }
 
@@ -107,68 +104,81 @@ impl Manager {
             "Prepared installation is stale; prepare it again"
         );
         control.check()?;
-        // Snapshot only after earlier commands have finished. The initial preparation copy is never committed.
-        control.stage(crate::InstallStage::Migrating)?;
-        let snapshot = if let Some(old) = self.live.get_mut(&id) {
-            Some(old.snapshot()?)
-        } else {
-            self.load_snapshot(&id)?
-        };
-        prepared.transaction.refresh()?;
-        let candidate = prepared.transaction.candidate();
-        let existed = self
-            .instance_data_directory(manifest)
-            .parent()
-            .unwrap()
-            .exists();
-        let from = data_version(&candidate, existed)?;
-        let format = manifest.data_format.as_ref().unwrap();
-        prepared.next.call(Message::Prepare {
-            environment: self.environment.clone(),
-            snapshot: if from == format.version {
-                snapshot.clone()
-            } else {
-                None
-            },
-        })?;
-        let migrated = if from != format.version {
-            anyhow::ensure!(
-                from == 0 || format.migration_hook,
-                "Data format change requires a migration hook"
-            );
-            if format.migration_hook {
-                prepared
-                    .next
-                    .migrate_data(from, format.version, snapshot.clone())?
-            } else {
-                snapshot.clone()
-            }
-        } else {
-            snapshot.clone()
-        };
-        if let Some(value) = &migrated {
-            anyhow::ensure!(
-                value.data.len() <= manifest.storage_limit,
-                "Migrated snapshot exceeds quota"
-            );
-        }
-        // Re-prepare transfers the migrated opaque snapshot; handles from the migration have already expired.
-        prepared.next.call(Message::Prepare {
-            environment: self.environment.clone(),
-            snapshot: migrated.clone(),
-        })?;
-        self.configure_saved_settings(&mut prepared.next, manifest)?;
-        self.refresh_services();
-        prepared
-            .next
-            .connect_services(self.plugin_services.clone())?;
-        control.check()?;
+        // Read the last safe fallback before retiring any owner; final snapshot failures also require recovery.
+        let mut snapshot = self.load_snapshot(&id)?;
         let previous = self.installed.get(&id).cloned();
         let mut old = self.live.remove(&id);
         if let Some(instance) = &mut old {
-            instance.stop();
+            instance.quiesce();
         }
+        self.retire_language_services(&id);
+        self.refresh_services();
+        let candidate = prepared.transaction.candidate();
+        // Undeclared formats retain version one, but use exactly the same transactional cutover.
+        let target = manifest
+            .data_format
+            .as_ref()
+            .map_or(1, |format| format.version);
+        let hook = manifest
+            .data_format
+            .as_ref()
+            .is_some_and(|format| format.migration_hook);
         let result = (|| {
+            if let Some(instance) = &mut old {
+                snapshot = Some(instance.snapshot()?);
+                instance.stop();
+            }
+            control.stage(crate::InstallStage::Migrating)?;
+            prepared.transaction.refresh()?;
+            let from = data_version(&candidate, prepared.transaction.source_exists())?;
+            prepared.next.call(Message::Prepare {
+                environment: self.environment.clone(),
+                snapshot: if from == target {
+                    snapshot.clone()
+                } else {
+                    None
+                },
+            })?;
+            let migrated = if from != target {
+                anyhow::ensure!(
+                    from == 0 || hook,
+                    "Data format change requires a migration hook"
+                );
+                if hook {
+                    prepared.next.migrate_data(from, target, snapshot.clone())?
+                } else {
+                    snapshot.clone()
+                }
+            } else {
+                snapshot.clone()
+            };
+            if let Some(value) = &migrated {
+                anyhow::ensure!(
+                    value.data.len() <= manifest.storage_limit,
+                    "Migrated snapshot exceeds quota"
+                );
+            }
+            // Final discovery sees current data/configuration. Changed plans must be prepared anew, outside cutover.
+            prepared.next.call(Message::Prepare {
+                environment: self.environment.clone(),
+                snapshot: migrated,
+            })?;
+            self.configure_saved_settings(&mut prepared.next, manifest)?;
+            let values = prepared.next.configuration.clone();
+            let plans = dependencies::resolve_dependency_plans(
+                &self.environment,
+                &prepared.package,
+                Some(&mut prepared.next),
+                &values,
+            )?;
+            anyhow::ensure!(
+                serde_json::to_vec(&plans)? == serde_json::to_vec(&prepared.dependency_plans)?,
+                "Dependency selection changed during preparation; prepare the update again"
+            );
+            prepared
+                .next
+                .connect_services(self.plugin_services.clone())?;
+            control.check()?;
             prepared.next.activate()?;
             prepared.next.commit_data()?;
             let checkpoint = prepared.next.snapshot()?;
@@ -182,7 +192,7 @@ impl Manager {
             )?;
             atomic_write(
                 &candidate.join("data-format.json"),
-                &serde_json::to_vec(&format.version)?,
+                &serde_json::to_vec(&target)?,
             )?;
             let mut registry = self.installed.clone();
             registry.insert(
@@ -209,6 +219,10 @@ impl Manager {
         })();
         if let Err(error) = result {
             prepared.next.stop();
+            if let Some(instance) = &mut old {
+                // Snapshot failure happens before stop; no native ownership may remain during recovery.
+                instance.stop();
+            }
             if prepared.transaction.recovery_pending() {
                 if let Some(entry) = self.installed.get_mut(&id) {
                     entry.error = Some(format!("Recovery incomplete: {error:#}"));
@@ -218,12 +232,13 @@ impl Manager {
             }
             if let Some(mut old) = old {
                 if let Err(recovery) = old.restart(self.environment.clone(), snapshot) {
+                    old.stop();
+                    let message = format!("Update failed: {error:#}; restart failed: {recovery:#}");
                     if let Some(entry) = self.installed.get_mut(&id) {
-                        entry.error = Some(format!("Recovery failed: {recovery:#}"));
+                        entry.error = Some(message.clone());
                     }
-                    return Err(anyhow::anyhow!(
-                        "Update failed: {error:#}; restart failed: {recovery:#}"
-                    ));
+                    self.refresh_services();
+                    return Err(anyhow::anyhow!(message));
                 }
                 self.live.insert(id, old);
             }
@@ -239,7 +254,6 @@ impl Manager {
         } else {
             prepared.next.stop();
         }
-        self.retire_language_services(&id);
         self.refresh_services();
         Ok(())
     }
@@ -255,10 +269,16 @@ impl Manager {
             "Workspace is restricted or closed"
         );
         anyhow::ensure!(
-            package.manifest.protocol == 7
-                && package.manifest.component.is_some()
-                && package.manifest.data_format.is_some(),
-            "Package does not declare a private data format"
+            package.manifest.protocol == 7 && package.manifest.component.is_some(),
+            "Transactional preparation requires a protocol 7 WASM package"
+        );
+        anyhow::ensure!(
+            package.manifest.data_format.is_some()
+                || self
+                    .installed
+                    .get(&package.manifest.id)
+                    .is_none_or(|old| old.manifest.data_format.is_none()),
+            "Removing a data format requires an explicit migration"
         );
         anyhow::ensure!(
             package.manifest.permissions.is_subset(grants),

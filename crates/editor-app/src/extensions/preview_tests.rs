@@ -113,7 +113,7 @@ fn svg_preview_follows_open_documents_and_unsaved_edits(cx: &mut TestAppContext)
             .unwrap()
             .try_iter()
             .filter_map(|work| {
-                if let Work::Event(_, event) = work {
+                if let Work::Event(_, _, event) = work {
                     Some(serde_json::to_value(event).unwrap())
                 } else {
                     None
@@ -151,7 +151,7 @@ fn svg_preview_follows_open_documents_and_unsaved_edits(cx: &mut TestAppContext)
                 .unwrap()
                 .try_iter()
                 .any(|work| {
-                    let Work::Event(_, event) = work else {
+                    let Work::Event(_, _, event) = work else {
                         return false;
                     };
                     serde_json::to_value(event).unwrap()["Surface"]["event"]["Document"]["text"]
@@ -203,7 +203,7 @@ fn svg_preview_follows_open_documents_and_unsaved_edits(cx: &mut TestAppContext)
                 .unwrap()
                 .try_iter()
                 .any(|work| {
-                    let Work::Event(_, event) = work else {
+                    let Work::Event(_, _, event) = work else {
                         return false;
                     };
                     serde_json::to_value(event).unwrap()["Surface"]["event"]["Document"]["text"]
@@ -263,7 +263,7 @@ fn svg_preview_follows_open_documents_and_unsaved_edits(cx: &mut TestAppContext)
                 .unwrap()
                 .try_iter()
                 .any(|work| {
-                    let Work::Event(_, event) = work else {
+                    let Work::Event(_, _, event) = work else {
                         return false;
                     };
                     serde_json::to_value(event).unwrap()["Surface"]["event"]["Document"]["text"]

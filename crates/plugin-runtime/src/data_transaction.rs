@@ -42,6 +42,10 @@ impl Transaction {
     pub(crate) fn candidate(&self) -> PathBuf {
         self.directory.join("candidate")
     }
+    /// A globally installed package may still have no data in the current logical workspace.
+    pub(crate) fn source_exists(&self) -> bool {
+        self.root.join(&self.scope).exists()
+    }
     /// The held transaction lock makes this registry the base for the eventual whole-file replacement.
     pub(crate) fn registry(&self) -> anyhow::Result<Option<Vec<u8>>> {
         read_optional(&self.root.join("registry.json"))

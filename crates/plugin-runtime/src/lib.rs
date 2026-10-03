@@ -19,6 +19,6 @@ mod plugin_services;
 mod process;
 mod toolchains;
 pub use instance::Instance;
-pub use manager::{Installed, Manager, PreparedInstallation};
+pub use manager::{InstallationPreparation, Installed, Manager, PreparedInstallation};
 pub use package::Package;
 pub use plugin_protocol;

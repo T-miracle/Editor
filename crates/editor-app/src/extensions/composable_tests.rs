@@ -160,7 +160,7 @@ fn events(
             .unwrap()
             .try_iter()
             .filter_map(|work| {
-                if let Work::Event(_, PluginEvent::Surface { event, .. }) = work {
+                if let Work::Event(_, _, PluginEvent::Surface { event, .. }) = work {
                     if let PluginEvent::Ui(event) = *event {
                         return Some(event);
                     }
@@ -302,7 +302,7 @@ fn pump(
             .collect()
     });
     for work in work {
-        if let Work::Event(id, event) = work {
+        if let Work::Event(id, _, event) = work {
             if let Err(error) = manager.event(&id, event) {
                 assert!(
                     matches!(error.downcast_ref::<protocol::api::Failure>(), Some(error) if error.code==protocol::api::ErrorCode::StaleRevision),

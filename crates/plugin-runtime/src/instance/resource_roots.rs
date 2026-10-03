@@ -142,7 +142,14 @@ impl State {
                 return Err(Failure::new(ErrorCode::InvalidHandle, "Not a file handle"));
             }
             RootKind::Workspace => {
-                if write || self.roots.application || self.workspace.as_os_str().is_empty() {
+                if write
+                    || self.roots.application
+                    || self.workspace.as_os_str().is_empty()
+                    || !self
+                        .plugin_services
+                        .alive
+                        .load(std::sync::atomic::Ordering::Acquire)
+                {
                     return Err(Failure::new(
                         ErrorCode::PermissionDenied,
                         "No workspace authority for this operation",

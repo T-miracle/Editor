@@ -548,6 +548,17 @@ pub struct Instance {
     pub error: Option<String>,
 }
 impl Instance {
+    /// The identity changes on recovery as well as replacement; old host callbacks must not follow it.
+    pub(crate) fn instance_id(&self) -> Option<&str> {
+        self.store.data().active.then_some(
+            self.store
+                .data()
+                .plugin_services
+                .principal
+                .instance
+                .as_str(),
+        )
+    }
     pub fn engine() -> anyhow::Result<Engine> {
         let mut config = wasmtime::Config::new();
         config
@@ -852,14 +863,18 @@ impl Instance {
         }
         Ok(())
     }
-    pub fn stop(&mut self) {
+    /// Seal already-published work before the final snapshot, while retaining private-file access for serialization.
+    pub(crate) fn quiesce(&mut self) {
         self.store.data_mut().plugin_services.clear();
-        self.preview_sources.clear();
         self.store.data_mut().subscriptions.clear();
         for request in self.store.data_mut().editor_requests.values() {
             request.call.retire();
         }
         self.store.data_mut().editor_requests.clear();
+    }
+    pub fn stop(&mut self) {
+        self.quiesce();
+        self.preview_sources.clear();
         self.store.data_mut().roots.retire();
         self.scenes.clear();
         self.scene = None;

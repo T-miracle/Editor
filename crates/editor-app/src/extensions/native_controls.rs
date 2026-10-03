@@ -47,6 +47,8 @@ impl ExtensionPanel {
             });
         } else {
             let owner = cx.entity().downgrade();
+            // Retained popups belong to the instance which supplied their items.
+            let epoch = self.instance_epoch;
             let position = point(
                 (self.bounds.right() - px(230.)).max(px(8.)),
                 self.bounds.top().max(px(8.)),
@@ -58,6 +60,9 @@ impl ExtensionPanel {
                     position,
                     move |action, _, cx| {
                         let _ = owner.update(cx, |this, cx| {
+                            if this.instance_epoch != epoch {
+                                return;
+                            }
                             if let protocol::ui::Action::Select(id) = action {
                                 this.command(id);
                             }

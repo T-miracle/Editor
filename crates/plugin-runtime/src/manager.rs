@@ -11,8 +11,10 @@ mod data_updates;
 mod dependencies;
 mod language;
 mod plugin_services;
+mod preparation;
 mod recovery;
 pub use data_updates::PreparedInstallation;
+pub use preparation::InstallationPreparation;
 pub(crate) mod scopes;
 mod settings;
 mod ui_events;
@@ -96,6 +98,10 @@ pub struct Manager {
     language_services: BTreeMap<String, language::Prepared>,
 }
 impl Manager {
+    /// Expose an opaque live incarnation for host publications, never authority for guest-supplied requests.
+    pub fn instance_id(&self, id: &str) -> Option<&str> {
+        self.live.get(id).and_then(Instance::instance_id)
+    }
     /// Identify the workspace whose override is active in this runtime.
     pub fn workspace(&self) -> &str {
         &self.environment.workspace
@@ -256,7 +262,7 @@ impl Manager {
             );
             return self.install_declarative(package, grants, control);
         }
-        if package.manifest.data_format.is_some() {
+        if package.manifest.protocol == 7 {
             let prepared = self.prepare_installation(package, grants, control)?;
             return self.commit_installation(prepared, control);
         }

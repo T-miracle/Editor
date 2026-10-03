@@ -9,10 +9,7 @@ use gpui_base::{ScrollbarHandle, ScrollbarMode};
 use gpui_kit::component::WindowExt as _;
 use gpui_kit::component::dialog::{DialogAction, DialogClose, DialogFooter};
 use gpui_kit::component::scroll::ScrollableElement;
-use gpui_kit::{
-    ElementInputHandler, EntityInputHandler, FontWeight, TextRun, UTF16Selection, canvas, fill,
-    font, rgb,
-};
+use gpui_kit::{EntityInputHandler, FontWeight, TextRun, UTF16Selection, canvas, fill, font, rgb};
 use std::{
     ops::Range,
     sync::mpsc,
@@ -25,6 +22,7 @@ struct ScrollState {
     bounds: Bounds<Pixels>,
     info: Option<protocol::ScrollInfo>,
     plugin: String,
+    epoch: u64,
     tx: mpsc::Sender<Work>,
     last_activity: Option<Instant>,
     dragging: bool,
@@ -36,13 +34,20 @@ impl PluginScroll {
             bounds: Bounds::default(),
             info: None,
             plugin: String::new(),
+            epoch: 0,
             tx,
             last_activity: None,
             dragging: false,
             last_visible: false,
         })))
     }
-    fn update(&self, bounds: Bounds<Pixels>, info: Option<protocol::ScrollInfo>, plugin: String) {
+    fn update(
+        &self,
+        bounds: Bounds<Pixels>,
+        info: Option<protocol::ScrollInfo>,
+        plugin: String,
+        epoch: u64,
+    ) {
         let mut s = self.0.borrow_mut();
         // New history and changed offsets count as scrolling activity for declarative overlays.
         if matches!((&s.info, &info), (None, Some(_)))
@@ -54,6 +59,7 @@ impl PluginScroll {
         s.bounds = bounds;
         s.info = info;
         s.plugin = plugin;
+        s.epoch = epoch;
     }
     fn note_activity(&self) {
         self.0.borrow_mut().last_activity = Some(Instant::now());
@@ -113,6 +119,7 @@ impl ScrollbarHandle for PluginScroll {
         if let Some(info) = &s.info {
             let _ = s.tx.send(Work::Event(
                 s.plugin.clone(),
+                s.epoch,
                 PluginEvent::Scroll {
                     id: info.id.clone(),
                     offset: -offset.y / px(1.),
@@ -136,6 +143,32 @@ impl ScrollbarHandle for PluginScroll {
 mod scroll_tests {
     use super::*;
 
+    /// A retained native scrollbar must keep its original incarnation after a replacement mounts.
+    #[test]
+    fn retained_scrollbar_keeps_original_instance_epoch() {
+        let (tx, rx) = mpsc::channel();
+        let old = PluginScroll::new(tx.clone());
+        let info = protocol::ScrollInfo {
+            id: "output".into(),
+            rect: protocol::Rect::default(),
+            content: 200.,
+            offset: 0.,
+            hide_after_ms: None,
+        };
+        old.update(Bounds::default(), Some(info.clone()), "plugin".into(), 7);
+        let retained = old.clone();
+        let replacement = PluginScroll::new(tx);
+        replacement.update(Bounds::default(), Some(info), "plugin".into(), 8);
+        retained.set_offset(point(px(0.), px(-40.)));
+        replacement.set_offset(point(px(0.), px(-50.)));
+        assert!(
+            matches!(rx.try_recv(), Ok(Work::Event(_, 7, PluginEvent::Scroll { offset, .. })) if offset == 40.)
+        );
+        assert!(
+            matches!(rx.try_recv(), Ok(Work::Event(_, 8, PluginEvent::Scroll { offset, .. })) if offset == 50.)
+        );
+    }
+
     /// An idle overlay disappears at the declared deadline and still forwards drag offsets.
     #[test]
     fn declared_scroll_timeout_preserves_native_scroll_events() {
@@ -148,7 +181,7 @@ mod scroll_tests {
             offset: 0.,
             hide_after_ms: Some(1000),
         };
-        scroll.update(Bounds::default(), Some(info.clone()), "terminal".into());
+        scroll.update(Bounds::default(), Some(info.clone()), "terminal".into(), 0);
         let started = scroll.0.borrow().last_activity.unwrap();
         assert!(scroll.visible_at(&info, started + Duration::from_millis(999)));
         assert!(!scroll.visible_at(&info, started + Duration::from_millis(1000)));
@@ -163,7 +196,7 @@ mod scroll_tests {
         );
         scroll.set_offset(point(px(0.), px(-40.)));
         assert!(
-            matches!(rx.try_recv(), Ok(Work::Event(id, PluginEvent::Scroll { offset, .. })) if id == "terminal" && offset == 40.)
+            matches!(rx.try_recv(), Ok(Work::Event(id, _, PluginEvent::Scroll { offset, .. })) if id == "terminal" && offset == 40.)
         );
         let refreshed = scroll.0.borrow().last_activity.unwrap();
         assert!(scroll.visible_at(&info, refreshed + Duration::from_millis(999)));
@@ -185,7 +218,7 @@ impl ExtensionPanel {
         if self.focus.is_focused(window) {
             window.handle_input(
                 &self.focus,
-                ElementInputHandler::new(bounds, cx.entity()),
+                legacy_input::Handler::new(bounds, cx.entity(), self.instance_epoch),
                 cx,
             );
         }
@@ -1087,13 +1120,21 @@ impl Render for ExtensionPanel {
         if self.manager_open || self.surface_id.is_none() {
             return self.manager(window, cx);
         }
+        // Every retained callback belongs to this publication, not a future replacement.
+        let epoch = self.instance_epoch;
         if self._focus_events.is_empty() {
             self._focus_events
-                .push(cx.on_focus(&self.focus, window, |this, _, _| {
+                .push(cx.on_focus(&self.focus, window, move |this, _, _| {
+                    if this.instance_epoch != epoch {
+                        return;
+                    }
                     this.send(PluginEvent::Focus(true))
                 }));
             self._focus_events
-                .push(cx.on_blur(&self.focus, window, |this, _, cx| {
+                .push(cx.on_blur(&self.focus, window, move |this, _, cx| {
+                    if this.instance_epoch != epoch {
+                        return;
+                    }
                     this.composition.clear();
                     this.send(PluginEvent::Focus(false));
                     cx.notify();
@@ -1132,6 +1173,7 @@ impl Render for ExtensionPanel {
                             }
                             let _ = tx.send(Work::Event(
                                 plugin.clone(),
+                                epoch,
                                 PluginEvent::Surface {
                                     panel: panel.clone(),
                                     event: Box::new(PluginEvent::Ui(event)),
@@ -1172,7 +1214,10 @@ impl Render for ExtensionPanel {
             .relative()
             .overflow_hidden()
             .track_focus(&self.focus)
-            .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
+            .on_key_down(cx.listener(move |this, event: &KeyDownEvent, window, cx| {
+                if this.instance_epoch != epoch {
+                    return;
+                }
                 if this.editing.is_some()
                     || !this.composition.is_empty()
                     || !this.focus.is_focused(window)
@@ -1199,7 +1244,10 @@ impl Render for ExtensionPanel {
             }))
             .on_mouse_down(
                 MouseButton::Left,
-                cx.listener(|this, event: &MouseDownEvent, window, cx| {
+                cx.listener(move |this, event: &MouseDownEvent, window, cx| {
+                    if this.instance_epoch != epoch {
+                        return;
+                    }
                     this.focus(window, cx);
                     this.pointer(
                         "down",
@@ -1212,13 +1260,19 @@ impl Render for ExtensionPanel {
             )
             .on_mouse_up(
                 MouseButton::Left,
-                cx.listener(|this, event: &MouseUpEvent, _, _| {
+                cx.listener(move |this, event: &MouseUpEvent, _, _| {
+                    if this.instance_epoch != epoch {
+                        return;
+                    }
                     this.pointer("up", event.position, 0, 1, event.modifiers.shift)
                 }),
             )
             .on_mouse_down(
                 MouseButton::Right,
-                cx.listener(|this, event: &MouseDownEvent, window, cx| {
+                cx.listener(move |this, event: &MouseDownEvent, window, cx| {
+                    if this.instance_epoch != epoch {
+                        return;
+                    }
                     this.focus(window, cx);
                     this.pointer(
                         "down",
@@ -1232,22 +1286,36 @@ impl Render for ExtensionPanel {
             )
             .on_mouse_up(
                 MouseButton::Right,
-                cx.listener(|this, event: &MouseUpEvent, _, _| {
+                cx.listener(move |this, event: &MouseUpEvent, _, _| {
+                    if this.instance_epoch != epoch {
+                        return;
+                    }
                     this.pointer("up", event.position, 2, 1, event.modifiers.shift)
                 }),
             )
             .on_mouse_down(
                 MouseButton::Middle,
-                cx.listener(|this, event: &MouseDownEvent, _, _| {
+                cx.listener(move |this, event: &MouseDownEvent, _, _| {
+                    if this.instance_epoch != epoch {
+                        return;
+                    }
                     this.pointer("down", event.position, 1, 1, event.modifiers.shift)
                 }),
             )
-            .on_mouse_move(cx.listener(|this, event: &gpui_kit::MouseMoveEvent, _, _| {
-                if event.pressed_button.is_some() {
-                    this.pointer("move", event.position, 0, 1, event.modifiers.shift);
+            .on_mouse_move(
+                cx.listener(move |this, event: &gpui_kit::MouseMoveEvent, _, _| {
+                    if this.instance_epoch != epoch {
+                        return;
+                    }
+                    if event.pressed_button.is_some() {
+                        this.pointer("move", event.position, 0, 1, event.modifiers.shift);
+                    }
+                }),
+            )
+            .on_scroll_wheel(cx.listener(move |this, event: &ScrollWheelEvent, _, cx| {
+                if this.instance_epoch != epoch {
+                    return;
                 }
-            }))
-            .on_scroll_wheel(cx.listener(|this, event: &ScrollWheelEvent, _, cx| {
                 let delta = event.delta.pixel_delta(px(this.last_size.3.max(1.))).y
                     / px(this.last_size.3.max(1.));
                 let position = event.position - this.bounds.origin;
@@ -1277,6 +1345,9 @@ impl Render for ExtensionPanel {
                 canvas(
                     move |bounds, window, cx| {
                         let _ = prepaint.update(cx, |this, _| {
+                            if this.instance_epoch != epoch {
+                                return;
+                            }
                             this.bounds = bounds;
                             if let Some(scene) = this.current_scene() {
                                 let face = font(scene.font.clone());
@@ -1310,12 +1381,17 @@ impl Render for ExtensionPanel {
                                         .unwrap_or(bounds),
                                     scene.scroll.clone(),
                                     this.active.clone().unwrap_or_default(),
+                                    epoch,
                                 );
                             }
                         });
                     },
                     move |bounds, _, window, cx| {
-                        let _ = paint.update(cx, |this, cx| this.paint(bounds, window, cx));
+                        let _ = paint.update(cx, |this, cx| {
+                            if this.instance_epoch == epoch {
+                                this.paint(bounds, window, cx);
+                            }
+                        });
                     },
                 )
                 .size_full(),
@@ -1346,7 +1422,11 @@ impl Render for ExtensionPanel {
                 if !widget.edit {
                     let id = widget.id.clone();
                     let mut button = Button::new(SharedString::from(format!("widget-{id}")))
-                        .on_click(cx.listener(move |this, _, _, _| this.command(id.clone())));
+                        .on_click(cx.listener(move |this, _, _, _| {
+                            if this.instance_epoch == epoch {
+                                this.command(id.clone());
+                            }
+                        }));
                     let style = &widget.style;
                     if style.font.family.is_some()
                         || style.font.size_px.is_some()
@@ -1446,7 +1526,10 @@ impl Render for ExtensionPanel {
                             .cursor_col_resize()
                             .on_mouse_down(
                                 MouseButton::Left,
-                                cx.listener(|this, event: &MouseDownEvent, window, cx| {
+                                cx.listener(move |this, event: &MouseDownEvent, window, cx| {
+                                    if this.instance_epoch != epoch {
+                                        return;
+                                    }
                                     // Forward the resize press once; the parent surface also listens.
                                     this.focus(window, cx);
                                     this.pointer(
@@ -1460,7 +1543,10 @@ impl Render for ExtensionPanel {
                                 }),
                             )
                             .on_mouse_move(cx.listener(
-                                |this, event: &gpui_kit::MouseMoveEvent, _, cx| {
+                                move |this, event: &gpui_kit::MouseMoveEvent, _, cx| {
+                                    if this.instance_epoch != epoch {
+                                        return;
+                                    }
                                     if event.pressed_button.is_some() {
                                         this.pointer(
                                             "move",
@@ -1475,7 +1561,10 @@ impl Render for ExtensionPanel {
                             ))
                             .on_mouse_up(
                                 MouseButton::Left,
-                                cx.listener(|this, event: &MouseUpEvent, _, cx| {
+                                cx.listener(move |this, event: &MouseUpEvent, _, cx| {
+                                    if this.instance_epoch != epoch {
+                                        return;
+                                    }
                                     this.pointer("up", event.position, 0, 1, event.modifiers.shift);
                                     cx.stop_propagation();
                                 }),
@@ -1558,6 +1647,7 @@ impl Render for ExtensionPanel {
                         move |event, _| {
                             let _ = tx.send(Work::Event(
                                 plugin.clone(),
+                                epoch,
                                 PluginEvent::Surface {
                                     panel: panel.clone(),
                                     event: Box::new(PluginEvent::Ui(event)),
