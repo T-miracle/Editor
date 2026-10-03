@@ -7,10 +7,12 @@ use std::{
     collections::{BTreeMap, BTreeSet},
     path::{Path, PathBuf},
 };
+mod data_updates;
 mod dependencies;
 mod language;
 mod plugin_services;
 mod recovery;
+pub use data_updates::PreparedInstallation;
 pub(crate) mod scopes;
 mod settings;
 mod ui_events;
@@ -78,6 +80,8 @@ impl Installed {
 }
 /// Run this module on a worker thread; native rendering reads only published scenes.
 pub struct Manager {
+    /// Executable guests share one private-data owner; metadata/dependency-only managers remain independent.
+    _runtime_lock: Option<std::fs::File>,
     diagnostic_history: BTreeMap<String, Vec<crate::faults::Diagnostic>>,
     plugin_services: crate::plugin_services::Shared,
     root: PathBuf,
@@ -98,6 +102,7 @@ impl Manager {
     }
     /// Read metadata without starting WASM; first read migrates legacy IDs and preserves private data.
     pub fn read_registry(root: &Path) -> anyhow::Result<BTreeMap<String, Installed>> {
+        let _transaction_guard = crate::data_transaction::recover(root)?;
         let installed = match std::fs::read(root.join("registry.json")) {
             Ok(bytes) => serde_json::from_slice(&bytes)?,
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => BTreeMap::new(),
@@ -117,6 +122,7 @@ impl Manager {
         std::fs::create_dir_all(&root)?;
         let installed = Self::read_registry(&root)?;
         let mut manager = Self {
+            _runtime_lock: None,
             diagnostic_history: BTreeMap::new(),
             plugin_services: std::sync::Arc::new(std::sync::Mutex::new(
                 crate::plugin_services::Broker::new(plugin_services::read_preferences(&root)?),
@@ -132,6 +138,13 @@ impl Manager {
             workspace_open: true,
             language_services: BTreeMap::new(),
         };
+        if manager
+            .installed
+            .values()
+            .any(|entry| entry.manifest.component.is_some())
+        {
+            manager.acquire_data_owner()?;
+        }
         let ids: Vec<_> = manager
             .installed
             .iter()
@@ -170,6 +183,8 @@ impl Manager {
             .join(format!("state-{}.json", &workspace[..16]))
     }
     fn save_registry(&self) -> anyhow::Result<()> {
+        // Other metadata managers cannot write through an in-flight private-data/registry transaction.
+        let _transaction_guard = crate::data_transaction::recover(&self.root)?;
         atomic_write(
             &self.root.join("registry.json"),
             &serde_json::to_vec_pretty(&self.installed)?,
@@ -233,8 +248,25 @@ impl Manager {
             "Permission confirmation required"
         );
         if package.manifest.component.is_none() {
+            anyhow::ensure!(
+                self.installed
+                    .get(&id)
+                    .is_none_or(|old| old.manifest.data_format.is_none()),
+                "Removing a data format requires an explicit migration"
+            );
             return self.install_declarative(package, grants, control);
         }
+        if package.manifest.data_format.is_some() {
+            let prepared = self.prepare_installation(package, grants, control)?;
+            return self.commit_installation(prepared, control);
+        }
+        anyhow::ensure!(
+            self.installed
+                .get(&id)
+                .is_none_or(|old| old.manifest.data_format.is_none()),
+            "Removing a data format requires an explicit migration"
+        );
+        self.acquire_data_owner()?;
         let snapshot = if let Some(old) = self.live.get_mut(&id) {
             Some(old.snapshot()?)
         } else {
@@ -385,6 +417,8 @@ impl Manager {
     }
     /// Re-enable from the last committed version and plugin-owned snapshot.
     pub fn enable(&mut self, id: &str) -> anyhow::Result<()> {
+        // A prior failed rollback must finish before any instance can touch the formal data directory.
+        drop(crate::data_transaction::recover(&self.root)?);
         anyhow::ensure!(
             self.trusted && self.workspace_open,
             "Workspace is restricted or closed"
@@ -395,6 +429,13 @@ impl Manager {
             }
             self.save_registry()?;
             return Ok(());
+        }
+        if self
+            .installed
+            .get(id)
+            .is_some_and(|entry| entry.manifest.component.is_some())
+        {
+            self.acquire_data_owner()?;
         }
         let entry = self
             .installed
@@ -440,6 +481,28 @@ impl Manager {
                 .join(&entry.digest)
                 .join(component_path),
         )?;
+        // A dormant workspace may still contain an older format than the globally installed package.
+        if let Some(format) = &entry.manifest.data_format {
+            let scope = self.data_directory(id).parent().unwrap().to_owned();
+            let from = if scope.exists() {
+                data_updates::data_version(&scope, true)?
+            } else {
+                0
+            };
+            if from != format.version {
+                let package = Package {
+                    manifest: entry.manifest.clone(),
+                    digest: entry.digest.clone(),
+                    files: [(component_path.clone(), component)].into(),
+                    source: None,
+                };
+                let control = crate::InstallControl::default();
+                let mut prepared =
+                    self.prepare_installation(&package, entry.grants.clone(), &control)?;
+                prepared.enable_requested = true;
+                return self.commit_installation(prepared, &control);
+            }
+        }
         if self.engine.is_none() {
             self.engine = Some(Instance::engine()?);
         }
@@ -672,6 +735,7 @@ mod icon_tests {
         std::fs::write(icons.join("dark.svg"), dark).unwrap();
         let installed = Installed {
             manifest: Manifest {
+                data_format: None,
                 plugin_services: Default::default(),
                 language_servers: Default::default(),
                 services: Default::default(),
@@ -734,6 +798,7 @@ mod scope_tests {
         std::fs::create_dir_all(contribution.parent().unwrap()).unwrap();
         std::fs::write(contribution, "").unwrap();
         let manifest = Manifest {
+            data_format: None,
             plugin_services: Default::default(),
             language_servers: Default::default(),
             services: Default::default(),

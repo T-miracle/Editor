@@ -1,12 +1,12 @@
 # 插件平台 API 重构：实施工单与发布记录
 
-日期：2026-10-02
+日期：2026-10-03
 
 来源：[已确认规格](../plugin-api-platform.md)。测试边界已由用户确认。
 
-状态：总方案和 20 张工单已发布，GitHub 是正式议题跟踪器。工单 01–11 已提交推送（`1969094`、`bc3102f`、`c2ca98d`、`9f5a2a7`、`762cc00`、`891651f`、`8bf4790`、`556c061`、`5273c78`、`43923c8`、`11a3c34`），GitHub #2–#12 已关闭。工单 12 已实现并通过测试及双轴审查，随本提交推送并关闭 GitHub #13。用户已授权连续完成剩余工单，每项通过验证后提交、推送、核对关闭再继续下一项。
+状态：总方案和 20 张工单已发布，GitHub 是正式议题跟踪器。工单 01–12 已提交推送（`1969094`、`bc3102f`、`c2ca98d`、`9f5a2a7`、`762cc00`、`891651f`、`8bf4790`、`556c061`、`5273c78`、`43923c8`、`11a3c34`、`7066225`），GitHub #2–#13 已关闭。工单 13 已实现并通过测试及双轴审查，随本提交推送并关闭 GitHub #14。用户已授权连续完成剩余工单，每项通过验证后提交、推送、核对关闭再继续下一项。
 
-设计基线：[GitHub #1](https://github.com/T-miracle/Editor/issues/1)。当前交付：[工单 12 / GitHub #13](https://github.com/T-miracle/Editor/issues/13)；下一项为 [工单 13 / GitHub #14](https://github.com/T-miracle/Editor/issues/14)。验证记录见 [故障恢复验证](../plugin-api-recovery-verification.md)。
+设计基线：[GitHub #1](https://github.com/T-miracle/Editor/issues/1)。当前交付：[工单 13 / GitHub #14](https://github.com/T-miracle/Editor/issues/14)；下一项为 [工单 14 / GitHub #15](https://github.com/T-miracle/Editor/issues/15)。验证记录见 [私有数据迁移验证](../plugin-api-data-migration-verification.md)。
 
 ## GitHub 议题映射
 

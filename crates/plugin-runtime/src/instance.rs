@@ -45,6 +45,8 @@ struct State {
     active: bool,
     /// A bounded discovery invocation can read granted resources without launching native work.
     language_hook: bool,
+    /// Migration grants access exclusively to a transaction's isolated private-data copy.
+    migrating: bool,
     effects: Vec<Request>,
     /// Initialization writes commit only with the version switch; failed activation cannot edit old settings.
     staged_writes: Option<std::collections::BTreeMap<PathBuf, Vec<u8>>>,
@@ -354,6 +356,7 @@ mod tests {
             assets,
             active: true,
             language_hook: false,
+            migrating: false,
             effects: vec![],
             staged_writes: None,
         };
@@ -505,6 +508,7 @@ mod tests {
             assets: root.path().into(),
             active: true,
             language_hook: false,
+            migrating: false,
             effects: vec![],
             staged_writes: Some(Default::default()),
         };
@@ -619,6 +623,7 @@ impl Instance {
             assets,
             active: false,
             language_hook: false,
+            migrating: false,
             effects: vec![],
             staged_writes: Some(Default::default()),
         };

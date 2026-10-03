@@ -1,5 +1,9 @@
 # Capability Example
 
+0.11.0 增加 `MigrateData` 夹具：版本化包将私有值转换为 `v2:原值`，迁移期间验证无法访问工作区。
+验收包通过 `migration-policy.txt` 选择正常迁移、迁移拒绝或激活失败，宿主不包含这些业务分支。
+SDK `MIGRATION.md` 说明私有数据版本、隔离权限、最终副本与中断恢复规则。
+
 0.10.0 增加 `fault-spin` 和 `fault-memory` 故障夹具，分别触发执行预算和内存预算。
 插件管理页可查看原因并独立重启；恢复失败不会删除私有文件。具体限制见宿主导出的 SDK `FAULTS.md`。
 

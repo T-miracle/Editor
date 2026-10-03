@@ -3,6 +3,30 @@ use super::*;
 use plugin_protocol::settings::{Effective, EffectiveValue, Phase, Source};
 
 impl Instance {
+    /// The hook sees only isolated files; ephemeral handles cannot escape into the activated instance.
+    pub(crate) fn migrate_data(
+        &mut self,
+        from: u32,
+        to: u32,
+        snapshot: Option<Snapshot>,
+    ) -> anyhow::Result<Option<Snapshot>> {
+        let checkpoint = self.store.data().roots.checkpoint();
+        self.store.data_mut().migrating = true;
+        let result = self.call(Message::Event(Event::Capability(
+            api::Notification::MigrateData {
+                from,
+                to,
+                snapshot: snapshot.clone(),
+            },
+        )));
+        self.store.data_mut().migrating = false;
+        self.store.data_mut().roots.release_since(checkpoint);
+        Ok(result?.snapshot.or(snapshot))
+    }
+    /// After the durable directory switch, file handles resolve against the committed scope rather than its copy.
+    pub(crate) fn retarget_data(&mut self, data: PathBuf) {
+        self.store.data_mut().data = data;
+    }
     /// Discovery is bounded by the normal fuel/deadline and cannot mutate files, processes or UI.
     pub(crate) fn prepare_language(
         &mut self,

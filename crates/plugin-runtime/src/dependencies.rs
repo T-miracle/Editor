@@ -21,6 +21,9 @@ pub use installer::InstallerPrompt;
 /// Progress reports preparation honestly; only the protocol client can report language-service readiness.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum InstallStage {
+    Migrating,
+    Committing,
+    Committed,
     Preparing,
     Downloading(String),
     Verifying(String),

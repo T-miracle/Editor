@@ -262,6 +262,20 @@ impl Package {
             (1024..=32 * 1024 * 1024).contains(&manifest.storage_limit),
             "Invalid storage quota"
         );
+        if let Some(format) = &manifest.data_format {
+            anyhow::ensure!(
+                manifest.protocol == 7
+                    && manifest.component.is_some()
+                    && format.version > 0
+                    && manifest.permissions.contains("storage")
+                    && manifest.api.as_ref().is_some_and(|api| api
+                        .required
+                        .contains_key("storage.private")
+                        && (!format.migration_hook
+                            || api.required.contains_key("storage.migration"))),
+                "Data formats require a private-storage component and negotiated migration hooks"
+            );
+        }
         anyhow::ensure!(
             manifest.component.is_some() || manifest.contributions.is_some(),
             "Package declares neither a component nor contributions"

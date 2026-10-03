@@ -49,6 +49,35 @@ impl State {
     fn handle(&mut self, input: api::Input) -> Result<api::Output, Failure> {
         match input {
             api::Input::Event {
+                event: api::Notification::MigrateData { from, to, snapshot },
+                ..
+            } => {
+                // This fixture owns the conversion rule; the host only supplies isolated file handles and versions.
+                let policy = api::guest::read_asset("migration-policy.txt")?;
+                if api::guest::open_workspace().is_ok() {
+                    return Err(Failure::new(
+                        ErrorCode::OperationFailed,
+                        "Migration escaped its private copy",
+                    ));
+                }
+                let data = api::guest::open_data()?;
+                if from != 0 {
+                    let previous = api::guest::read_file(&data, "value.txt")?;
+                    let value = format!("v{to}:{}", String::from_utf8_lossy(&previous));
+                    api::guest::write_file(&data, "value.txt", value.into_bytes())?;
+                }
+                if policy == b"fail" {
+                    return Err(Failure::new(
+                        ErrorCode::OperationFailed,
+                        "Fixture rejected migration after a staged write",
+                    ));
+                }
+                return Ok(api::Output {
+                    snapshot,
+                    ..Default::default()
+                });
+            }
+            api::Input::Event {
                 event: api::Notification::Command { id, .. },
                 ..
             } if id == "fault-spin" => {
@@ -175,6 +204,15 @@ impl State {
                 return Ok(api::Output::default());
             }
             api::Input::Activate => {
+                // A package asset selects the activation-failure scenario without a host-side fixture branch.
+                if api::guest::read_asset("migration-policy.txt")
+                    .is_ok_and(|policy| policy == b"activate-fail")
+                {
+                    return Err(Failure::new(
+                        ErrorCode::OperationFailed,
+                        "Fixture activation failed",
+                    ));
+                }
                 self.text = String::from_utf8(api::guest::read_asset("welcome.txt")?)
                     .map_err(|error| Failure::new(ErrorCode::OperationFailed, error.to_string()))?;
                 if !self.optional_available {

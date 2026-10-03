@@ -2,6 +2,7 @@
 mod capabilities;
 mod dependencies;
 pub use dependencies::{InstallControl, InstallStage, InstallerPrompt};
+mod data_transaction;
 mod document_events;
 mod editor_requests;
 pub mod faults;
@@ -18,6 +19,6 @@ mod plugin_services;
 mod process;
 mod toolchains;
 pub use instance::Instance;
-pub use manager::{Installed, Manager};
+pub use manager::{Installed, Manager, PreparedInstallation};
 pub use package::Package;
 pub use plugin_protocol;

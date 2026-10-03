@@ -27,6 +27,9 @@ pub mod bindings {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Manifest {
+    /// Opt-in private-data format; the host never interprets the plugin's business fields.
+    #[serde(default)]
+    pub data_format: Option<DataFormat>,
     /// Versioned plugin-to-plugin contracts, separate from native executable declarations.
     #[serde(default)]
     pub plugin_services: service::Declarations,
@@ -66,6 +69,15 @@ pub struct Manifest {
     pub commands: Vec<Command>,
     /// Maximum opaque persisted snapshot size, also bounded by the host quota.
     pub storage_limit: usize,
+}
+
+/// Version zero is reserved for a new scope; changed versions require an explicit WASM migration hook.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DataFormat {
+    pub version: u32,
+    #[serde(default)]
+    pub migration_hook: bool,
 }
 
 /// Dock and command contributions are data, not host-side feature branches.

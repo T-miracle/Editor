@@ -194,8 +194,12 @@ impl Worker {
                         let mut state = output.lock().unwrap();
                         if let Some(report) = &mut state.installation {
                             use plugin_runtime::InstallStage::*;
-                            report.cancellable = stage != Prepared;
+                            report.cancellable =
+                                !matches!(stage, Prepared | Migrating | Committing | Committed);
                             report.message = match stage {
+                                Migrating => "正在隔离副本中迁移插件数据…".into(),
+                                Committing => "正在提交插件版本和数据…".into(),
+                                Committed => "插件版本和数据已提交。".into(),
                                 Preparing => "正在准备依赖…".into(),
                                 Downloading(id) => format!("正在下载 / 读取依赖：{id}"),
                                 Verifying(id) => format!("正在验证 SHA-256：{id}"),

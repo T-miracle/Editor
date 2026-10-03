@@ -57,6 +57,22 @@ impl State {
             }
             let request: api::Request = serde_json::from_value(value)
                 .map_err(|error| Failure::new(ErrorCode::InvalidRequest, error.to_string()))?;
+            // A migration may not borrow workspace, editor, service or process authority from its normal grants.
+            if self.migrating
+                && !matches!(
+                    &request.operation,
+                    api::Operation::ReadAsset { .. }
+                        | api::Operation::OpenData
+                        | api::Operation::ReadFile { .. }
+                        | api::Operation::WriteFile { .. }
+                        | api::Operation::CloseResource { .. }
+                )
+            {
+                return Err(Failure::new(
+                    ErrorCode::PermissionDenied,
+                    "Migration has private-copy authority only",
+                ));
+            }
             // Discovery may read granted roots but cannot create side effects or subscriptions.
             if self.language_hook
                 && !matches!(
@@ -221,6 +237,14 @@ impl Instance {
         let completion: api::Completion = serde_json::from_str(payload)?;
         anyhow::ensure!(completion.id == id, "Plugin completion ID mismatch");
         let output = completion.result?;
+        anyhow::ensure!(
+            !self.store.data().migrating
+                || (output.views.is_empty()
+                    && output.configuration.is_none()
+                    && output.language_service.is_none()
+                    && output.service_reply.is_none()),
+            "Migration may return only an opaque snapshot"
+        );
         anyhow::ensure!(
             output.service_reply.is_none() || self.store.data().plugin_services.invoking,
             "Service results require an owning invocation"

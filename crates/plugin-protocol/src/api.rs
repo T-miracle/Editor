@@ -206,6 +206,12 @@ pub enum Input {
 /// Native UI notifications contain no legacy canvas or character-grid fields.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum Notification {
+    /// Only the isolated private-data root and package assets are available during this callback.
+    MigrateData {
+        from: u32,
+        to: u32,
+        snapshot: Option<crate::Snapshot>,
+    },
     Service(crate::service::Notification),
     /// An authorized preview receives the current unsaved text with the open-document identity/version.
     Preview {
