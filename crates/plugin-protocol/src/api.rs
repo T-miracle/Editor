@@ -316,15 +316,34 @@ pub struct DocumentChange {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum EditorOperation {
+    /// Clipboard calls are separately negotiated and authorized; they use the same asynchronous completion gate.
+    ReadClipboard,
+    WriteClipboard {
+        text: String,
+    },
+    /// Open an existing file below this instance's private data root without exposing its host layout.
+    OpenDataFile {
+        path: String,
+    },
     ReadSelection,
     ActiveDirectory,
-    SaveDocument { document: DocumentVersion },
-    SetPanelVisibility { panel: String, visible: bool },
+    SaveDocument {
+        document: DocumentVersion,
+    },
+    SetPanelVisibility {
+        panel: String,
+        visible: bool,
+    },
 }
 
 /// Values describe the actual document and revision observed or saved, rather than an acknowledgement.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum EditorValue {
+    Clipboard {
+        text: String,
+    },
+    /// An effect completed successfully without a document result.
+    Unit,
     Selection {
         document: DocumentVersion,
         text: String,

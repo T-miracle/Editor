@@ -6,11 +6,11 @@ SVG 预览插件使用 `protocol = 6`：清单面板声明 `position = "editor"`
 
 通用 `Paint::Svg { rect, clip, source }` 保留原有颜色与透明度；前面的绘图构成底层，SVG 可叠在棋盘上。主程序后台解析、按可见区域裁剪并缓存矢量图，UI 线程只提交图像；普通停靠插件不使用此接口。协议 1–5 继续兼容。
 
-终端插件 0.5.5 使用 `protocol = 5` 与 `Scene.controls`：画布负责字符网格，主程序提供独立的侧边 Tab 栏和共享原生菜单。侧边栏支持左右停靠、滚动、重命名、关闭、排序和宽度调整；选中项保留完整边框，内侧强调线及宽度拖动手柄随停靠侧改变，标签不使用悬停变色。菜单及面板标题命令菜单使用资源管理器同款卡片/条目封装。条目以稳定 ID 回传操作，配色和字体实时取自主题。宿主继续支持 protocol 1–4，兼容旧 protocol 3 插件的 `chrome` 字段；旧宿主拒绝 protocol 5 新包，避免把左侧布局错误显示为右侧。
+终端插件 0.6.0 使用 `protocol = 7` 和公开能力协议：普通 Row 组合 SideTabs 与 Canvas，画布负责字符网格，原生侧栏支持左右布局、滚动、重命名、关闭、排序和宽度调整。菜单使用共享原生控件，以稳定 ID 回传操作。主题、字体、滚动和输入均经通用 UI 契约传递。当前包安装与激活只接受协议 7；旧包保留数据并提示更新。
 
 插件可声明 `protocol = 2`，使用 `plugin_protocol::ui::Document/Node` 返回行列布局和原生控件树，宿主通过 gpui-base 实现布局、输入、焦点、滚动和模态弹窗。协议、事件、主题角色与限制见 [插件原生界面协议](../crates/plugin-protocol/UI.md)。该文档及 Rust 接口由主程序内嵌，并自动提供给插件构建。protocol 1 的画布终端继续兼容；示例插件 0.2.0 演示新接口。
 
-编辑器提供通用安装接口。终端和示例插件通过 WebAssembly Component Model 执行；Rust、TOML、HTML 和 JavaScript 是由宿主管理生命周期的声明式资源包。亮色与深色基础主题内置于编辑器，首次启动默认使用亮色主题。终端核心使用插件目录内的 Alacritty 0.26.0 WASM 适配版，元数据解析使用上游 `vte`。语言插件包携带 Tree-sitter WASM grammar；其他主题插件仍可携带主题和图标资源，由宿主验证并注册。
+编辑器提供通用安装接口。终端和示例插件通过 WebAssembly Component Model 执行；Rust 为声明式资源加可选 WASM 策略，TOML、HTML 和 JavaScript 是声明式资源包。亮色与深色基础主题内置于编辑器，首次启动默认使用亮色主题。终端核心直接依赖支持 WASM 的上游 `term-wm-vt100`，不在项目保留 vendor 副本。语言插件包携带 Tree-sitter WASM grammar；其他主题插件仍可携带主题和图标资源，由宿主验证并注册。
 
 ## 构建与安装
 
@@ -45,7 +45,7 @@ Rust、TOML、HTML 和 JavaScript 插件安装后才提供对应文件的语法�
 | `crates/plugin-runtime` | Wasmtime 隔离、受控资源句柄、安装事务、快照存储和插件生命周期 |
 | `crates/editor-app/src/extensions` | 通用 GPUI 绘制、原生输入法、控件与滚动条、停靠注册、权限与管理界面 |
 | `plugins/terminal` | Shell 配置、项目运行、Tab 与命名、输入协议、选择、VT 解析、网格、历史、主题和状态迁移 |
-| `plugins/terminal/src/emulator.rs` | 对接插件内 Alacritty 核心的应用适配：选择复制、查询响应、颜色和快照 |
+| `plugins/terminal/src/emulator.rs` | 对接上游 VT100 核心的插件适配：选择复制、查询响应、颜色和快照 |
 | `plugins/example` | 不申请系统权限的计数器与笔记，用于验证宿主的通用性 |
 
 主程序把公开接口编入 `editor-app.exe`。独立插件项目声明带 `guest` feature 的 `plugin-protocol` 版本依赖，并通过 `editor-app.exe --plugin-cargo <插件/Cargo.toml> build --target wasm32-wasip2 --release` 编译。编辑器按接口内容摘要管理用户缓存，并为本次 Cargo 调用注入依赖路径；Rust 消息类型和 WIT 绑定都来自这份缓存。项目不需要 `plugins/sdk`，发行目录不再附带 `sdk/`，插件也不引用 `crates/` 源码。相同入口支持 `check` 和 `test`；开发机需要 Rust/Cargo，使用插件的用户不需要。安装包只包含编译后的 `.wasm`、清单和资源。运行时主程序实现 WIT 的 `host.request` 导入。显式 `--export-plugin-sdk` 仅供其他工具链或接口检查使用。
@@ -80,7 +80,7 @@ WIT 世界为 `editor:plugin/plugin@0.1.0`，只有宿主 `request` 导入与插
 
 宿主功能可调用 `EditorApp::invoke_plugin_command(plugin_id, command_id, arguments, window, cx)`，后台 worker 通过 `Manager::invoke_command` 进入插件串行事件循环。参数是插件自行定义的 JSON，主程序验证运行状态、清单中的命令及参数容量，不依赖终端实现。`Event::Command.arguments` 为可选字段，旧宿主和旧插件仍可使用无参数命令。调用不会自动安装、启用插件或扩大权限。
 
-终端 0.5.3 接收 `terminal.new`、`terminal.run` 的 `name`、`cwd`、`profile` 参数；运行命令还可携带 `command`，保存文件后创建独立会话并执行。普通新建统一使用工具名，传入名称时使用指定名称。详见[终端接口说明](../plugins/terminal/README.md#宿主主动调用)。
+终端 0.6.0 接收 `terminal.new`、`terminal.run` 的 `name`、`cwd`、`profile` 参数；运行命令还可携带 `command`，收到类型化保存成功结果后创建独立会话并执行。普通新建统一使用工具名，传入名称时使用指定名称。详见[终端接口说明](../plugins/terminal/README.md)。
 
 1. 读取并验证本机包，取得用户授权；版本目录按包摘要保存。
 2. 向旧版请求快照。宿主只认识 `schema + data`，不解释内部字段。
@@ -88,7 +88,7 @@ WIT 世界为 `editor:plugin/plugin@0.1.0`，只有宿主 `request` 导入与插
 4. 准备成功后原子保存快照，停止旧版拥有的程序，再调用新版 `Activate`。
 5. 启用成功才提交安装记录。准备失败时旧版继续运行；切换后失败则加载旧版及原快照。已停止的程序无法恢复进程内存，旧版会重新启动程序。
 
-终端快照保留 Tab 名称、顺序、当前 Tab、Shell 配置、工作目录、主题和有容量上限的带颜色旧输出。还原时旧输出只送入 Alacritty 解析器，**不送入 Shell 输入**；启动全新的 Shell，不自动重跑原命令或还原临时变量。PowerShell 默认配置通过插件内的 Shell Integration 跟踪 `cd` 后的目录；自定义命令启动模式与未提供目录元数据的 Shell 保留其启动目录。
+终端快照保留 Tab 名称、顺序、当前 Tab、Shell 配置、工作目录、主题和有容量上限的带颜色旧输出。还原时旧输出只送入 VT 解析器，**不送入 Shell 输入**；仍在运行的逻辑会话启动全新 Shell，不自动重跑原命令或还原临时变量，已退出会话只恢复历史。PowerShell 默认配置通过插件内的 Shell Integration 跟踪 `cd` 后的目录；自定义命令启动模式与未提供目录元数据的 Shell 保留其启动目录。
 
 快照按工作区隔离，每三秒检查保存一次，正常退出时等待最后一次保存完成。崩溃时使用最后一次成功的快照。终端历史受 `history` 行数与总输出字节限制约束，超额舍弃最旧内容。宿主以临时文件和原子替换保存数据。失败或恶意插件仍可停用和卸载；取快照失败则保留上次有效数据。
 
@@ -115,10 +115,10 @@ cargo check --workspace
 
 当前已在 Windows 上验证；其他系统的原生 PTY 路径尚未做实际运行验证。图片协议、kitty 扩展键盘协议、在线市场和现有语言/主题插件迁移不包含在此次终端先行版本中。
 
-## 终端内核升级（0.3.0）
+## 终端公开能力与上游内核（0.6.0）
 
-终端包继续编译为 `wasm32-wasip2`，`Cargo.lock` 固定 Alacritty 适配版与 `vte` 的依赖版本。安装/更新 `dist/plugins/terminal.zip` 即可；无需更换插件协议。旧版 schema 1 的带颜色输出快照继续可读，快照还原不向 Shell 重放输入。
+终端包继续编译为 `wasm32-wasip2`，通过宿主导出的 SDK 独立构建。`Cargo.lock` 固定上游 `term-wm-vt100` 的 Git 修订与依赖，移除本地 Alacritty vendor。安装/更新 `dist/plugins/terminal.zip` 即可；协议 7 能力协商先于激活。旧版 schema 1 的带颜色输出快照继续可读，schema 2 额外保存已退出状态；快照还原不向 Shell 重放输入。
 
-采用 Alacritty 的字符样式、屏幕、滚动历史和模式语义；应用适配保留中文宽字符、真彩色、选择复制、应用方向键、括号粘贴、鼠标报告、焦点报告及常用状态/颜色查询。历史配置限制立即约束滚动与快照，新建会话时按配置分配历史容量。
+上游核心管理字符样式、屏幕、滚动历史、换行重排和模式；插件适配保留中文宽字符、真彩色、选择复制、应用方向键、括号粘贴、鼠标报告、焦点报告及常用状态/颜色查询。历史配置限制立即约束滚动与快照。进程、剪贴板、保存与打开私有设置文件均通过类型化公开能力；配置省略 Shell 时按宿主操作系统补默认值。
 
-上游项目：<https://github.com/alacritty/alacritty>、<https://github.com/alacritty/vte>。Alacritty 适配版与许可位于 `plugins/terminal/vendor/alacritty_terminal`，许可随插件包分发。
+上游项目：[term-wm-vt100](https://github.com/jzombie/term-wm-vt100)、[vte](https://github.com/alacritty/vte)。许可位于 `THIRD_PARTY_LICENSES/term-wm-vt100-LICENSE` 和 `THIRD_PARTY_LICENSES/vte-LICENSE-APACHE`，随插件包分发。验收见[终端迁移记录](specs/plugin-api-terminal-migration-verification.md)。

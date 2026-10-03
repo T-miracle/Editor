@@ -1,40 +1,26 @@
-//! The terminal guest owns Alacritty's VT parser, cells, modes and scrollback.
-use alacritty_terminal::Term;
-use alacritty_terminal::event::{Event, EventListener, WindowSize};
-use alacritty_terminal::grid::{Dimensions, Grid, GridCell, Scroll};
-use alacritty_terminal::index::{Column, Line, Point};
-use alacritty_terminal::term::cell::{Cell, Flags};
-use alacritty_terminal::term::{Config, TermMode};
-use alacritty_terminal::vte::ansi::{
-    Color as CoreColor, CursorShape, CursorStyle, NamedColor, Processor, Rgb,
-};
+//! Upstream VT parsing and reflow run entirely in the WASM guest.
 use serde::{Deserialize, Serialize};
 use std::cell::{RefCell, RefMut};
-use std::collections::VecDeque;
 use std::rc::Rc;
+mod replies;
+mod selection;
+mod snapshot;
 
-/// Color representation kept at the scene/snapshot boundary.
+/// Palette-independent colors shared by painting and saved transcripts.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum Color {
     Default,
     Idx(u16),
     Rgb(u8, u8, u8),
 }
-
-/// Convert Alacritty's named, indexed and true colors to a palette-independent value.
-fn color(value: CoreColor) -> Color {
+fn color(value: vt100::Color) -> Color {
     match value {
-        CoreColor::Spec(rgb) => Color::Rgb(rgb.r, rgb.g, rgb.b),
-        CoreColor::Indexed(index) => Color::Idx(index as u16),
-        CoreColor::Named(NamedColor::Foreground | NamedColor::Background | NamedColor::Cursor) => {
-            Color::Default
-        }
-        // Keep 259..268 intact: clamping named dim colors to 255 made them pale gray.
-        CoreColor::Named(named) => Color::Idx(named as u16),
+        vt100::Color::Default => Color::Default,
+        vt100::Color::Idx(i) => Color::Idx(i.into()),
+        vt100::Color::Rgb(r, g, b) => Color::Rgb(r, g, b),
     }
 }
-
-/// Host-facing answers and theme values, shared with Alacritty's event callback.
+/// Guest-owned responses and dynamic appearance; no native authority enters the parser.
 #[derive(Default)]
 pub(super) struct Replies {
     pub bytes: Vec<u8>,
@@ -42,66 +28,9 @@ pub(super) struct Replies {
     pub colors: std::collections::BTreeMap<usize, u32>,
     pub cell_size: (u16, u16),
     pub grid_size: (u16, u16),
+    focus: bool,
+    cursor: u16,
 }
-
-/// Convert parser events into PTY replies without giving the WASM guest direct OS access.
-#[derive(Clone)]
-struct Listener(Rc<RefCell<Replies>>);
-impl EventListener for Listener {
-    fn send_event(&self, event: Event) {
-        let mut replies = self.0.borrow_mut();
-        match event {
-            Event::PtyWrite(text) => replies.bytes.extend_from_slice(text.as_bytes()),
-            Event::ColorRequest(index, format) => {
-                let rgb = replies
-                    .colors
-                    .get(&index)
-                    .copied()
-                    .or_else(|| replies.palette.get(index).copied())
-                    .unwrap_or(0);
-                replies.bytes.extend_from_slice(
-                    format(Rgb {
-                        r: (rgb >> 16) as u8,
-                        g: (rgb >> 8) as u8,
-                        b: rgb as u8,
-                    })
-                    .as_bytes(),
-                );
-            }
-            Event::TextAreaSizeRequest(format) => {
-                let (cell_width, cell_height) = replies.cell_size;
-                let (num_lines, num_cols) = replies.grid_size;
-                let size = WindowSize {
-                    num_lines,
-                    num_cols,
-                    cell_width,
-                    cell_height,
-                };
-                replies.bytes.extend_from_slice(format(size).as_bytes());
-            }
-            _ => {}
-        }
-    }
-}
-
-/// Alacritty accepts any type implementing its generic viewport dimensions.
-struct Size {
-    rows: usize,
-    cols: usize,
-}
-impl Dimensions for Size {
-    fn total_lines(&self) -> usize {
-        self.rows
-    }
-    fn screen_lines(&self) -> usize {
-        self.rows
-    }
-    fn columns(&self) -> usize {
-        self.cols
-    }
-}
-
-/// Mouse modes are translated once for the plugin interaction layer.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(super) enum MouseProtocolMode {
     None,
@@ -115,62 +44,55 @@ pub(super) enum MouseProtocolEncoding {
     Sgr,
 }
 
-/// Read-only viewport over Alacritty's grid, including a scrolled history region.
+/// Rendering borrows the live viewport. Historical selection lazily clones once, never per cell.
 pub(super) struct Screen<'a> {
-    grid: &'a Grid<Cell>,
-    mode: TermMode,
+    view: &'a vt100::Screen,
+    history: RefCell<Option<vt100::Screen>>,
 }
-impl<'a> Screen<'a> {
-    pub(super) fn size(&self) -> (u16, u16) {
-        (self.grid.screen_lines() as u16, self.grid.columns() as u16)
+impl Screen<'_> {
+    pub fn size(&self) -> (u16, u16) {
+        self.view.size()
     }
-    pub(super) fn scrollback(&self) -> usize {
-        self.grid.display_offset()
+    pub fn scrollback(&self) -> usize {
+        self.view.scrollback()
     }
-    pub(super) fn alternate_screen(&self) -> bool {
-        self.mode.contains(TermMode::ALT_SCREEN)
+    pub fn alternate_screen(&self) -> bool {
+        self.view.alternate_screen()
     }
-    pub(super) fn application_cursor(&self) -> bool {
-        self.mode.contains(TermMode::APP_CURSOR)
+    pub fn application_cursor(&self) -> bool {
+        self.view.application_cursor()
     }
-    pub(super) fn bracketed_paste(&self) -> bool {
-        self.mode.contains(TermMode::BRACKETED_PASTE)
+    pub fn bracketed_paste(&self) -> bool {
+        self.view.bracketed_paste()
     }
-    pub(super) fn hide_cursor(&self) -> bool {
-        !self.mode.contains(TermMode::SHOW_CURSOR)
+    pub fn hide_cursor(&self) -> bool {
+        self.view.hide_cursor()
     }
-    pub(super) fn cursor_position(&self) -> (u16, u16) {
-        (
-            self.grid.cursor.point.line.0.max(0) as u16,
-            self.grid.cursor.point.column.0 as u16,
-        )
+    pub fn cursor_position(&self) -> (u16, u16) {
+        let (r, c) = self.view.cursor_position();
+        (r, c.min(self.size().1 - 1))
     }
-    pub(super) fn mouse_protocol_mode(&self) -> MouseProtocolMode {
-        if self.mode.contains(TermMode::MOUSE_MOTION) {
-            MouseProtocolMode::AnyMotion
-        } else if self.mode.contains(TermMode::MOUSE_DRAG) {
-            MouseProtocolMode::ButtonMotion
-        } else if self.mode.contains(TermMode::MOUSE_REPORT_CLICK) {
-            MouseProtocolMode::Press
-        } else {
-            MouseProtocolMode::None
+    pub fn mouse_protocol_mode(&self) -> MouseProtocolMode {
+        match self.view.mouse_protocol_mode() {
+            vt100::MouseProtocolMode::None => MouseProtocolMode::None,
+            vt100::MouseProtocolMode::Press | vt100::MouseProtocolMode::PressRelease => {
+                MouseProtocolMode::Press
+            }
+            vt100::MouseProtocolMode::ButtonMotion => MouseProtocolMode::ButtonMotion,
+            vt100::MouseProtocolMode::AnyMotion => MouseProtocolMode::AnyMotion,
         }
     }
-    pub(super) fn mouse_protocol_encoding(&self) -> MouseProtocolEncoding {
-        if self.mode.contains(TermMode::SGR_MOUSE) {
-            MouseProtocolEncoding::Sgr
-        } else {
-            MouseProtocolEncoding::Legacy
+    pub fn mouse_protocol_encoding(&self) -> MouseProtocolEncoding {
+        match self.view.mouse_protocol_encoding() {
+            vt100::MouseProtocolEncoding::Sgr => MouseProtocolEncoding::Sgr,
+            _ => MouseProtocolEncoding::Legacy,
         }
     }
-    pub(super) fn cell(&self, row: u16, col: u16) -> Option<CellView<'a>> {
-        if row as usize >= self.grid.screen_lines() {
-            return None;
-        }
-        self.cell_line(row as i32 - self.scrollback() as i32, col)
+    pub fn cell(&self, row: u16, col: u16) -> Option<CellView> {
+        self.view.cell(row, col).cloned().map(CellView)
     }
-    /// Exclude unused terminal columns while retaining spaces inside actual line content.
-    pub(super) fn content_end(&self, row: u16) -> u16 {
+    /// Padding is excluded; spaces between printed glyphs remain selectable.
+    pub fn content_end(&self, row: u16) -> u16 {
         (0..self.size().1)
             .rev()
             .find_map(|col| {
@@ -181,97 +103,91 @@ impl<'a> Screen<'a> {
             .unwrap_or(0)
             .min(self.size().1)
     }
-    pub(super) fn cell_line(&self, line: i32, col: u16) -> Option<CellView<'a>> {
-        if col as usize >= self.grid.columns()
-            || line < -(self.grid.history_size() as i32)
-            || line >= self.grid.screen_lines() as i32
-        {
+    pub fn cell_line(&self, line: i32, col: u16) -> Option<CellView> {
+        self.with_line(line, |screen, row| {
+            screen.cell(row, col).cloned().map(CellView)
+        })
+        .flatten()
+    }
+    pub fn row_wrapped(&self, line: i32) -> bool {
+        self.with_line(line, |screen, row| screen.row_wrapped(row))
+            .unwrap_or(false)
+    }
+    /// A separate historical viewport avoids mutating the screen displayed to the user.
+    fn with_line<T>(&self, line: i32, read: impl FnOnce(&vt100::Screen, u16) -> T) -> Option<T> {
+        let row = line + self.scrollback() as i32;
+        if row >= 0 && row < self.size().0 as i32 {
+            return Some(read(self.view, row as u16));
+        }
+        if line >= self.size().0 as i32 {
             return None;
         }
-        Some(CellView(
-            &self.grid[Point::new(Line(line), Column(col as usize))],
-        ))
-    }
-    pub(super) fn row_wrapped(&self, line: i32) -> bool {
-        self.cell_line(line, self.size().1.saturating_sub(1))
-            .is_some_and(|cell| cell.0.flags.contains(Flags::WRAPLINE))
+        let mut history = self.history.borrow_mut();
+        let history = history.get_or_insert_with(|| self.view.clone());
+        let offset = (-line).max(0) as usize;
+        history.set_scrollback(offset);
+        if history.scrollback() != offset {
+            return None;
+        }
+        Some(read(history, line.max(0) as u16))
     }
     #[cfg(test)]
-    pub(super) fn contents(&self) -> String {
-        (0..self.size().0)
-            .map(|row| {
-                let mut text = String::new();
-                for col in 0..self.size().1 {
-                    if let Some(cell) = self.cell(row, col) {
-                        if !cell.is_wide_continuation() {
-                            text.push_str(&cell.contents());
-                        }
-                    }
-                }
-                text.trim_end().to_owned()
-            })
+    pub fn contents(&self) -> String {
+        self.view
+            .rows(0, self.size().1)
             .collect::<Vec<_>>()
             .join("\n")
     }
 }
-
-/// Expose cell styling without moving rendering policy into Alacritty.
-pub(super) struct CellView<'a>(&'a Cell);
-impl CellView<'_> {
-    pub(super) fn contents(&self) -> String {
-        let mut text = self.0.c.to_string();
-        if let Some(extra) = self.0.zerowidth() {
-            text.extend(extra.iter());
-        }
-        text
-    }
-    pub(super) fn has_contents(&self) -> bool {
-        self.0.c != ' ' || self.0.zerowidth().is_some_and(|chars| !chars.is_empty())
-    }
-    pub(super) fn is_wide_continuation(&self) -> bool {
-        self.0.flags.contains(Flags::WIDE_CHAR_SPACER)
-    }
-    pub(super) fn is_wide(&self) -> bool {
-        self.0.flags.contains(Flags::WIDE_CHAR)
-    }
-    pub(super) fn fgcolor(&self) -> Color {
-        let foreground = color(self.0.fg);
-        // The terminal core stores SGR intensity as flags; resolve named colors for painting.
-        match foreground {
-            Color::Default if self.0.flags.contains(Flags::DIM) => Color::Idx(268),
-            Color::Default if self.0.flags.contains(Flags::BOLD) => Color::Idx(267),
-            Color::Idx(index @ 0..=7) if self.0.flags.contains(Flags::DIM) => {
-                Color::Idx(index + 259)
-            }
-            Color::Idx(index @ 0..=7) if self.0.flags.contains(Flags::BOLD) => {
-                Color::Idx(index + 8)
-            }
-            _ => foreground,
+/// Owned cell views let historical lookup release its temporary viewport borrow.
+pub(super) struct CellView(vt100::Cell);
+impl CellView {
+    pub fn contents(&self) -> String {
+        if self.0.contents().is_empty() {
+            " ".into()
+        } else {
+            self.0.contents().into()
         }
     }
-    pub(super) fn bgcolor(&self) -> Color {
-        color(self.0.bg)
+    pub fn has_contents(&self) -> bool {
+        !self.0.contents().trim_end_matches(' ').is_empty()
     }
-    pub(super) fn bold(&self) -> bool {
-        self.0.flags.contains(Flags::BOLD)
+    pub fn is_wide_continuation(&self) -> bool {
+        self.0.is_wide_continuation()
     }
-    pub(super) fn underline(&self) -> bool {
-        self.0.flags.intersects(Flags::ALL_UNDERLINES)
+    pub fn is_wide(&self) -> bool {
+        self.0.is_wide()
     }
-    pub(super) fn inverse(&self) -> bool {
-        self.0.flags.contains(Flags::INVERSE)
+    pub fn fgcolor(&self) -> Color {
+        match color(self.0.fgcolor()) {
+            Color::Default if self.0.dim() => Color::Idx(268),
+            Color::Default if self.0.bold() => Color::Idx(267),
+            Color::Idx(i @ 0..=7) if self.0.dim() => Color::Idx(i + 259),
+            Color::Idx(i @ 0..=7) if self.0.bold() => Color::Idx(i + 8),
+            value => value,
+        }
+    }
+    pub fn bgcolor(&self) -> Color {
+        color(self.0.bgcolor())
+    }
+    pub fn bold(&self) -> bool {
+        self.0.bold()
+    }
+    pub fn underline(&self) -> bool {
+        self.0.underline()
+    }
+    pub fn inverse(&self) -> bool {
+        self.0.inverse()
     }
 }
-
-/// Selection points use live viewport coordinates, so scrolling does not move the selection.
+/// Selection anchors remain stable as the user scrolls the viewport.
 #[derive(Clone, Copy)]
 struct Selection {
     anchor: (i32, u16),
     end: (i32, u16),
     clicks: u8,
 }
-
-/// Presentation metadata supplements ANSI text without persisting a running shell's modes.
+/// Schema-one metadata remains readable; new payloads carry precise caret state and soft wraps.
 #[derive(Serialize, Deserialize)]
 pub(super) struct DisplayState {
     rows: u16,
@@ -279,101 +195,89 @@ pub(super) struct DisplayState {
     cursor: (u16, u16),
     wrap_pending: bool,
     scrollback: usize,
-    /// History-relative row numbers distinguish soft wraps from real line breaks.
     wrapped_lines: Vec<i32>,
+    #[serde(default)]
+    cursor_bytes: Option<String>,
+    #[serde(default)]
+    soft_wraps: bool,
 }
 impl DisplayState {
-    /// Bound user-controlled dimensions before allocating an emulator on restore.
-    pub(super) fn size(&self) -> (u16, u16) {
+    pub fn size(&self) -> (u16, u16) {
         (self.rows.clamp(1, 500), self.columns.clamp(2, 1000))
     }
 }
-
-/// Single terminal session: upstream parser and grid plus editor-facing presentation state.
+/// Upstream owns both screen buffers; the guest owns selection and saved presentation state.
 pub(super) struct Emulator {
-    term: Term<Listener>,
-    parser: Processor,
+    parser: vt100::Parser<replies::Listener>,
     replies: Rc<RefCell<Replies>>,
+    limit: usize,
+    /// Cached after mutations so painting never clones an entire scrollback buffer.
+    history_len: usize,
     selection: Option<Selection>,
-    /// Only a new Windows PTY's first output can be its inherited-cursor bootstrap query.
     bootstrap: Option<Vec<u8>>,
-    /// Synchronize the parser with the inherited line origin when real process output arrives.
     bootstrap_line_start: bool,
 }
 impl Emulator {
-    /// Construct an Alacritty screen with bounded history.
     pub fn new(rows: u16, cols: u16, limit: usize) -> Self {
         let replies = Rc::new(RefCell::new(Replies {
             palette: vec![0; 269],
             cell_size: (8, 21),
             grid_size: (rows, cols),
+            cursor: 5,
             ..Replies::default()
         }));
-        let config = Config {
-            scrolling_history: limit,
-            // A beam is the plugin default; explicit Shell/TUI cursor sequences still win.
-            default_cursor_style: CursorStyle {
-                shape: CursorShape::Beam,
-                blinking: false,
-            },
-            ..Config::default()
-        };
-        let size = Size {
-            rows: rows.max(1) as usize,
-            cols: cols.max(2) as usize,
-        };
         Self {
-            term: Term::new(config, &size, Listener(replies.clone())),
-            parser: Processor::new(),
+            parser: vt100::Parser::new_with_callbacks(
+                rows.max(1),
+                cols.max(2),
+                limit,
+                replies::Listener(replies.clone()),
+            ),
             replies,
+            limit,
+            history_len: 0,
             selection: None,
             bootstrap: None,
             bootstrap_line_start: false,
         }
     }
-    /// Borrow the active viewport for rendering and input mode checks.
     pub fn screen(&self) -> Screen<'_> {
         Screen {
-            grid: self.term.grid(),
-            mode: *self.term.mode(),
+            view: self.parser.screen(),
+            history: RefCell::new(None),
         }
     }
-    /// Set cell dimensions or drain replies from the event loop.
     pub fn replies_mut(&self) -> RefMut<'_, Replies> {
         self.replies.borrow_mut()
     }
-    /// Reuse a saved empty default prompt, while keeping pending input and task output intact.
+    /// ConPTY may reuse an empty saved prompt, never pending input.
     pub fn begin_process(&mut self, windows: bool, prompt: Option<&str>) {
-        let grid = self.term.grid();
+        let screen = self.parser.screen();
         self.bootstrap = (windows
-            && prompt
-                .is_some_and(|prompt| grid_line_text(grid, grid.cursor.point.line.0) == prompt))
+            && prompt.is_some_and(|prompt| {
+                line_text(screen, screen.cursor_position().0).trim_end() == prompt.trim_end()
+            }))
         .then(Vec::new);
         self.bootstrap_line_start = false;
     }
-    /// Feed PTY output to Alacritty; no output is sent back as shell input.
+    /// Only the first ConPTY query is special; ordinary output stays in the upstream parser.
     pub fn process(&mut self, bytes: &[u8]) {
-        // portable-pty enables ConPTY cursor inheritance. A saved prompt's final column makes
-        // PowerShell insert a newline. Startup can look correct until the first height redraw
-        // clears the saved prompt row and exposes the gap in the restored command transcript.
-        // Answer only this initial query with column one; normal application DSR stays upstream.
-        const INHERIT_QUERY: &[u8] = b"\x1b[6n";
+        const QUERY: &[u8] = b"\x1b[6n";
         let buffered = if let Some(mut initial) = self.bootstrap.take() {
             initial.extend_from_slice(bytes);
-            if initial.len() < INHERIT_QUERY.len() && INHERIT_QUERY.starts_with(&initial) {
+            if initial.len() < QUERY.len() && QUERY.starts_with(&initial) {
                 self.bootstrap = Some(initial);
                 return;
             }
-            if initial.starts_with(INHERIT_QUERY) {
+            if initial.starts_with(QUERY) {
                 let row = self.screen().cursor_position().0 + 1;
                 self.replies
                     .borrow_mut()
                     .bytes
                     .extend_from_slice(format!("\x1b[{row};1R").as_bytes());
                 self.bootstrap_line_start = true;
-                Some(initial.split_off(INHERIT_QUERY.len()))
+                Some(initial.split_off(QUERY.len()))
             } else {
-                // Shells without this bootstrap keep all original bytes, including split ESCs.
                 Some(initial)
             }
         } else {
@@ -381,380 +285,120 @@ impl Emulator {
         };
         let bytes = buffered.as_deref().unwrap_or(bytes);
         if self.bootstrap_line_start && !bytes.is_empty() {
-            // ConPTY may emit the prompt without CUP when no resize redraw is needed. Match
-            // its reported column before parsing output, but keep the saved caret until then.
-            let grid = self.term.grid_mut();
-            grid.cursor.point.column = Column(0);
-            grid.cursor.input_needs_wrap = false;
+            self.parser.process(b"\r");
             self.bootstrap_line_start = false;
         }
-        self.parser.advance(&mut self.term, bytes);
-        // Keep OSC palette changes available to subsequent color-query callbacks.
-        let mut replies = self.replies.borrow_mut();
-        replies.colors.clear();
-        for index in 0..269 {
-            if let Some(rgb) = self.term.colors()[index] {
-                replies.colors.insert(
-                    index,
-                    (rgb.r as u32) << 16 | (rgb.g as u32) << 8 | rgb.b as u32,
-                );
-            }
-        }
+        self.parser.process(bytes);
+        self.refresh_history();
         self.selection = None;
     }
-    /// Replay display data locally and restore its caret without inserting a separator or newline.
-    pub fn restore(&mut self, output: &str, display: Option<&DisplayState>) {
-        if let Some(display) = display {
-            self.process(output.as_bytes());
-            let grid = self.term.primary_grid_mut();
-            let rows = grid.screen_lines();
-            let columns = grid.columns();
-            grid.cursor.point = Point::new(
-                Line(i32::from(display.cursor.0).min(rows as i32 - 1)),
-                Column(usize::from(display.cursor.1).min(columns - 1)),
-            );
-            grid.cursor.input_needs_wrap = display.wrap_pending;
-            // ANSI replay uses hard breaks for exact rows; restore their original reflow flags.
-            for &line in &display.wrapped_lines {
-                if line >= -(grid.history_size() as i32) && line < rows as i32 {
-                    grid[Point::new(Line(line), Column(columns - 1))]
-                        .flags
-                        .insert(Flags::WRAPLINE);
-                }
-            }
-            self.set_scrollback(display.scrollback.min(self.history()));
-        } else {
-            // Legacy snapshots added a writer newline and a generated restoration separator.
-            // Remove only that exact legacy row, leaving user output and internal breaks intact.
-            let marker = "\x1b[0m\x1b[0m--- restored session; new shell ---\x1b[0m\r\n";
-            let output = output
-                .replace(&format!("\x1b[0m\r\n{marker}"), "")
-                .replace(marker, "");
-            self.process(output.strip_suffix("\r\n").unwrap_or(&output).as_bytes());
-        }
-        // A snapshot is never allowed to issue terminal query responses to the new process.
-        self.replies.borrow_mut().bytes.clear();
-    }
-    /// Migrate the old startup artifact only between two identical empty default prompts.
-    pub fn repair_legacy_prompt_gap(&mut self, prompt: &str) {
-        let grid = self.term.primary_grid();
-        let cursor = grid.cursor.clone();
-        let row = cursor.point.line.0;
-        // Never compact printed commands, colored blank output, wrapped prompts or later content.
-        if row <= 1
-            || grid_line_text(grid, row) != prompt
-            || grid[Line(row)][Column(grid.columns() - 1)]
-                .flags
-                .contains(Flags::WRAPLINE)
-            || (row + 1..grid.screen_lines() as i32).any(|line| snapshot_line_end(grid, line) > 0)
-        {
-            return;
-        }
-        let Some(previous) = (0..row)
-            .rev()
-            .find(|&line| snapshot_line_end(grid, line) > 0)
-        else {
-            return;
-        };
-        let gap = row - previous - 1;
-        if gap == 0
-            || grid_line_text(grid, previous) != prompt
-            || grid[Line(previous)][Column(grid.columns() - 1)]
-                .flags
-                .contains(Flags::WRAPLINE)
-        {
-            return;
-        }
-        let offset = grid.display_offset();
-        self.process(format!("\x1b[{};1H\x1b[{gap}M", previous + 2).as_bytes());
-        let grid = self.term.primary_grid_mut();
-        grid.cursor = cursor;
-        grid.cursor.point.line -= gap;
-        self.set_scrollback(offset.min(self.history()));
-    }
-    /// Resize the emulator grid without introducing a line of shell input.
+    /// Reflow primary lines upstream; full-screen programs keep absolute coordinates.
     pub fn resize(&mut self, rows: u16, cols: u16) {
-        self.term.resize(Size {
-            rows: rows.max(1) as usize,
-            cols: cols.max(2) as usize,
-        });
+        self.parser.screen_mut().set_size(rows.max(1), cols.max(2));
+        self.refresh_history();
         self.replies.borrow_mut().grid_size = (rows, cols);
         self.selection = None;
     }
-    /// Return real primary history, excluding alternate-screen contents.
     pub fn history(&self) -> usize {
         if self.screen().alternate_screen() {
+            return 0;
+        }
+        self.history_len
+    }
+    pub fn scroll(&mut self, delta: i32) {
+        self.set_scrollback((self.screen().scrollback() as i64 + i64::from(delta)).max(0) as usize);
+    }
+    pub fn set_scrollback(&mut self, offset: usize) {
+        self.parser.screen_mut().set_scrollback(offset);
+    }
+    /// Replace screen data while retaining split escape sequences in the live parser.
+    pub fn set_history_limit(&mut self, limit: usize) {
+        if self.limit == limit {
+            return;
+        }
+        self.replace_history(limit, false);
+        self.limit = limit;
+    }
+    pub fn clear_history(&mut self) {
+        self.replace_history(self.limit, true);
+        self.selection = None;
+    }
+    /// Clearing both buffers preserves interactive input modes and process identity.
+    pub fn clear_buffer(&mut self) {
+        let (rows, cols) = self.screen().size();
+        let alternate = self.screen().alternate_screen();
+        let modes = self.parser.screen().input_mode_formatted();
+        let mut blank = vt100::Parser::new(rows, cols, self.limit);
+        blank.process(&modes);
+        if alternate {
+            blank.process(b"\x1b[?1049h");
+        }
+        *self.parser.screen_mut() = blank.screen().clone();
+        self.selection = None;
+        self.refresh_history();
+    }
+    /// Temporary parsing changes history capacity without resetting live parsing or alternate output.
+    fn replace_history(&mut self, limit: usize, clear: bool) {
+        let primary = primary_screen(self.parser.screen());
+        let (rows, cols) = primary.size();
+        let history = if clear {
             0
         } else {
-            self.term.grid().history_size()
-        }
-    }
-    /// Scroll toward older output for positive deltas.
-    pub fn scroll(&mut self, delta: i32) {
-        self.term.scroll_display(Scroll::Delta(delta));
-    }
-    /// Set an absolute history offset for the native scrollbar.
-    pub fn set_scrollback(&mut self, offset: usize) {
-        let delta = offset as i32 - self.term.grid().display_offset() as i32;
-        self.scroll(delta);
-    }
-    /// Apply the plugin-configured scrollback cap to the primary grid.
-    pub fn set_history_limit(&mut self, limit: usize) {
-        self.term.primary_grid_mut().update_history(limit);
-    }
-    /// Remove old lines without erasing the visible terminal screen.
-    pub fn clear_history(&mut self) {
-        self.term.primary_grid_mut().clear_history();
-        self.selection = None;
-    }
-    /// Erase current and primary buffers while retaining the live process and its input modes.
-    pub fn clear_buffer(&mut self) {
-        self.term.grid_mut().reset::<CoreColor>();
-        if self.screen().alternate_screen() {
-            self.term.primary_grid_mut().reset::<CoreColor>();
-        }
-        self.selection = None;
-    }
-    /// Begin character, word or line selection.
-    pub fn select(&mut self, row: u16, col: u16, clicks: u8) {
-        let point = (row as i32 - self.screen().scrollback() as i32, col);
-        self.selection = Some(Selection {
-            anchor: point,
-            end: point,
-            clicks,
-        });
-    }
-    /// A press outside printed content removes an old selection without creating a new one.
-    pub fn clear_selection(&mut self) {
-        self.selection = None;
-    }
-    /// Extend a selection while preserving its history-relative anchor.
-    pub fn extend_selection(&mut self, row: u16, col: u16) {
-        let offset = self.screen().scrollback() as i32;
-        if let Some(selection) = &mut self.selection {
-            selection.end = (row as i32 - offset, col);
-        }
-    }
-    /// Expand double- and triple-click selections around words and full lines.
-    fn selection_bounds(&self) -> Option<((i32, u16), (i32, u16))> {
-        let selection = self.selection?;
-        let (mut start, mut end) = if selection.anchor <= selection.end {
-            (selection.anchor, selection.end)
-        } else {
-            (selection.end, selection.anchor)
+            history_size(&primary).min(limit)
         };
-        let screen = self.screen();
-        let cols = screen.size().1;
-        if selection.clicks >= 3 {
-            start.1 = 0;
-            end.1 = cols - 1;
-        } else if selection.clicks == 2 {
-            for (point, left) in [(&mut start, true), (&mut end, false)] {
-                let word = |col| {
-                    screen.cell_line(point.0, col).is_some_and(|cell| {
-                        cell.contents()
-                            .chars()
-                            .any(|c| c.is_alphanumeric() || c == '_')
-                    })
-                };
-                if word(point.1) {
-                    if left {
-                        while point.1 > 0 && word(point.1 - 1) {
-                            point.1 -= 1;
-                        }
-                    } else {
-                        while point.1 + 1 < cols && word(point.1 + 1) {
-                            point.1 += 1;
-                        }
-                    }
-                }
-            }
+        let output = snapshot::transcript(&primary, history, usize::MAX).0;
+        let mut replacement = vt100::Parser::new(rows, cols, limit);
+        replacement.process(output.as_bytes());
+        replacement.process(&primary.cursor_state_formatted());
+        replacement.process(&primary.input_mode_formatted());
+        replacement.process(&primary.attributes_formatted());
+        if self.screen().alternate_screen() {
+            replacement.process(b"\x1b[?1049h");
+            replacement.process(&self.parser.screen().state_formatted());
         }
-        Some((start, end))
+        replacement
+            .screen_mut()
+            .set_scrollback(primary.scrollback().min(history));
+        *self.parser.screen_mut() = replacement.screen().clone();
+        self.refresh_history();
     }
-    /// Return bounds once per frame for selection highlighting.
-    pub fn selected_range(&self) -> Option<((i32, u16), (i32, u16))> {
-        self.selection_bounds()
+    /// Offset clamping is constant-time and restores the exact current viewport immediately.
+    fn refresh_history(&mut self) {
+        let screen = self.parser.screen_mut();
+        let offset = screen.scrollback();
+        screen.set_scrollback(usize::MAX);
+        self.history_len = screen.scrollback();
+        screen.set_scrollback(offset);
     }
-    /// Extract only selected text, preserving hard line endings.
-    pub fn selection_text(&self) -> Option<String> {
-        let (start, end) = self.selection_bounds()?;
-        let screen = self.screen();
-        let cols = screen.size().1;
-        let mut text = String::new();
-        for line in start.0..=end.0 {
-            let first = if line == start.0 { start.1 } else { 0 };
-            let last = if line == end.0 { end.1 } else { cols - 1 };
-            let mut value = String::new();
-            for col in first..=last {
-                if let Some(cell) = screen.cell_line(line, col) {
-                    if !cell.is_wide_continuation() {
-                        value.push_str(&cell.contents());
-                    }
-                }
-            }
-            text.push_str(value.trim_end());
-            if line < end.0 && !screen.row_wrapped(line) {
-                text.push('\n');
-            }
-        }
-        Some(text)
-    }
-    /// Capture the primary viewport even when a TUI temporarily owns the alternate screen.
-    fn display_state(&self, wrapped_lines: Vec<i32>) -> DisplayState {
-        let grid = self.term.primary_grid();
-        let rows = grid.screen_lines();
-        let columns = grid.columns();
-        DisplayState {
-            rows: rows as u16,
-            columns: columns as u16,
-            cursor: (
-                grid.cursor.point.line.0.max(0) as u16,
-                grid.cursor.point.column.0 as u16,
-            ),
-            wrap_pending: grid.cursor.input_needs_wrap,
-            scrollback: grid.display_offset(),
-            wrapped_lines,
-        }
-    }
-    /// Tests can inspect the ANSI payload without unpacking its presentation metadata.
-    #[cfg(test)]
-    pub fn snapshot(&self, budget: usize) -> String {
-        self.snapshot_with_display(budget).0
-    }
-    /// Save only styled primary-screen output, compatible with the existing ANSI snapshot schema.
-    pub fn snapshot_with_display(&self, budget: usize) -> (String, DisplayState) {
-        let grid = self.term.primary_grid();
-        let rows = grid.screen_lines();
-        if grid.history_size() == 0
-            && grid.cursor.point == Point::new(Line(0), Column(0))
-            && (0..rows).all(|row| snapshot_line_end(grid, row as i32) == 0)
-        {
-            return (String::new(), self.display_state(Vec::new()));
-        }
-        let mut lines = VecDeque::new();
-        let mut bytes = 0;
-        let mut wrapped_lines = Vec::new();
-        // Traverse newest lines first and stop as soon as the storage budget is full.
-        // Existing blank screen rows keep history in the same viewport; no extra row is appended.
-        for line in (-(grid.history_size() as i32)..rows as i32).rev() {
-            let mut value = String::from("\x1b[0m");
-            let row = &grid[Line(line)];
-            let end = snapshot_line_end(grid, line);
-            let mut previous = None;
-            for col in 0..end {
-                let cell = &row[Column(col)];
-                if cell.flags.contains(Flags::WIDE_CHAR_SPACER) {
-                    continue;
-                }
-                let style = (cell.fg, cell.bg, cell.flags);
-                if previous != Some(style) {
-                    value.push_str("\x1b[0m");
-                    ansi_color(&mut value, color(cell.fg), false);
-                    ansi_color(&mut value, color(cell.bg), true);
-                    for (enabled, code) in [
-                        (cell.flags.contains(Flags::BOLD), 1),
-                        (cell.flags.contains(Flags::DIM), 2),
-                        (cell.flags.contains(Flags::ITALIC), 3),
-                        (cell.flags.intersects(Flags::ALL_UNDERLINES), 4),
-                        (cell.flags.contains(Flags::INVERSE), 7),
-                    ] {
-                        if enabled {
-                            value.push_str(&format!("\x1b[{code}m"));
-                        }
-                    }
-                    previous = Some(style);
-                }
-                // Append directly so a long line does not allocate once per character.
-                value.push(cell.c);
-                if let Some(extra) = cell.zerowidth() {
-                    value.extend(extra.iter());
-                }
-            }
-            value.push_str("\x1b[0m");
-            if line < rows as i32 - 1 {
-                value.push_str("\r\n");
-            }
-            if value.len() > budget {
-                continue;
-            }
-            if bytes + value.len() > budget {
-                break;
-            }
-            bytes += value.len();
-            lines.push_front(value);
-            // Capture flags only for retained lines so metadata obeys the same storage/fuel cap.
-            if row[Column(grid.columns() - 1)]
-                .flags
-                .contains(Flags::WRAPLINE)
-            {
-                wrapped_lines.push(line);
-            }
-        }
-        (
-            lines.into_iter().collect(),
-            self.display_state(wrapped_lines),
-        )
-    }
-    /// Resolve dynamic OSC palette values retained by Alacritty.
     pub fn color_override(&self, index: usize) -> Option<u32> {
-        self.term.colors()[index]
-            .map(|rgb| (rgb.r as u32) << 16 | (rgb.g as u32) << 8 | rgb.b as u32)
+        self.replies.borrow().colors.get(&index).copied()
     }
-    /// Expose the active focus-reporting mode.
     pub fn focus_mode(&self) -> bool {
-        self.term.mode().contains(TermMode::FOCUS_IN_OUT)
+        self.replies.borrow().focus
     }
-    /// Return the cursor shape selected by shell or TUI output.
     pub fn cursor_shape(&self) -> u16 {
-        match self.term.cursor_style().shape {
-            alacritty_terminal::vte::ansi::CursorShape::Beam => 5,
-            alacritty_terminal::vte::ansi::CursorShape::Underline => 3,
-            _ => 1,
-        }
+        self.replies.borrow().cursor
     }
 }
-
-/// Preserve styled trailing spaces as well as printed characters in occupied cells.
-fn snapshot_line_end(grid: &Grid<Cell>, line: i32) -> usize {
-    let row = &grid[Line(line)];
-    (0..row.occupied_len().min(grid.columns()))
-        .rev()
-        .find(|&col| !row[Column(col)].is_empty())
-        .map(|col| col + 1)
-        .unwrap_or(0)
-}
-
-/// Read one physical row for prompt matching, including combining marks and excluding padding.
-fn grid_line_text(grid: &Grid<Cell>, line: i32) -> String {
-    let mut text = String::new();
-    for col in 0..grid[Line(line)].occupied_len().min(grid.columns()) {
-        let cell = &grid[Point::new(Line(line), Column(col))];
-        if !cell.flags.contains(Flags::WIDE_CHAR_SPACER) {
-            text.push(cell.c);
-            if let Some(extra) = cell.zerowidth() {
-                text.extend(extra.iter());
-            }
-        }
+/// Inspect primary state on an isolated parser; live full-screen applications remain untouched.
+fn primary_screen(screen: &vt100::Screen) -> vt100::Screen {
+    let (rows, cols) = screen.size();
+    let mut copy = vt100::Parser::new(rows, cols, 0);
+    *copy.screen_mut() = screen.clone();
+    if screen.alternate_screen() {
+        copy.process(b"\x1b[?1049l");
     }
-    text.trim_end().to_owned()
+    copy.screen().clone()
 }
-
-/// Emit ANSI SGR attributes without any executable shell or OSC control sequences.
-fn ansi_color(out: &mut String, color: Color, background: bool) {
-    let base = if background { 48 } else { 38 };
-    match color {
-        Color::Rgb(r, g, b) => out.push_str(&format!("\x1b[{base};2;{r};{g};{b}m")),
-        Color::Idx(index) if index <= 255 => out.push_str(&format!("\x1b[{base};5;{index}m")),
-        // Snapshot SGR must stay legal even when Alacritty stores a derived named color.
-        Color::Idx(index @ 259..=266) => {
-            out.push_str("\x1b[2m");
-            let base = if background { 40 } else { 30 };
-            out.push_str(&format!("\x1b[{}m", base + index - 259));
-        }
-        Color::Idx(267) => out.push_str("\x1b[1m"),
-        Color::Idx(268) => out.push_str("\x1b[2m"),
-        Color::Idx(_) => {}
-        Color::Default => {}
-    }
+/// Scroll clamping exposes the retained history size without reaching into upstream private grids.
+fn history_size(screen: &vt100::Screen) -> usize {
+    let mut copy = screen.clone();
+    copy.set_scrollback(usize::MAX);
+    copy.scrollback()
+}
+fn line_text(screen: &vt100::Screen, row: u16) -> String {
+    screen
+        .rows(0, screen.size().1)
+        .nth(row as usize)
+        .unwrap_or_default()
 }

@@ -13,6 +13,204 @@ fn init(cx: &mut TestAppContext) {
     });
 }
 
+/// Reopening a native popup preserves canvas layout and allows one dismissal on every opening.
+#[gpui::test]
+fn popup_reopens_without_resizing_canvas_or_losing_escape(cx: &mut TestAppContext) {
+    use plugin_runtime::plugin_protocol::ui::{Canvas, MenuItem, PopupMenu};
+    init(cx);
+    let events = Rc::new(RefCell::new(Vec::new()));
+    let output = events.clone();
+    let slot = Rc::new(RefCell::new(None));
+    let capture = slot.clone();
+    let document = Document::new(
+        Node::new(
+            "drawing",
+            Kind::Canvas(Canvas {
+                focusable: true,
+                ..Default::default()
+            }),
+        )
+        .grow(),
+    );
+    let initial = document.clone();
+    let (_, cx) = cx.add_window_view(move |window, cx| {
+        let view = cx.new(|cx| {
+            PluginView::new(
+                "test".into(),
+                initial,
+                Environment::default(),
+                move |event, _| output.borrow_mut().push(event),
+                window,
+                cx,
+            )
+        });
+        *capture.borrow_mut() = Some(view.clone());
+        Root::new(view, window, cx)
+    });
+    let view = slot.borrow_mut().take().unwrap();
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+    cx.run_until_parked();
+    let bounds = cx.debug_bounds("plugin-ui-drawing").unwrap();
+    for revision in [1, 3] {
+        let mut opened = document.clone().revision(revision);
+        opened.menu = Some(PopupMenu {
+            id: "popup".into(),
+            x: 20.,
+            y: 20.,
+            items: vec![MenuItem {
+                id: "item".into(),
+                label: "Action".into(),
+                disabled: false,
+                separator_before: false,
+            }],
+        });
+        cx.update(|window, cx| {
+            view.update(cx, |view, cx| {
+                view.update_document(opened, Environment::default(), window, cx)
+            })
+        });
+        cx.update(|window, cx| window.draw(cx).clear(cx));
+        cx.run_until_parked();
+        assert_eq!(cx.debug_bounds("plugin-ui-drawing").unwrap(), bounds);
+        events.borrow_mut().clear();
+        cx.simulate_keystrokes("escape");
+        cx.run_until_parked();
+        assert_eq!(
+            events
+                .borrow()
+                .iter()
+                .filter(|event| event.node == "popup" && matches!(event.action, Action::Dismiss))
+                .count(),
+            1
+        );
+        cx.update(|window, cx| {
+            view.update(cx, |view, cx| {
+                view.update_document(
+                    document.clone().revision(revision + 1),
+                    Environment::default(),
+                    window,
+                    cx,
+                )
+            })
+        });
+        cx.update(|window, cx| window.draw(cx).clear(cx));
+        cx.run_until_parked();
+    }
+}
+
+/// Native collections occupy their own tree node and cannot steal the adjacent canvas's geometry.
+#[gpui::test]
+fn side_tabs_compose_with_canvas_and_emit_native_resize(cx: &mut TestAppContext) {
+    use gpui_kit::{MouseButton, point, px};
+    use plugin_runtime::plugin_protocol::ui::{Canvas, SideTab, SideTabs, SideTabsPosition};
+    init(cx);
+    let events = Rc::new(RefCell::new(Vec::new()));
+    let output = events.clone();
+    let (_, cx) = cx.add_window_view(move |window, cx| {
+        let tabs = SideTabs {
+            id: "sessions".into(),
+            position: SideTabsPosition::Left,
+            width: 180.,
+            min_width: 112.,
+            max_width: 480.,
+            selected: Some("first".into()),
+            rename: None,
+            items: ["first", "second"]
+                .into_iter()
+                .map(|id| SideTab {
+                    id: id.into(),
+                    label: id.into(),
+                    status: None,
+                    disabled: false,
+                    closable: true,
+                })
+                .collect(),
+        };
+        let document = Document::new(
+            Node::row(
+                "row",
+                vec![
+                    Node::new("sessions", Kind::SideTabs(tabs)).width(180.),
+                    Node::new(
+                        "drawing",
+                        Kind::Canvas(Canvas {
+                            focusable: true,
+                            grid: true,
+                            ..Default::default()
+                        }),
+                    )
+                    .grow(),
+                ],
+            )
+            .grow(),
+        );
+        let view = cx.new(|cx| {
+            PluginView::new(
+                "test".into(),
+                document,
+                Environment::default(),
+                move |event, _| output.borrow_mut().push(event),
+                window,
+                cx,
+            )
+        });
+        Root::new(view, window, cx)
+    });
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+    cx.run_until_parked();
+    let tabs = cx.debug_bounds("native-side-tabs").unwrap();
+    let canvas = cx.debug_bounds("plugin-ui-drawing").unwrap();
+    assert_eq!(tabs.size.width, px(180.));
+    assert!(canvas.left() >= tabs.right());
+    assert_eq!(canvas.size.height, tabs.size.height);
+    // A grid line is its measured cell height, so one-notch wheels cannot truncate to zero.
+    let height = events
+        .borrow()
+        .iter()
+        .find_map(|event| match &event.action {
+            Action::Canvas(plugin_runtime::plugin_protocol::ui::CanvasEvent::Resize {
+                grid: Some(grid),
+                ..
+            }) => Some(grid.cell_height),
+            _ => None,
+        })
+        .unwrap();
+    for lines in [1., -1.] {
+        cx.update(|window, cx| {
+            window.dispatch_event(
+                gpui_kit::PlatformInput::ScrollWheel(gpui_kit::ScrollWheelEvent {
+                    position: canvas.center(),
+                    delta: gpui_kit::ScrollDelta::Lines(point(0., lines)),
+                    ..Default::default()
+                }),
+                cx,
+            );
+        });
+        cx.run_until_parked();
+        assert!(events.borrow().iter().any(|event|matches!(event.action,Action::Canvas(plugin_runtime::plugin_protocol::ui::CanvasEvent::Wheel{delta_y,..}) if delta_y==height*lines)));
+    }
+    let second = cx.debug_bounds("side-tab-second").unwrap().center();
+    cx.simulate_click(second, Default::default());
+    cx.run_until_parked();
+    assert!(events.borrow().iter().any(|event| event.node == "sessions"
+        && matches!(&event.action,Action::Select(id) if id=="second")));
+    let divider = cx.debug_bounds("side-tabs-resize").unwrap().center();
+    cx.simulate_mouse_down(divider, MouseButton::Left, Default::default());
+    cx.simulate_mouse_move(
+        divider + point(px(50.), px(0.)),
+        Some(MouseButton::Left),
+        Default::default(),
+    );
+    cx.simulate_mouse_up(
+        divider + point(px(50.), px(0.)),
+        MouseButton::Left,
+        Default::default(),
+    );
+    cx.run_until_parked();
+    assert!(events.borrow().iter().any(|event| event.node == "sessions"
+        && matches!(event.action,Action::Resize(width) if width>180.)));
+}
+
 /// A keyed disabled canvas must receive its first grid measurement when activated at the same size.
 #[gpui::test]
 fn enabling_canvas_delivers_current_dimensions_without_a_resize(cx: &mut TestAppContext) {

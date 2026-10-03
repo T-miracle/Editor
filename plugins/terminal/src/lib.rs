@@ -3,6 +3,8 @@ mod commands;
 mod config;
 mod controls;
 mod emulator;
+mod events;
+mod host;
 mod input;
 mod interaction;
 mod scene;
@@ -11,16 +13,12 @@ mod shell;
 mod tests;
 mod theme;
 use config::{Profile, Settings};
+use events::Event;
 use plugin_protocol::bindings::{Guest, export};
-// Native tests use a deterministic host shim instead of calling WASM component imports.
-#[cfg(not(test))]
-use plugin_protocol::bindings::editor;
 use plugin_protocol::*;
+use plugin_protocol::{api, process};
 use serde::{Deserialize, Serialize};
-use std::{
-    cell::RefCell,
-    collections::{BTreeMap, VecDeque},
-};
+use std::{cell::RefCell, collections::BTreeMap};
 struct TerminalPlugin;
 thread_local! { static APP: RefCell<Option<Terminal>> = const { RefCell::new(None) }; }
 // Keep the terminal usable while allowing a wider session list for long names.
@@ -35,50 +33,78 @@ fn default_tab_width() -> f32 {
 impl Guest for TerminalPlugin {
     /// A serial event loop keeps parsing and UI mutation in the same isolated instance.
     fn dispatch(payload: String) -> Result<String, String> {
-        let message: Message = serde_json::from_str(&payload).map_err(|e| e.to_string())?;
-        APP.with(|cell| {
-            let mut app = cell.borrow_mut();
-            if let Message::Prepare {
-                environment,
-                snapshot,
-            } = &message
-            {
-                *app = Some(Terminal::prepare(environment.clone(), snapshot.clone())?);
-            }
-            let terminal = app.as_mut().ok_or("Plugin has not been prepared")?;
-            let reply = match message {
-                Message::Prepare { .. } => Reply::default(),
-                Message::Activate => {
-                    terminal.activate();
-                    terminal.reply()
+        api::guest::dispatch(&payload, |message| {
+            APP.with(|cell| {
+                if let api::Input::Event {
+                    event: api::Notification::MigrateData { snapshot, .. },
+                    ..
+                } = &message
+                {
+                    // Version one preserves the existing JSON configuration and logical snapshot; no shell starts here.
+                    if let Some(source) =
+                        host::read_optional("settings.json", true).map_err(failure)?
+                    {
+                        let os = cell
+                            .borrow()
+                            .as_ref()
+                            .map(|app| app.env.os.clone())
+                            .ok_or_else(|| failure("Migration requires prepared environment"))?;
+                        Settings::parse_for_os(&source, &os)
+                            .map_err(|error| failure(error.to_string()))?;
+                    }
+                    return Ok(api::Output {
+                        snapshot: snapshot.clone(),
+                        ..Default::default()
+                    });
                 }
-                Message::Event(event) => {
-                    terminal.event(event);
-                    terminal.reply()
+                let mut app = cell.borrow_mut();
+                if let api::Input::Prepare {
+                    environment,
+                    snapshot,
+                    ..
+                } = &message
+                {
+                    *app = Some(
+                        Terminal::prepare(environment.clone(), snapshot.clone())
+                            .map_err(failure)?,
+                    );
                 }
-                Message::Snapshot => Reply {
-                    snapshot: Some(terminal.snapshot()),
-                    ..Reply::default()
-                },
-            };
-            serde_json::to_string(&reply).map_err(|e| e.to_string())
+                let terminal = app
+                    .as_mut()
+                    .ok_or_else(|| failure("Plugin has not been prepared"))?;
+                let previous = terminal.interaction_identity();
+                let mut reply = match message {
+                    api::Input::Prepare { .. } => api::Output::default(),
+                    api::Input::Activate => {
+                        terminal.activate();
+                        terminal.reply()
+                    }
+                    api::Input::Event { event, .. } => {
+                        terminal.notify(event);
+                        terminal.reply()
+                    }
+                    api::Input::Snapshot => api::Output {
+                        snapshot: Some(terminal.snapshot()),
+                        ..Default::default()
+                    },
+                };
+                // Paint/output changes cannot expire already queued keys from the same native frame.
+                if previous != terminal.interaction_identity() {
+                    terminal.ui_revision = terminal.ui_revision.wrapping_add(1);
+                    for view in &mut reply.views {
+                        view.document.revision = terminal.ui_revision;
+                    }
+                }
+                Ok(reply)
+            })
         })
     }
 }
 export!(TerminalPlugin);
 
-/// Native operations cross the permission-checked component import.
-fn host(request: Request) -> Result<serde_json::Value, String> {
-    #[cfg(test)]
-    {
-        return tests::host(request);
-    }
-    #[cfg(not(test))]
-    {
-        let payload = serde_json::to_string(&request).map_err(|e| e.to_string())?;
-        let result = editor::plugin::host::request(&payload)?;
-        serde_json::from_str(&result).map_err(|e| e.to_string())
-    }
+/// Lifecycle failures remain typed; recoverable shell errors are displayed inside the terminal view.
+fn failure(message: impl Into<String>) -> api::Failure {
+    api::Failure::new(api::ErrorCode::OperationFailed, message)
 }
 #[derive(Clone, Copy)]
 struct Extent {
@@ -90,7 +116,7 @@ struct Tab {
     name: String,
     profile: Profile,
     cwd: String,
-    handle: Option<u64>,
+    handle: Option<api::ResourceHandle>,
     /// Upstream screen and plugin selection stay inside WASM.
     term: emulator::Emulator,
     exited: bool,
@@ -116,6 +142,9 @@ struct Saved {
 }
 #[derive(Serialize, Deserialize)]
 struct SavedTab {
+    /// Finished sessions are historical views; restoring them must not execute their program again.
+    #[serde(default)]
+    exited: bool,
     id: u64,
     name: String,
     profile: Profile,
@@ -147,7 +176,7 @@ struct Terminal {
     active: usize,
     next_id: u64,
     /// Preserve each host invocation while awaiting the editor's asynchronous save response.
-    pending_runs: VecDeque<commands::OpenOptions>,
+    pending_editor: BTreeMap<u64, commands::PendingEditor>,
     width: f32,
     height: f32,
     tab_width: f32,
@@ -163,38 +192,14 @@ struct Terminal {
 impl Terminal {
     /// Validate and migrate saved data without acquiring any OS resources.
     fn prepare(env: Environment, snapshot: Option<Snapshot>) -> Result<Self, String> {
-        let mut settings = Settings::default();
-        if env.os == "windows" {
-            settings.profiles = vec![
-                Profile {
-                    name: "PowerShell".into(),
-                    program: "powershell.exe".into(),
-                    args: vec!["-NoLogo".into()],
-                },
-                Profile {
-                    name: "Command Prompt".into(),
-                    program: "cmd.exe".into(),
-                    args: vec![],
-                },
-                Profile {
-                    name: "PowerShell 7".into(),
-                    program: "pwsh.exe".into(),
-                    args: vec!["-NoLogo".into()],
-                },
-                Profile {
-                    name: "WSL".into(),
-                    program: "wsl.exe".into(),
-                    args: vec![],
-                },
-            ];
-        }
+        let settings = Settings::for_os(&env.os);
         let mut app = Self {
             env,
             settings,
             tabs: vec![],
             active: 0,
             next_id: 1,
-            pending_runs: VecDeque::new(),
+            pending_editor: BTreeMap::new(),
             width: 800.,
             height: 240.,
             tab_width: DEFAULT_TAB_WIDTH,
@@ -208,7 +213,7 @@ impl Terminal {
             error: None,
         };
         if let Some(snapshot) = snapshot {
-            if snapshot.schema != 1 {
+            if !matches!(snapshot.schema, 1 | 2) {
                 return Err(format!(
                     "Unsupported terminal snapshot schema {}",
                     snapshot.schema
@@ -240,21 +245,21 @@ impl Terminal {
     }
     /// Read private settings and launch fresh shells only after host commit starts.
     fn activate(&mut self) {
-        if let Ok(value) = host(Request::ReadData {
-            path: "settings.json".into(),
-        }) {
-            if let Some(text) = value.as_str() {
-                match Settings::parse(text) {
-                    Ok(s) => self.settings = s,
-                    Err(e) => self.error = Some(e.to_string()),
-                }
-            }
+        match host::read_optional("settings.json", true) {
+            Ok(Some(text)) => match Settings::parse_for_os(&text, &self.env.os) {
+                Ok(s) => self.settings = s,
+                Err(e) => self.error = Some(e.to_string()),
+            },
+            Ok(None) => {}
+            Err(error) => self.error = Some(error),
         }
         if self.tabs.is_empty() {
             self.add(self.settings.default_profile, self.env.workspace.clone());
         } else {
             for index in 0..self.tabs.len() {
-                self.spawn(index);
+                if !self.tabs[index].exited {
+                    self.spawn(index);
+                }
             }
         }
     }
@@ -277,7 +282,7 @@ impl Terminal {
             cwd: saved.cwd,
             handle: None,
             term,
-            exited: false,
+            exited: saved.exited,
             metadata_parser: vte::Parser::new(),
             metadata: shell::Metadata::default(),
         });
@@ -296,14 +301,11 @@ impl Terminal {
     }
     /// A left sidebar offsets every canvas cell, cursor and mouse coordinate equally.
     fn content_left(&self) -> f32 {
-        match self.settings.tab_position {
-            ui::SideTabsPosition::Left => self.effective_tab_width().min(self.width.max(0.)),
-            ui::SideTabsPosition::Right => 0.,
-        }
+        0.
     }
     /// Reserve the same canvas width regardless of which side owns the tabs.
     fn content_width(&self) -> f32 {
-        (self.width - self.effective_tab_width()).max(0.)
+        self.width.max(0.)
     }
     /// Share the canvas boundary across painting, scrolling and hit testing.
     fn content_right(&self) -> f32 {
@@ -353,6 +355,7 @@ impl Terminal {
             .filter(|value| !value.is_empty())
             .unwrap_or(tool);
         let saved = SavedTab {
+            exited: false,
             id: self.next_id,
             name,
             profile,
@@ -375,19 +378,22 @@ impl Terminal {
             .begin_process(self.env.os == "windows", prompt.as_deref());
         // A restored PTY starts at the saved grid size until the host reports its actual layout.
         let (rows, columns) = tab.term.screen().size();
-        match host(Request::Spawn {
+        match host::process(process::Operation::Execute {
             program: tab.profile.program.clone(),
             args: shell::arguments(&tab.profile),
-            cwd: tab.cwd.clone(),
-            columns,
-            rows,
+            cwd: (!tab.cwd.is_empty()).then(|| tab.cwd.clone()),
+            transport: process::Transport::Pty { columns, rows },
         }) {
-            Ok(value) => {
-                tab.handle = value.as_u64();
+            Ok(api::Value::Resource(handle)) => {
+                tab.handle = Some(handle);
                 tab.exited = false;
             }
             Err(error) => {
                 self.error = Some(error);
+                tab.exited = true;
+            }
+            Ok(_) => {
+                self.error = Some("Expected process handle".into());
                 tab.exited = true;
             }
         }
@@ -395,8 +401,8 @@ impl Terminal {
     fn send(&mut self, bytes: Vec<u8>) {
         if let Some(tab) = self.tabs.get_mut(self.active) {
             tab.term.set_scrollback(0);
-            if let Some(handle) = tab.handle {
-                if let Err(e) = host(Request::Write { handle, bytes }) {
+            if let Some(handle) = tab.handle.clone() {
+                if let Err(e) = host::process(process::Operation::Write { handle, bytes }) {
                     self.error = Some(e);
                 }
             }
@@ -408,7 +414,7 @@ impl Terminal {
             let active_id = self.tabs.get(self.active).map(|tab| tab.id);
             let tab = self.tabs.remove(index);
             if let Some(handle) = tab.handle {
-                let _ = host(Request::Close { handle });
+                let _ = host::process(process::Operation::Terminate { handle });
             }
             self.active = self
                 .tabs
@@ -420,19 +426,25 @@ impl Terminal {
                 self.rename = None;
                 self.selecting = false;
                 // Closing a session is plugin behavior; native dock visibility belongs to the host.
-                if let Err(error) = host(Request::Editor {
-                    command: "hide_panel:terminal".into(),
-                }) {
+                if let Err(error) = self.editor_request(
+                    api::EditorOperation::SetPanelVisibility {
+                        panel: "terminal".into(),
+                        visible: false,
+                    },
+                    commands::PendingEditor::Effect,
+                ) {
                     self.error = Some(error);
                 }
             }
         }
     }
-    fn reply(&self) -> Reply {
-        Reply {
-            scene: Some(self.scene()),
-            error: self.error.clone(),
-            ..Reply::default()
+    fn reply(&self) -> api::Output {
+        api::Output {
+            views: vec![api::View {
+                panel: "terminal".into(),
+                document: self.document(),
+            }],
+            ..Default::default()
         }
     }
     /// Bound styled history by the host quota in addition to configured history rows.
@@ -444,6 +456,7 @@ impl Terminal {
             .map(|t| {
                 let (output, display) = scene::history(t, budget);
                 SavedTab {
+                    exited: t.exited,
                     id: t.id,
                     name: t.name.clone(),
                     profile: t.profile.clone(),
@@ -454,7 +467,7 @@ impl Terminal {
             })
             .collect();
         Snapshot {
-            schema: 1,
+            schema: 2,
             data: serde_json::to_string(&Saved {
                 tabs,
                 active: self.active,

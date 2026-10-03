@@ -11,6 +11,7 @@ use plugin_runtime::plugin_protocol::{
     ui::{Canvas, CanvasEvent, GridMetrics, PointerPhase},
 };
 use std::ops::Range;
+mod scroll;
 
 pub(super) struct CanvasView {
     pub(super) drawing: Canvas,
@@ -25,11 +26,16 @@ pub(super) struct CanvasView {
     composition: String,
     selection: Range<usize>,
     drag: Option<MouseButton>,
+    scroll: scroll::CanvasScroll,
     sink: Rc<dyn Fn(CanvasEvent, u64, &mut App)>,
     _subscriptions: Vec<Subscription>,
 }
 
 impl CanvasView {
+    /// Sibling native controls return keyboard input to the addressed canvas after their action.
+    pub(super) fn focus_handle(&self) -> FocusHandle {
+        self.focus.clone()
+    }
     pub(super) fn new(
         drawing: Canvas,
         sink: impl Fn(CanvasEvent, u64, &mut App) + 'static,
@@ -60,6 +66,7 @@ impl CanvasView {
             composition: String::new(),
             selection: 0..0,
             drag: None,
+            scroll: Default::default(),
             sink: Rc::new(sink),
             _subscriptions: subscriptions,
         }
@@ -108,6 +115,10 @@ impl CanvasView {
     /// Geometry is measured at this layout node, independent of surrounding toolbars and panel edges.
     fn measure(&mut self, bounds: Bounds<Pixels>, window: &mut Window, cx: &mut Context<Self>) {
         self.bounds = bounds;
+        self.scroll.update(bounds, self.drawing.scroll.clone());
+        if let Some(offset) = self.scroll.take_offset() {
+            self.emit(CanvasEvent::Scroll { offset }, cx);
+        }
         let grid = self.drawing.grid.then(|| {
             let face = font(
                 self.font
@@ -374,11 +385,16 @@ impl Render for CanvasView {
                 }),
             );
         }
-        element
+        element = element
             .on_scroll_wheel(cx.listener(|this, event: &ScrollWheelEvent, _, cx| {
-                let delta = event
-                    .delta
-                    .pixel_delta(px(this.font.size_px.unwrap_or(14.)));
+                // Line wheels on a grid use measured rows, not the smaller font point size.
+                let line_height = match &this.measured {
+                    Some(CanvasEvent::Resize {
+                        grid: Some(grid), ..
+                    }) => grid.cell_height,
+                    _ => this.font.size_px.unwrap_or(14.),
+                };
+                let delta = event.delta.pixel_delta(px(line_height));
                 let at = event.position - this.bounds.origin;
                 this.emit(
                     CanvasEvent::Wheel {
@@ -402,7 +418,15 @@ impl Render for CanvasView {
                     },
                 )
                 .size_full(),
-            )
+            );
+        // The overlay must paint after the guest canvas, which may fill its entire bounds.
+        if self.enabled && self.drawing.scroll.is_some() {
+            element = element.child(crate::ui::controls::vertical_viewport_scrollbar(
+                &self.scroll,
+                cx,
+            ));
+        }
+        element
     }
 }
 

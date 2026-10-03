@@ -108,6 +108,8 @@ fn incompatible_installed_plugin_preserves_data_without_starting(cx: &mut TestAp
     .unwrap();
     // Replay a real pre-rename installation through editor startup, not a migration-private API.
     manifest.id = "me.terminal".into();
+    // The fixture describes a stored protocol-five installation, independent of today's bundle.
+    manifest.protocol = 5;
     let old_data = root.join("data/me.terminal");
     std::fs::create_dir_all(&old_data).unwrap();
     std::fs::write(old_data.join("settings.json"), "preserved settings").unwrap();

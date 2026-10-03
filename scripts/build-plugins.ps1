@@ -60,8 +60,8 @@ try {
         # The manager reads README.md from the installed package version.
         $packageFiles = @(@('manifest.json', "plugins/$($plugin[0])/manifest.json"), @('README.md', "plugins/$($plugin[0])/README.md"), @("$($plugin[0]).wasm", "target/wasm32-wasip2/release/$($plugin[1]).wasm"))
         if ($plugin[0] -eq 'terminal') {
-            # Bundle license notices for the adapted Alacritty core and its VTE dependency.
-            $packageFiles += ,@('licenses/alacritty-LICENSE-APACHE', 'plugins/terminal/vendor/alacritty_terminal/LICENSE-APACHE')
+            # Bundle the upstream WASM-compatible core's license alongside its VTE dependency.
+            $packageFiles += ,@('licenses/term-wm-vt100-LICENSE', 'THIRD_PARTY_LICENSES/term-wm-vt100-LICENSE')
             $packageFiles += ,@('licenses/vte-LICENSE-APACHE', 'THIRD_PARTY_LICENSES/vte-LICENSE-APACHE')
             # The panel manifest selects the matching SVG when the editor theme changes.
             $packageFiles += ,@('icons/terminal_light.svg', 'plugins/terminal/icons/terminal_light.svg')

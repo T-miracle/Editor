@@ -42,8 +42,25 @@ pub struct Settings {
 
 impl Default for Settings {
     fn default() -> Self {
-        #[cfg(windows)]
-        let profiles = vec![
+        let profiles = default_profiles(cfg!(windows));
+        Self {
+            enabled: true,
+            tab_position: SideTabsPosition::Right,
+            font_family: "Cascadia Mono".into(),
+            font_size: 14.,
+            history: 10_000,
+            default_profile: 0,
+            profiles,
+            theme: Palette::default(),
+            run_command: None,
+        }
+    }
+}
+
+/// Choose platform defaults from the runtime environment, never the WASM compilation target.
+fn default_profiles(windows: bool) -> Vec<Profile> {
+    if windows {
+        vec![
             Profile {
                 name: "PowerShell".into(),
                 program: "powershell.exe".into(),
@@ -64,28 +81,37 @@ impl Default for Settings {
                 program: "wsl.exe".into(),
                 args: vec![],
             },
-        ];
-        #[cfg(not(windows))]
-        let profiles = vec![Profile {
+        ]
+    } else {
+        vec![Profile {
             name: "Shell".into(),
-            program: std::env::var("SHELL").unwrap_or("/bin/sh".into()),
+            program: "/bin/sh".into(),
             args: vec![],
-        }];
-        Self {
-            enabled: true,
-            tab_position: SideTabsPosition::Right,
-            font_family: "Cascadia Mono".into(),
-            font_size: 14.,
-            history: 10_000,
-            default_profile: 0,
-            profiles,
-            theme: Palette::default(),
-            run_command: None,
-        }
+        }]
     }
 }
 
 impl Settings {
+    /// Build startup settings for the OS on which the native process service will execute.
+    pub fn for_os(os: &str) -> Self {
+        Self {
+            profiles: default_profiles(os == "windows"),
+            ..Self::default()
+        }
+    }
+    /// Fill omitted profiles before validation; explicit user programs are never replaced.
+    pub fn parse_for_os(source: &str, os: &str) -> anyhow::Result<Self> {
+        let mut value: serde_json::Value = serde_json::from_str(source)?;
+        if let Some(object) = value.as_object_mut() {
+            if !object.contains_key("profiles") {
+                object.insert(
+                    "profiles".into(),
+                    serde_json::to_value(default_profiles(os == "windows"))?,
+                );
+            }
+        }
+        Self::parse(&serde_json::to_string(&value)?)
+    }
     /// Reject malformed values instead of crashing or silently selecting another shell.
     pub fn parse(source: &str) -> anyhow::Result<Self> {
         let settings: Self = serde_json::from_str(source)?;

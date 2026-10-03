@@ -309,4 +309,57 @@ fn typed_editor_requests_read_selection_and_save_without_switching_documents(
         panic!("text expected")
     };
     assert!(text.contains("Document"));
+    // Desktop capabilities use the same admission/completion gate and never expose raw host commands.
+    for operation in [
+        Op::WriteClipboard {
+            text: "SDK 中文 paste".into(),
+        },
+        Op::ReadClipboard,
+    ] {
+        let call = request(&mut manager, operation);
+        cx.update(|window, cx| {
+            app.update(cx, |app, cx| {
+                app.perform_editor_request(&package.manifest.id, call.clone(), window, cx)
+            })
+        });
+        cx.run_until_parked();
+        match call.status() {
+            RequestUpdate::Completed {
+                result: Ok(EditorValue::Clipboard { text }),
+            } => assert_eq!(text, "SDK 中文 paste"),
+            RequestUpdate::Completed {
+                result: Ok(EditorValue::Unit),
+            } => {}
+            status => panic!("clipboard completion expected: {status:?}"),
+        }
+    }
+    let private = manager
+        .data_directory(&package.manifest.id)
+        .join("settings.json");
+    std::fs::write(&private, "{\"value\":1}").unwrap();
+    let call = request(
+        &mut manager,
+        Op::OpenDataFile {
+            path: "settings.json".into(),
+        },
+    );
+    cx.update(|window, cx| {
+        app.update(cx, |app, cx| {
+            app.perform_editor_request(&package.manifest.id, call.clone(), window, cx)
+        })
+    });
+    cx.run_until_parked();
+    assert!(matches!(
+        call.status(),
+        RequestUpdate::Completed {
+            result: Ok(EditorValue::Unit)
+        }
+    ));
+    let expected = private.canonicalize().unwrap();
+    assert!(cx.update(|_, cx| {
+        app.read(cx)
+            .tabs
+            .iter()
+            .any(|tab| tab.session.path() == expected)
+    }));
 }

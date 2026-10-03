@@ -12,6 +12,8 @@ pub struct EditorRequest {
     handle: ResourceHandle,
     operation: EditorOperation,
     workspace: String,
+    /// Trusted runtime metadata; the guest supplies only a relative file name.
+    data_root: std::path::PathBuf,
     completion: Completion<EditorValue>,
 }
 impl EditorRequest {
@@ -20,6 +22,7 @@ impl EditorRequest {
         handle: ResourceHandle,
         operation: EditorOperation,
         workspace: String,
+        data_root: std::path::PathBuf,
         timeout_ms: u32,
         context: Option<&crate::plugin_services::Context>,
     ) -> Self {
@@ -29,6 +32,7 @@ impl EditorRequest {
             handle,
             operation,
             workspace,
+            data_root,
             completion,
         }
     }
@@ -40,6 +44,10 @@ impl EditorRequest {
     }
     pub fn workspace(&self) -> &str {
         &self.workspace
+    }
+    /// The UI revalidates containment at execution rather than trusting a guest-provided native path.
+    pub fn data_root(&self) -> &std::path::Path {
+        &self.data_root
     }
     pub fn begin(&self) -> bool {
         self.completion.begin()

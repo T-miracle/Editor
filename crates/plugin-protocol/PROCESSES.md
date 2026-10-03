@@ -1,4 +1,4 @@
-# 原生进程能力 1.0
+# 原生进程能力 1.2
 
 独立协商 `process: ^1`。通过普通 SDK `request` 发送
 `api::Operation::Process { operation }`；能力不由插件名称决定。
@@ -16,8 +16,10 @@
 修改环境、工作目录或插入安装步骤。每项服务独立授权，安装弹窗展示程序及参数数组。
 更新新增权限需确认；拒绝后旧包、旧授权及运行实例保持可用。
 
-`Execute { program, args, transport }` 单独要求 **`process.exec`**，允许显式选择
+`Execute { program, args, transport, cwd }` 单独要求 **`process.exec`**，允许显式选择
 程序（包括解释器），不能由普通服务权限获得。当前没有原生安装器操作。
+
+`cwd` 默认为空；显式指定需要协商 `process >=1.2`，且必须是存在的绝对目录，长度不超过 4096 字节、不含 NUL。它只选择已授权任意进程的启动目录，不授予 WASM 文件访问权限，也不能用于覆盖 `StartService` 的声明。省略时继续使用实例默认目录。
 
 通用 toolchains 解析器只接受绝对可执行路径，或在 PATH 的绝对目录中查找裸工具名；
 不隐式搜索当前项目，不拼接 Shell 命令。Windows 只启动 `.exe`。工作区实例使用其

@@ -1,5 +1,7 @@
 # Capability Example
 
+0.14.0 增加 `ui.clipboard` 与 `storage.editor` 验收：使用类型化编辑器请求读写剪贴板、打开自身私有配置，并验证实际原生完成结果。
+
 宿主通过 `Prepare` 交付的 opaque snapshot 会由 `Snapshot` 原样返回，用于验证重装、项目切换和历史数据导入不会清空插件私有状态。
 
 0.11.0 增加 `MigrateData` 夹具：版本化包将私有值转换为 `v2:原值`，迁移期间验证无法访问工作区。
@@ -22,7 +24,7 @@ SDK `MIGRATION.md` 说明私有数据版本、隔离权限、最终副本与中�
 发送类型化操作。`process-events` 按序号查看有界事件记录，`close-on-output` 演示在首个
 输出回调中释放进程。普通示例包默认不申请原生执行权限。
 
-安装时需要批准 assets.read（读取包资源）、workspace.read（读取所属工作区）、storage（读写实例私有文件）、editor.read（选区和文档事件）、editor.write（保存已打开文档）与 ui.panels（自身面板显隐）。不申请进程、网络或剪贴板权限。菜单命令“检查类型化错误”验证未知操作、错误参数与路径越界的明确返回。
+安装时需要批准 assets.read（读取包资源）、workspace.read（读取所属工作区）、storage（读写实例私有文件）、clipboard（类型化剪贴板读写）、editor.read（选区和文档事件）、editor.write（保存已打开文档）与 ui.panels（自身面板显隐）。不申请进程或网络权限。菜单命令“检查类型化错误”验证未知操作、错误参数与路径越界的明确返回。
 
 scope-write / scope-read 将工作区的 source.txt 与私有 value.txt 一起显示；scope-probe 接收公开 Operation JSON，并将 SDK 的类型化结果显示为文本。诊断命令验证跨实例句柄拒绝、应用级实例不具有工作区权限，以及显式释放后的句柄失效。
 

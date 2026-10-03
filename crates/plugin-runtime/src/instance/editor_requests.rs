@@ -24,6 +24,30 @@ impl State {
             ));
         }
         let (capability, permission) = match &operation {
+            EditorOperation::WriteClipboard { text } if text.len() > 1024 * 1024 => {
+                return Err(Failure::new(
+                    ErrorCode::LimitExceeded,
+                    "Clipboard exceeds 1 MiB",
+                ));
+            }
+            EditorOperation::ReadClipboard | EditorOperation::WriteClipboard { .. } => {
+                ("ui.clipboard", "clipboard")
+            }
+            EditorOperation::OpenDataFile { path } => {
+                if path.is_empty()
+                    || path.len() > 4096
+                    || path.contains(['\\', ':', '\0'])
+                    || path
+                        .split('/')
+                        .any(|part| part.is_empty() || matches!(part, "." | ".."))
+                {
+                    return Err(Failure::new(
+                        ErrorCode::InvalidPath,
+                        "Private file path must be relative",
+                    ));
+                }
+                ("storage.editor", "storage")
+            }
             EditorOperation::SetPanelVisibility { panel, .. } => {
                 if !self.declared_panels.contains(panel) {
                     return Err(Failure::new(
@@ -65,6 +89,7 @@ impl State {
             handle.clone(),
             operation,
             self.workspace.display().to_string(),
+            self.data.clone(),
             timeout_ms,
             self.plugin_services.context.as_ref(),
         );

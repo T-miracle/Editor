@@ -89,6 +89,10 @@ pub enum Operation {
         program: String,
         args: Vec<String>,
         transport: Transport,
+        /// process 1.2: an explicit absolute native directory under the already granted execution authority.
+        /// Omission preserves the instance's workspace/private-data default; this grants no WASI access.
+        #[serde(default)]
+        cwd: Option<String>,
     },
     Write {
         handle: crate::api::ResourceHandle,

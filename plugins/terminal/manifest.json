@@ -1,10 +1,19 @@
 {
   "id": "terminal",
   "name": "终端",
-  "version": "0.5.8",
-  "protocol": 5,
+  "version": "0.6.0",
+  "protocol": 7,
+  "api": {
+    "base": "^1",
+    "required": {
+      "process": ">=1.2, <2", "ui.native": "^1", "ui.canvas": ">=1.1, <2", "ui.grid": "^1",
+      "ui.collections": "^1", "ui.panels": "^1", "ui.clipboard": "^1", "editor.documents": "^1",
+      "workspace.files": "^1", "storage.private": "^1", "storage.editor": "^1", "storage.migration": "^1"
+    }
+  },
+  "data_format": {"version": 1, "migration_hook": true},
   "component": "terminal.wasm",
-  "permissions": ["process.pty", "workspace.read", "storage", "clipboard", "editor.commands"],
+  "permissions": ["process.exec", "workspace.read", "storage", "clipboard", "editor.read", "editor.write", "ui.panels"],
   "storage_limit": 16777216,
   "panels": [{"id":"terminal", "title":"终端", "position":"bottom", "default_visible":false, "status_order":0, "icon_light":"icons/terminal_light.svg", "icon_dark":"icons/terminal_dark.svg"}],
   "commands": [

@@ -43,6 +43,14 @@ cargo test -p editor-app --bin editor-app capability_package_consent -- --ignore
 
 这两个操作可在活动实例及只读 `LanguageService` 准备钩子中调用。钩子可以关闭本次创建的文件句柄，其余临时句柄在返回时统一撤销；它不能通过发现发起写入、进程或编辑器操作。迁移钩子仍只有私有副本权限。宿主经 `Manager::open_with_resources` 提供不可变 `HostResources`，同一资源快照传入后台安装、设置替换、工作区切换及失败回滚后的实例。公开集成回归通过 `cargo test -p plugin-runtime --test sdk_discovery -- --ignored` 运行，先执行上面的独立 SDK 构建脚本。
 
+## ui.clipboard 1.0 与 storage.editor 1.0
+
+`EditorOperation::ReadClipboard` / `WriteClipboard { text }` 分别返回 `EditorValue::Clipboard { text }` / `Unit`。它们需要协商 `ui.clipboard` 并批准 `clipboard` 权限，单次文本不超过 1 MiB。操作通过编辑器请求队列执行，`Accepted` 只代表已入队；插件应等待对应请求的完成通知，不能将延迟结果应用到已经切换或关闭的目标。
+
+`EditorOperation::OpenDataFile { path }` 需要协商 `storage.editor` 与 `storage` 权限。路径为当前插件私有目录内、使用 `/` 的相对文件路径，不允许 `..`、绝对路径或越界链接；成功返回 `Unit`，文件进入宿主正常文档生命周期。它不允许打开其他插件或任意本机文件。
+
+这三种操作当前仅在活动工作区实例可用，遵循统一超时、取消与实例撤销规则。原生宿主在执行副作用前检查请求状态；取消不意味着回滚已经完成的剪贴板写入或文档打开。
+
 ## configuration 1.0
 
 协议 7 清单的 `settings` 以插件内部键声明 `title`、`value_type`、`default`、`scope` 和 `apply`。类型为 boolean、string（max_length）、integer（min/max）、enum（choices）；作用域为 user 或 project，后者允许明确确认的项目覆盖。此版本的生效方式为 `restart_instance`。最多 64 个字段、字符串最多 4096 字节、枚举最多 32 个不重复选项；无效默认值在包检查时拒绝。可执行包需声明必需能力 `configuration: ^1`。

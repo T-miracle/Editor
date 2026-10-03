@@ -43,12 +43,13 @@ impl State {
                     .get(&service)
                     .cloned()
                     .ok_or_else(|| Failure::new(ErrorCode::NotFound, "Undeclared service"))?;
-                self.start_process(command, Transport::Stdio, permission)
+                self.start_process(command, Transport::Stdio, permission, None)
             }
             Operation::Execute {
                 program,
                 args,
                 transport,
+                cwd,
             } => {
                 self.process_authority("process.exec")?;
                 self.start_process(
@@ -61,6 +62,7 @@ impl State {
                     },
                     transport,
                     "process.exec".into(),
+                    cwd,
                 )
             }
             Operation::Write { handle, bytes } => {
@@ -120,6 +122,7 @@ impl State {
         command: Service,
         transport: Transport,
         permission: String,
+        cwd: Option<String>,
     ) -> Result<Value, Failure> {
         if self.processes.len() >= 32 {
             return Err(Failure::new(
@@ -163,13 +166,35 @@ impl State {
         } else {
             command.args
         };
-        let cwd = if self.roots.application || self.workspace.as_os_str().is_empty() {
-            &self.data
-        } else {
-            &self.workspace
+        // Arbitrary execution already grants native filesystem authority; service-only calls cannot set cwd.
+        let cwd = match cwd {
+            Some(cwd) => {
+                if !self.api.as_ref().is_some_and(|api| {
+                    api.capabilities
+                        .get("process")
+                        .is_some_and(|version| *version >= semver::Version::new(1, 2, 0))
+                }) {
+                    return Err(Failure::new(
+                        ErrorCode::CapabilityUnavailable,
+                        "process 1.2 is required for cwd",
+                    ));
+                }
+                let path = PathBuf::from(&cwd);
+                if cwd.len() > 4096 || cwd.contains('\0') || !path.is_absolute() || !path.is_dir() {
+                    return Err(Failure::new(
+                        ErrorCode::InvalidPath,
+                        "Process cwd must be an existing absolute directory",
+                    ));
+                }
+                path
+            }
+            None if self.roots.application || self.workspace.as_os_str().is_empty() => {
+                self.data.clone()
+            }
+            None => self.workspace.clone(),
         };
         let id = match transport {
-            Transport::Stdio => self.processes.spawn_stdio(&program, &args, cwd),
+            Transport::Stdio => self.processes.spawn_stdio(&program, &args, &cwd),
             Transport::Pty { columns, rows } => self.processes.spawn(
                 program.display().to_string(),
                 args,

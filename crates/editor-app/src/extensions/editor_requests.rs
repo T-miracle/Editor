@@ -88,6 +88,61 @@ impl EditorApp {
             return;
         }
         let result = (|| match request.operation() {
+            Op::OpenDataFile { path } => {
+                // The owning runtime supplies this root. Resolve aliases again immediately before opening.
+                let root = request
+                    .data_root()
+                    .canonicalize()
+                    .map_err(|error| Failure::new(ErrorCode::NotFound, error.to_string()))?;
+                let file = root
+                    .join(path)
+                    .canonicalize()
+                    .map_err(|error| Failure::new(ErrorCode::NotFound, error.to_string()))?;
+                if !file.starts_with(&root) || !file.is_file() {
+                    return Err(Failure::new(
+                        ErrorCode::PermissionDenied,
+                        "File escaped private data",
+                    ));
+                }
+                if !request.enter_side_effect() {
+                    return Err(Failure::new(
+                        ErrorCode::Cancelled,
+                        "Private file open cancelled",
+                    ));
+                }
+                self.open_file(file.clone(), window, cx);
+                if !self.tabs.iter().any(|tab| tab.session.path() == file) {
+                    return Err(Failure::new(
+                        ErrorCode::OperationFailed,
+                        "Private file could not be opened",
+                    ));
+                }
+                Ok(Value::Unit)
+            }
+            Op::ReadClipboard => {
+                let text = cx
+                    .read_from_clipboard()
+                    .and_then(|item| item.text())
+                    .unwrap_or_default();
+                if text.len() > 1024 * 1024 {
+                    return Err(Failure::new(
+                        ErrorCode::LimitExceeded,
+                        "Clipboard exceeds 1 MiB",
+                    ));
+                }
+                Ok(Value::Clipboard { text })
+            }
+            Op::WriteClipboard { text } => {
+                // Retired or cancelled requests must not overwrite a newer user's clipboard.
+                if !request.enter_side_effect() {
+                    return Err(Failure::new(
+                        ErrorCode::Cancelled,
+                        "Clipboard write cancelled",
+                    ));
+                }
+                cx.write_to_clipboard(ClipboardItem::new_string(text.clone()));
+                Ok(Value::Unit)
+            }
             Op::ReadSelection => {
                 let index = self
                     .active_tab_index()

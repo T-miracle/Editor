@@ -1,19 +1,35 @@
 //! Guest tests exercise the same event/snapshot interface without native OS resources.
 use super::*;
-thread_local! {static CALLS:RefCell<Vec<Request>>=const{RefCell::new(vec![])};}
-pub(super) fn host(request: Request) -> Result<serde_json::Value, String> {
+thread_local! {static CALLS:RefCell<Vec<api::Operation>>=const{RefCell::new(vec![])};}
+/// Model only SDK admission here; asynchronous completion is explicitly delivered by each test.
+pub(super) fn host(request: api::Operation) -> Result<api::Value, api::Failure> {
     CALLS.with(|calls| {
         let mut calls = calls.borrow_mut();
+        let handle = request_handle(calls.len() as u64 + 1);
         let value = match &request {
-            Request::ReadData { .. } | Request::ReadWorkspace { .. } => {
-                return Err("Missing fixture file".into());
+            api::Operation::OpenData | api::Operation::OpenWorkspace => {
+                return Err(api::Failure::new(
+                    api::ErrorCode::NotFound,
+                    "Missing fixture file",
+                ));
             }
-            Request::Spawn { .. } => serde_json::json!(calls.len() + 1),
-            _ => serde_json::Value::Null,
+            api::Operation::Process {
+                operation: process::Operation::Execute { .. },
+            } => api::Value::Resource(handle),
+            api::Operation::Editor { .. } => api::Value::Accepted(handle),
+            _ => api::Value::Unit,
         };
         calls.push(request);
         Ok(value)
     })
+}
+/// Opaque fixture identities use the same instance and scope binding as production.
+fn request_handle(resource: u64) -> api::ResourceHandle {
+    api::ResourceHandle {
+        instance: "terminal-test".into(),
+        scope: "workspace-test".into(),
+        resource,
+    }
 }
 fn app() -> Terminal {
     CALLS.with(|c| c.borrow_mut().clear());
@@ -43,27 +59,22 @@ fn blank_history_and_real_history_have_distinct_scroll_ranges() {
         cell_width: 8.,
         cell_height: 20.,
     });
-    let handle = app.tabs[0].handle.unwrap();
+    let handle = app.tabs[0].handle.clone().unwrap();
     app.event(Event::ProcessOutput {
-        handle,
+        handle: handle.clone(),
         bytes: b"PS C:\\project> ".to_vec(),
     });
     assert!(app.scene().scroll.is_none());
     let output = (0..70).map(|i| format!("line{i}\r\n")).collect::<String>();
     app.event(Event::ProcessOutput {
-        handle,
+        handle: handle.clone(),
         bytes: output.into_bytes(),
     });
     let scene = app.scene();
     let scroll = scene.scroll.unwrap();
     // An absent guest timeout keeps visibility under the host's shared scrollbar policy.
-    assert_eq!(scroll.hide_after_ms, None);
-    assert_eq!(scroll.rect.x + scroll.rect.w, app.width - 180.);
-    assert!(scroll.content > scroll.rect.h);
-    app.event(Event::Scroll {
-        id: "output".into(),
-        offset: 0.,
-    });
+    assert!(scroll.content > app.height);
+    app.event(Event::Scroll { offset: 0. });
     assert!(app.tabs[0].term.screen().scrollback() > 0);
 }
 
@@ -83,9 +94,9 @@ fn restore_recreates_shells_but_never_replays_old_input() {
             value: "构建任务".into(),
         },
     }));
-    let handle = app.tabs[1].handle.unwrap();
+    let handle = app.tabs[1].handle.clone().unwrap();
     app.event(Event::ProcessOutput {
-        handle,
+        handle: handle.clone(),
         bytes: b"OLD OUTPUT\r\n".to_vec(),
     });
     let snapshot = app.snapshot();
@@ -100,14 +111,24 @@ fn restore_recreates_shells_but_never_replays_old_input() {
         CALLS.with(|c| c
             .borrow()
             .iter()
-            .filter(|r| matches!(r, Request::Spawn { .. }))
+            .filter(|r| matches!(
+                r,
+                api::Operation::Process {
+                    operation: process::Operation::Execute { .. }
+                }
+            ))
             .count()),
         2
     );
     assert!(!CALLS.with(|c| {
-        c.borrow()
-            .iter()
-            .any(|r| matches!(r, Request::Write { .. }))
+        c.borrow().iter().any(|r| {
+            matches!(
+                r,
+                api::Operation::Process {
+                    operation: process::Operation::Write { .. }
+                }
+            )
+        })
     }));
 }
 
@@ -116,11 +137,9 @@ fn restore_recreates_shells_but_never_replays_old_input() {
 fn terminal_delegates_tab_controls_to_canvas_controls() {
     let app = app();
     let scene = app.scene();
-    assert!(scene.widgets.is_empty());
-    assert!(scene.column_resize_regions.is_empty());
-    let controls = scene.controls.unwrap();
-    controls.validate().unwrap();
-    let sidebar = controls.sidebar.unwrap();
+    assert!(matches!(app.document().root.kind, ui::Kind::Row { .. }));
+    app.document().validate().unwrap();
+    let sidebar = app.sessions();
     assert_eq!(sidebar.selected, Some(app.tabs[app.active].id.to_string()));
     assert_eq!(sidebar.items[0].label, app.tabs[0].name);
     assert!(
@@ -154,20 +173,14 @@ fn left_tabs_keep_canvas_input_and_persistent_layout_in_sync() {
     terminal.resize_grid();
     assert_eq!(terminal.tabs[0].term.screen().size(), dimensions);
     let scene = terminal.scene();
-    assert_eq!(
-        scene.controls.unwrap().sidebar.unwrap().position,
-        ui::SideTabsPosition::Left
-    );
-    assert_eq!(
-        scene.cursor.x,
-        terminal.effective_tab_width() + 8. + 9. * terminal.cw
-    );
+    assert_eq!(terminal.sessions().position, ui::SideTabsPosition::Left);
+    assert_eq!(scene.caret.unwrap().x, 8. + 9. * terminal.cw);
     assert!(
         scene
             .paint
             .iter()
             .any(|paint| matches!(paint, Paint::Text { x, text, .. }
-        if *x == terminal.effective_tab_width() + 8. && text == "S"))
+        if *x == 8. && text == "S"))
     );
     let x = terminal.content_left() + 8.;
     terminal.event(Event::Pointer {
@@ -187,16 +200,7 @@ fn left_tabs_keep_canvas_input_and_persistent_layout_in_sync() {
         clicks: 1,
         shift: false,
     });
-    // Sidebar presses must not clear the command area's selection or open its context menu.
-    terminal.event(Event::Pointer {
-        kind: "down".into(),
-        x: 12.,
-        y: 8.,
-        button: 2,
-        clicks: 1,
-        shift: false,
-    });
-    assert!(terminal.menu.is_none());
+    // Session interactions arrive on their own node, outside canvas-local coordinates.
     let id = terminal.tabs[0].id.to_string();
     terminal.event(Event::Ui(ui::UiEvent {
         revision: 0,
@@ -213,12 +217,11 @@ fn left_tabs_keep_canvas_input_and_persistent_layout_in_sync() {
             .as_bytes(),
     );
     let scroll = terminal.scene().scroll.unwrap();
-    assert_eq!(scroll.rect.x, terminal.effective_tab_width());
-    assert_eq!(scroll.rect.x + scroll.rect.w, terminal.width);
+    assert!(scroll.content > terminal.height);
     terminal.event(Event::Wheel {
         delta: 3.,
         shift: false,
-        x: scroll.rect.x + 10.,
+        x: 10.,
         y: 30.,
     });
     let offset = terminal.tabs[0].term.screen().scrollback();
@@ -229,7 +232,7 @@ fn left_tabs_keep_canvas_input_and_persistent_layout_in_sync() {
         x: 10.,
         y: 30.,
     });
-    assert_eq!(terminal.tabs[0].term.screen().scrollback(), offset);
+    assert!(terminal.tabs[0].term.screen().scrollback() > offset);
     let restored = Terminal::prepare(terminal.env.clone(), Some(terminal.snapshot())).unwrap();
     assert_eq!(restored.settings.tab_position, ui::SideTabsPosition::Left);
     assert_eq!(restored.tab_width, terminal.tab_width);
@@ -239,12 +242,12 @@ fn left_tabs_keep_canvas_input_and_persistent_layout_in_sync() {
 #[test]
 fn shell_directory_metadata_can_cross_output_chunks() {
     let mut app = app();
-    let handle = app.tabs[0].handle.unwrap();
+    let handle = app.tabs[0].handle.clone().unwrap();
     let encoded = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, "C:/changed");
     let bytes = format!("\x1b]633;P;Cwd64={encoded}\x07").into_bytes();
     for chunk in bytes.chunks(3) {
         app.event(Event::ProcessOutput {
-            handle,
+            handle: handle.clone(),
             bytes: chunk.to_vec(),
         });
     }
@@ -254,7 +257,7 @@ fn shell_directory_metadata_can_cross_output_chunks() {
 /// Feed the public output event using the active host resource handle.
 fn output(app: &mut Terminal, bytes: &[u8]) {
     app.event(Event::ProcessOutput {
-        handle: app.tabs[app.active].handle.unwrap(),
+        handle: app.tabs[app.active].handle.clone().unwrap(),
         bytes: bytes.to_vec(),
     });
 }
@@ -266,7 +269,9 @@ fn writes() -> Vec<u8> {
             .borrow()
             .iter()
             .filter_map(|r| match r {
-                Request::Write { bytes, .. } => Some(bytes.clone()),
+                api::Operation::Process {
+                    operation: process::Operation::Write { bytes, .. },
+                } => Some(bytes.clone()),
                 _ => None,
             })
             .flatten()
@@ -297,7 +302,7 @@ fn unicode_colors_and_legacy_snapshot_round_trip() {
             .any(|p| matches!(p, Paint::Text { text, color: 0x0c2238, .. } if text == "中"))
     );
     let snapshot = terminal.snapshot();
-    assert_eq!(snapshot.schema, 1);
+    assert_eq!(snapshot.schema, 2);
     let restored = Terminal::prepare(terminal.env.clone(), Some(snapshot)).unwrap();
     assert!(
         restored.tabs[0]
@@ -369,10 +374,9 @@ fn editor_theme_can_override_every_terminal_palette_role() {
             .insert(format!("terminal.ansi.{name}"), 0x112200 + index as u32);
     }
     for (index, name) in names[..8].iter().enumerate() {
-        environment.theme_colors.insert(
-            format!("terminal.ansi.dim_{name}"),
-            0x223300 + index as u32,
-        );
+        environment
+            .theme_colors
+            .insert(format!("terminal.ansi.dim_{name}"), 0x223300 + index as u32);
     }
     for (name, value) in [
         ("foreground", 0x334401),
@@ -416,7 +420,7 @@ fn editor_theme_can_override_every_terminal_palette_role() {
 #[test]
 fn live_theme_updates_terminal_text_styles() {
     let mut terminal = app();
-    let handle = terminal.tabs[0].handle;
+    let handle = terminal.tabs[0].handle.clone();
     let mut environment = terminal.env.clone();
     environment.ui_font = FontStyle {
         family: Some("Theme UI".into()),
@@ -438,14 +442,14 @@ fn live_theme_updates_terminal_text_styles() {
     );
     terminal.event(Event::Theme(environment));
     let scene = terminal.scene();
-    assert_eq!(scene.font, "Theme Mono");
-    assert_eq!(scene.font_size, 17.);
+    assert_eq!(scene.font.family.as_deref(), Some("Theme Mono"));
+    assert_eq!(scene.font.size_px, Some(17.));
     assert!(!scene.paint.iter().any(|paint| matches!(
         paint,
         Paint::Text { font: Some(family), size: 19., bold: true, .. } if family == "Theme Tab"
     )));
     terminal.rename = Some(terminal.tabs[0].id);
-    let sidebar = terminal.scene().controls.unwrap().sidebar.unwrap();
+    let sidebar = terminal.sessions();
     assert_eq!(sidebar.rename, Some(terminal.tabs[0].id.to_string()));
     assert_eq!(terminal.tabs[0].handle, handle);
 }
@@ -560,6 +564,13 @@ fn native_sidebar_events_keep_session_identity_and_resize_pty() {
     assert_eq!(terminal.tabs[1].name, "构建");
     let columns = terminal.tabs[1].term.screen().size().1;
     send(&mut terminal, ui::Action::Resize(300.));
+    // Native layout publishes the resulting canvas extent separately from the divider event.
+    terminal.event(Event::Resize {
+        width: 600.,
+        height: 420.,
+        cell_width: 8.,
+        cell_height: 20.,
+    });
     assert!(terminal.tabs[1].term.screen().size().1 < columns);
     send(&mut terminal, ui::Action::Close(second));
     assert_eq!(terminal.tabs[terminal.active].id.to_string(), first);
@@ -578,7 +589,7 @@ fn native_sidebar_events_keep_session_identity_and_resize_pty() {
         action: ui::Action::Dismiss,
     }));
     assert!(terminal.menu.is_none());
-    terminal.scene().controls.unwrap().validate().unwrap();
+    terminal.document().validate().unwrap();
 }
 
 /// Every close entry point hides the panel only after its last session and process are removed.
@@ -589,7 +600,7 @@ fn final_tab_close_requests_panel_hiding_for_all_close_actions() {
         terminal.add(0, terminal.env.workspace.clone());
         let first = terminal.tabs[0].id;
         let last = terminal.tabs[1].id;
-        let last_handle = terminal.tabs[1].handle.unwrap();
+        let last_handle = terminal.tabs[1].handle.clone().unwrap();
         CALLS.with(|calls| calls.borrow_mut().clear());
         terminal.event(Event::Ui(ui::UiEvent {
             revision: 0,
@@ -598,11 +609,15 @@ fn final_tab_close_requests_panel_hiding_for_all_close_actions() {
         }));
         assert_eq!(terminal.tabs.len(), 1);
         assert_eq!(terminal.tabs[terminal.active].id, last);
-        assert!(!CALLS.with(
-            |calls| calls.borrow().iter().any(|request| matches!(request,
-                Request::Editor { command } if command.starts_with("hide_panel:")
-            ))
-        ));
+        assert!(
+            !CALLS.with(|calls| calls.borrow().iter().any(|request| matches!(
+                request,
+                api::Operation::Editor {
+                    operation: api::EditorOperation::SetPanelVisibility { visible: false, .. },
+                    ..
+                }
+            )))
+        );
         CALLS.with(|calls| calls.borrow_mut().clear());
         terminal.menu = Some(TerminalMenu::Commands);
         terminal.rename = Some(last);
@@ -629,22 +644,13 @@ fn final_tab_close_requests_panel_hiding_for_all_close_actions() {
         assert!(terminal.tabs.is_empty(), "{action}");
         assert!(terminal.menu.is_none());
         assert!(terminal.rename.is_none());
-        assert!(
-            terminal
-                .scene()
-                .controls
-                .unwrap()
-                .sidebar
-                .unwrap()
-                .items
-                .is_empty()
-        );
+        assert!(terminal.sessions().items.is_empty());
         CALLS.with(|calls| {
             let requests = calls.borrow();
             // Process retirement precedes panel hiding and must not launch a replacement shell.
             assert!(
-                matches!(&requests[..], [Request::Close { handle }, Request::Editor { command }]
-                if *handle == last_handle && command == "hide_panel:terminal"),
+                matches!(&requests[..], [api::Operation::Process { operation: process::Operation::Terminate { handle } }, api::Operation::Editor { operation: api::EditorOperation::SetPanelVisibility {panel,visible:false}, .. }]
+                if *handle == last_handle && panel == "terminal"),
                 "{action}: {requests:?}"
             );
         });
@@ -660,20 +666,17 @@ fn opening_empty_terminal_creates_one_default_tab() {
     let mut terminal = app();
     terminal.close(0);
     CALLS.with(|calls| calls.borrow_mut().clear());
-    let opened = || Event::Surface {
-        panel: "terminal".into(),
-        event: Box::new(Event::Command {
-            id: "panel.opened".into(),
-            cwd: None,
-            text: None,
-            arguments: None,
-        }),
+    let opened = || Event::Command {
+        id: "panel.opened".into(),
+        cwd: None,
+        text: None,
+        arguments: None,
     };
     terminal.event(opened());
     assert_eq!(terminal.tabs.len(), 1);
     assert_eq!(terminal.tabs[0].name, "powershell");
     assert_eq!(terminal.tabs[0].cwd, terminal.env.workspace);
-    let handle = terminal.tabs[0].handle;
+    let handle = terminal.tabs[0].handle.clone();
     terminal.event(opened());
     terminal.event(Event::Focus(true));
     assert_eq!(terminal.tabs.len(), 1);
@@ -682,14 +685,20 @@ fn opening_empty_terminal_creates_one_default_tab() {
         CALLS.with(|calls| calls
             .borrow()
             .iter()
-            .filter(|request| matches!(request, Request::Spawn { .. }))
+            .filter(|request| matches!(
+                request,
+                api::Operation::Process {
+                    operation: process::Operation::Execute { .. }
+                }
+            ))
             .count()),
         1
     );
     terminal.close(0);
-    terminal
-        .pending_runs
-        .push_back(commands::OpenOptions::default());
+    terminal.pending_editor.insert(
+        999,
+        commands::PendingEditor::BeforeSave(commands::OpenOptions::default()),
+    );
     CALLS.with(|calls| calls.borrow_mut().clear());
     terminal.event(opened());
     assert!(terminal.tabs.is_empty());
@@ -701,7 +710,7 @@ fn opening_empty_terminal_creates_one_default_tab() {
 fn live_dark_mode_recolors_existing_output() {
     let mut terminal = app();
     output(&mut terminal, b"\x1b[33mY");
-    let handle = terminal.tabs[0].handle;
+    let handle = terminal.tabs[0].handle.clone();
     assert_eq!(terminal.color(3), 0x8a5a00);
     let mut environment = terminal.env.clone();
     environment.dark = true;
@@ -721,7 +730,7 @@ fn live_dark_mode_recolors_existing_output() {
 fn default_caret_is_beam_and_shell_can_request_block() {
     let mut terminal = app();
     assert_eq!(terminal.tabs[0].term.cursor_shape(), 5);
-    let cursor = terminal.scene().cursor;
+    let cursor = terminal.scene().caret.unwrap();
     assert!(terminal.scene().paint.iter().any(|paint| matches!(
         paint,
         Paint::Fill { rect, color, .. }
@@ -879,7 +888,7 @@ fn selection_copy_and_mouse_reporting() {
         calls
             .borrow()
             .iter()
-            .any(|r| matches!(r, Request::ClipboardWrite(text) if text == "hello"))
+            .any(|r| matches!(r, api::Operation::Editor { operation: api::EditorOperation::WriteClipboard {text}, .. } if text == "hello"))
     }));
     terminal.event(Event::Pointer {
         kind: "down".into(),
@@ -939,13 +948,15 @@ fn resizing_and_history_limits() {
         cell_width: 8.,
         cell_height: 20.,
     });
-    assert_eq!(terminal.tabs[0].term.screen().size(), (29, 99));
+    assert_eq!(terminal.tabs[0].term.screen().size(), (29, 122));
     assert!(CALLS.with(|calls| calls.borrow().iter().any(|r| matches!(
         r,
-        Request::Resize {
-            rows: 29,
-            columns: 99,
-            ..
+        api::Operation::Process {
+            operation: process::Operation::Resize {
+                rows: 29,
+                columns: 122,
+                ..
+            }
         }
     ))));
     let bytes = (0..100)
@@ -985,7 +996,14 @@ fn dragging_within_one_cell_extent_sends_only_one_pty_resize() {
         calls
             .borrow()
             .iter()
-            .filter(|request| matches!(request, Request::Resize { .. }))
+            .filter(|request| {
+                matches!(
+                    request,
+                    api::Operation::Process {
+                        operation: process::Operation::Resize { .. }
+                    }
+                )
+            })
             .count()
     });
     assert_eq!(count, 1, "one grid size needs one PTY resize notification");
@@ -1005,7 +1023,7 @@ fn window_resize_preserves_selected_tab_width() {
             cell_width: 8.,
             cell_height: 20.,
         });
-        let tabs = terminal.canvas_controls().sidebar.unwrap();
+        let tabs = terminal.sessions();
         assert_eq!(tabs.width, chosen_width, "window width {width}");
         assert_eq!(tabs.min_width, MIN_TAB_WIDTH);
         assert_eq!(tabs.max_width, MAX_TAB_WIDTH);
@@ -1336,14 +1354,14 @@ fn control_copy_paste_and_shift_aliases_use_clipboard() {
         assert_eq!(
             calls
                 .iter()
-                .filter(|r| matches!(r, Request::ClipboardWrite(text) if text == "hello"))
+                .filter(|r| matches!(r, api::Operation::Editor { operation: api::EditorOperation::WriteClipboard {text}, .. } if text == "hello"))
                 .count(),
             2
         );
         assert_eq!(
             calls
                 .iter()
-                .filter(|r| matches!(r, Request::ClipboardRead))
+                .filter(|r| matches!(r, api::Operation::Editor { operation: api::EditorOperation::ReadClipboard, .. }))
                 .count(),
             2
         );
@@ -1371,7 +1389,7 @@ fn output_context_menu_copies_only_selected_text_and_pastes() {
         clicks: 1,
         shift: false,
     });
-    let menu = terminal.canvas_controls().menu.unwrap();
+    let menu = terminal.document().menu.unwrap();
     assert_eq!((menu.x, menu.y), (60., 40.));
     assert_eq!(
         menu.items
@@ -1403,8 +1421,8 @@ fn output_context_menu_copies_only_selected_text_and_pastes() {
         shift: false,
     });
     assert_eq!(terminal.selected_text().as_deref(), Some("hello"));
-    assert!(!terminal.canvas_controls().menu.unwrap().items[0].disabled);
-    terminal.canvas_controls().validate().unwrap();
+    assert!(!terminal.document().menu.unwrap().items[0].disabled);
+    terminal.document().validate().unwrap();
     terminal.event(Event::Ui(ui::UiEvent {
         revision: 0,
         node: menu.id.clone(),
@@ -1415,7 +1433,7 @@ fn output_context_menu_copies_only_selected_text_and_pastes() {
         calls
             .borrow()
             .iter()
-            .any(|r| matches!(r, Request::ClipboardWrite(text) if text == "hello"))
+            .any(|r| matches!(r, api::Operation::Editor { operation: api::EditorOperation::WriteClipboard {text}, .. } if text == "hello"))
     }));
     terminal.event(Event::Pointer {
         kind: "down".into(),
@@ -1431,10 +1449,15 @@ fn output_context_menu_copies_only_selected_text_and_pastes() {
         action: ui::Action::Select("paste".into()),
     }));
     assert!(CALLS.with(|calls| {
-        calls
-            .borrow()
-            .iter()
-            .any(|r| matches!(r, Request::ClipboardRead))
+        calls.borrow().iter().any(|r| {
+            matches!(
+                r,
+                api::Operation::Editor {
+                    operation: api::EditorOperation::ReadClipboard,
+                    ..
+                }
+            )
+        })
     }));
     assert!(writes().is_empty());
 }
@@ -1448,7 +1471,7 @@ fn output_context_menu_clears_entire_active_buffer() {
     let bytes = (0..40).map(|i| format!("line {i}\r\n")).collect::<String>();
     output(&mut terminal, bytes.as_bytes());
     output(&mut terminal, b"\x1b[?2004h\x1b[?1049halt output");
-    let handle = terminal.tabs[1].handle;
+    let handle = terminal.tabs[1].handle.clone();
     terminal.tabs[1].term.select(0, 0, 2);
     CALLS.with(|calls| calls.borrow_mut().clear());
     terminal.event(Event::Pointer {
@@ -1492,7 +1515,7 @@ fn invoke(terminal: &mut Terminal, id: &str, arguments: serde_json::Value) {
         text: None,
         arguments: Some(arguments),
     };
-    terminal.event(serde_json::from_str(&serde_json::to_string(&event).unwrap()).unwrap());
+    terminal.event(event);
 }
 
 /// Duplicate labels remain independent sessions, including after closing and restoring old data.
@@ -1527,7 +1550,7 @@ fn default_names_never_increment_and_legacy_names_are_preserved() {
     restored.add(0, "C:/new".into());
     assert_eq!(restored.tabs[0].name, "powershell42");
     assert_eq!(restored.tabs.last().unwrap().name, "powershell");
-    restored.canvas_controls().validate().unwrap();
+    restored.document().validate().unwrap();
 }
 
 /// Host-provided names and profiles survive persistence while an empty name uses the tool.
@@ -1547,7 +1570,7 @@ fn host_can_create_named_terminal_in_a_selected_directory() {
     assert_eq!(tab.profile.program, "cmd.exe");
     assert!(
         CALLS.with(|calls| calls.borrow().iter().any(|call| matches!(call,
-            Request::Spawn { program, cwd, .. } if program == "cmd.exe" && cwd == "C:/build"
+            api::Operation::Process { operation: process::Operation::Execute { program, cwd, .. } } if program == "cmd.exe" && cwd.as_deref() == Some("C:/build")
         )))
     );
     let restored = Terminal::prepare(terminal.env.clone(), Some(terminal.snapshot())).unwrap();
@@ -1585,33 +1608,26 @@ fn host_run_parameters_survive_asynchronous_save_callbacks() {
     }
     assert_eq!(terminal.tabs.len(), 1);
     assert!(writes().is_empty());
-    assert_eq!(terminal.pending_runs.len(), 2);
-    assert_eq!(
-        CALLS.with(|calls| calls
-            .borrow()
-            .iter()
-            .filter(|call| matches!(call, Request::Editor { command } if command == "save"))
-            .count()),
-        2
-    );
-    invoke(&mut terminal, "save.result", serde_json::Value::Null);
+    assert_eq!(terminal.pending_editor.len(), 2);
+    assert_eq!(terminal.pending_editor.len(), 2);
+    complete_save(&mut terminal);
     assert_eq!(terminal.tabs[terminal.active].name, "运行 A");
     assert_eq!(terminal.tabs[terminal.active].cwd, "C:/a");
     assert_eq!(writes(), b"echo alpha\r");
     CALLS.with(|calls| calls.borrow_mut().clear());
-    invoke(&mut terminal, "save.result", serde_json::Value::Null);
+    complete_save(&mut terminal);
     assert_eq!(terminal.tabs[terminal.active].name, "运行 B");
     assert_eq!(terminal.tabs[terminal.active].cwd, "C:/b");
     assert_eq!(terminal.tabs[terminal.active].profile.program, "cmd.exe");
     assert_eq!(writes(), b"echo beta\r");
-    assert!(terminal.pending_runs.is_empty());
+    assert!(terminal.pending_editor.is_empty());
 }
 
 /// Rejected task creation must never send a host's command to the existing interactive tab.
 #[test]
 fn invalid_or_disabled_host_requests_do_not_run_in_an_existing_session() {
     let mut terminal = app();
-    let handle = terminal.tabs[0].handle;
+    let handle = terminal.tabs[0].handle.clone();
     CALLS.with(|calls| calls.borrow_mut().clear());
     invoke(
         &mut terminal,
@@ -1627,7 +1643,7 @@ fn invalid_or_disabled_host_requests_do_not_run_in_an_existing_session() {
     ] {
         terminal.settings.enabled = arguments.get("profile").is_some();
         invoke(&mut terminal, "terminal.run", arguments);
-        invoke(&mut terminal, "save.result", serde_json::Value::Null);
+        complete_save(&mut terminal);
         assert_eq!(terminal.tabs.len(), 1);
         assert_eq!(terminal.tabs[0].handle, handle);
         assert!(writes().is_empty());
@@ -1646,10 +1662,42 @@ fn invalid_or_disabled_host_requests_do_not_run_in_an_existing_session() {
 #[test]
 fn old_host_command_without_arguments_remains_compatible() {
     let mut terminal = app();
-    let event: Event =
-        serde_json::from_str(r#"{"Command":{"id":"terminal.new","cwd":null,"text":null}}"#)
-            .unwrap();
-    terminal.event(event);
+    invoke(&mut terminal, "terminal.new", serde_json::Value::Null);
     assert_eq!(terminal.tabs.len(), 2);
     assert_eq!(terminal.tabs[1].name, "powershell");
+}
+/// Drive version-aware read and save completions; admission itself must not run the command.
+fn complete_save(terminal: &mut Terminal) {
+    let document = api::DocumentVersion {
+        id: "file".into(),
+        path: "src/main.rs".into(),
+        revision: 3,
+    };
+    let Some(id) = terminal
+        .pending_editor
+        .iter()
+        .find_map(|(id, p)| matches!(p, commands::PendingEditor::BeforeSave(_)).then_some(*id))
+    else {
+        return;
+    };
+    terminal.editor_completion(
+        request_handle(id),
+        api::RequestUpdate::Completed {
+            result: Ok(api::EditorValue::Selection {
+                document: document.clone(),
+                text: String::new(),
+            }),
+        },
+    );
+    let id = terminal
+        .pending_editor
+        .iter()
+        .find_map(|(id, p)| matches!(p, commands::PendingEditor::AfterSave(_)).then_some(*id))
+        .unwrap();
+    terminal.editor_completion(
+        request_handle(id),
+        api::RequestUpdate::Completed {
+            result: Ok(api::EditorValue::Saved { document }),
+        },
+    );
 }

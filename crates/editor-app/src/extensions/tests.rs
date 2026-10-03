@@ -916,9 +916,11 @@ fn incompatible_plugin_details_keep_preferences_and_update_uninstall_actions(
     cx.update(|window, cx| {
         let owner = app.read(cx).extensions.clone();
         owner.update(cx, |owner, cx| {
-            let old: protocol::Manifest =
+            let mut old: protocol::Manifest =
                 serde_json::from_str(include_str!("../../../../plugins/terminal/manifest.json"))
                     .unwrap();
+            // Keep a genuinely legacy installed fixture after the delivered package migrates.
+            old.protocol = 5;
             // Same-version SDK repacks must still offer an update for an incompatible installed protocol.
             let current = crate::extensions::test_manifest(include_str!(
                 "../../../../plugins/terminal/manifest.json"

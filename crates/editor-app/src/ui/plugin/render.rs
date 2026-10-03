@@ -14,6 +14,7 @@ impl PluginView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
+        self.sync_widgets(window, cx);
         let root = self.document.root.clone();
         let body = self.node(&root, false, window, cx);
         let mut view = div()
@@ -24,6 +25,27 @@ impl PluginView {
             .overflow_hidden()
             .bg(self.colors("container", cx).background)
             .child(body);
+        // Popup anchors use this composed view's native origin, never the containing editor window origin.
+        let owner = cx.entity().downgrade();
+        view = view.child(
+            gpui_kit::canvas(
+                move |bounds, _, cx| {
+                    let _ = owner.update(cx, |this, cx| {
+                        if this.origin != bounds.origin {
+                            this.origin = bounds.origin;
+                            cx.notify();
+                        }
+                    });
+                },
+                |_, _, _, _| {},
+            )
+            .absolute()
+            .size_full(),
+        );
+        if let Some(popup) = &self.popup {
+            // Menus overlay their owner; a full-size widget must not consume a second flex row.
+            view = view.child(div().absolute().inset_0().child(popup.clone()));
+        }
         if let Some(dialog) = self.document.dialog.clone() {
             // Dismiss stays blocked until the guest acknowledges it by removing the modal.
             let content = self.node(&dialog.content, false, window, cx);
@@ -112,6 +134,7 @@ impl PluginView {
         let id = node.id.clone();
         let native_id = SharedString::from(format!("plugin-ui-{}", node.id));
         let content = match &node.kind {
+            Kind::SideTabs(_) => self.collections[&node.id].clone().into_any_element(),
             Kind::Canvas(_) => self.canvases[&node.id].clone().into_any_element(),
             Kind::Column { children } | Kind::Row { children } => {
                 let children: Vec<_> = children

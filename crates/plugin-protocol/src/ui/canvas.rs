@@ -4,6 +4,12 @@ use serde::{Deserialize, Serialize};
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Canvas {
+    /// Optional typography for custom grids; omitted fields inherit the selected theme role.
+    #[serde(default)]
+    pub font: crate::FontStyle,
+    /// Native scrollbar range. Content remains guest-owned; scrolling emits an absolute pixel offset.
+    #[serde(default)]
+    pub scroll: Option<ScrollRange>,
     pub paint: Vec<crate::Paint>,
     /// Ordinary image surfaces do not claim text focus or IME; interactive canvases explicitly opt in.
     #[serde(default)]
@@ -14,6 +20,13 @@ pub struct Canvas {
     /// Optional IME anchor in canvas-local coordinates. It does not imply an editable document.
     #[serde(default)]
     pub caret: Option<crate::Rect>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ScrollRange {
+    pub content: f32,
+    pub offset: f32,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -34,6 +47,9 @@ pub enum PointerPhase {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum CanvasEvent {
+    Scroll {
+        offset: f32,
+    },
     Resize {
         width: f32,
         height: f32,
@@ -71,6 +87,26 @@ pub enum CanvasEvent {
 impl Canvas {
     /// Validate geometry and bound expensive vectors before allocating host rendering resources.
     pub fn validate(&self) -> Result<(), String> {
+        if self
+            .font
+            .family
+            .as_ref()
+            .is_some_and(|font| font.is_empty() || font.len() > 256)
+            || self
+                .font
+                .size_px
+                .is_some_and(|size| !size.is_finite() || !(1. ..=128.).contains(&size))
+            || self.scroll.as_ref().is_some_and(|range| {
+                !range.content.is_finite()
+                    || !range.offset.is_finite()
+                    || range.content < 0.
+                    || range.content > 100_000_000.
+                    || range.offset < 0.
+                    || range.offset > range.content
+            })
+        {
+            return Err("Invalid canvas typography or scroll range".into());
+        }
         let coordinate = |value: f32| value.is_finite() && value.abs() <= 1_000_000.;
         let rect = |rect: &crate::Rect| {
             coordinate(rect.x)

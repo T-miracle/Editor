@@ -30,6 +30,9 @@ pub struct Document {
     /// At most one modal per panel. Removing it closes the modal.
     #[serde(default)]
     pub dialog: Option<Dialog>,
+    /// Optional native popup in root-local coordinates; it owns input until dismissed.
+    #[serde(default)]
+    pub menu: Option<PopupMenu>,
 }
 
 impl Document {
@@ -40,6 +43,7 @@ impl Document {
             revision: 0,
             root,
             dialog: None,
+            menu: None,
         }
     }
 
@@ -60,6 +64,9 @@ impl Document {
 
     /// Find an interactive node only in the active modal, or the panel when no modal exists.
     pub fn active_node(&self, id: &str) -> Option<&Node> {
+        if self.menu.is_some() && self.dialog.is_none() {
+            return None;
+        }
         self.dialog
             .as_ref()
             .map_or(&self.root, |dialog| &dialog.content)
@@ -118,6 +125,8 @@ pub struct Layout {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum Kind {
+    /// A keyed, reorderable native item list can be placed anywhere in the ordinary layout tree.
+    SideTabs(SideTabs),
     /// Any position in the same layout tree can hold a drawing surface; it has no implicit grid.
     Canvas(Canvas),
     Column {
@@ -330,6 +339,7 @@ impl Node {
             return &self.role;
         }
         match &self.kind {
+            Kind::SideTabs(_) => "tab_bar",
             Kind::Canvas(_) => "canvas",
             Kind::Column { .. } | Kind::Row { .. } => "container",
             Kind::Scroll { .. } => "scroll",

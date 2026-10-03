@@ -269,6 +269,14 @@ impl State {
                 "workspace.read"
             }
             api::Operation::Editor { operation, .. } => match operation {
+                api::EditorOperation::ReadClipboard
+                | api::EditorOperation::WriteClipboard { .. } => "clipboard",
+                api::EditorOperation::OpenDataFile { .. } => {
+                    return Err(Failure::new(
+                        ErrorCode::PermissionDenied,
+                        "Service calls cannot open private provider files",
+                    ));
+                }
                 api::EditorOperation::SaveDocument { .. } => "editor.write",
                 api::EditorOperation::SetPanelVisibility { .. } => "ui.panels",
                 _ => "editor.read",

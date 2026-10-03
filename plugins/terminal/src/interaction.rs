@@ -4,12 +4,8 @@ use crate::emulator::{MouseProtocolEncoding, MouseProtocolMode};
 impl Terminal {
     /// Native input is forwarded as data and interpreted only by this plugin.
     pub(super) fn event(&mut self, event: Event) {
-        self.ui_revision = self.ui_revision.wrapping_add(1);
         match event {
-            // File-scoped document events belong to preview plugins, never to terminal input.
-            Event::Document { .. } => {}
             Event::Ui(event) => self.ui_event(event),
-            Event::Surface { event, .. } => self.event(*event),
             Event::Resize {
                 width,
                 height,
@@ -25,7 +21,11 @@ impl Terminal {
             Event::Theme(env) => self.env = env,
             Event::ProcessOutput { handle, bytes } => {
                 let palette: Vec<_> = (0..269).map(|i| self.color(i)).collect();
-                if let Some(tab) = self.tabs.iter_mut().find(|t| t.handle == Some(handle)) {
+                if let Some(tab) = self
+                    .tabs
+                    .iter_mut()
+                    .find(|t| t.handle.as_ref() == Some(&handle))
+                {
                     tab.metadata_parser.advance(&mut tab.metadata, &bytes);
                     if let Some(cwd) = tab.metadata.cwd.take() {
                         tab.cwd = cwd;
@@ -34,12 +34,16 @@ impl Terminal {
                     tab.term.process(&bytes);
                     let bytes = std::mem::take(&mut tab.term.replies_mut().bytes);
                     if !bytes.is_empty() {
-                        let _ = host(Request::Write { handle, bytes });
+                        let _ = host::process(process::Operation::Write { handle, bytes });
                     }
                 }
             }
             Event::ProcessExit { handle } => {
-                if let Some(tab) = self.tabs.iter_mut().find(|t| t.handle == Some(handle)) {
+                if let Some(tab) = self
+                    .tabs
+                    .iter_mut()
+                    .find(|t| t.handle.as_ref() == Some(&handle))
+                {
                     tab.exited = true;
                     tab.handle = None;
                 }
@@ -78,6 +82,7 @@ impl Terminal {
                 }
             }
             Event::Text(text) => self.send(text.into_bytes()),
+            #[cfg(test)]
             Event::Paste(text) => {
                 let bracketed = self
                     .tabs
@@ -121,7 +126,7 @@ impl Terminal {
                     }
                 }
             }
-            Event::Scroll { id: _, offset } => {
+            Event::Scroll { offset } => {
                 if let Some(tab) = self.tabs.get_mut(self.active) {
                     let target = (scene::visible_history(tab) as i32
                         - (offset / self.ch).round() as i32)
@@ -129,18 +134,6 @@ impl Terminal {
                     let delta = target - tab.term.screen().scrollback() as i32;
                     tab.term.scroll(delta);
                 }
-            }
-            Event::Edit { id, text } => {
-                if let Some(tab) = self
-                    .tabs
-                    .iter_mut()
-                    .find(|t| format!("rename:{}", t.id) == id)
-                {
-                    if !text.trim().is_empty() {
-                        tab.name = text.trim().chars().take(80).collect();
-                    }
-                }
-                self.rename = None;
             }
             Event::Focus(focused) => {
                 if self
@@ -162,8 +155,8 @@ impl Terminal {
             // Pixel drag events need no ConPTY call until the cell count changes.
             if tab.term.screen().size() != dimensions {
                 tab.term.resize(dimensions.0, dimensions.1);
-                if let Some(handle) = tab.handle {
-                    let _ = host(Request::Resize {
+                if let Some(handle) = tab.handle.clone() {
+                    let _ = host::process(process::Operation::Resize {
                         handle,
                         columns: dimensions.1,
                         rows: dimensions.0,
@@ -177,7 +170,15 @@ impl Terminal {
         match id.trim_start_matches("terminal.") {
             "panel.opened" => {
                 // An explicit reopen creates one default session; an awaited run supplies its own.
-                if self.tabs.is_empty() && self.pending_runs.is_empty() {
+                if self.tabs.is_empty()
+                    && !self.pending_editor.values().any(|purpose| {
+                        matches!(
+                            purpose,
+                            commands::PendingEditor::BeforeSave(_)
+                                | commands::PendingEditor::AfterSave(_)
+                        )
+                    })
+                {
                     self.add(self.settings.default_profile, self.env.workspace.clone());
                 }
             }
@@ -219,77 +220,86 @@ impl Terminal {
             "copy" => {
                 // Never replace the clipboard when there is no nonempty selected text.
                 if let Some(text) = self.selected_text() {
-                    let _ = host(Request::ClipboardWrite(text));
+                    self.queue_editor(
+                        api::EditorOperation::WriteClipboard { text },
+                        commands::PendingEditor::Effect,
+                    );
                 }
             }
             "paste" => {
-                let _ = host(Request::ClipboardRead);
+                if let Some(handle) = self
+                    .tabs
+                    .get(self.active)
+                    .and_then(|tab| tab.handle.clone())
+                {
+                    self.queue_editor(
+                        api::EditorOperation::ReadClipboard,
+                        commands::PendingEditor::Paste(handle),
+                    );
+                }
             }
             "selection" => {
-                let _ = host(Request::Editor {
-                    command: "selection".into(),
-                });
-            }
-            "selection.result" => {
-                if let Some(text) = text {
-                    self.event(Event::Paste(text));
+                if let Some(handle) = self
+                    .tabs
+                    .get(self.active)
+                    .and_then(|tab| tab.handle.clone())
+                {
+                    self.queue_editor(
+                        api::EditorOperation::ReadSelection,
+                        commands::PendingEditor::Selection(handle),
+                    );
                 }
             }
             "cwd" | "here" => {
-                let _ = host(Request::Editor {
-                    command: "active_directory".into(),
-                });
+                self.queue_editor(
+                    api::EditorOperation::ActiveDirectory,
+                    commands::PendingEditor::Directory,
+                );
             }
-            "active_directory.result" => self.add(
-                self.settings.default_profile,
-                cwd.unwrap_or(self.env.workspace.clone()),
-            ),
             "restart" => {
                 if let Some(tab) = self.tabs.get_mut(self.active) {
                     if let Some(handle) = tab.handle.take() {
-                        let _ = host(Request::Close { handle });
+                        let _ = host::process(process::Operation::Terminate { handle });
                     }
                     self.spawn(self.active);
                 }
             }
             "run" => self.invoke_command(id, cwd, text, None),
-            "save.result" => {
-                if let Some(options) = self.pending_runs.pop_front() {
-                    self.run_project(options);
-                }
-            }
             "settings" => {
                 let source = serde_json::to_string_pretty(&self.settings).unwrap();
-                if host(Request::ReadData {
-                    path: "settings.json".into(),
-                })
-                .is_err()
-                {
-                    let _ = host(Request::WriteData {
-                        path: "settings.json".into(),
-                        text: source,
-                    });
-                }
-                let _ = host(Request::Editor {
-                    command: "open_data:settings.json".into(),
-                });
-            }
-            "reload" => {
-                if let Ok(value) = host(Request::ReadData {
-                    path: "settings.json".into(),
-                }) {
-                    match Settings::parse(value.as_str().unwrap_or("")) {
-                        Ok(s) => {
-                            self.settings = s;
-                            for tab in &mut self.tabs {
-                                tab.term.set_history_limit(self.settings.history);
-                            }
-                            self.error = None;
-                        }
-                        Err(e) => self.error = Some(e.to_string()),
+                let existing = match host::read_optional("settings.json", true) {
+                    Ok(value) => value,
+                    Err(error) => {
+                        self.error = Some(error);
+                        return;
+                    }
+                };
+                if existing.is_none() {
+                    if let Err(error) = host::write_data("settings.json", source) {
+                        self.error = Some(error);
+                        return;
                     }
                 }
+                self.queue_editor(
+                    api::EditorOperation::OpenDataFile {
+                        path: "settings.json".into(),
+                    },
+                    commands::PendingEditor::Effect,
+                );
             }
+            "reload" => match host::read("settings.json", true) {
+                Ok(value) => match Settings::parse_for_os(&value, &self.env.os) {
+                    Ok(s) => {
+                        self.settings = s;
+                        for tab in &mut self.tabs {
+                            tab.term.set_history_limit(self.settings.history);
+                        }
+                        self.error = None;
+                    }
+                    Err(e) => self.error = Some(e.to_string()),
+                },
+                Err(error) => self.error = Some(error),
+            },
             _ if id.starts_with("profile:") => {
                 if let Ok(index) = id[8..].parse() {
                     self.add(index, self.env.workspace.clone());
@@ -299,22 +309,15 @@ impl Terminal {
         }
     }
     /// Project detection reads only authorized workspace files and never auto-runs at launch.
-    fn run_project(&mut self, options: commands::OpenOptions) {
+    pub(super) fn run_project(&mut self, options: commands::OpenOptions) {
         let command = options
             .command
             .or_else(|| self.settings.run_command.clone())
             .or_else(|| {
-                if host(Request::ReadWorkspace {
-                    path: "Cargo.toml".into(),
-                })
-                .is_ok()
-                {
+                if host::read("Cargo.toml", false).is_ok() {
                     Some("cargo run".into())
-                } else if let Ok(value) = host(Request::ReadWorkspace {
-                    path: "package.json".into(),
-                }) {
-                    let package: serde_json::Value =
-                        serde_json::from_str(value.as_str().unwrap_or("")).ok()?;
+                } else if let Ok(value) = host::read("package.json", false) {
+                    let package: serde_json::Value = serde_json::from_str(&value).ok()?;
                     let scripts = package.get("scripts")?;
                     if scripts.get("dev").is_some() {
                         Some("npm run dev".into())

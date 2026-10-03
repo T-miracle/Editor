@@ -14,6 +14,18 @@ pub(super) fn document(document: &Document) -> Result<(), String> {
         vectors: 0,
     };
     validator.node(&document.root, 0)?;
+    if let Some(menu) = &document.menu {
+        validator.id(&menu.id)?;
+        CanvasControls {
+            menu: Some(menu.clone()),
+            ..Default::default()
+        }
+        .validate()?;
+        validator.budget(menu.items.len())?;
+        for item in &menu.items {
+            validator.text(&item.label)?;
+        }
+    }
     if let Some(dialog) = &document.dialog {
         validator.id(&dialog.id)?;
         validator.text(&dialog.title)?;
@@ -92,6 +104,23 @@ impl Validator {
         dimension(layout.gap, 0., 256.)?;
         dimension(layout.padding, 0., 256.)?;
         match &node.kind {
+            Kind::SideTabs(tabs) => {
+                if tabs.id != node.id {
+                    return Err("Item list identity differs from its node".into());
+                }
+                CanvasControls {
+                    sidebar: Some(tabs.clone()),
+                    ..Default::default()
+                }
+                .validate()?;
+                self.budget(tabs.items.len())?;
+                for item in &tabs.items {
+                    self.text(&item.label)?;
+                    if let Some(status) = &item.status {
+                        self.text(status)?;
+                    }
+                }
+            }
             Kind::Canvas(canvas) => {
                 canvas.validate()?;
                 // Drawings count toward this whole document, preventing many small canvases bypassing quotas.

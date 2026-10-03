@@ -6,6 +6,7 @@ mod render;
 #[cfg(test)]
 mod tests;
 mod theme;
+mod widgets;
 
 use gpui_base::input::{InputEvent, InputState};
 use gpui_kit::{
@@ -38,6 +39,10 @@ pub(crate) struct PluginView {
     inputs: BTreeMap<String, NativeInput>,
     scrolls: BTreeMap<String, ScrollHandle>,
     canvases: BTreeMap<String, Entity<canvas::CanvasView>>,
+    /// Collection widgets retain native rename/drag state independently of canvas redraws.
+    collections: BTreeMap<String, Entity<controls::CanvasControlsView>>,
+    popup: Option<Entity<controls::CanvasControlsView>>,
+    origin: gpui_kit::Point<gpui_kit::Pixels>,
     dialog_focus: FocusHandle,
     previous_focus: Option<FocusHandle>,
     dismissed_dialog: Option<String>,
@@ -81,6 +86,9 @@ impl PluginView {
             inputs: BTreeMap::new(),
             scrolls: BTreeMap::new(),
             canvases: BTreeMap::new(),
+            collections: BTreeMap::new(),
+            popup: None,
+            origin: Default::default(),
             dialog_focus: cx.focus_handle(),
             previous_focus: None,
             dismissed_dialog: None,
@@ -105,8 +113,14 @@ impl PluginView {
         }
         let old_dialog = self.document.dialog.as_ref().map(|d| d.id.clone());
         let next_dialog = document.dialog.as_ref().map(|d| d.id.clone());
+        let menu_changed = self.document.menu.as_ref().map(|menu| &menu.id)
+            != document.menu.as_ref().map(|menu| &menu.id);
         self.document = document;
         self.environment = environment;
+        // Each popup opening owns a fresh dismiss acknowledgement, even when it reuses an ID.
+        if menu_changed {
+            self.dismissed_dialog = None;
+        }
         if old_dialog != next_dialog {
             self.dismissed_dialog = None;
             if next_dialog.is_some() {
@@ -188,9 +202,11 @@ impl PluginView {
                     self.canvases.insert(node.id.clone(), view);
                 }
                 let active = self.document.active_node(&node.id).is_some();
-                let font =
-                    self.environment
-                        .font_style(&self.plugin, node.theme_role(), drawing.grid);
+                let font = drawing.font.clone().over(self.environment.font_style(
+                    &self.plugin,
+                    node.theme_role(),
+                    drawing.grid,
+                ));
                 self.canvases[&node.id].update(cx, |view, cx| {
                     view.drawing = drawing.clone();
                     view.font = font;

@@ -371,17 +371,37 @@ impl Instance {
             }
             let mut canvas = false;
             let mut grid = false;
+            let mut collections = view.document.menu.is_some();
+            let mut enhanced_canvas = false;
             let mut visit = |node: &ui::Node| {
                 if let ui::Kind::Canvas(value) = &node.kind {
                     canvas = true;
                     grid |= value.grid;
+                    enhanced_canvas |= value.scroll.is_some() || value.font != Default::default();
                 }
+                collections |= matches!(node.kind, ui::Kind::SideTabs(_));
             };
             view.document.root.visit(&mut visit);
             if let Some(dialog) = &view.document.dialog {
                 dialog.content.visit(&mut visit);
             }
-            for (required, capability) in [(canvas, "ui.canvas"), (grid, "ui.grid")] {
+            if enhanced_canvas
+                && !api
+                    .capabilities
+                    .get("ui.canvas")
+                    .is_some_and(|version| *version >= semver::Version::new(1, 1, 0))
+            {
+                return Err(Failure::new(
+                    ErrorCode::CapabilityUnavailable,
+                    "ui.canvas 1.1 is required for font and scroll range",
+                )
+                .into());
+            }
+            for (required, capability) in [
+                (canvas, "ui.canvas"),
+                (grid, "ui.grid"),
+                (collections, "ui.collections"),
+            ] {
                 if required && !api.capabilities.contains_key(capability) {
                     return Err(api::Failure::new(
                         api::ErrorCode::CapabilityUnavailable,

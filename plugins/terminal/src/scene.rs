@@ -2,24 +2,23 @@
 use super::*;
 use crate::emulator::Color;
 
-/// Alacritty allocates history only when real rows leave the screen.
+/// The upstream grid allocates history only when real rows leave the screen.
 pub(super) fn visible_history(tab: &Tab) -> usize {
     tab.term.history()
 }
 impl Terminal {
     /// The host receives only drawing primitives and generic editable widget descriptions.
-    pub(super) fn scene(&self) -> Scene {
+    pub(super) fn scene(&self) -> ui::Canvas {
         let bg = self.color(257);
         let content_style = self.text_style("content", true);
         let error_style = self.text_style("error", false);
         let content_size = content_style.size_px.unwrap();
         let left = self.content_left();
-        let mut scene = Scene {
-            panel: "terminal".into(),
-            font: content_style.family.clone().unwrap(),
-            font_size: content_size,
-            controls: Some(self.canvas_controls()),
-            ..Scene::default()
+        let mut scene = ui::Canvas {
+            font: content_style.clone(),
+            focusable: true,
+            grid: true,
+            ..Default::default()
         };
         fill_to_bottom(
             &mut scene,
@@ -99,12 +98,12 @@ impl Terminal {
             let (row, col) = screen.cursor_position();
             let x = left + 8. + col as f32 * self.cw;
             let y = 8. + (row as usize + offset) as f32 * self.ch;
-            scene.cursor = Rect {
+            scene.caret = Some(Rect {
                 x,
                 y,
                 w: self.cw,
                 h: self.ch,
-            };
+            });
             if !tab.exited && offset == 0 && !screen.hide_cursor() {
                 let shape = tab.term.cursor_shape();
                 let rect = match shape {
@@ -120,7 +119,7 @@ impl Terminal {
                         w: self.cw,
                         h: 2.,
                     },
-                    _ => scene.cursor,
+                    _ => scene.caret.unwrap(),
                 };
                 fill(&mut scene, rect, self.color(258));
                 if shape <= 2 {
@@ -140,18 +139,9 @@ impl Terminal {
             }
             let history = visible_history(tab);
             if history > 0 {
-                scene.scroll = Some(ScrollInfo {
-                    id: "output".into(),
-                    rect: Rect {
-                        x: left,
-                        y: 8.,
-                        w: self.content_width(),
-                        h: (self.height - 16.).max(0.),
-                    },
-                    content: (self.height - 16.).max(0.) + history as f32 * self.ch,
+                scene.scroll = Some(ui::ScrollRange {
+                    content: self.height.max(0.) + history as f32 * self.ch,
                     offset: history.saturating_sub(offset) as f32 * self.ch,
-                    // Let the host apply the same hover, drag and idle animation as the explorer.
-                    hide_after_ms: None,
                 });
             }
         }
@@ -187,7 +177,7 @@ impl Terminal {
             .unwrap_or_else(|| self.color(index))
     }
 }
-fn fill(scene: &mut Scene, rect: Rect, color: u32) {
+fn fill(scene: &mut ui::Canvas, rect: Rect, color: u32) {
     scene.paint.push(Paint::Fill {
         rect,
         color,
@@ -195,7 +185,7 @@ fn fill(scene: &mut Scene, rect: Rect, color: u32) {
     });
 }
 /// Allow full-height backgrounds to reach the native canvas bottom during Dock drag.
-fn fill_to_bottom(scene: &mut Scene, rect: Rect, color: u32) {
+fn fill_to_bottom(scene: &mut ui::Canvas, rect: Rect, color: u32) {
     scene.paint.push(Paint::Fill {
         rect,
         color,
@@ -203,7 +193,7 @@ fn fill_to_bottom(scene: &mut Scene, rect: Rect, color: u32) {
     });
 }
 fn text(
-    scene: &mut Scene,
+    scene: &mut ui::Canvas,
     x: f32,
     y: f32,
     text: String,
