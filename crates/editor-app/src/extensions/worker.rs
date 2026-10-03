@@ -49,6 +49,20 @@ pub(super) enum Work {
     Shutdown(Option<futures::channel::oneshot::Sender<()>>),
 }
 impl Work {
+    /// Preserve plugin ownership before dispatch consumes the work; manager-wide actions have no owner.
+    fn plugin_id(&self) -> Option<&str> {
+        match self {
+            Self::SetSetting { plugin, .. } | Self::Invoke { plugin, .. } => Some(plugin),
+            Self::Install(package) => Some(&package.manifest.id),
+            Self::Enable(id)
+            | Self::Restart(id)
+            | Self::Disable(id)
+            | Self::SetProjectEnabled(id, _)
+            | Self::Uninstall(id, _)
+            | Self::Event(id, ..) => Some(id),
+            _ => None,
+        }
+    }
     /// Identify the operation whose button should show loading while queued or running.
     fn lifecycle(&self) -> Option<OperationProgress> {
         match self {
@@ -133,12 +147,18 @@ pub(super) struct Published {
     /// Each scene's full-color image operations are ready before the UI observes that scene.
     pub images: super::images::SceneImages,
     pub pending: Option<Package>,
-    pub status: Option<String>,
+    pub status: Option<OperationStatus>,
     pub progress: Option<OperationProgress>,
     pub generation: u64,
     /// Changes when a plugin instance is replaced, even by the same package digest.
     pub instance_epochs: BTreeMap<String, u64>,
     pub processes: BTreeMap<String, usize>,
+}
+/// One transient operation error retains its target; manager failures cannot become another plugin's log.
+#[derive(Clone, Debug)]
+pub(super) struct OperationStatus {
+    pub plugin: Option<String>,
+    pub message: String,
 }
 /// The channel disconnect also shuts down when the last UI owner is released.
 pub(super) struct Worker {
@@ -226,7 +246,10 @@ impl Worker {
         state.status = None;
         if self.tx.send(work).is_err() {
             state.progress = None;
-            state.status = Some("插件后台服务不可用".into());
+            state.status = Some(OperationStatus {
+                plugin: None,
+                message: "插件后台服务不可用".into(),
+            });
             return false;
         }
         true

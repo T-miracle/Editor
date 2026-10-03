@@ -16,6 +16,45 @@ fn wait_for(worker: &Worker, ready: impl Fn(&Published) -> bool) {
     }
 }
 
+/// Production dispatch retains a command target while inspection failures remain manager-wide.
+#[test]
+fn operation_errors_retain_plugin_ownership_through_worker_publication() {
+    let directory = tempfile::tempdir().unwrap();
+    let worker = Worker::start_background(
+        directory.path().join("plugins"),
+        Environment::default(),
+        true,
+    );
+    worker
+        .tx
+        .send(Work::Invoke {
+            plugin: "missing-plugin".into(),
+            command: "unknown".into(),
+            arguments: json!(null),
+        })
+        .unwrap();
+    wait_for(&worker, |state| state.status.is_some());
+    let status = worker.state.lock().unwrap().status.take().unwrap();
+    assert_eq!(status.plugin.as_deref(), Some("missing-plugin"));
+    assert!(status.message.contains("Plugin is not running"));
+    worker.queue_lifecycle(Work::Inspect(directory.path().join("missing.zip")));
+    wait_for(&worker, |state| state.status.is_some());
+    assert!(
+        worker
+            .state
+            .lock()
+            .unwrap()
+            .status
+            .as_ref()
+            .unwrap()
+            .plugin
+            .is_none()
+    );
+    let (tx, rx) = futures::channel::oneshot::channel();
+    worker.tx.send(Work::Shutdown(Some(tx))).unwrap();
+    futures::executor::block_on(rx).unwrap();
+}
+
 /// Both old-version writes and typed editor completions must progress before the download is released.
 #[test]
 #[ignore = "build capability-example through the public SDK first"]
@@ -167,7 +206,7 @@ fn run_preparation(restrict: bool) {
             state
                 .status
                 .as_ref()
-                .is_some_and(|message| message.contains("Plugin is not running"))
+                .is_some_and(|status| status.message.contains("Plugin is not running"))
         });
         let state = worker.state.lock().unwrap();
         assert!(state.views.is_empty());

@@ -94,6 +94,15 @@ fn native_restart_recovers_a_fault_without_blocking_document_input(cx: &mut Test
     let form = VisualTestContext::from_window(dialog, editor_cx).into_mut();
     form.run_until_parked();
     form.update(|window, cx| window.draw(cx).clear(cx));
+    assert!(form.debug_bounds("plugin-readme-region").is_some());
+    assert!(form.debug_bounds("plugin-runtime-diagnostic").is_none());
+    let log_tab = form.debug_bounds("plugin-detail-tabs-5").unwrap();
+    form.simulate_click(log_tab.center(), Default::default());
+    form.run_until_parked();
+    form.update(|window, cx| window.draw(cx).clear(cx));
+    // Actual guest fault records are routed to the runtime page, while the same header still restarts.
+    assert!(form.debug_bounds("plugin-runtime-diagnostic").is_some());
+    assert!(form.debug_bounds("plugin-readme-region").is_none());
     let restart = form.debug_bounds("plugin-restart-action").unwrap();
     form.simulate_click(restart.center(), Default::default());
     let restart = form

@@ -24,7 +24,10 @@ impl Worker {
                     Err(e) => {
                         let mut published = output.lock().unwrap();
                         published.startup.clear();
-                        published.status = Some(format!("{e:#}"));
+                        published.status = Some(OperationStatus {
+                            plugin: None,
+                            message: format!("{e:#}"),
+                        });
                         return;
                     }
                 };
@@ -100,6 +103,11 @@ impl Worker {
                         delete_data: None,
                     })
                     .or_else(|| work.as_ref().and_then(Work::lifecycle));
+                // Capture ownership before consuming either an asynchronous install or the queued action.
+                let status_plugin = completed
+                    .as_ref()
+                    .map(|(id, _, _)| id.clone())
+                    .or_else(|| work.as_ref().and_then(Work::plugin_id).map(str::to_owned));
                 let retiring = if let Some((id, _, Ok(_))) = &completed {
                     vec![id.clone()]
                 } else {
@@ -279,7 +287,10 @@ impl Worker {
                 }
                 if last_save.elapsed() > Duration::from_secs(3) {
                     if let Err(e) = manager.checkpoint() {
-                        output.lock().unwrap().status = Some(format!("保存插件状态失败：{e:#}"));
+                        output.lock().unwrap().status = Some(OperationStatus {
+                            plugin: None,
+                            message: format!("保存插件状态失败：{e:#}"),
+                        });
                     }
                     last_save = Instant::now();
                 }
@@ -390,10 +401,13 @@ impl Worker {
                 // Startup loading ends only after Manager::open has restored every enabled plugin.
                 published.startup.clear();
                 if let Err(e) = result {
-                    published.status = Some(if let Some(operation) = &lifecycle {
-                        format!("{}失败：{e:#}", operation.action.label())
-                    } else {
-                        format!("{e:#}")
+                    published.status = Some(OperationStatus {
+                        plugin: status_plugin,
+                        message: if let Some(operation) = &lifecycle {
+                            format!("{}失败：{e:#}", operation.action.label())
+                        } else {
+                            format!("{e:#}")
+                        },
                     });
                 }
                 if lifecycle.is_some() {

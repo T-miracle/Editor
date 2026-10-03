@@ -22,6 +22,9 @@ mod installer_tests;
 pub(crate) mod language_tests;
 #[cfg(test)]
 pub(crate) mod lsp_tests;
+mod management;
+#[cfg(test)]
+mod management_tests;
 mod native_controls;
 #[cfg(test)]
 mod native_ui_tests;
@@ -112,11 +115,17 @@ pub struct ExtensionPanel {
     manager_search_subscription: Option<Subscription>,
     manager_market: bool,
     manager_selected: Option<String>,
+    /// Manager tabs own native focus independently of plugin surfaces and the search input.
+    manager_tabs_focus: FocusHandle,
+    manager_detail_focus: FocusHandle,
+    /// Only the active detail page scrolls; the header and tab strip remain outside this handle.
+    manager_detail_scroll: gpui_kit::ScrollHandle,
+    manager_detail_tab: management::DetailTab,
     manager_packages: Vec<Package>,
     confirm: Option<(String, bool)>,
     /// Keep an uninstall confirmation to one overlay per click.
     confirm_dialog_open: bool,
-    status: Option<String>,
+    status: Option<worker::OperationStatus>,
     progress: Option<OperationProgress>,
     processes: HashMap<String, usize>,
     _task: gpui_kit::Task<()>,
@@ -266,6 +275,10 @@ impl ExtensionPanel {
             manager_search_subscription: None,
             manager_market: false,
             manager_selected: None,
+            manager_tabs_focus: cx.focus_handle(),
+            manager_detail_focus: cx.focus_handle(),
+            manager_detail_scroll: gpui_kit::ScrollHandle::new(),
+            manager_detail_tab: management::DetailTab::Overview,
             manager_packages: vec![],
             confirm: None,
             confirm_dialog_open: false,
@@ -347,6 +360,10 @@ impl ExtensionPanel {
             manager_search_subscription: None,
             manager_market: false,
             manager_selected: None,
+            manager_tabs_focus: cx.focus_handle(),
+            manager_detail_focus: cx.focus_handle(),
+            manager_detail_scroll: gpui_kit::ScrollHandle::new(),
+            manager_detail_tab: management::DetailTab::Overview,
             manager_packages: vec![],
             confirm: None,
             confirm_dialog_open: false,
@@ -1109,8 +1126,14 @@ impl EditorApp {
             return;
         }
         let manager = self.extensions.clone();
+        // A newly opened manager starts at Overview; activating an existing window keeps its current page.
+        manager.update(cx, |manager, cx| {
+            manager.manager_detail_tab = management::DetailTab::Overview;
+            manager.manager_detail_scroll.set_offset(Default::default());
+            cx.notify();
+        });
         let (_, handle) = app_dialog::open_dialog_sized(
-            "插件管理",
+            t!("plugins.manager_title").to_string(),
             1080.,
             680.,
             move |content, _, _| content.h_full().child(manager.clone()),

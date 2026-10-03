@@ -1,4 +1,73 @@
 _version: 2
+plugins.manager_title:
+  en: "Plugin Management"
+  zh-CN: "插件管理"
+plugins.search:
+  en: "Search plugins"
+  zh-CN: "搜索插件"
+plugins.installed:
+  en: "Installed"
+  zh-CN: "已安装"
+plugins.market:
+  en: "Plugin Market"
+  zh-CN: "插件市场"
+plugins.install_local:
+  en: "Install local ZIP…"
+  zh-CN: "从本机安装 ZIP…"
+plugins.overview:
+  en: "Overview"
+  zh-CN: "概览"
+plugins.changes:
+  en: "Changes"
+  zh-CN: "最新变化"
+plugins.reviews:
+  en: "Reviews"
+  zh-CN: "评价"
+plugins.versions:
+  en: "Versions"
+  zh-CN: "其他版本"
+plugins.information:
+  en: "Information"
+  zh-CN: "其他信息"
+plugins.runtime_log:
+  en: "Runtime Log"
+  zh-CN: "运行日志"
+plugins.restart:
+  en: "Restart Plugin"
+  zh-CN: "重启插件"
+plugins.global_enabled:
+  en: "Global On"
+  zh-CN: "全局启动"
+plugins.global_disabled:
+  en: "Global Off"
+  zh-CN: "全局禁用"
+plugins.project_enabled:
+  en: "Enable in This Project"
+  zh-CN: "本项目启用"
+plugins.manager_error:
+  en: "Plugin manager: %{error}"
+  zh-CN: "插件管理器：%{error}"
+plugins.install:
+  en: "Install"
+  zh-CN: "安装"
+plugins.update:
+  en: "Update"
+  zh-CN: "更新"
+plugins.uninstall:
+  en: "Uninstall"
+  zh-CN: "卸载"
+plugins.no_readme:
+  en: "This plugin has no README.md."
+  zh-CN: "此插件没有提供 README.md。"
+plugins.no_runtime_logs:
+  en: "No runtime information for this plugin yet."
+  zh-CN: "此插件暂无运行信息。"
+plugins.empty_market:
+  en: "No plugin packages available in the local market."
+  zh-CN: "插件市场暂无可用插件包。"
+plugins.empty_installed:
+  en: "No installed plugins."
+  zh-CN: "暂无已安装插件。"
 notification.close:
   en: "Close notification"
   zh-CN: "关闭通知"
