@@ -99,6 +99,8 @@ pub struct ExtensionPanel {
     panel_title: String,
     /// Cache package-owned artwork so repainting does not read from disk.
     panel_icons: [Option<Vec<u8>>; 2],
+    /// Validated package-owned mode artwork shares the panel digest cache and has no ambient paths.
+    mode_icons: [Option<Vec<u8>>; 3],
     panel_icon_digest: Option<String>,
     focus: FocusHandle,
     bounds: Bounds<Pixels>,
@@ -261,6 +263,7 @@ impl ExtensionPanel {
             preview_error: None,
             panel_title: "插件管理".into(),
             panel_icons: [None, None],
+            mode_icons: [None, None, None],
             panel_icon_digest: None,
             focus: cx.focus_handle(),
             bounds: Bounds::default(),
@@ -318,6 +321,16 @@ impl ExtensionPanel {
             })
             .unwrap_or_default();
         let panel_icon_digest = icon_entry.map(|entry| entry.digest.clone());
+        let mode_icons = icon_entry
+            .map(|entry| {
+                [
+                    protocol::PreviewMode::Source,
+                    protocol::PreviewMode::Split,
+                    protocol::PreviewMode::Preview,
+                ]
+                .map(|mode| entry.preview_mode_icon(&root, &panel.id, mode))
+            })
+            .unwrap_or_default();
         let task = cx.spawn(async move |this, cx| {
             loop {
                 cx.background_executor()
@@ -346,6 +359,7 @@ impl ExtensionPanel {
             preview_error: None,
             panel_title: panel.title,
             panel_icons,
+            mode_icons,
             panel_icon_digest,
             focus: cx.focus_handle(),
             bounds: Bounds::default(),
@@ -494,6 +508,16 @@ impl ExtensionPanel {
                                 entry.panel_icon(&self.root, panel_id, false),
                                 entry.panel_icon(&self.root, panel_id, true),
                             ]
+                        })
+                        .unwrap_or_default();
+                    self.mode_icons = entry
+                        .map(|entry| {
+                            [
+                                protocol::PreviewMode::Source,
+                                protocol::PreviewMode::Split,
+                                protocol::PreviewMode::Preview,
+                            ]
+                            .map(|mode| entry.preview_mode_icon(&self.root, panel_id, mode))
                         })
                         .unwrap_or_default();
                     self.panel_icon_digest = digest;

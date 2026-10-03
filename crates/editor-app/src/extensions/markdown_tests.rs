@@ -3,6 +3,9 @@
 use super::*;
 use gpui_kit::{TestAppContext, gpui};
 
+mod harness;
+mod modes;
+
 /// Inspect the editable package resources without inventing a special host API for this plugin.
 fn language_package() -> Package {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../plugins/markdown");

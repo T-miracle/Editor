@@ -7,6 +7,7 @@ use std::{
     collections::{BTreeMap, BTreeSet},
     path::{Path, PathBuf},
 };
+mod artwork;
 mod data_updates;
 mod dependencies;
 mod language;
@@ -48,42 +49,6 @@ impl Installed {
         self.project_enabled
             .iter()
             .any(|path| scopes::workspace_key(path) == key)
-    }
-    /// Resolve only a declared SVG from this installed package version.
-    pub fn panel_icon(&self, root: &Path, panel_id: &str, dark: bool) -> Option<Vec<u8>> {
-        let panel = self
-            .manifest
-            .panels
-            .iter()
-            .find(|panel| panel.id == panel_id)?;
-        let path = if dark {
-            panel.icon_dark.as_ref().or(panel.icon_light.as_ref())
-        } else {
-            panel.icon_light.as_ref().or(panel.icon_dark.as_ref())
-        }?;
-        if !self.manifest.id.bytes().all(|byte| {
-            byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'.' || byte == b'-'
-        }) || self.digest.len() != 64
-            || !self.digest.bytes().all(|byte| byte.is_ascii_hexdigit())
-            || !Path::new(path)
-                .components()
-                .all(|part| matches!(part, std::path::Component::Normal(_)))
-        {
-            return None;
-        }
-        let bytes = std::fs::read(
-            root.join("packages")
-                .join(&self.manifest.id)
-                .join(&self.digest)
-                .join(path),
-        )
-        .ok()?;
-        (bytes.len() <= 64 * 1024
-            && std::str::from_utf8(&bytes)
-                .ok()?
-                .trim_start()
-                .starts_with("<svg"))
-        .then_some(bytes)
     }
 }
 /// Run this module on a worker thread; native rendering reads only published documents.
@@ -698,6 +663,7 @@ mod icon_tests {
                     status_order: None,
                     icon_light: Some("icons/light.svg".into()),
                     icon_dark: Some("icons/dark.svg".into()),
+                    view_modes: None,
                 }],
                 commands: vec![],
                 storage_limit: 1024,

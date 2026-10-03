@@ -1,6 +1,8 @@
 # 02 — 原生 Markdown 预览验收
 
-日期：2026-10-04。基线：`72b23146258bf93deebe531b7b3c63eda27e4483`。包版本：`0.2.0`。状态：行为、必需检查及 Standards / Spec 双轴审查通过。对应工单 [#28](https://github.com/T-miracle/Editor/issues/28)，远端交付读回随下一阶段记录。
+日期：2026-10-04。基线：`72b23146258bf93deebe531b7b3c63eda27e4483`。包版本：`0.2.0`。状态：行为、必需检查及 Standards / Spec 双轴审查通过。对应工单 [#28](https://github.com/T-miracle/Editor/issues/28)。
+
+提交 `3f1ff579de2e96c495736c3c04660ed960a3ee89` 已推送 `origin/codex/markdown-plugin`，远端 SHA 一致。2026-10-04 读回 #28 为 closed / completed；父方案保持 open。
 
 ## 实现与边界
 

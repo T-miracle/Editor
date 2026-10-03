@@ -38,6 +38,10 @@ pub struct SessionState {
     pub plugin_dock_sizes: std::collections::BTreeMap<String, f32>,
     #[serde(default)]
     pub plugin_panel_visibility: std::collections::BTreeMap<String, bool>,
+    /// Per-preview presentation is local to this workspace and never changes document state.
+    #[serde(default)]
+    pub editor_preview_modes:
+        std::collections::BTreeMap<String, plugin_runtime::plugin_protocol::PreviewMode>,
     /// Base serializes the complete split tree, dock extents and open state.
     #[serde(default)]
     pub dock_layout: Option<gpui_base::dock::DockAreaState>,
@@ -65,6 +69,7 @@ impl SessionState {
             extensions_visible: true,
             plugin_dock_sizes: Default::default(),
             plugin_panel_visibility: Default::default(),
+            editor_preview_modes: Default::default(),
             dock_layout: None,
             open_tabs: Vec::new(),
             active_file: None,

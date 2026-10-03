@@ -658,7 +658,7 @@ impl EditorApp {
             .child(self.render_text_drag_caret(cx))
             .into_any_element();
         let body = if let Some(preview) = self.active_editor_preview(cx) {
-            self.render_editor_preview_split(source, preview, cx)
+            self.render_editor_preview_body(source, preview, window, cx)
         } else {
             source
         };

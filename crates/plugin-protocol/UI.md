@@ -18,6 +18,24 @@
 
 编辑区预览声明 `position:"editor"` 和 `file_extensions`，使用工作区实例，申请 `editor.read` 并协商 `editor.documents ^1`。宿主发送 `Notification::Preview { document, text }`，其中 `DocumentVersion` 指向内存文档，`text` 包括未保存修改。插件必须在 `ui::Document.source` 原样返回版本；过期预览不会替换新文档。`document:None` 与空文本表示撤销当前预览。普通面板 `source` 留空。隐藏或卸载后销毁原生事件目标并移除其布局空间。
 
+## 编辑区呈现模式（editor.presentation 1.0）
+
+工作区编辑区预览可声明 `Panel.view_modes: Option<PreviewModes>`，通过三个包内 SVG 提供底栏模式图标。该声明必须把 `editor.presentation: ^1` 放入 `api.required`；仅可选协商不满足声明门禁。继续要求 `position:"editor"`、有效 `file_extensions`、工作区作用域、`editor.documents` 与 `editor.read`，不增加文件、网络或编辑授权。未使用 `view_modes` 的已有包保留原有行为，无需升级基础协议或 UI 文档版本。
+
+```json
+"view_modes": {
+  "source": "icons/source.svg",
+  "split": "icons/split.svg",
+  "preview": "icons/preview.svg"
+}
+```
+
+公开 `PreviewMode` 的持久化值为 `source`、`split`、`preview`，默认 `split`。宿主按工作区保存该预览面板的最近模式，在同工作区切换文档和重开时恢复，工作区之间独立。`source` 仅显示源码，`split` 左源码右预览，`preview` 仅显示预览；隐藏源码区时其工具栏随之隐藏。模式控制只改变原生布局，不替换文本、选区、IME 或会话撤销历史，不建立另一份可变文档。宿主提供随界面语言切换的提示、选中态及键盘焦点；插件提供的几何图标可使用 `currentColor` 随主题着色。
+
+三个路径都使用包内相对路径，安装前检查资源存在和大小。每个 SVG 最大 64 KiB，XML 树最多 512 节点、几何元素最多 16 层嵌套；只允许 `svg/g/path/rect/circle/ellipse/line/polyline/polygon` 与几何、描边和颜色属性。接受颜色名、十六进制颜色和 `currentColor`，不接受 CSS、URL paint、`href`（含命名空间及空白变体）、图片、字体文字、脚本、DTD 或 XML 样式表。因此图标不依赖环境文件、网络或字体读取。
+
+宿主通过公开 runtime 的 `Installed::preview_mode_icon(root, panel_id, mode)` 读取当前包版本的图标；`root` 为宿主管理的插件安装目录。路径解析后仍须属于该 ID/digest 的版本目录，读取受同一大小限制并再次验证 SVG。声明缺失、所有权不符、资源不存在、内容不安全或读取失败均返回 `None`；禁用、卸载或失去对应预览时，宿主撤销模式按钮贡献。
+
 独立 SDK 示例见 `plugins/capability-example/src/composition.rs` 与同目录 `composed-ui.json`；将示例的 `label` 配置为 `composable-ui` 可展示组合界面，`ui-layout` 命令参数 `form/canvas/combined` 切换三种布局。
 
 ## 常用界面元素

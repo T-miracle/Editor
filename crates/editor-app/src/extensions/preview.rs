@@ -2,6 +2,8 @@
 
 use super::*;
 
+mod presentation;
+
 impl ExtensionPanel {
     /// Layout restoration must exclude panels whose lifecycle follows the current document.
     pub(crate) fn is_editor_preview(&self) -> bool {

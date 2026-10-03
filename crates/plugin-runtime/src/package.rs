@@ -7,6 +7,7 @@ use std::{
     io::{Cursor, Read, Write},
     path::Path,
 };
+pub(crate) mod icons;
 
 /// LSP declarations carry exactly the native service authority that the host will exercise.
 fn validate_language_services(manifest: &Manifest) -> anyhow::Result<()> {
@@ -407,6 +408,20 @@ impl Package {
                 },
                 "Editor previews require document read authority and valid file extensions"
             );
+            if let Some(modes) = &panel.view_modes {
+                // Mode controls alter editor layout, so optional negotiation cannot admit a declaration.
+                anyhow::ensure!(
+                    panel.position == "editor"
+                        && manifest.scope == plugin_protocol::api::InstanceScope::Workspace
+                        && manifest.api.as_ref().is_some_and(|api| {
+                            api.required.contains_key("editor.presentation")
+                        }),
+                    "Preview modes require a workspace editor preview and required editor.presentation"
+                );
+                for icon in [&modes.source, &modes.split, &modes.preview] {
+                    icons::validate(&files, icon)?;
+                }
+            }
             // Panel artwork must come from this package and remain small enough for native UI.
             for icon in [&panel.icon_light, &panel.icon_dark].into_iter().flatten() {
                 validate_relative(icon)?;

@@ -11,6 +11,8 @@ dirs.workspace = true
 glob = "0.3"
 ignore.workspace = true
 globset = "0.4"
+# Parse preview-mode SVG artwork without resource resolution or permissive XML string matching.
+roxmltree = "0.21.1"
 plugin-protocol = { path = "../plugin-protocol" }
 plugin-schema = { path = "../plugin-schema" }
 serde.workspace = true

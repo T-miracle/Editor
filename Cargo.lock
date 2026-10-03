@@ -5515,6 +5515,7 @@ dependencies = [
  "plugin-protocol",
  "plugin-schema",
  "portable-pty",
+ "roxmltree 0.21.1",
  "semver",
  "serde",
  "serde_json",

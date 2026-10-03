@@ -18,6 +18,8 @@
 
 `Environment.locale` 显式传入用户界面语言，在 Prepare 与 `Notification::Theme` 中同步；缺失或空值保持简体中文默认。插件本身的提示和空状态应同时提供中英文，不读取项目设置来覆盖该用户选择。
 
+`editor.presentation ^1` 允许工作区编辑区预览用 `Panel.view_modes` 声明源码、分栏、预览三个包内几何 SVG。该能力必须为 required，沿用 `editor.documents` 与 `editor.read` 门禁；不授予文件、网络或文本编辑权限。公开 `PreviewMode` 以 `source/split/preview` 序列化，默认 Split，供宿主按工作区保存原生布局选择。未声明模式的已有包无需增加能力或升级 `protocol=7` / UI 文档版本 1。图标检查与布局生命周期详见 [UI.md](UI.md#编辑区呈现模式editorpresentation-10)。独立 `editor_presentation` 实际包回归通过 `capability-example.zip` 重新打包为另一身份，验证协商、权限、资源边界与安装后的安全读取。
+
 当前包安装和实例恢复要求 `protocol = 7` 及可协商的基础 API。协议 1–6 的已安装记录保留设置、权限、启用范围和私有数据，并显示需要更新；旧组件不会激活。使用当前 SDK 重建并安装同一插件的新包后恢复使用。旧运行协议与转换器已经删除；旧安装记录只参与管理界面展示和有限数据导入，不恢复执行。
 
 独立验证插件为 `capability-example`，不属于正式发行包。先构建开发版宿主，再运行 `scripts/verify-plugin-sdk.ps1`：脚本将示例源文件、清单、README 和资源复制到系统临时目录，从该目录通过实际宿主的公开 `--plugin-cargo` 命令构建，不使用宿主仓库的 Cargo 工作区或业务源码路径。脚本还通过 `--export-plugin-sdk` 验证完整导出与损坏文件恢复。验证命令：

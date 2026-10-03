@@ -291,6 +291,7 @@ impl EditorApp {
     fn render_panel_buttons(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let selected_style = component_styles(cx, ThemeComponent::PanelToggle).selected;
         h_flex()
+            .debug_selector(|| "editor-panel-tools".into())
             .items_center()
             .gap_1()
             .child(
@@ -470,6 +471,9 @@ impl Render for EditorApp {
                     .child(
                         StatusBar::new()
                             .left(self.render_panel_buttons(cx))
+                            .when_some(self.render_editor_preview_controls(cx), |bar, controls| {
+                                bar.left(controls)
+                            })
                             .left(div().max_w(px(320.)).truncate().child(self.status.clone()))
                             // Keep error counts separate from temporary save/loading messages.
                             .when(

@@ -1,4 +1,13 @@
 _version: 2
+preview.source_mode:
+  en: "Editor only"
+  zh-CN: "仅编辑"
+preview.split_mode:
+  en: "Editor and preview"
+  zh-CN: "编辑与预览"
+preview.preview_mode:
+  en: "Preview only"
+  zh-CN: "仅预览"
 plugins.manager_title:
   en: "Plugin Management"
   zh-CN: "插件管理"

@@ -90,6 +90,10 @@ pub struct Panel {
     /// Other panel positions leave this list empty and retain their independent dock behavior.
     #[serde(default)]
     pub file_extensions: Vec<String>,
+    /// Opt-in source/split/preview controls for workspace-owned editor previews.
+    /// All three SVG paths belong to this package; declaration requires `editor.presentation`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub view_modes: Option<PreviewModes>,
     /// Used only when this panel has no saved visibility preference yet.
     #[serde(default = "panel_visible_by_default")]
     pub default_visible: bool,
@@ -102,6 +106,33 @@ pub struct Panel {
     /// Optional package-relative SVG used when the editor has a dark theme.
     #[serde(default)]
     pub icon_dark: Option<String>,
+}
+
+/// Package-owned artwork for the host's three fixed editor presentation modes.
+/// Paths use package-relative `/` separators and reference safe geometric SVGs under 64 KiB.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PreviewModes {
+    /// Package-relative SVG for showing only the source editor.
+    pub source: String,
+    /// Package-relative SVG for showing source on the left and preview on the right.
+    pub split: String,
+    /// Package-relative SVG for showing only the preview.
+    pub preview: String,
+}
+
+/// Workspace-persisted editor layout; the initial presentation shows both source and preview.
+/// This changes host layout only and never creates a second mutable document or undo stack.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PreviewMode {
+    /// Hide the preview while retaining the current source document session.
+    Source,
+    #[default]
+    /// Show the source editor and preview together.
+    Split,
+    /// Hide the source editor without discarding its text, selection or undo history.
+    Preview,
 }
 
 /// Existing manifests continue to open their panels unless they opt out.

@@ -1,7 +1,7 @@
 {
   "id": "markdown",
   "name": "Markdown",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "protocol": 7,
   "contributions": "plugin.toml",
   "component": "markdown.wasm",
@@ -12,7 +12,8 @@
     "required": {
       "ui.native": "^1",
       "ui.richtext": "^1",
-      "editor.documents": "^1"
+      "editor.documents": "^1",
+      "editor.presentation": "^1"
     }
   },
   "panels": [
@@ -21,7 +22,12 @@
       "title": "Markdown",
       "position": "editor",
       "file_extensions": ["md", "markdown"],
-      "default_visible": true
+      "default_visible": true,
+      "view_modes": {
+        "source": "icons/view-source.svg",
+        "split": "icons/view-split.svg",
+        "preview": "icons/view-preview.svg"
+      }
     }
   ],
   "commands": []
