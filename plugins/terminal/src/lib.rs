@@ -8,6 +8,7 @@ mod host;
 mod input;
 mod interaction;
 mod scene;
+mod service;
 mod shell;
 #[cfg(test)]
 mod tests;
@@ -79,6 +80,15 @@ impl Guest for TerminalPlugin {
                         terminal.activate();
                         terminal.reply()
                     }
+                    api::Input::Event {
+                        event: api::Notification::Service(plugin_protocol::service::Notification::Invoke(call)),
+                        ..
+                    } => {
+                        let result = terminal.execute_service(call);
+                        let mut output = terminal.reply();
+                        output.service_reply = Some(result);
+                        output
+                    }
                     api::Input::Event { event, .. } => {
                         terminal.notify(event);
                         terminal.reply()
@@ -120,6 +130,8 @@ struct Tab {
     /// Upstream screen and plugin selection stay inside WASM.
     term: emulator::Emulator,
     exited: bool,
+    /// Delegated programs are never restarted using this provider's private authority.
+    resumable: bool,
     /// A second lightweight VT observer captures only shell integration metadata.
     metadata_parser: vte::Parser,
     metadata: shell::Metadata,
@@ -283,6 +295,7 @@ impl Terminal {
             handle: None,
             term,
             exited: saved.exited,
+            resumable: true,
             metadata_parser: vte::Parser::new(),
             metadata: shell::Metadata::default(),
         });
@@ -456,7 +469,7 @@ impl Terminal {
             .map(|t| {
                 let (output, display) = scene::history(t, budget);
                 SavedTab {
-                    exited: t.exited,
+                    exited: t.exited || !t.resumable,
                     id: t.id,
                     name: t.name.clone(),
                     profile: t.profile.clone(),

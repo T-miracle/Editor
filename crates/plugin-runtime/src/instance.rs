@@ -968,11 +968,12 @@ impl Instance {
     }
     pub fn poll(&mut self) -> anyhow::Result<bool> {
         self.retire_service_sources();
+        let revoked = self.poll_service_revocations()?;
         self.poll_service_requests()?;
         self.poll_editor_requests()?;
         self.poll_document_events()?;
         let events = self.store.data_mut().poll_processes()?;
-        let changed = !events.is_empty();
+        let changed = revoked || !events.is_empty();
         for event in events {
             // Exit removes its slot, but the last callback still inherits the originating service authority.
             let context =

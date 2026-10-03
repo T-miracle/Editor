@@ -18,6 +18,8 @@ pub(super) struct Services {
     pub context: Option<CallContext>,
     pub invoking: bool,
     pub resources: BTreeMap<u64, (api::ResourceHandle, CallContext)>,
+    /// Final cleanup notifications retain revoked authority and are drained outside broker reconciliation.
+    pub revoked_processes: Vec<(api::ResourceHandle, CallContext)>,
 }
 impl Default for Services {
     fn default() -> Self {
@@ -36,6 +38,7 @@ impl Default for Services {
             context: None,
             invoking: false,
             resources: Default::default(),
+            revoked_processes: Vec::new(),
         }
     }
 }
@@ -51,6 +54,7 @@ impl Services {
         self.references.clear();
         self.context = None;
         self.resources.clear();
+        self.revoked_processes.clear();
     }
 }
 
@@ -316,15 +320,51 @@ impl Instance {
             .resources
             .values()
             .filter(|(_, context)| !broker.context_alive(context))
-            .map(|(handle, _)| handle.clone())
+            .map(|(handle, context)| (handle.clone(), context.clone()))
             .collect::<Vec<_>>();
         drop(broker);
-        for handle in retired {
-            let _ = self
+        for (handle, context) in retired {
+            let process = matches!(
+                self.store.data().roots.resolve(&handle),
+                Ok(RootKind::Process(_))
+            );
+            let released = self
                 .store
                 .data_mut()
-                .resource_request(api::Operation::CloseResource { handle });
+                .resource_request(api::Operation::CloseResource {
+                    handle: handle.clone(),
+                });
+            if process && released.is_ok() {
+                self.store
+                    .data_mut()
+                    .plugin_services
+                    .revoked_processes
+                    .push((handle, context));
+            }
         }
+    }
+    /// A final Terminated update may update local UI, but every new host effect still sees the dead source.
+    pub(super) fn poll_service_revocations(&mut self) -> anyhow::Result<bool> {
+        let revoked = std::mem::take(&mut self.store.data_mut().plugin_services.revoked_processes);
+        let changed = !revoked.is_empty();
+        for (handle, context) in revoked {
+            // Bypass only the ordinary late-event suppression, never the authority check on host imports.
+            let previous = self
+                .store
+                .data_mut()
+                .plugin_services
+                .context
+                .replace(context);
+            let result = self.call(Message::Event(Event::Capability(
+                api::Notification::Process {
+                    handle,
+                    update: process::Update::Terminated,
+                },
+            )));
+            self.store.data_mut().plugin_services.context = previous;
+            result?;
+        }
+        Ok(changed)
     }
     /// Async continuations inherit their source context instead of regaining provider privileges.
     pub(super) fn call_with_service_context(

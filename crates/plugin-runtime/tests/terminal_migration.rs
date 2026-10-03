@@ -213,7 +213,10 @@ fn replacement(package: &Package) -> Package {
     use std::io::{Cursor, Write};
     let mut files = package.files.clone();
     let mut manifest: serde_json::Value = serde_json::from_slice(&files["manifest.json"]).unwrap();
-    manifest["version"] = serde_json::json!("0.6.1");
+    // Keep exercising an update as the delivered terminal advances through later migrations.
+    let mut version: semver::Version = package.manifest.version.parse().unwrap();
+    version.patch += 1;
+    manifest["version"] = serde_json::json!(version.to_string());
     manifest["data_format"]["version"] = serde_json::json!(2);
     files.insert(
         "manifest.json".into(),

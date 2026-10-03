@@ -1,5 +1,7 @@
 # Capability Example
 
+0.15.0 增加 `interactive.execute` 1.0 的独立替代提供者夹具：消费者继续使用 `service-open` / `service-call`，测试打包时声明同一契约与权限。替代实现通过 stdio 执行 argv 并请求自身普通面板；不引用终端 ID 或终端源码。默认包仍不申请执行权限，也不发布这项契约。实际进程、选择、取消、来源授权和替换验证见 `interactive_execution` 集成测试。
+
 0.14.0 增加 `ui.clipboard` 与 `storage.editor` 验收：使用类型化编辑器请求读写剪贴板、打开自身私有配置，并验证实际原生完成结果。
 
 宿主通过 `Prepare` 交付的 opaque snapshot 会由 `Snapshot` 原样返回，用于验证重装、项目切换和历史数据导入不会清空插件私有状态。

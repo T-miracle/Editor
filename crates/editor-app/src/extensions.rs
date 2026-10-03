@@ -8,6 +8,8 @@ pub(crate) mod contributions;
 #[cfg(test)]
 mod dependency_tests;
 mod editor_requests;
+#[cfg(test)]
+mod execution_service_tests;
 mod legacy_input;
 use crate::ui::plugin::images;
 #[cfg(test)]

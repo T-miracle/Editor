@@ -2,7 +2,7 @@
 use plugin_protocol::{api, process};
 
 /// Native unit fixtures use the same typed request shape as the component import.
-fn call(operation: api::Operation) -> Result<api::Value, api::Failure> {
+pub(super) fn call(operation: api::Operation) -> Result<api::Value, api::Failure> {
     #[cfg(test)]
     {
         crate::tests::host(operation)

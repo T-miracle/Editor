@@ -7,6 +7,7 @@ use plugin_protocol::{
 use std::cell::RefCell;
 mod composition;
 mod discovery;
+mod execution_demo;
 mod service_demo;
 
 #[derive(Default)]
@@ -101,6 +102,22 @@ impl State {
                     api::Notification::Service(plugin_protocol::service::Notification::Invoke(call)),
                 ..
             } => {
+                // The alternative execution provider has its own ordinary panel, independent of any terminal UI.
+                if call.contract == "interactive.execute" {
+                    let result = execution_demo::execute(call);
+                    self.text = format!("Execution: {}", serde_json::to_string(&result).unwrap());
+                    return Ok(api::Output {
+                        service_reply: Some(result),
+                        views: vec![api::View {
+                            panel: "welcome".into(),
+                            document: ui::Document::new(ui::Node::text(
+                                "welcome-text",
+                                self.text.clone(),
+                            )),
+                        }],
+                        ..Default::default()
+                    });
+                }
                 return Ok(api::Output {
                     service_reply: Some(self.service_client.provide(call)),
                     ..Default::default()
@@ -269,6 +286,13 @@ impl State {
                 event: api::Notification::Process { handle, update },
                 ..
             } => {
+                if matches!(update, plugin_protocol::process::Update::Terminated) {
+                    // The final resource notification cannot regain the provider's normal private-data grant.
+                    self.text = format!(
+                        "Resource revoked: {:?}",
+                        api::guest::request(api::Operation::OpenData)
+                    );
+                }
                 if self.close_on_output
                     && matches!(update, plugin_protocol::process::Update::Output { .. })
                 {
