@@ -91,10 +91,18 @@ pub(crate) fn latest(mut entries: Vec<Diagnostic>) -> Vec<Diagnostic> {
 
 /// A manager-owned bounded sink remains readable after the originating instance is retired.
 #[derive(Clone, Default)]
-pub(crate) struct NativeDiagnostics(
-    std::sync::Arc<std::sync::Mutex<std::collections::VecDeque<Diagnostic>>>,
-);
+pub(crate) struct NativeDiagnostics {
+    entries: std::sync::Arc<std::sync::Mutex<std::collections::VecDeque<Diagnostic>>>,
+    logs: crate::RuntimeLogs,
+}
 impl NativeDiagnostics {
+    /// Retired native workers retain this process-local sink as well as the bounded diagnostic queue.
+    pub(crate) fn with_logs(logs: crate::RuntimeLogs) -> Self {
+        Self {
+            logs,
+            ..Default::default()
+        }
+    }
     pub(crate) fn reporter(&self, plugin: &str, scope: &str) -> NativeReporter {
         NativeReporter {
             sink: self.clone(),
@@ -103,7 +111,7 @@ impl NativeDiagnostics {
         }
     }
     pub(crate) fn for_plugin(&self, plugin: &str) -> Vec<Diagnostic> {
-        self.0
+        self.entries
             .lock()
             .unwrap()
             .iter()
@@ -121,7 +129,14 @@ pub(crate) struct NativeReporter {
 }
 impl NativeReporter {
     pub(crate) fn record(&self, operation: &str, message: String) {
-        let mut entries = self.sink.0.lock().unwrap();
+        let message: String = message.chars().take(4096).collect();
+        self.sink.logs.append(
+            &self.plugin,
+            crate::LogLevel::Error,
+            &format!("native/{operation}"),
+            format!("scope={} {message}", self.scope),
+        );
+        let mut entries = self.sink.entries.lock().unwrap();
         if entries.len() == 128 {
             entries.pop_front();
         }
@@ -129,7 +144,7 @@ impl NativeReporter {
             self.plugin.clone(),
             self.scope.clone(),
             operation.into(),
-            message.chars().take(4096).collect(),
+            message,
         ));
     }
 }
@@ -140,7 +155,8 @@ mod native_diagnostic_tests {
     use super::{Diagnostic, NativeDiagnostics, latest};
     #[test]
     fn delayed_native_errors_retain_attribution_and_stay_bounded() {
-        let manager = NativeDiagnostics::default();
+        let logs = crate::RuntimeLogs::default();
+        let manager = NativeDiagnostics::with_logs(logs.clone());
         let instance = manager.clone();
         let reporter = instance.reporter("unknown-plugin", "workspace-one");
         drop(instance);
@@ -157,6 +173,18 @@ mod native_diagnostic_tests {
         assert_eq!(entries[0].operation, "pty.retire.wait");
         assert!(entries.last().unwrap().message.contains("failure=139"));
         assert!(manager.for_plugin("another-plugin").is_empty());
+        let records = logs.records("unknown-plugin");
+        assert_eq!(records.len(), 140);
+        assert_eq!(records.last().unwrap().source, "native/pty.retire.wait");
+        assert_eq!(records.last().unwrap().level, crate::LogLevel::Error);
+        assert!(
+            records
+                .last()
+                .unwrap()
+                .message
+                .contains("process=42 failure=139")
+        );
+        assert!(logs.records("another-plugin").is_empty());
     }
 
     /// Old native failures never displace a later WASM trap, irrespective of merge source order.

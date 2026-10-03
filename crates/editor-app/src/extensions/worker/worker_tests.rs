@@ -37,6 +37,10 @@ fn operation_errors_retain_plugin_ownership_through_worker_publication() {
     let status = worker.state.lock().unwrap().status.take().unwrap();
     assert_eq!(status.plugin.as_deref(), Some("missing-plugin"));
     assert!(status.message.contains("Plugin is not running"));
+    let logs = worker.state.lock().unwrap().logs.clone();
+    assert!(logs.records("missing-plugin").iter().any(|record| {
+        record.level == plugin_runtime::logs::LogLevel::Error && record.source == "host.operation"
+    }));
     worker.queue_lifecycle(Work::Inspect(directory.path().join("missing.zip")));
     wait_for(&worker, |state| state.status.is_some());
     assert!(
@@ -49,6 +53,109 @@ fn operation_errors_retain_plugin_ownership_through_worker_publication() {
             .unwrap()
             .plugin
             .is_none()
+    );
+    let (tx, rx) = futures::channel::oneshot::channel();
+    worker.tx.send(Work::Shutdown(Some(tx))).unwrap();
+    futures::executor::block_on(rx).unwrap();
+}
+
+/// Obsolete native revisions and incarnations remain rejected without faulting a healthy real guest.
+#[test]
+#[ignore = "build capability-example through the public SDK first"]
+fn obsolete_ui_callbacks_are_information_but_real_rejections_are_errors() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path().join("plugins");
+    let environment = Environment {
+        workspace: directory.path().display().to_string(),
+        ..Default::default()
+    };
+    let package = Package::read(
+        &PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../target/plugin-api-test/capability-example.zip"),
+    )
+    .unwrap();
+    let mut manager = Manager::open(root.clone(), environment.clone()).unwrap();
+    manager
+        .install(&package, package.manifest.permissions.clone())
+        .unwrap();
+    drop(manager);
+    let worker = Worker::start_background(root, environment, true);
+    wait_for(&worker, |state| {
+        state.views.contains_key("capability-example/welcome")
+    });
+    let (logs, epoch, revision) = {
+        let state = worker.state.lock().unwrap();
+        (
+            state.logs.clone(),
+            state.instance_epochs["capability-example"],
+            state.views["capability-example/welcome"].revision,
+        )
+    };
+    worker
+        .tx
+        .send(Work::Event(
+            "capability-example".into(),
+            epoch,
+            Some("welcome".into()),
+            api::Notification::Ui(ui::UiEvent {
+                revision: revision.wrapping_add(1),
+                node: "obsolete".into(),
+                action: ui::Action::Click,
+            }),
+        ))
+        .unwrap();
+    wait_for(&worker, |_| {
+        logs.records("capability-example")
+            .iter()
+            .any(|entry| entry.source == "host.ui.stale")
+    });
+    assert_eq!(logs.unread_severity("capability-example"), None);
+    assert!(worker.state.lock().unwrap().status.is_none());
+    worker
+        .tx
+        .send(Work::Event(
+            "capability-example".into(),
+            epoch.wrapping_add(1),
+            Some("welcome".into()),
+            api::Notification::Ui(ui::UiEvent {
+                revision,
+                node: "obsolete".into(),
+                action: ui::Action::Click,
+            }),
+        ))
+        .unwrap();
+    wait_for(&worker, |_| {
+        logs.records("capability-example")
+            .iter()
+            .any(|entry| entry.source == "host.ui.retired")
+    });
+    assert_eq!(logs.unread_severity("capability-example"), None);
+    // A current callback to an invalid node is a real error; typed stale handling cannot swallow it.
+    worker
+        .tx
+        .send(Work::Event(
+            "capability-example".into(),
+            epoch,
+            Some("welcome".into()),
+            api::Notification::Ui(ui::UiEvent {
+                revision,
+                node: "missing-node".into(),
+                action: ui::Action::Click,
+            }),
+        ))
+        .unwrap();
+    wait_for(&worker, |state| state.status.is_some());
+    assert_eq!(
+        logs.unread_severity("capability-example"),
+        Some(plugin_runtime::logs::LogLevel::Error)
+    );
+    assert!(
+        worker
+            .state
+            .lock()
+            .unwrap()
+            .views
+            .contains_key("capability-example/welcome")
     );
     let (tx, rx) = futures::channel::oneshot::channel();
     worker.tx.send(Work::Shutdown(Some(tx))).unwrap();

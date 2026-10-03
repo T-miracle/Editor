@@ -16,6 +16,7 @@ mod segmented_tabs;
 pub(crate) mod side_tabs;
 mod spinner;
 mod status_bar;
+mod status_icon;
 mod tabs;
 mod text;
 mod tooltip;
@@ -35,6 +36,7 @@ pub(crate) use scrollbar::{
 pub(crate) use segmented_tabs::SegmentedTabs;
 pub(crate) use spinner::Spinner;
 pub(crate) use status_bar::StatusBar;
+pub(crate) use status_icon::StatusIcon;
 pub(crate) use tabs::tab_strip;
 pub(crate) use text::markdown_view;
 pub(crate) use tooltip::Tooltip;

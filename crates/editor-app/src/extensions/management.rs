@@ -119,6 +119,8 @@ impl ExtensionPanel {
             .filter(|id| choices.iter().any(|choice| &choice.0 == *id))
             .cloned()
             .or_else(|| choices.first().map(|choice| choice.0.clone()));
+        // Store the resolved row so delayed log acknowledgements can verify the exact displayed plugin.
+        self.manager_selected = selected_id.clone();
         let selected_entry = selected_id
             .as_ref()
             .and_then(|id| self.entries.iter().find(|entry| &entry.manifest.id == id));
@@ -198,6 +200,7 @@ impl ExtensionPanel {
                                     (t!("plugins.installed").into(), false),
                                     (t!("plugins.market").into(), false),
                                 ],
+                                [None; 2],
                                 &self.manager_tabs_focus,
                                 {
                                     let owner = cx.entity().downgrade();
@@ -475,6 +478,7 @@ impl ExtensionPanel {
                     (t!("plugins.information").into(), true),
                     (t!("plugins.runtime_log").into(), false),
                 ],
+                [None, None, None, None, None, self.log_badge(&id)],
                 &self.manager_detail_focus,
                 move |index, _, cx| {
                     if let Some(tab) = DetailTab::from_index(index) {
@@ -489,6 +493,7 @@ impl ExtensionPanel {
             ));
             let mut body = v_flex().w_full().min_w(px(0.));
             if self.manager_detail_tab == DetailTab::Overview {
+                self.manager_log_view = None;
                 let readme = self
                     .manager_market
                     .then_some(selected_package)

@@ -77,6 +77,7 @@ fn native_restart_recovers_a_fault_without_blocking_document_input(cx: &mut Test
         owner.update(cx, |owner, cx| {
             let mut state = owner.worker.state.lock().unwrap();
             state.entries = manager.published_entries();
+            state.logs = manager.runtime_logs();
             state.diagnostics.insert(
                 "capability-example".into(),
                 manager.diagnostics("capability-example"),
@@ -212,4 +213,104 @@ fn crashing_lsp_stops_retrying_and_manual_recovery_uses_a_new_transport() {
         server.prepare().is_err(),
         "retired adapter cannot receive replacement events"
     );
+}
+
+/// Runtime retirement wins even before the worker has replaced the UI's matching published Arc.
+#[gpui::test]
+fn retired_language_status_cannot_alert_while_its_publication_is_still_current(
+    cx: &mut TestAppContext,
+) {
+    cx.update(|cx| {
+        gpui_kit::init(cx);
+        typography::init(cx);
+        apply_theme(builtin_theme(false), cx);
+    });
+    let directory = tempfile::tempdir().unwrap();
+    let workspace = Workspace::open(directory.path()).unwrap();
+    // Preparing a declaration-only package obtains real authority without starting a test executable.
+    let manifest = serde_json::json!({
+        "id":"status-publication", "name":"Status publication", "version":"1.0.0",
+        "protocol":7, "api":{"base":"^1", "required":{"process":"^1", "language.lsp":"^1"}},
+        "contributions":"plugin.toml", "storage_limit":1024,
+        "permissions":["process.service.analysis"],
+        "services":{"analysis":{"program":std::env::current_exe().unwrap(), "args":[]}},
+        "language_servers":[{"id":"analysis", "language":"unfamiliar", "service":"analysis"}]
+    });
+    let package = language_tests::packages::repack(BTreeMap::from([
+        (
+            "manifest.json".into(),
+            serde_json::to_vec(&manifest).unwrap(),
+        ),
+        (
+            "plugin.toml".into(),
+            b"[plugin]\nid = \"status-publication\"\nname = \"Status publication\"\nversion = \"1.0.0\"\nhost_version = \">=0.1.0\"\n".to_vec(),
+        ),
+    ]))
+    .unwrap();
+    let mut manager = plugin_runtime::Manager::open(
+        directory.path().join("installed"),
+        protocol::Environment {
+            workspace: workspace.root().display().to_string(),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    manager
+        .install(&package, package.manifest.permissions.clone())
+        .unwrap();
+    let key = "status-publication/analysis";
+    let services = manager.language_services();
+    let plan = services[key].as_ref().unwrap().clone();
+    let logs = manager.runtime_logs();
+    let slot = Rc::new(RefCell::new(None));
+    let capture = slot.clone();
+    let (_, ui) = cx.add_window_view(move |window, cx| {
+        let app = cx.new(|cx| EditorApp::new(workspace, None, window, cx));
+        *capture.borrow_mut() = Some(app.clone());
+        Root::new(app, window, cx)
+    });
+    let app = slot.borrow_mut().take().unwrap();
+    let owner = ui.update(|_, cx| app.read(cx).extensions.clone());
+    ui.update(|_, cx| {
+        owner.update(cx, |panel, cx| {
+            let mut state = panel.worker.state.lock().unwrap();
+            state.language_services = services;
+            state.logs = logs.clone();
+            drop(state);
+            panel.language_service_status(
+                key,
+                &plan,
+                plugin_runtime::LogLevel::Info,
+                "starting".into(),
+                cx,
+            );
+        });
+    });
+    assert_eq!(logs.records("status-publication").len(), 1);
+    manager.disable("status-publication").unwrap();
+    assert!(!plan.is_active());
+    let before = logs.records("status-publication");
+    // Leave the old publication intact to reproduce cancellation completing before the next worker poll.
+    ui.update(|_, cx| {
+        owner.update(cx, |panel, cx| {
+            let published = panel.worker.state.lock().unwrap().language_services[key]
+                .as_ref()
+                .unwrap()
+                .clone();
+            assert!(Arc::ptr_eq(&published, &plan));
+            panel.language_service_status(
+                key,
+                &plan,
+                plugin_runtime::LogLevel::Error,
+                "provider has been retired".into(),
+                cx,
+            );
+            assert_eq!(
+                panel.worker.state.lock().unwrap().service_states[key],
+                "starting"
+            );
+        });
+    });
+    assert_eq!(logs.records("status-publication"), before);
+    assert_eq!(logs.unread_severity("status-publication"), None);
 }

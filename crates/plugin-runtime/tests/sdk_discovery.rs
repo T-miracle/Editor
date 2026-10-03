@@ -98,6 +98,7 @@ fn resources(sdk_root: &Path) -> HostResources {
             root: sdk_root.display().to_string(),
             cargo_config: config.display().to_string(),
         })),
+        ..Default::default()
     }
 }
 
@@ -443,6 +444,7 @@ fn discovery_requires_negotiation_and_preserves_sdk_failure_categories() {
         (
             HostResources {
                 sdk: Some(Err("fixture export failed".into())),
+                ..Default::default()
             },
             api::ErrorCode::OperationFailed,
         ),

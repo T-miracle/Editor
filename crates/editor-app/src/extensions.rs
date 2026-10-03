@@ -74,6 +74,8 @@ pub fn init(cx: &mut App) {
 pub struct ExtensionPanel {
     /// Form observers redraw only when configuration publication changes.
     configuration_revision: u64,
+    /// Log arrivals and viewing changes redraw every native consumer of the shared process history.
+    log_generation: u64,
     parent: WeakEntity<EditorApp>,
     visible: Rc<Cell<bool>>,
     workspace: PathBuf,
@@ -121,6 +123,8 @@ pub struct ExtensionPanel {
     /// Only the active detail page scrolls; the header and tab strip remain outside this handle.
     manager_detail_scroll: gpui_kit::ScrollHandle,
     manager_detail_tab: management::DetailTab,
+    /// Entry boundary is captured once; later arrivals are read only when their message is visible.
+    manager_log_view: Option<(String, u64)>,
     manager_packages: Vec<Package>,
     confirm: Option<(String, bool)>,
     /// Keep an uninstall confirmation to one overlay per click.
@@ -265,6 +269,7 @@ impl ExtensionPanel {
             native_ui: None,
             manager_open: false,
             configuration_revision: 0,
+            log_generation: 0,
             commands_open: false,
             command_popup: None,
             pending: None,
@@ -279,6 +284,7 @@ impl ExtensionPanel {
             manager_detail_focus: cx.focus_handle(),
             manager_detail_scroll: gpui_kit::ScrollHandle::new(),
             manager_detail_tab: management::DetailTab::Overview,
+            manager_log_view: None,
             manager_packages: vec![],
             confirm: None,
             confirm_dialog_open: false,
@@ -350,6 +356,7 @@ impl ExtensionPanel {
             native_ui: None,
             manager_open: false,
             configuration_revision: 0,
+            log_generation: 0,
             commands_open: false,
             command_popup: None,
             pending: None,
@@ -364,6 +371,7 @@ impl ExtensionPanel {
             manager_detail_focus: cx.focus_handle(),
             manager_detail_scroll: gpui_kit::ScrollHandle::new(),
             manager_detail_tab: management::DetailTab::Overview,
+            manager_log_view: None,
             manager_packages: vec![],
             confirm: None,
             confirm_dialog_open: false,
@@ -398,6 +406,11 @@ impl ExtensionPanel {
         let mut contributions_changed = false;
         let editor_requests = {
             let mut state = self.worker.state.lock().unwrap();
+            let log_generation = state.logs.generation();
+            if self.log_generation != log_generation {
+                self.log_generation = log_generation;
+                changed = true;
+            }
             if self.configuration_revision != state.configuration_revision {
                 self.configuration_revision = state.configuration_revision;
                 changed = true;
@@ -597,6 +610,11 @@ impl ExtensionPanel {
             .worker
             .tx
             .send(Work::Event(id.into(), epoch, panel, event));
+    }
+
+    /// The manager, language host and bottom popover use one in-memory history and viewing state.
+    pub(crate) fn runtime_logs(&self) -> plugin_runtime::logs::RuntimeLogs {
+        self.worker.state.lock().unwrap().logs.clone()
     }
     /// Queue a plugin lifecycle operation and expose its waiting state on this frame.
     fn queue_lifecycle(&mut self, work: Work) -> bool {
@@ -1128,7 +1146,9 @@ impl EditorApp {
         let manager = self.extensions.clone();
         // A newly opened manager starts at Overview; activating an existing window keeps its current page.
         manager.update(cx, |manager, cx| {
+            manager.manager_open = true;
             manager.manager_detail_tab = management::DetailTab::Overview;
+            manager.manager_log_view = None;
             manager.manager_detail_scroll.set_offset(Default::default());
             cx.notify();
         });
@@ -1145,6 +1165,12 @@ impl EditorApp {
             if closed_id == window_id {
                 let _ = owner.update(cx, |this, cx| {
                     this.extensions_window = None;
+                    this.extensions.update(cx, |panel, cx| {
+                        // Delayed acknowledgements cannot survive the native dialog's close boundary.
+                        panel.manager_open = false;
+                        panel.manager_log_view = None;
+                        cx.notify();
+                    });
                     cx.notify();
                 });
             }

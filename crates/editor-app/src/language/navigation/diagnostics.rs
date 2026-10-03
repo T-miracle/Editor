@@ -189,9 +189,21 @@ impl LanguageServer {
 impl LanguageServerConnection {
     /// Bound each polling turn so completion and navigation can acquire the shared connection.
     pub(super) fn drain_messages(&mut self) -> anyhow::Result<()> {
-        for _ in 0..256 {
+        self.drain_messages_until(Instant::now() + Duration::from_secs(30))
+    }
+
+    /// Preserve server requests within the caller's existing budget, including readiness waits.
+    /// An expired deadline fails the operation instead of silently discarding a reply.
+    pub(super) fn drain_messages_until(&mut self, deadline: Instant) -> anyhow::Result<()> {
+        for _ in 0..transport::MESSAGE_CAPACITY {
             match self.output.try_recv() {
-                Ok(message) => self.handle_server_message(&message?)?,
+                Ok(message) => {
+                    ensure!(
+                        Instant::now() < deadline,
+                        "language server message handling timed out"
+                    );
+                    self.handle_server_message_until(&message?, deadline)?;
+                }
                 Err(std::sync::mpsc::TryRecvError::Empty) => break,
                 Err(std::sync::mpsc::TryRecvError::Disconnected) => {
                     anyhow::bail!("language server closed its output")
@@ -201,8 +213,13 @@ impl LanguageServerConnection {
         Ok(())
     }
 
-    /// Both request waits and idle polling must process the same server notifications.
-    pub(super) fn handle_server_message(&mut self, message: &Value) -> anyhow::Result<()> {
+    /// Use the request/readiness deadline for server replies, so a blocked stdin cannot renew it.
+    /// Document publications still pass through their existing version/lifetime checks.
+    pub(super) fn handle_server_message_until(
+        &mut self,
+        message: &Value,
+        deadline: Instant,
+    ) -> anyhow::Result<()> {
         if message.get("method").and_then(Value::as_str) == Some("textDocument/publishDiagnostics")
         {
             match serde_json::from_value::<PublishDiagnosticsParams>(message["params"].clone()) {
@@ -216,13 +233,6 @@ impl LanguageServerConnection {
                     tracing::warn!(%error, "invalid language diagnostic notification");
                 }
             }
-        }
-        if let Some(readiness) = self.service.provider.readiness.as_ref()
-            && message.get("method").and_then(Value::as_str)
-                == Some(readiness.notification.as_str())
-        {
-            self.ready =
-                Some(message["params"].pointer(&readiness.pointer) == Some(&readiness.expected));
         }
         if let (Some(id), Some(method)) = (
             message.get("id"),
@@ -257,7 +267,12 @@ impl LanguageServerConnection {
                     .unwrap_or_else(|| json!([])),
                 _ => Value::Null,
             };
-            self.write_message(json!({ "jsonrpc": "2.0", "id": id, "result": result }))?;
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            ensure!(!remaining.is_zero(), "language server reply timed out");
+            self.input.send(
+                json!({ "jsonrpc": "2.0", "id": id, "result": result }),
+                remaining,
+            )?;
         }
         Ok(())
     }

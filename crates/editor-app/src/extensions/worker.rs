@@ -128,6 +128,8 @@ pub(super) struct InstallationProgress {
 }
 #[derive(Default)]
 pub(super) struct Published {
+    /// Kept independently of live instances and manager windows for this editor process only.
+    pub logs: plugin_runtime::logs::RuntimeLogs,
     pub diagnostics: BTreeMap<String, Vec<plugin_runtime::faults::Diagnostic>>,
     pub plugin_service_choices: Vec<service::Choice>,
     pub installation: Option<InstallationProgress>,

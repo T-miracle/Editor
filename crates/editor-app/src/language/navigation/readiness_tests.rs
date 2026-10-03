@@ -136,6 +136,7 @@ pub(super) fn installed_rust_server(
     .expect("build the Rust package with scripts/build-plugins.ps1");
     let resources = plugin_runtime::HostResources {
         sdk: Some(crate::sdk_export::descriptor().map_err(|error| format!("{error:#}"))),
+        ..Default::default()
     };
     let mut manager = plugin_runtime::Manager::open_with_resources(
         storage.path().join("plugins"),

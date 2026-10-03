@@ -1,6 +1,6 @@
 # 插件管理与运行日志改造方案
 
-状态：产品需求、测试边界与工单拆分已确认并发布；#23 已完成，#24–#25 待实施。日期：2026-10-03。
+状态：产品需求、测试边界与工单拆分已确认并发布；#23–#24 已完成，#25 待实施。日期：2026-10-04。
 依据：截图标注、grill-me / grilling 访谈及用户选择的 A 方案；按 to-spec 模板整理。
 GitHub 方案：[#22](https://github.com/T-miracle/Editor/issues/22)，标签：`ready-for-agent`。
 工单见[实施工单](../tickets/plugin-management-logs/README.md)，本批次独立于已完成的 20 张平台工单。
