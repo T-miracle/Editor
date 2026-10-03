@@ -1,5 +1,7 @@
 # Capability Example
 
+0.15.5 增加独立 `image-input-fixture` 的 `editor.images` 验收：组合树在没有 `Document.source` 时隐藏图片输入声明；原生图片通知只传元数据，示例使用公开 `scope-probe` 发起保存并展示异步回执。测试覆盖权限、跨实例句柄、名称边界、配额、碰撞重试与源版本撤销；默认包不增加图片写入权限。
+
 0.15.4 增加独立 `images-fixture` 图片资源验收。组合 UI 资产中的 Image 在没有 `Document.source` 时仅发布替代文字，原模板保留，收到版本化 Preview 后声明资源。实际 ZIP 验证 `ui.images` 协商、逐图权限错误、本地工作区边界与异步 HTTP 回收；默认示例权限和界面不变。
 
 0.15.3 增加独立 `edit-fixture` 的版本化选区与源码工具栏验收。组合 UI 资产可带 `editor_toolbar`，输出克隆在尚无 `Document.source` 时隐藏它，原始模板保留；测试在版本化 Preview 后通过原有 zoom 按钮回调验证工具栏事件。组合界面按当前 ID 消费 Dialog/Menu 的 Dismiss，保留 Dialog 的输入优先级和源码版本。范围编辑使用公开 scope-probe 与异步编辑请求，不附加测试专用宿主 API。默认示例界面和权限声明不变，验收包显式协商 `editor.edit` / `editor.toolbar`。

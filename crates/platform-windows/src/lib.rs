@@ -10,6 +10,8 @@ use thiserror::Error;
 
 mod staged;
 pub use staged::PreparedFileStore;
+mod attachments;
+pub use attachments::{NewWorkspaceFileStore, create_document_attachment};
 
 #[derive(Debug, Default, Clone, Copy)]
 pub struct NativeFileStore;

@@ -125,7 +125,7 @@ pub(super) fn command(node: &str) -> Option<Command> {
 }
 
 /// Flexible rows let the host retain every button at narrow source widths and choose the native height.
-/// An optional localized failure belongs to this same source-bound contribution and disappears with it.
+/// Localized feedback stays source-bound; its short scroll viewport keeps long file receipts from hiding the editor.
 pub(super) fn node(english: bool, error: Option<&str>) -> ui::Node {
     let groups = GROUPS
         .iter()
@@ -147,7 +147,10 @@ pub(super) fn node(english: bool, error: Option<&str>) -> ui::Node {
         .collect();
     let mut children = vec![ui::Node::row("format-actions", groups).wrap().gap(12.)];
     if let Some(error) = error {
-        children.push(ui::Node::text("format-error", error));
+        // Buttons keep their natural wrapped height. Only feedback scrolls, so every saved filename remains readable.
+        children.push(
+            ui::Node::scroll("format-feedback", ui::Node::text("format-error", error)).height(56.),
+        );
     }
     ui::Node::column("format-toolbar", children)
         .padding(4.)

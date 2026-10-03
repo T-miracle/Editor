@@ -9,6 +9,13 @@ impl Manager {
         panel: Option<String>,
         event: api::Notification,
     ) -> anyhow::Result<()> {
+        if matches!(&event, api::Notification::ImageInput { .. }) {
+            return Err(api::Failure::new(
+                api::ErrorCode::InvalidRequest,
+                "Image input must originate from a native owned offer",
+            )
+            .into());
+        }
         self.refresh_services();
         // Never deliver document text to a guest without the same editor permission as native reads.
         let inner = &event;
@@ -62,6 +69,9 @@ impl Manager {
                 panel.as_ref().expect("validated panel").clone(),
                 document.clone(),
             );
+            // Revoke old offers before the new Preview hook can attempt a save using their handles.
+            // Accepted writers retain their original payload and may still report completed files.
+            instance.reconcile_image_inputs();
         }
         if let api::Notification::Ui(event) = inner {
             if panel.is_none() {

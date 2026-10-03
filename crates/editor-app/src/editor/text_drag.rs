@@ -332,6 +332,16 @@ fn move_edit(
     ))
 }
 
+/// Share the existing native layout hit test with external document input without duplicating caret geometry.
+pub(crate) fn caret_offset_at(
+    editor: &EditorState,
+    position: Point<Pixels>,
+    window: &Window,
+    cx: &App,
+) -> Option<usize> {
+    hit_test(editor, position, window, cx).map(|hit| hit.offset)
+}
+
 /// Find the nearest laid-out caret in logarithmic time, including wrapped or folded source rows.
 fn hit_test(
     editor: &EditorState,

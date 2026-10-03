@@ -179,6 +179,10 @@ struct EditorApp {
     pending_editor_requests: Vec<(String, plugin_runtime::EditorRequest)>,
     /// Only one request is dispatched before native change and completion effects have drained.
     editor_request_dispatch_scheduled: bool,
+    /// One native image preparation/save prompt owns the current gesture until its background result.
+    image_input_preparing: bool,
+    /// Bounded external paths belong only to the current native drag; no document authority is cached.
+    image_drag: Option<(gpui_kit::ExternalPaths, Bounds<Pixels>)>,
     plugin_saves: std::collections::BTreeSet<PathBuf>,
     /// Last published open identities allow versioned close notifications without retaining document text.
     plugin_documents:
@@ -404,6 +408,8 @@ impl EditorApp {
             pending_contribution_sync: false,
             pending_editor_requests: Vec::new(),
             editor_request_dispatch_scheduled: false,
+            image_input_preparing: false,
+            image_drag: None,
             plugin_saves: Default::default(),
             plugin_documents: Default::default(),
             plugin_popup: None,

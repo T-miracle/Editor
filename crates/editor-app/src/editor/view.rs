@@ -559,9 +559,14 @@ impl EditorApp {
             .when(hover_enabled, |view| {
                 view.capture_any_mouse_down(cx.listener(Self::text_drag_press))
                     .capture_action(cx.listener(Self::text_drag_escape))
+                    .capture_action(cx.listener(Self::paste_plugin_images))
+                    .on_drag_move(cx.listener(Self::image_drag_move))
             })
             // Register drag listeners before the editor's own selection listeners.
             .child(self.render_text_drag_events(cx))
+            .when(hover_enabled, |source| {
+                source.child(self.render_image_drag_events(cx))
+            })
             .on_mouse_move(cx.listener(Self::editor_pointer_move))
             .on_mouse_up(MouseButton::Middle, move |event, window, cx| {
                 let position = event.position;

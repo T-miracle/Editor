@@ -1,4 +1,25 @@
 _version: 2
+editor.image_save_first:
+  en: "Save the document before importing images"
+  zh-CN: "请先保存文档，再导入图片"
+editor.image_save_first_detail:
+  en: "Images will be stored beside this document. Cancel keeps the files and source unchanged."
+  zh-CN: "图片将保存到文档同级目录。取消后不会保存图片或插入引用。"
+editor.image_save:
+  en: "Save"
+  zh-CN: "保存"
+editor.image_cancel:
+  en: "Cancel"
+  zh-CN: "取消"
+editor.image_input_failed:
+  en: "Image import failed; no reference was inserted"
+  zh-CN: "图片导入失败，未插入引用"
+editor.image_input_denied:
+  en: "Image import requires document and workspace write permission; no file or reference was created"
+  zh-CN: "导入图片需要文档与工作区写入权限，未创建文件或引用"
+editor.image_input_busy:
+  en: "An image import is being prepared. Please retry after it finishes."
+  zh-CN: "正在准备上一批图片，请在完成后重试。"
 preview.image_loading:
   en: "Loading image…"
   zh-CN: "正在加载图片…"
@@ -26,6 +47,9 @@ preview.image_failed:
 plugins.permission_network_images:
   en: "Download preview images through bounded HTTP(S) requests"
   zh-CN: "通过受限 HTTP(S) 请求下载预览图片"
+plugins.permission_workspace_write:
+  en: "Save pasted or dropped images as new files beside their bound document, without overwriting files"
+  zh-CN: "将粘贴或拖入的图片保存为绑定文档同级的新文件，不覆盖已有文件"
 preview.source_mode:
   en: "Editor only"
   zh-CN: "仅编辑"

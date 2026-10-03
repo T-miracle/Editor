@@ -32,6 +32,10 @@ pub struct Document {
     /// Node identities and quotas share the panel's root/dialog/menu namespace.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub editor_toolbar: Option<Node>,
+    /// Claim user-initiated image paste/drop on the source pane through `editor.images`.
+    /// This additive declaration requires `source`; ordinary panels and older guests leave it false.
+    #[serde(default)]
+    pub editor_image_input: bool,
     /// At most one modal per panel. Removing it closes the modal.
     #[serde(default)]
     pub dialog: Option<Dialog>,
@@ -48,6 +52,7 @@ impl Document {
             revision: 0,
             root,
             editor_toolbar: None,
+            editor_image_input: false,
             dialog: None,
             menu: None,
         }
@@ -55,6 +60,12 @@ impl Document {
 
     pub fn revision(mut self, revision: u64) -> Self {
         self.revision = revision;
+        self
+    }
+
+    /// Enable source-pane image input for this versioned preview without exposing native pixel bytes.
+    pub fn editor_image_input(mut self, enabled: bool) -> Self {
+        self.editor_image_input = enabled;
         self
     }
 

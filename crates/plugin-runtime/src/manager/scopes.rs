@@ -104,6 +104,7 @@ impl Manager {
             return self.set_workspace_trust(trusted);
         }
         self.retire_workspace_images();
+        self.retire_workspace_image_inputs();
         let ids = self
             .live
             .keys()
@@ -185,6 +186,7 @@ impl Manager {
         let current = workspace_key(&self.environment.workspace) == key;
         if current {
             self.retire_workspace_images();
+            self.retire_workspace_image_inputs();
             self.language_services.clear();
         }
         let (environment, mut live) = if current {
@@ -275,6 +277,7 @@ impl Manager {
     /// Shutdown retires application resources as well as all workspace resources.
     pub fn shutdown(&mut self) {
         self.retire_workspace_images();
+        self.retire_workspace_image_inputs();
         let _ = self.checkpoint();
         for instance in self.live.values_mut() {
             instance.stop();

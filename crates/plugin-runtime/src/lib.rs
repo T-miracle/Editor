@@ -7,6 +7,12 @@ mod document_events;
 mod editor_requests;
 mod images;
 pub use images::{ImageResource, ImageState};
+mod image_input;
+pub use image_input::{
+    HostImageInput, HostImageOrigin, IMAGE_INPUT_MAX_BATCH, IMAGE_INPUT_MAX_BATCH_BYTES,
+    IMAGE_INPUT_MAX_BYTES, IMAGE_INPUT_MAX_RESIDENT_BYTES, IMAGE_INPUT_TIMEOUT_MS,
+    ImageInputResource,
+};
 pub mod faults;
 mod request_state;
 pub use document_events::DocumentEvents;

@@ -46,6 +46,7 @@ impl State {
 impl Instance {
     /// Host document revisions enter only the owning instance's bounded subscriptions.
     pub(crate) fn document_changed(&mut self, change: api::DocumentChange) {
+        self.invalidate_image_inputs(&change);
         for subscription in self.store.data_mut().subscriptions.values_mut() {
             subscription.events.push(change.clone());
         }

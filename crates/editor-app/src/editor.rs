@@ -15,6 +15,7 @@ mod pointer_hover;
 pub(crate) use popovers::{CompletionPopupState, DefinitionPopupFocus};
 mod popovers;
 pub(crate) use text_drag::TextDragState;
+pub(crate) use text_drag::caret_offset_at;
 mod text_drag;
 mod view;
 

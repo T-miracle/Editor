@@ -10,6 +10,7 @@ mod dependency_tests;
 mod editor_requests;
 #[cfg(test)]
 mod execution_service_tests;
+mod image_input;
 use crate::ui::plugin::images;
 #[cfg(test)]
 mod dock_tests;

@@ -9,6 +9,7 @@ use std::cell::RefCell;
 
 mod format;
 mod formatting;
+mod imports;
 mod preview;
 mod toolbar;
 
@@ -26,6 +27,8 @@ struct State {
     blocks: Vec<ui::Node>,
     /// The pending intent stores request ownership only; source text remains a readonly host snapshot.
     formatting: formatting::Formatting,
+    /// Image imports preserve complete-file receipts independently of the current source snapshot.
+    imports: imports::Imports,
     revision: u64,
 }
 
@@ -34,7 +37,7 @@ thread_local! { static STATE: RefCell<State> = RefCell::new(State::default()); }
 struct MarkdownPlugin;
 
 impl Guest for MarkdownPlugin {
-    /// Source snapshots arrive through Preview; formatting writes use separate version-checked editor tasks.
+    /// Source snapshots arrive through Preview; image saves and text writes use correlated host editor tasks.
     fn dispatch(payload: String) -> Result<String, String> {
         api::guest::dispatch(&payload, |message| {
             STATE.with(|cell| {
@@ -52,6 +55,7 @@ impl Guest for MarkdownPlugin {
                             ));
                         }
                         state.formatting.source_changed();
+                        state.imports.superseded();
                         *state = State {
                             environment,
                             ..Default::default()
@@ -98,6 +102,7 @@ impl State {
                 };
                 if changed {
                     self.formatting.source_changed();
+                    self.imports.source_changed();
                 }
                 self.source = document.map(|version| Source { version, text });
                 self.refresh();
@@ -112,19 +117,44 @@ impl State {
             api::Notification::Ui(event) if panel == Some("preview") => {
                 if event.revision == self.revision && event.action == ui::Action::Click {
                     if let Some(command) = toolbar::command(&event.node) {
+                        let imports_changed = self.imports.superseded();
                         // Keeping the same revision for acceptance lets a later fast click replace this intent.
-                        if self.formatting.start(command, self.source.as_ref()) {
+                        if self.formatting.start(command, self.source.as_ref()) || imports_changed {
                             self.revision = self.revision.saturating_add(1);
                         }
                     }
                 }
             }
-            event @ api::Notification::Request { .. } => {
-                if self.formatting.request(
-                    &event,
+            api::Notification::ImageInput {
+                document,
+                selection,
+                images,
+            } if panel == Some("preview") => {
+                // Only a current native offer supersedes formatting; late offers cannot cancel a newer document's edit.
+                if self
+                    .source
+                    .as_ref()
+                    .is_some_and(|source| source.version == document)
+                {
+                    self.formatting.source_changed();
+                }
+                self.imports.start(
+                    document,
+                    selection,
+                    images,
                     self.source.as_ref(),
                     self.environment.locale.starts_with("en"),
-                ) {
+                );
+                self.revision = self.revision.saturating_add(1);
+            }
+            event @ api::Notification::Request { .. } => {
+                let english = self.environment.locale.starts_with("en");
+                let formatting_changed =
+                    self.formatting
+                        .request(&event, self.source.as_ref(), english);
+                // Both owners inspect correlation; short-circuiting would strand an import's file receipt.
+                let imports_changed = self.imports.request(&event, self.source.as_ref(), english);
+                if formatting_changed || imports_changed {
                     self.revision = self.revision.saturating_add(1);
                 }
             }
@@ -149,10 +179,20 @@ impl State {
         let mut document = ui::Document::new(ui::Node::scroll("preview-scroll", body).grow())
             .revision(self.revision);
         document.source = self.source.as_ref().map(|source| source.version.clone());
+        document.editor_image_input = self.source.is_some();
         if self.source.is_some() {
             let english = self.environment.locale.starts_with("en");
-            document.editor_toolbar =
-                Some(toolbar::node(english, self.formatting.message(english)));
+            let import_message = self.imports.message(self.source.as_ref(), english);
+            // A format failure and an external-file receipt are independent outcomes; show both when needed.
+            let messages = [self.formatting.message(english), import_message.as_deref()]
+                .into_iter()
+                .flatten()
+                .collect::<Vec<_>>()
+                .join("\n");
+            document.editor_toolbar = Some(toolbar::node(
+                english,
+                (!messages.is_empty()).then_some(messages.as_str()),
+            ));
         }
         // A large or deeply nested document should leave the guest alive and preserve its source authority.
         // The same public quotas apply to this preview and every other native plugin view.

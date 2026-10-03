@@ -67,6 +67,22 @@ cargo test -p editor-app --bin editor-app capability_package_consent -- --ignore
 
 两种操作只允许活动 workspace 实例，服务委派也分别核对来源 `editor.read` / `editor.write`。`editor.toolbar` 只提供源码顶部控件，布局、提示、预算与事件规则见 [UI.md](UI.md#源码工具栏editortoolbar-10)；执行格式动作必须另获上述编辑能力与权限。独立真实包回归为 runtime 的 `editor_edit` 集成测试，使用同一 SDK 示例重打包成不同插件身份。
 
+## editor.images 1.0 — 原生图片输入与同级保存
+
+`Document.editor_image_input: true` 为当前 `Document.source` 的源码编辑区声明图片输入，要求协商 `editor.images`，并具有 `editor.read` / `editor.write`；只允许自己的工作区 editor 面板。`ui.images` 负责显示图片，两项能力分别协商。此声明不允许访客轮询系统剪贴板或读取外部路径。
+
+原生宿主捕获用户粘贴或拖入的真实图片，校验格式后调用 `Manager::offer_image_input`；剪贴板来源额外需要 `clipboard`，所有输入需要 `workspace.write`。宿主回调先核对活动预览、文档版本、选区和实例 epoch，再交付 `Notification::ImageInput { document, selection, images }`。`ImageInput { handle, format, byte_len }` 只有元数据；编码字节保留在 host 的 `Arc<Vec<u8>>` 资源，不穿过 JSON。`ImageFormat::extension()` 为 png / jpg / gif / webp / svg，后缀来自实际格式，不信任外部文件名。
+
+每批最多 8 张，单张至多 8 MiB、每批至多 32 MiB，manager 待保存编码数据总计至多 64 MiB；原生入队也须预留有限内存。输入句柄在 30 秒后失效，精确归属于实例、面板、文档版本与半开 UTF-8 选区。预览撤销、源版本变化、文档关闭、工作区切换、插件停用或替换撤销尚未使用的输入。普通 `Manager::event` 不能伪造图片通知；文件或服务句柄不能代替图片句柄，服务调用不能借用这项原生授权。
+
+访客通过 `EditorOperation::SaveImageInput { input, name }` 请求同级图片文件；需要 `editor.images`、`editor.read`、`editor.write`、`workspace.write`，请求期限最多 30 秒。`name` 为最多 255 字节的单一安全 basename，必须符合资源格式后缀；拒绝目录、绝对路径、Windows 设备名、ADS、控制字符、末尾空格或点。宿主重新核对目标工作区及规范化后的文档父目录，用原子 create-new 写入，不能覆盖旧文件；`Conflict` 保留句柄，访客可递增名称重试。同一输入不能同时受理两个保存。
+
+宿主通过 `EditorRequest::image_input()` 获得不可变 `ImageInputResource { input, document, selection, bytes }`，完成返回 `EditorValue::ImageSaved { input, document, name }`，三个字段必须与受理请求一致；成功才消费输入。已受理的写入持有原始字节与目标，源预览变化不会丢失成功保存回执。取消的请求终态不会再变成成功：进入文件副作用后取消只能停止等待，不能声称撤销文件。因此访客应保留已受理保存任务以观察回执，源变化只撤销后续文本插入意图和未使用输入。
+
+文件保存与引用编辑分别确认：本能力不编辑 Markdown 或其他文本，也不删除完整图片。访客在全部保存成功后使用 `editor.edit` 的一次版本化范围事务插入引用；迟到、关闭或选区变化的编辑会拒绝，成功文件保留并报告引用未插入。文本 Undo 只撤销引用。创建失败时，宿主仅清理该请求创建的不完整新文件。`workspace.write` 在这里授权目标文档同级附件，既有 `workspace.files` 仍为只读，不获得任意工作区写入能力。
+
+公开独立回归：先构建 capability-example，再运行 `cargo test -p plugin-runtime --test editor_images -- --ignored --test-threads=1`；原生剪贴板、拖入、实际文件和 Undo 由宿主集成验收。
+
 ## configuration 1.0
 
 协议 7 清单的 `settings` 以插件内部键声明 `title`、`value_type`、`default`、`scope` 和 `apply`。类型为 boolean、string（max_length）、integer（min/max）、enum（choices）；作用域为 user 或 project，后者允许明确确认的项目覆盖。此版本的生效方式为 `restart_instance`。最多 64 个字段、字符串最多 4096 字节、枚举最多 32 个不重复选项；无效默认值在包检查时拒绝。可执行包需声明必需能力 `configuration: ^1`。

@@ -164,6 +164,7 @@ impl Demo {
         if document.source.is_none() {
             // Source controls cannot publish until their immutable document identity is available.
             document.editor_toolbar = None;
+            document.editor_image_input = false;
             // Preserve the asset's mapping template for later previews, but never publish unbound ranges.
             visit(&mut document.root, &mut unbind_source);
             if let Some(dialog) = &mut document.dialog {
@@ -171,6 +172,11 @@ impl Demo {
             }
         }
         document
+    }
+    /// Diagnostics reuse the same public document so native image metadata and typed request failures stay observable.
+    pub(super) fn diagnostic(&mut self, text: &str) {
+        self.document.root = Node::text("scope-probe-result", text);
+        self.document.revision += 1;
     }
 }
 

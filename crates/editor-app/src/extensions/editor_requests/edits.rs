@@ -5,7 +5,10 @@ use protocol::api::TextRange;
 
 impl EditorApp {
     /// A toolbar action may only observe or edit the still-active document that produced its UI.
-    fn current_plugin_edit_target(&self, document: &DocumentVersion) -> Result<usize, Failure> {
+    pub(super) fn current_plugin_edit_target(
+        &self,
+        document: &DocumentVersion,
+    ) -> Result<usize, Failure> {
         self.active_tab_index()
             .filter(|index| {
                 self.plugin_document_version(*index)
@@ -20,7 +23,7 @@ impl EditorApp {
     }
 
     /// Read retained native selection, including when a source toolbar button currently owns focus.
-    pub(super) fn read_plugin_document_selection(
+    pub(in crate::extensions) fn read_plugin_document_selection(
         &self,
         document: &DocumentVersion,
         window: &mut Window,

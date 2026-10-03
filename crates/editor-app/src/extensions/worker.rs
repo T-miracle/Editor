@@ -40,6 +40,18 @@ pub(super) enum Work {
     Uninstall(String, bool),
     /// Native callbacks retain the incarnation that created them, even if a replacement reuses node IDs.
     Event(String, u64, Option<String>, api::Notification),
+    /// Bytes offered by a native user gesture remain host-owned; only opaque metadata crosses WASM.
+    ImageInput {
+        plugin: String,
+        panel: String,
+        epoch: u64,
+        document: api::DocumentVersion,
+        selection: api::TextRange,
+        origin: plugin_runtime::HostImageOrigin,
+        images: Vec<plugin_runtime::HostImageInput>,
+        /// Conservatively reserves one 32 MiB batch until the manager adopts or rejects its bytes.
+        reservation: ImageOfferReservation,
+    },
     /// Host-originated commands target a plugin directly, even while its panel is hidden.
     Invoke {
         plugin: String,
@@ -52,7 +64,9 @@ impl Work {
     /// Preserve plugin ownership before dispatch consumes the work; manager-wide actions have no owner.
     fn plugin_id(&self) -> Option<&str> {
         match self {
-            Self::SetSetting { plugin, .. } | Self::Invoke { plugin, .. } => Some(plugin),
+            Self::SetSetting { plugin, .. }
+            | Self::Invoke { plugin, .. }
+            | Self::ImageInput { plugin, .. } => Some(plugin),
             Self::Install(package) => Some(&package.manifest.id),
             Self::Enable(id)
             | Self::Restart(id)
@@ -166,10 +180,32 @@ pub(super) struct Worker {
     pub state: Arc<Mutex<Published>>,
     /// UI publication is masked immediately, including results queued before revocation.
     pub trusted: std::sync::atomic::AtomicBool,
+    /// Two native batches bound preparation and the otherwise unbounded command channel to 64 MiB.
+    image_offers: Arc<std::sync::atomic::AtomicUsize>,
     #[cfg(test)]
     pub recorded: Mutex<mpsc::Receiver<Work>>,
 }
+
+/// Queue ownership is released on rejection, worker shutdown or completion of native-to-manager transfer.
+pub(super) struct ImageOfferReservation(Arc<std::sync::atomic::AtomicUsize>);
+
+impl Drop for ImageOfferReservation {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, std::sync::atomic::Ordering::AcqRel);
+    }
+}
+
 impl Worker {
+    /// Reserve before copying clipboard pixels or reading external files, never after enqueueing them.
+    pub(super) fn reserve_image_offer(&self) -> Option<ImageOfferReservation> {
+        use std::sync::atomic::Ordering;
+        self.image_offers
+            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |used| {
+                (used < 2).then_some(used + 1)
+            })
+            .ok()?;
+        Some(ImageOfferReservation(self.image_offers.clone()))
+    }
     /// This bypasses the serialized command queue so a long download cannot delay shutdown or trust revocation.
     pub fn cancel_installation(&self) {
         if let Some(control) = &self.state.lock().unwrap().install_control {
@@ -266,6 +302,7 @@ impl Worker {
                 trusted,
             ))),
             trusted: std::sync::atomic::AtomicBool::new(trusted),
+            image_offers: Default::default(),
             recorded: Mutex::new(rx),
         }
     }

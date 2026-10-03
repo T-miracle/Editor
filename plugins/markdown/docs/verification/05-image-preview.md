@@ -37,3 +37,5 @@
 ## 交付及实际限制
 
 本单为原生 GPUI Windows 自动交互验收与隔离本地／loopback HTTP 测试，未请求真实第三方网站。GIF/WebP 暂仅第一帧，SVG 复杂度配额采取保守上界。系统 DNS 物理调用不能立即中断，但仍位于 8 个已计数 worker 内，消费者超时即失效且迟到解析不再连接。保留已有 linker 与未使用 API 警告。粘贴／拖入图片、任务交互、链接、提供者代码高亮及同步滚动按后续工单继续实施。本单普通提交、推送验证及 #31 completed 读回将在交付后补证据，不关闭父议题。
+
+2026-10-04 交付：普通提交 `9f3670ed0185ac12a85a2c23a49148a8dbf80c2a` 已推送 `origin/codex/markdown-plugin`，`git ls-remote` 核对远端 SHA 完全一致；GitHub #31 PATCH 后独立 GET 读回 `closed / completed`。#26 保持未修改。此交付读回追加到后续工单的文档提交，未改写已推送历史。

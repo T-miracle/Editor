@@ -352,6 +352,9 @@ impl Instance {
                     .data()
                     .check_editor_toolbar_authority(&view.panel)?;
             }
+            if view.document.editor_image_input {
+                self.store.data().check_image_input_authority(&view.panel)?;
+            }
             let mut canvas = false;
             let mut grid = false;
             let mut collections = view.document.menu.is_some();

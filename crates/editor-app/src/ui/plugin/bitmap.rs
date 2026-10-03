@@ -13,6 +13,32 @@ pub(crate) struct Bitmap {
     pub height: u32,
 }
 
+/// Detect the actual encoding and validate bounded pixels before a native image gesture is offered.
+/// No supplied filename or platform format hint can change the suffix of the eventual attachment.
+pub(crate) fn input_format(
+    bytes: &[u8],
+) -> Result<plugin_runtime::plugin_protocol::api::ImageFormat, Failure> {
+    use plugin_runtime::plugin_protocol::api::ImageFormat as Format;
+    if bytes.is_empty() || bytes.len() > 8 * 1024 * 1024 {
+        return Err(limited());
+    }
+    let format = match image::guess_format(bytes) {
+        Ok(image::ImageFormat::Png) => Format::Png,
+        Ok(image::ImageFormat::Jpeg) => Format::Jpeg,
+        Ok(image::ImageFormat::Gif) => Format::Gif,
+        Ok(image::ImageFormat::WebP) => Format::Webp,
+        Err(_) => Format::Svg,
+        _ => {
+            return Err(Failure::new(
+                ErrorCode::UnsupportedOperation,
+                "Unsupported image encoding",
+            ));
+        }
+    };
+    decode_with_budget(bytes, 64 * 1024 * 1024)?;
+    Ok(format)
+}
+
 /// Content detection accepts the documented formats; invalid or oversized bytes fail one image only.
 #[cfg(test)]
 pub(super) fn decode(bytes: &[u8]) -> Result<Bitmap, Failure> {

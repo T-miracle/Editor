@@ -253,6 +253,34 @@ impl Worker {
                                 Ok(())
                             }
                         }
+                        Some(Work::ImageInput {
+                            plugin,
+                            panel,
+                            epoch,
+                            document,
+                            selection,
+                            origin,
+                            images,
+                            reservation,
+                        }) => {
+                            let current = output
+                                .lock()
+                                .unwrap()
+                                .instance_epochs
+                                .get(&plugin)
+                                .copied()
+                                .unwrap_or(0);
+                            let result = if epoch == current {
+                                manager.offer_image_input(
+                                    &plugin, &panel, document, selection, origin, images,
+                                )
+                            } else {
+                                // Native preparation may finish after an upgrade; a replacement never owns these bytes.
+                                Ok(())
+                            };
+                            drop(reservation);
+                            result
+                        }
                         Some(Work::Invoke {
                             plugin,
                             command,
@@ -454,6 +482,7 @@ impl Worker {
             tx,
             state,
             trusted: std::sync::atomic::AtomicBool::new(trusted),
+            image_offers: Default::default(),
             #[cfg(test)]
             recorded: Mutex::new(mpsc::channel().1),
         }

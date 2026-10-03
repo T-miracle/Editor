@@ -291,6 +291,23 @@ pub(super) fn pump(
             .collect()
     });
     for work in work {
+        if let Work::ImageInput {
+            plugin,
+            panel,
+            document,
+            selection,
+            origin,
+            images,
+            reservation,
+            ..
+        } = work
+        {
+            manager
+                .offer_image_input(&plugin, &panel, document, selection, origin, images)
+                .unwrap();
+            drop(reservation);
+            continue;
+        }
         if let Work::Event(id, _, panel, event) = work {
             if let Err(error) = manager.event(&id, panel, event) {
                 assert!(

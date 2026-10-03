@@ -3,6 +3,9 @@ use semver::{Version, VersionReq};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
+#[cfg(test)]
+mod images_tests;
+
 /// Maximum encoded host request size; SDKs reject oversized requests before transport.
 pub const MAX_REQUEST_BYTES: usize = 2 * 1024 * 1024;
 
@@ -22,6 +25,40 @@ pub struct ResourceHandle {
     pub instance: String,
     pub scope: String,
     pub resource: u64,
+}
+
+/// Formats accepted by native image input; the host identifies encoded content before issuing a handle.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ImageFormat {
+    Png,
+    Jpeg,
+    Gif,
+    Webp,
+    Svg,
+}
+
+impl ImageFormat {
+    /// Canonical suffix without a dot, used to validate a caller-chosen document-sibling name.
+    pub const fn extension(self) -> &'static str {
+        match self {
+            Self::Png => "png",
+            Self::Jpeg => "jpg",
+            Self::Gif => "gif",
+            Self::Webp => "webp",
+            Self::Svg => "svg",
+        }
+    }
+}
+
+/// Metadata for a 30-second, instance-owned input. Encoded pixels never cross the 2 MiB JSON transport.
+/// Batches contain at most eight images, each at most 8 MiB and together at most 32 MiB.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ImageInput {
+    pub handle: ResourceHandle,
+    pub format: ImageFormat,
+    pub byte_len: u64,
 }
 
 /// Compatibility ranges describe API requirements, never the plugin package version.
@@ -249,6 +286,13 @@ pub enum Input {
 /// Native UI notifications contain no legacy canvas or character-grid fields.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum Notification {
+    /// User-initiated native input belongs to this exact source version and UTF-8 selection.
+    /// Only the authorized active workspace preview receives the ordered metadata batch.
+    ImageInput {
+        document: DocumentVersion,
+        selection: TextRange,
+        images: Vec<ImageInput>,
+    },
     /// Only the isolated private-data root and package assets are available during this callback.
     MigrateData {
         from: u32,
@@ -327,6 +371,14 @@ pub struct DocumentChange {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum EditorOperation {
+    /// Create an input's bytes beside its bound source document, without overwriting an existing file.
+    /// Requires `editor.images`, `editor.read`, `editor.write` and `workspace.write`.
+    /// `name` is a basename with the resource's canonical suffix. Conflict retains the input for retry;
+    /// successful completion consumes it. No reference edit or file deletion is implied.
+    SaveImageInput {
+        input: ResourceHandle,
+        name: String,
+    },
     /// Clipboard calls are separately negotiated and authorized; they use the same asynchronous completion gate.
     ReadClipboard,
     WriteClipboard {
@@ -366,6 +418,13 @@ pub enum EditorOperation {
 /// Values describe the actual document and revision observed or saved, rather than an acknowledgement.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum EditorValue {
+    /// The complete file was created. `name` is relative to this original document's directory.
+    /// A later source change cannot turn this receipt into permission to edit another document.
+    ImageSaved {
+        input: ResourceHandle,
+        document: DocumentVersion,
+        name: String,
+    },
     Clipboard {
         text: String,
     },

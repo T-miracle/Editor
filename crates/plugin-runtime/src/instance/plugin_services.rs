@@ -269,6 +269,12 @@ impl State {
                 "workspace.read"
             }
             api::Operation::Editor { operation, .. } => match operation {
+                api::EditorOperation::SaveImageInput { .. } => {
+                    return Err(Failure::new(
+                        ErrorCode::PermissionDenied,
+                        "Native image offers cannot be delegated through services",
+                    ));
+                }
                 api::EditorOperation::ReadClipboard
                 | api::EditorOperation::WriteClipboard { .. } => "clipboard",
                 api::EditorOperation::OpenDataFile { .. } => {

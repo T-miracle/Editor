@@ -1,6 +1,6 @@
 //! Native plugin view lifecycle. GPUI entities stay here; guests receive typed events only.
 mod atlas;
-mod bitmap;
+pub(crate) mod bitmap;
 mod canvas;
 pub(crate) mod controls;
 pub(crate) mod images;

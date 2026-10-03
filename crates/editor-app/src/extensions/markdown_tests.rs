@@ -5,6 +5,7 @@ use gpui_kit::{TestAppContext, gpui};
 
 mod format_toolbar;
 mod harness;
+mod image_import;
 mod image_preview;
 mod modes;
 mod range_edits;

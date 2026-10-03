@@ -101,6 +101,10 @@ const SDK_FILES: &[(&str, &[u8])] = &[
         include_bytes!("../../plugin-protocol/src/ui/images_tests.rs"),
     ),
     (
+        "src/api/images_tests.rs",
+        include_bytes!("../../plugin-protocol/src/api/images_tests.rs"),
+    ),
+    (
         "wit/plugin.wit",
         include_bytes!("../../plugin-protocol/wit/plugin.wit"),
     ),

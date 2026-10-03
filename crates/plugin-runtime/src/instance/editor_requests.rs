@@ -24,6 +24,7 @@ impl State {
             ));
         }
         let (capability, permission) = match &operation {
+            EditorOperation::SaveImageInput { .. } => ("editor.images", "workspace.write"),
             EditorOperation::ReadDocumentSelection { .. } => ("editor.edit", "editor.read"),
             EditorOperation::ReplaceDocumentRange { .. } => ("editor.edit", "editor.write"),
             EditorOperation::WriteClipboard { text } if text.len() > 1024 * 1024 => {
@@ -75,6 +76,17 @@ impl State {
             ));
         }
         validate_edit_request(&operation)?;
+        let image_input = if let EditorOperation::SaveImageInput { input, name } = &operation {
+            if timeout_ms > crate::IMAGE_INPUT_TIMEOUT_MS {
+                return Err(Failure::new(
+                    ErrorCode::InvalidRequest,
+                    "Image save deadline must not exceed 30000 ms",
+                ));
+            }
+            Some(self.image_input_payload(input, name)?)
+        } else {
+            None
+        };
         if self.editor_requests.len() >= 32 {
             return Err(Failure::new(
                 ErrorCode::LimitExceeded,
@@ -84,7 +96,7 @@ impl State {
         let Value::Resource(handle) = self.roots.open(RootKind::EditorRequest)? else {
             unreachable!()
         };
-        let call = EditorRequest::new(
+        let mut call = EditorRequest::new(
             handle.clone(),
             operation,
             self.workspace.display().to_string(),
@@ -92,6 +104,10 @@ impl State {
             timeout_ms,
             self.plugin_services.context.as_ref(),
         );
+        if let Some(input) = image_input {
+            self.mark_image_input_pending(&input.input.handle, handle.clone());
+            call = call.with_image_input(input);
+        }
         self.editor_requests.insert(
             handle.resource,
             PendingRequest {
@@ -179,7 +195,11 @@ impl Instance {
                 continue;
             }
             if update.is_terminal() {
-                self.store.data_mut().editor_requests.remove(&slot);
+                if let Some(pending) = self.store.data_mut().editor_requests.remove(&slot) {
+                    self.store
+                        .data_mut()
+                        .finish_image_input_request(&pending.call, &update);
+                }
                 self.store.data_mut().roots.remove(&handle);
                 self.store
                     .data_mut()

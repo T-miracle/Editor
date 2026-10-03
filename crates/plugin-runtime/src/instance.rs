@@ -14,6 +14,7 @@ mod capability_calls;
 mod document_events;
 mod editor_requests;
 mod file_discovery;
+mod image_inputs;
 mod plugin_services;
 mod process_calls;
 mod resource_roots;
@@ -33,6 +34,8 @@ struct State {
     roots: ResourceRoots,
     /// Slots and pending completions are owned by this exact WASM instance.
     editor_requests: std::collections::BTreeMap<u64, crate::editor_requests::PendingRequest>,
+    /// Native inputs and their slots share this incarnation; pending writers retain their own immutable payload.
+    image_inputs: std::collections::BTreeMap<u64, image_inputs::Input>,
     declared_panels: BTreeSet<String>,
     /// Editor toolbar authority is confined to this package's declared workspace preview surfaces.
     declared_editor_panels: BTreeSet<String>,
@@ -227,6 +230,7 @@ impl Instance {
             call_deadline: std::time::Instant::now(),
             roots: ResourceRoots::new(&environment.workspace, application, manifest.storage_limit),
             editor_requests: Default::default(),
+            image_inputs: Default::default(),
             subscriptions: Default::default(),
             declared_panels: manifest
                 .panels
@@ -395,6 +399,9 @@ impl Instance {
                 std::sync::Arc::new(view.document.clone()),
             );
         }
+        // Revoke against the newly published opt-in, before a second public event can use old slots.
+        // Accepted writers pin their payload independently and still deliver the original save receipt.
+        self.reconcile_image_inputs();
         self.error = None;
         Ok(reply)
     }
@@ -467,6 +474,7 @@ impl Instance {
     }
     /// Seal already-published work before the final snapshot, while retaining private-file access for serialization.
     pub(crate) fn quiesce(&mut self) {
+        self.clear_image_inputs();
         self.store.data_mut().plugin_services.clear();
         self.store.data_mut().subscriptions.clear();
         for request in self.store.data_mut().editor_requests.values() {
@@ -521,6 +529,7 @@ impl Instance {
         self.store.data().processes.ids()
     }
     pub fn poll(&mut self) -> anyhow::Result<bool> {
+        self.reconcile_image_inputs();
         self.retire_service_sources();
         let revoked = self.poll_service_revocations()?;
         self.poll_service_requests()?;

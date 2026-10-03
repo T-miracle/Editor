@@ -130,6 +130,14 @@ let document = Document::new(Node::button("open", "打开"))
 
 点击关闭或按 Escape 返回 `Dismiss`（node 为弹窗 ID）；插件应将下一份文档的 `dialog` 设为 `None`。确认按钮的语义由插件定义。等待插件回复期间继续保持模态，重复关闭请求只发送一次。弹窗关闭后恢复之前的焦点。协议 v1 每个面板最多一个模态浮层，尚不提供任意系统顶层窗口或嵌套弹窗。
 
+## 源码图片输入（editor.images 1.0）
+
+`Document.editor_image_input: bool` 默认 false，开启后在该文档源码区接收原生图片粘贴和外部文件拖入。必须携带当前 `Document.source`，协商 `editor.images ^1`，具有 `editor.read` / `editor.write`，且属于工作区实例自己声明的 editor 面板；普通面板、application 实例或缺少授权在发布前拒绝。源码单栏与左右分栏共享同一输入授权，仅预览模式不接受源码编辑输入。
+
+真正捕获需要 `workspace.write`，剪贴板来源还需要 `clipboard`。宿主校验实际图片格式和有限批量，将只含元数据的 `Notification::ImageInput` 返回同一 `api::View.panel`；宿主保存编码字节，访客选择 basename 并提交 `SaveImageInput`。这项声明不提供任意路径读取、环境剪贴板轮询或 JSON 图片上传。撤销声明、文档/实例变化或 30 秒到期清理未使用资源；已受理保存的成功回执保留，源变化不能把引用插入到新的目标。
+
+输入、保存、文件副作用与引用撤销规则见 [README.md](README.md#editorimages-10--原生图片输入与同级保存)。图片预览仍独立使用 `ui.images` 的受控资源，不执行 HTML 默认图片读取。
+
 ## 主题和字体
 
 节点只声明样式角色，没有硬编码颜色或字体字段。省略 `role` 时，使用 `button/input/checkbox/choice/tabs/text/rich_text/code_block/image/list/table/progress/separator/scroll/spacer/container`；弹窗外壳使用 `dialog`。

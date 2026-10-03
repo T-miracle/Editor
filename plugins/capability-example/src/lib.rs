@@ -384,6 +384,9 @@ impl State {
                 }
                 self.text = serde_json::to_string(&result)
                     .map_err(|error| Failure::new(ErrorCode::OperationFailed, error.to_string()))?;
+                if let Some(demo) = &mut self.ui_demo {
+                    demo.diagnostic(&self.text);
+                }
             }
             api::Input::Event {
                 event: api::Notification::Command { id, .. },
@@ -409,6 +412,20 @@ impl State {
                         self.document = Some(document.clone());
                     }
                     self.text = format!("{update:?}");
+                }
+                if let Some(demo) = &mut self.ui_demo {
+                    demo.diagnostic(&self.text);
+                }
+            }
+            api::Input::Event {
+                event: event @ api::Notification::ImageInput { .. },
+                ..
+            } => {
+                // The example receives only native-owned metadata; pixels never pass through this JSON transport.
+                self.text = serde_json::to_string(&event)
+                    .map_err(|error| Failure::new(ErrorCode::OperationFailed, error.to_string()))?;
+                if let Some(demo) = &mut self.ui_demo {
+                    demo.diagnostic(&self.text);
                 }
             }
             api::Input::Event {

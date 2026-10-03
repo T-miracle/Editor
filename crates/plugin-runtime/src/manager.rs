@@ -10,6 +10,7 @@ use std::{
 mod artwork;
 mod data_updates;
 mod dependencies;
+mod image_input;
 mod images;
 mod language;
 mod plugin_services;
@@ -74,6 +75,8 @@ pub struct Manager {
     /// Byte producers are independent of WASM calls and retained only for current preview identities.
     images: BTreeMap<String, crate::images::Entry>,
     image_budget: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+    /// Reservations also cover payloads retained by an accepted native writer.
+    image_input_budget: std::sync::Arc<std::sync::atomic::AtomicUsize>,
     retired_image_sources: BTreeMap<String, api::DocumentVersion>,
 }
 impl Manager {
@@ -139,6 +142,7 @@ impl Manager {
             language_services: BTreeMap::new(),
             images: BTreeMap::new(),
             image_budget: Default::default(),
+            image_input_budget: Default::default(),
             retired_image_sources: BTreeMap::new(),
         };
         if manager.installed.values().any(|entry| {

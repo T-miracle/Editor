@@ -9,6 +9,7 @@ pub(super) enum RootKind {
     Workspace,
     Data,
     EditorRequest,
+    ImageInput,
     ServiceReference,
     ServiceRequest,
     Subscription,
@@ -135,6 +136,7 @@ impl State {
         }
         let (capability, permission, root) = match kind {
             RootKind::EditorRequest
+            | RootKind::ImageInput
             | RootKind::ServiceReference
             | RootKind::ServiceRequest
             | RootKind::Subscription
@@ -297,12 +299,14 @@ impl State {
                         .map(|_| Value::Unit);
                 }
                 self.subscriptions.remove(&handle.resource);
+                self.image_inputs.remove(&handle.resource);
                 self.plugin_services.references.remove(&handle.resource);
                 if let Some(request) = self.plugin_services.pending.remove(&handle.resource) {
                     request.call.completion.retire();
                 }
                 if let Some(request) = self.editor_requests.remove(&handle.resource) {
                     request.call.retire();
+                    self.finish_image_input_request(&request.call, &request.call.status());
                 }
                 self.roots.slots.remove(&handle.resource);
                 Ok(Value::Unit)
