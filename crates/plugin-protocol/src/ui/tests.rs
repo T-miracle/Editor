@@ -1,6 +1,149 @@
 //! Contract regression cases are also shipped with the standalone SDK.
 use super::*;
 
+/// A wrapping row retains this portable layout flag across independent SDK serialization.
+#[test]
+fn row_wrap_is_a_portable_layout_flag() {
+    let document: Document = serde_json::from_value(serde_json::json!({
+        "version":1, "revision":0, "root":{
+            "id":"toolbar", "layout":{"wrap":true}, "kind":{"type":"row","children":[]}
+        }
+    }))
+    .unwrap();
+    assert_eq!(
+        serde_json::to_value(&document).unwrap()["root"]["layout"]["wrap"],
+        true
+    );
+    assert!(document.validate().is_ok());
+}
+
+/// Source controls share the document's identity, text, node and depth limits rather than separate quotas.
+#[test]
+fn editor_toolbar_is_version_bound_and_shares_document_quotas() {
+    let mut document = Document::new(Node::text("body", "Preview"));
+    document.editor_toolbar = Some(
+        Node::row(
+            "toolbar",
+            vec![Node::button("bold", "B").tooltip("粗体 / Bold")],
+        )
+        .wrap(),
+    );
+    assert!(
+        document.validate().is_err(),
+        "unbound editor toolbar was accepted"
+    );
+    document.source = Some(crate::api::DocumentVersion {
+        id: "open".into(),
+        path: "source.sample".into(),
+        revision: 1,
+    });
+    assert!(document.validate().is_ok());
+    document.editor_toolbar = Some(Node::button("body", "Duplicate"));
+    assert!(document.validate().is_err());
+    document.editor_toolbar = Some(Node::button("bold", "B").tooltip("x".repeat(65537)));
+    assert!(document.validate().is_err());
+    document.root = Node::column(
+        "body",
+        (0..1024)
+            .map(|i| Node::button(format!("r{i}"), ""))
+            .collect(),
+    );
+    document.editor_toolbar = Some(Node::row(
+        "toolbar",
+        (0..1024)
+            .map(|i| Node::button(format!("t{i}"), ""))
+            .collect(),
+    ));
+    assert!(
+        document.validate().is_err(),
+        "toolbar reset the node budget"
+    );
+    document.root = Node::column(
+        "body",
+        (0..16)
+            .map(|i| Node::text(format!("text{i}"), "x".repeat(65536)))
+            .collect(),
+    );
+    document.editor_toolbar = Some(Node::button("bold", ""));
+    assert!(document.validate().is_ok());
+    document.editor_toolbar = Some(Node::button("bold", "").tooltip("x"));
+    assert!(
+        document.validate().is_err(),
+        "tooltip reset the text budget"
+    );
+    document.root = Node::text("body", "");
+    let mut toolbar = Node::button("bold", "B");
+    for i in 0..26 {
+        toolbar = Node::scroll(format!("depth{i}"), toolbar);
+    }
+    document.editor_toolbar = Some(toolbar);
+    assert!(
+        document.validate().is_err(),
+        "toolbar reset the depth budget"
+    );
+}
+
+/// Toolbar callbacks retain stale/disabled/modal rejection even when the source is the only visible surface.
+#[test]
+fn editor_toolbar_events_share_revision_and_modal_priority() {
+    use crate::api::ErrorCode;
+    let mut document = Document::new(Node::text("body", "Preview")).revision(3);
+    document.source = Some(crate::api::DocumentVersion {
+        id: "open".into(),
+        path: "source.sample".into(),
+        revision: 1,
+    });
+    document.editor_toolbar = Some(Node::button("bold", "B"));
+    let mut event = UiEvent {
+        revision: 3,
+        node: "bold".into(),
+        action: Action::Click,
+    };
+    assert!(document.validate_event(&event).is_ok());
+    event.revision = 2;
+    assert_eq!(
+        document.validate_event(&event).unwrap_err().code,
+        ErrorCode::StaleRevision
+    );
+    event.revision = 3;
+    document.editor_toolbar.as_mut().unwrap().disabled = true;
+    assert_eq!(
+        document.validate_event(&event).unwrap_err().code,
+        ErrorCode::InvalidHandle
+    );
+    document.editor_toolbar.as_mut().unwrap().disabled = false;
+    document.dialog = Some(Dialog::new(
+        "modal",
+        "Modal",
+        Node::button("close", "Close"),
+    ));
+    assert_eq!(
+        document.validate_event(&event).unwrap_err().code,
+        ErrorCode::InvalidHandle
+    );
+    assert!(document.active_node("close").is_some());
+    document.dialog = None;
+    document.menu = Some(PopupMenu {
+        id: "popup".into(),
+        x: 0.,
+        y: 0.,
+        items: vec![MenuItem {
+            id: "choice".into(),
+            label: "Choice".into(),
+            disabled: false,
+            separator_before: false,
+        }],
+    });
+    assert!(document.active_node("bold").is_none());
+    assert_eq!(
+        document.validate_event(&event).unwrap_err().code,
+        ErrorCode::InvalidState
+    );
+    event.node = "popup".into();
+    event.action = Action::Select("choice".into());
+    assert!(document.validate_event(&event).is_ok());
+}
+
 #[test]
 fn side_tabs_rejects_ambiguous_items_and_unbounded_geometry() {
     // Collection validation is independent of its location in a document.

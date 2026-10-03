@@ -37,7 +37,25 @@ impl EditorApp {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         match self.editor_preview_mode(&preview, cx) {
-            PreviewMode::Source => source,
+            PreviewMode::Source => {
+                let overlay = preview.update(cx, |panel, cx| panel.source_overlay(window, cx));
+                div()
+                    .size_full()
+                    .relative()
+                    .flex()
+                    .flex_col()
+                    .child(source)
+                    .when_some(overlay, |body, overlay| {
+                        body.child(
+                            div()
+                                .debug_selector(|| "editor-source-plugin-overlay".into())
+                                .absolute()
+                                .inset_0()
+                                .child(overlay),
+                        )
+                    })
+                    .into_any_element()
+            }
             PreviewMode::Split => self.render_editor_preview_split(source, preview, cx),
             PreviewMode::Preview => {
                 // Tab activation and startup restoration can defer source focus until after a mode click.
@@ -73,7 +91,13 @@ impl EditorApp {
         self.session_state.editor_preview_modes.insert(key, mode);
         if mode == PreviewMode::Source {
             preview.update(cx, |panel, cx| {
-                panel.native_ui = None;
+                // The same native view can carry an open dialog/menu into the source overlay.
+                if panel
+                    .current_document()
+                    .is_none_or(|document| document.dialog.is_none() && document.menu.is_none())
+                {
+                    panel.native_ui = None;
+                }
                 cx.notify();
             });
         } else if mode == PreviewMode::Preview && self.editor.focus_handle(cx).is_focused(window) {

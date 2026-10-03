@@ -24,6 +24,8 @@ impl State {
             ));
         }
         let (capability, permission) = match &operation {
+            EditorOperation::ReadDocumentSelection { .. } => ("editor.edit", "editor.read"),
+            EditorOperation::ReplaceDocumentRange { .. } => ("editor.edit", "editor.write"),
             EditorOperation::WriteClipboard { text } if text.len() > 1024 * 1024 => {
                 return Err(Failure::new(
                     ErrorCode::LimitExceeded,
@@ -72,6 +74,7 @@ impl State {
                 format!("{permission} permission required"),
             ));
         }
+        validate_edit_request(&operation)?;
         if self.editor_requests.len() >= 32 {
             return Err(Failure::new(
                 ErrorCode::LimitExceeded,
@@ -100,6 +103,37 @@ impl State {
         );
         Ok(Value::Accepted(handle))
     }
+}
+
+/// Check bounded request shape; only the host can check the target revision and UTF-8 boundaries.
+fn validate_edit_request(operation: &EditorOperation) -> Result<(), Failure> {
+    if let EditorOperation::ReplaceDocumentRange {
+        range,
+        text,
+        selection,
+        expected_selection,
+        ..
+    } = operation
+    {
+        if text.len() > 1024 * 1024 {
+            return Err(Failure::new(
+                ErrorCode::LimitExceeded,
+                "Replacement text exceeds 1 MiB",
+            ));
+        }
+        // Result selections address the resulting full document, so there is no replacement-size end bound.
+        if [Some(range), Some(selection), expected_selection.as_ref()]
+            .into_iter()
+            .flatten()
+            .any(|range| range.start > range.end)
+        {
+            return Err(Failure::new(
+                ErrorCode::InvalidRequest,
+                "Text range start must not exceed its end",
+            ));
+        }
+    }
+    Ok(())
 }
 
 impl Instance {

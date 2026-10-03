@@ -548,7 +548,13 @@ impl EditorApp {
             .debug_selector(|| "editor-source-pane".into())
             .flex_1()
             .min_h_0()
+            .flex()
+            .flex_col()
             .relative()
+            .when_some(
+                self.render_editor_source_toolbar(window, cx),
+                |source, toolbar| source.child(toolbar),
+            )
             // Capture selection presses before the base editor collapses them.
             .when(hover_enabled, |view| {
                 view.capture_any_mouse_down(cx.listener(Self::text_drag_press))

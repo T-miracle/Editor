@@ -5,6 +5,79 @@ use gpui_kit::component::WindowExt as _;
 use gpui_kit::component::dialog::{DialogAction, DialogClose, DialogFooter};
 use gpui_kit::rgb;
 impl ExtensionPanel {
+    /// Both a preview body and a source-only toolbar must deliver live theme and locale changes.
+    pub(super) fn native_environment(&mut self, cx: &mut Context<Self>) -> protocol::Environment {
+        let environment = environment(&self.workspace, cx);
+        if self.last_theme.as_ref() != Some(&environment) {
+            self.last_theme = Some(environment.clone());
+            for entry in &self.entries {
+                if entry.enabled && Some(&entry.manifest.id) == self.active.as_ref() {
+                    self.send_to(
+                        &entry.manifest.id,
+                        None,
+                        PluginEvent::Theme(environment.clone()),
+                    );
+                }
+            }
+        }
+        environment
+    }
+
+    /// Preview content and source-mode overlays share one keyed native view and event ownership.
+    pub(super) fn native_document(
+        &mut self,
+        mut document: protocol::ui::Document,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Entity<crate::ui::plugin::PluginView> {
+        document.editor_toolbar = None;
+        let environment = self.native_environment(cx);
+        if let Some(view) = &self.native_ui {
+            view.update(cx, |view, cx| {
+                view.update_document(document, environment, window, cx)
+            });
+        } else {
+            let tx = self.worker.tx.clone();
+            let plugin = self
+                .active
+                .clone()
+                .expect("an approved document has an owner");
+            let panel = self
+                .surface_id
+                .clone()
+                .expect("an approved document has a surface");
+            let visible = self.visible.clone();
+            let epoch = self.instance_epoch;
+            self.native_ui = Some(cx.new(|cx| {
+                crate::ui::plugin::PluginView::new(
+                    plugin.clone(),
+                    document,
+                    environment,
+                    move |event, _| {
+                        if visible.get() {
+                            let _ = tx.send(Work::Event(
+                                plugin.clone(),
+                                epoch,
+                                Some(panel.clone()),
+                                PluginEvent::Ui(event),
+                            ));
+                        }
+                    },
+                    window,
+                    cx,
+                )
+            }));
+        }
+        let key = format!(
+            "{}/{}",
+            self.active.as_deref().unwrap_or_default(),
+            self.surface_id.as_deref().unwrap_or_default()
+        );
+        let view = self.native_ui.as_ref().unwrap().clone();
+        view.update(cx, |view, cx| view.update_images(&key, &self.images, cx));
+        view
+    }
+
     /// Show package origin and requested capabilities above the manager's README.
     pub(super) fn open_install_dialog(
         &mut self,
@@ -363,20 +436,7 @@ impl Render for ExtensionPanel {
                     cx.notify();
                 }));
         }
-        let environment = environment(&self.workspace, cx);
-        // Plugin-only theme tokens trigger the same live update as editor base colors.
-        if self.last_theme.as_ref() != Some(&environment) {
-            self.last_theme = Some(environment.clone());
-            for entry in &self.entries {
-                if entry.enabled && Some(&entry.manifest.id) == self.active.as_ref() {
-                    self.send_to(
-                        &entry.manifest.id,
-                        None,
-                        PluginEvent::Theme(environment.clone()),
-                    );
-                }
-            }
-        }
+        self.native_environment(cx);
         if let Some(error) = &self.preview_error {
             // Host-side admission failures are readable UI, with no stale guest input target underneath.
             return div()
@@ -388,49 +448,11 @@ impl Render for ExtensionPanel {
                 .into_any_element();
         }
         if let Some(document) = self.current_document().map(|document| (*document).clone()) {
-            if let Some(view) = &self.native_ui {
-                view.update(cx, |view, cx| {
-                    view.update_document(document, environment, window, cx)
-                });
-            } else {
-                let tx = self.worker.tx.clone();
-                let plugin = self.active.clone().unwrap();
-                let panel = self.surface_id.clone().unwrap();
-                let visible = self.visible.clone();
-                self.native_ui = Some(cx.new(|cx| {
-                    crate::ui::plugin::PluginView::new(
-                        plugin.clone(),
-                        document,
-                        environment,
-                        move |event, _| {
-                            if !visible.get() {
-                                return;
-                            }
-                            let _ = tx.send(Work::Event(
-                                plugin.clone(),
-                                epoch,
-                                Some(panel.clone()),
-                                PluginEvent::Ui(event),
-                            ));
-                        },
-                        window,
-                        cx,
-                    )
-                }));
-            }
-            let key = format!(
-                "{}/{}",
-                self.active.as_deref().unwrap_or_default(),
-                self.surface_id.as_deref().unwrap_or_default()
-            );
-            self.native_ui
-                .as_ref()
-                .unwrap()
-                .update(cx, |view, cx| view.update_images(&key, &self.images, cx));
+            let view = self.native_document(document, window, cx);
             return div()
                 .size_full()
                 .key_context("PluginSurface")
-                .child(self.native_ui.as_ref().unwrap().clone())
+                .child(view)
                 .children(self.command_popup(window, cx))
                 .into_any_element();
         }

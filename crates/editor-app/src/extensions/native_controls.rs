@@ -6,6 +6,7 @@ impl ExtensionPanel {
     pub(super) fn hide(&mut self) {
         self.visible.set(false);
         self.native_ui = None;
+        self.native_toolbar = None;
         self.command_popup = None;
     }
     pub(super) fn command_popup(

@@ -2,6 +2,8 @@
 
 日期：2026-10-04。基线：`3f1ff579de2e96c495736c3c04660ed960a3ee89`。Markdown 包版本：`0.3.0`。对应工单 [#29](https://github.com/T-miracle/Editor/issues/29)。状态：原生模式、公开契约、仓库必需检查及 Standards / Spec 双轴审查通过。
 
+提交 `4f2c9bd1411c9b64c4058a74d1db016e39e15387` 已推送 `origin/codex/markdown-plugin`，远端 SHA 一致。2026-10-04 读回 #29 为 closed / completed。
+
 ## 实现与边界
 
 新增可选公开 `editor.presentation 1.0` 能力和编辑区面板的 `view_modes` 声明。包提供三个几何 SVG，宿主通用控件读取已授权实例的图标，在底栏现有工具组右侧添加短竖线和仅编辑、分栏、仅预览按钮。图标使用 16 × 16 设计网格，按本地按钮的 14 px 尺寸绘制，具备中英文提示和项目主题选中态。

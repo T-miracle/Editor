@@ -38,6 +38,14 @@
 
 独立 SDK 示例见 `plugins/capability-example/src/composition.rs` 与同目录 `composed-ui.json`；将示例的 `label` 配置为 `composable-ui` 可展示组合界面，`ui-layout` 命令参数 `form/canvas/combined` 切换三种布局。
 
+## 源码工具栏（editor.toolbar 1.0）
+
+`Document.editor_toolbar: Option<Node>` 在源码编辑区上方提供通用原生节点树；预览正文仍由 `root` 表达。工具栏必须提供当前不可变 `Document.source`，协商 `editor.toolbar ^1`，申请 `editor.read`，并属于当前工作区实例自己声明的 `position:"editor"` 面板。没有源码版本返回 `InvalidRequest`；未协商能力返回 `CapabilityUnavailable`；面板所有权、作用域或读取授权不满足则返回 `PermissionDenied`。该能力只贡献控件，不直接授予编辑权限。
+
+工具栏、root、dialog 和 menu 共用节点身份、文本、节点数、深度与编码预算；工具栏中的其他可选节点也须协商对应能力。工具栏事件仍以 `api::View.panel` 为所属面板，携带同一 `UiEvent.revision`、节点 ID 和动作。仅显示源码时仍可响应；仅预览时随源码区隐藏。Dialog 和 PopupMenu 保持输入优先级，禁用节点与过期回调沿用现有门禁。撤销预览版本或停用插件时移除工具栏及其事件目标。
+
+通用 `Node.tooltip: Option<String>` / `.tooltip(text)` 携带随 `Environment.locale` 本地化的提示，原生按钮将其映射为悬浮说明与可访问标签，计入现有 UI 文本预算。`Layout.wrap: bool` 默认 false；行节点可 `.wrap()` 在窄宽度下换行，宿主根据实际内容计算高度。工具栏外层和分组可使用可换行 Row，按钮保留最小尺寸，不设置固定工具栏宽高。
+
 ## 常用界面元素
 
 | Kind / 构造方法 | 用途 | 事件 |

@@ -15,6 +15,13 @@ pub(super) fn document(document: &Document) -> Result<(), String> {
         has_source: document.source.is_some(),
     };
     validator.node(&document.root, 0)?;
+    if let Some(toolbar) = &document.editor_toolbar {
+        if document.source.is_none() {
+            return Err("Editor toolbar requires Document.source".into());
+        }
+        // The same validator preserves identities and budgets across the host's source/preview surfaces.
+        validator.node(toolbar, 0)?;
+    }
     if let Some(menu) = &document.menu {
         validator.id(&menu.id)?;
         menu.validate()?;
@@ -93,6 +100,9 @@ impl Validator {
         }
         self.budget(1)?;
         self.id(&node.id)?;
+        if let Some(tooltip) = &node.tooltip {
+            self.text(tooltip)?;
+        }
         if let Some(range) = node.source_range {
             if !self.has_source {
                 return Err("UI source ranges require Document.source".into());

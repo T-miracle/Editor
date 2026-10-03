@@ -53,6 +53,9 @@ impl VectorRenderer {
                 }
             };
             document.root.visit(&mut visit);
+            if let Some(toolbar) = &document.editor_toolbar {
+                toolbar.visit(&mut visit);
+            }
             if let Some(dialog) = &document.dialog {
                 dialog.content.visit(&mut visit);
             }

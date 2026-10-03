@@ -71,8 +71,34 @@ impl NativeMarkdown {
     /// Let source notifications and rendered trees cross the existing worker seam in both directions.
     pub fn settle(&mut self, cx: &mut VisualTestContext) {
         use super::super::composable_tests::{publish, pump};
-        for _ in 0..3 {
+        for _ in 0..5 {
             pump(&mut self.manager, &self.app, cx);
+            self.manager.poll();
+            let requests = self
+                .manager
+                .live
+                .iter_mut()
+                .flat_map(|(id, instance)| {
+                    instance
+                        .take_editor_requests()
+                        .into_iter()
+                        .map(|request| (id.clone(), request))
+                })
+                .collect::<Vec<_>>();
+            // The production worker hands these owned handles to its deferred editor queue.
+            // Tests drive that same queue; they never apply text or synthesize request results.
+            cx.update(|_, cx| {
+                self.app
+                    .read(cx)
+                    .extensions
+                    .read(cx)
+                    .worker
+                    .state
+                    .lock()
+                    .unwrap()
+                    .editor_requests
+                    .extend(requests);
+            });
             publish(&self.manager, &mut self.renderer, &self.app, cx);
         }
     }

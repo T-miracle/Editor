@@ -177,6 +177,8 @@ struct EditorApp {
     pending_contribution_sync: bool,
     /// Requests are routed through the editor window; immutable save snapshots run off the UI thread.
     pending_editor_requests: Vec<(String, plugin_runtime::EditorRequest)>,
+    /// Only one request is dispatched before native change and completion effects have drained.
+    editor_request_dispatch_scheduled: bool,
     plugin_saves: std::collections::BTreeSet<PathBuf>,
     /// Last published open identities allow versioned close notifications without retaining document text.
     plugin_documents:
@@ -401,6 +403,7 @@ impl EditorApp {
             dynamic_language_ids: Default::default(),
             pending_contribution_sync: false,
             pending_editor_requests: Vec::new(),
+            editor_request_dispatch_scheduled: false,
             plugin_saves: Default::default(),
             plugin_documents: Default::default(),
             plugin_popup: None,

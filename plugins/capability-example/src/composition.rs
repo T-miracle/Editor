@@ -30,6 +30,26 @@ impl Demo {
     /// Stable native input identities keep composition intact when only canvas content changes.
     pub(super) fn event(&mut self, event: &ui::UiEvent) {
         match &event.action {
+            // Dismiss only the current overlay identity; dialogs retain priority over background menus.
+            Action::Dismiss
+                if self
+                    .document
+                    .dialog
+                    .as_ref()
+                    .is_some_and(|dialog| dialog.id == event.node) =>
+            {
+                self.document.dialog = None;
+            }
+            Action::Dismiss
+                if self.document.dialog.is_none()
+                    && self
+                        .document
+                        .menu
+                        .as_ref()
+                        .is_some_and(|menu| menu.id == event.node) =>
+            {
+                self.document.menu = None;
+            }
             Action::Click if event.node == "zoom" => {
                 self.zoom = (self.zoom * 1.25).min(4.);
                 let zoom = self.zoom;
@@ -142,6 +162,8 @@ impl Demo {
     pub(super) fn document(&self) -> ui::Document {
         let mut document = self.document.clone();
         if document.source.is_none() {
+            // Source controls cannot publish until their immutable document identity is available.
+            document.editor_toolbar = None;
             // Preserve the asset's mapping template for later previews, but never publish unbound ranges.
             visit(&mut document.root, &mut |node| node.source_range = None);
             if let Some(dialog) = &mut document.dialog {

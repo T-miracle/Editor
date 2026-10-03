@@ -34,6 +34,8 @@ struct State {
     /// Slots and pending completions are owned by this exact WASM instance.
     editor_requests: std::collections::BTreeMap<u64, crate::editor_requests::PendingRequest>,
     declared_panels: BTreeSet<String>,
+    /// Editor toolbar authority is confined to this package's declared workspace preview surfaces.
+    declared_editor_panels: BTreeSet<String>,
     subscriptions: std::collections::BTreeMap<u64, crate::document_events::Subscription>,
     wasi: WasiCtx,
     table: ResourceTable,
@@ -229,6 +231,12 @@ impl Instance {
             declared_panels: manifest
                 .panels
                 .iter()
+                .map(|panel| panel.id.clone())
+                .collect(),
+            declared_editor_panels: manifest
+                .panels
+                .iter()
+                .filter(|panel| panel.position == "editor")
                 .map(|panel| panel.id.clone())
                 .collect(),
             wasi: WasiCtx::builder().build(),

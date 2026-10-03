@@ -39,6 +39,8 @@ pub(crate) fn negotiate(manifest: &Manifest) -> anyhow::Result<api::Negotiated> 
         ("storage.migration".into(), Version::new(1, 0, 0)),
         ("editor.documents".into(), Version::new(1, 0, 0)),
         ("editor.presentation".into(), Version::new(1, 0, 0)),
+        ("editor.edit".into(), Version::new(1, 0, 0)),
+        ("editor.toolbar".into(), Version::new(1, 0, 0)),
         ("configuration".into(), Version::new(1, 0, 0)),
         ("ui.panels".into(), Version::new(1, 0, 0)),
         ("ui.clipboard".into(), Version::new(1, 0, 0)),

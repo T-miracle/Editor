@@ -213,6 +213,26 @@ impl State {
         Ok(api::Value::Sdk(sdk.clone()))
     }
 
+    /// Toolbar publication requires an independently negotiated capability and an owned workspace editor surface.
+    fn check_editor_toolbar_authority(&self, panel: &str) -> Result<(), Failure> {
+        if !self.api.capabilities.contains_key("editor.toolbar") {
+            return Err(Failure::new(
+                ErrorCode::CapabilityUnavailable,
+                "editor.toolbar was not negotiated",
+            ));
+        }
+        if self.roots.application
+            || !self.permissions.contains("editor.read")
+            || !self.declared_editor_panels.contains(panel)
+        {
+            return Err(Failure::new(
+                ErrorCode::PermissionDenied,
+                "Editor toolbar requires an owned workspace editor panel and editor.read",
+            ));
+        }
+        Ok(())
+    }
+
     /// Availability and authorization are separate; preparation can read only immutable assets.
     fn read_capability_asset(&self, path: &str) -> Result<api::Value, Failure> {
         if !self.api.capabilities.contains_key("package.assets") {
@@ -327,6 +347,11 @@ impl Instance {
                 )
                 .into());
             }
+            if view.document.editor_toolbar.is_some() {
+                self.store
+                    .data()
+                    .check_editor_toolbar_authority(&view.panel)?;
+            }
             let mut canvas = false;
             let mut grid = false;
             let mut collections = view.document.menu.is_some();
@@ -347,6 +372,9 @@ impl Instance {
                     );
             };
             view.document.root.visit(&mut visit);
+            if let Some(toolbar) = &view.document.editor_toolbar {
+                toolbar.visit(&mut visit);
+            }
             if let Some(dialog) = &view.document.dialog {
                 dialog.content.visit(&mut visit);
             }

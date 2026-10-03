@@ -18,9 +18,12 @@ impl PluginView {
         let root = self.document.root.clone();
         let body = self.node(&root, false, window, cx);
         let mut view = div()
-            .size_full()
+            .w_full()
+            .when(!self.content_sized, |view| view.h_full())
+            .when(self.content_sized, |view| view.h_auto().flex_shrink_0())
             .flex()
             .flex_col()
+            .tab_group()
             .relative()
             .overflow_hidden()
             .bg(self.colors("container", cx).background)
@@ -148,6 +151,10 @@ impl PluginView {
                     .min_h_0()
                     .gap(px(node.layout.gap))
                     .when(matches!(node.kind, Kind::Column { .. }), |v| v.flex_col())
+                    .when(
+                        matches!(node.kind, Kind::Row { .. }) && node.layout.wrap,
+                        |v| v.flex_wrap(),
+                    )
                     .children(children)
                     .into_any_element()
             }
@@ -220,6 +227,9 @@ impl PluginView {
                 .font(
                     Button::new(native_id.clone())
                         .label(label.clone())
+                        .when_some(node.tooltip.clone(), |button, tooltip| {
+                            button.accessibility_label(tooltip.clone()).tooltip(tooltip)
+                        })
                         .disabled(disabled)
                         .border_color(colors.border)
                         .custom(
@@ -411,6 +421,8 @@ impl PluginView {
                 .flex()
                 .flex_col()
                 .flex_shrink_0()
+                // Wrapped groups need a bounded outer box as well as a wrapping inner flex row.
+                .when(node.layout.wrap, |wrapper| wrapper.max_w_full())
                 .min_w_0()
                 .min_h_0()
                 .when(node.layout.grow, |v| v.flex_1())

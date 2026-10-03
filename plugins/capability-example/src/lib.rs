@@ -8,6 +8,7 @@ use std::cell::RefCell;
 mod composition;
 mod discovery;
 mod execution_demo;
+mod scope_probe;
 mod service_demo;
 
 #[derive(Default)]
@@ -373,8 +374,7 @@ impl State {
                 ..
             } if id == "scope-probe" => {
                 // Return expected domain failures as data so the host can observe continued liveness.
-                let operation = serde_json::from_value(arguments.unwrap_or_default())
-                    .map_err(|error| Failure::new(ErrorCode::InvalidRequest, error.to_string()))?;
+                let operation = scope_probe::operation(arguments.unwrap_or_default())?;
                 if matches!(operation, api::Operation::Editor { .. }) {
                     self.task = None;
                 }

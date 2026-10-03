@@ -277,7 +277,9 @@ impl State {
                         "Service calls cannot open private provider files",
                     ));
                 }
-                api::EditorOperation::SaveDocument { .. } => "editor.write",
+                // Delegated range edits cannot borrow the provider's stronger write grant.
+                api::EditorOperation::SaveDocument { .. }
+                | api::EditorOperation::ReplaceDocumentRange { .. } => "editor.write",
                 api::EditorOperation::SetPanelVisibility { .. } => "ui.panels",
                 _ => "editor.read",
             },

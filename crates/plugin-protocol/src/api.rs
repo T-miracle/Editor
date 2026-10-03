@@ -305,6 +305,17 @@ pub struct DocumentVersion {
     pub revision: u64,
 }
 
+/// Half-open UTF-8 byte offsets in one explicitly versioned document.
+/// Empty ranges represent carets; the host checks actual text length and character boundaries.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TextRange {
+    /// Inclusive byte offset.
+    pub start: usize,
+    /// Exclusive byte offset, greater than or equal to `start`.
+    pub end: usize,
+}
+
 /// Notifications carry versions, not text deltas; intermediate revisions may be coalesced safely.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct DocumentChange {
@@ -326,6 +337,22 @@ pub enum EditorOperation {
         path: String,
     },
     ReadSelection,
+    /// Read the selection of this exact document/version without following toolbar or editor focus.
+    /// Requires `editor.edit` and `editor.read` in the requesting workspace instance.
+    ReadDocumentSelection {
+        document: DocumentVersion,
+    },
+    /// Replace one source range atomically and set the selection in the resulting complete text.
+    /// Requires `editor.edit` and `editor.write`; replacement text is bounded to 1 MiB.
+    /// Optional expected selection rejects a toolbar action whose original selection has changed.
+    ReplaceDocumentRange {
+        document: DocumentVersion,
+        range: TextRange,
+        text: String,
+        selection: TextRange,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        expected_selection: Option<TextRange>,
+    },
     ActiveDirectory,
     SaveDocument {
         document: DocumentVersion,
@@ -347,6 +374,17 @@ pub enum EditorValue {
     Selection {
         document: DocumentVersion,
         text: String,
+    },
+    /// Actual source selection observed at the requested version, expressed as UTF-8 bytes.
+    DocumentSelection {
+        document: DocumentVersion,
+        range: TextRange,
+        text: String,
+    },
+    /// The resulting document version and full-text selection after one atomic editor transaction.
+    Edited {
+        document: DocumentVersion,
+        selection: TextRange,
     },
     Directory {
         path: String,

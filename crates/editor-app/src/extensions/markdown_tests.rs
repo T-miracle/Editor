@@ -3,8 +3,11 @@
 use super::*;
 use gpui_kit::{TestAppContext, gpui};
 
+mod format_toolbar;
 mod harness;
 mod modes;
+mod range_edits;
+mod source_overlay;
 
 /// Inspect the editable package resources without inventing a special host API for this plugin.
 fn language_package() -> Package {

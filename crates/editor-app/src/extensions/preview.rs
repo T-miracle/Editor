@@ -3,6 +3,7 @@
 use super::*;
 
 mod presentation;
+mod toolbar;
 
 impl ExtensionPanel {
     /// Layout restoration must exclude panels whose lifecycle follows the current document.
@@ -84,6 +85,7 @@ impl EditorApp {
                             panel.preview_version = None;
                             panel.preview_document = context.clone();
                             panel.native_ui = None;
+                            panel.native_toolbar = None;
                             panel.send(protocol::api::Notification::Preview {
                                 document: None,
                                 text: String::new(),
@@ -96,6 +98,7 @@ impl EditorApp {
                             panel.preview_document = context.clone();
                             panel.preview_error = Some("文档超过 1 MiB，无法预览".into());
                             panel.native_ui = None;
+                            panel.native_toolbar = None;
                             panel.send(protocol::api::Notification::Preview {
                                 document: None,
                                 text: String::new(),
@@ -118,6 +121,7 @@ impl EditorApp {
                     panel.preview_version = None;
                     panel.preview_error = None;
                     panel.native_ui = None;
+                    panel.native_toolbar = None;
                 }
             });
         }

@@ -46,6 +46,8 @@ pub(crate) struct PluginView {
     dialog_focus: FocusHandle,
     previous_focus: Option<FocusHandle>,
     dismissed_dialog: Option<String>,
+    /// Editor-local toolbar projections fit their wrapped content instead of consuming the full pane.
+    content_sized: bool,
 }
 
 impl PluginView {
@@ -92,12 +94,19 @@ impl PluginView {
             dialog_focus: cx.focus_handle(),
             previous_focus: None,
             dismissed_dialog: None,
+            content_sized: false,
         };
         this.sync_native(window, cx);
         if this.document.dialog.is_some() {
             this.focus_dialog(window, cx);
         }
         this
+    }
+
+    /// Retain the same native controls and event gate while letting a surrounding layout own height.
+    pub(crate) fn content_sized(mut self) -> Self {
+        self.content_sized = true;
+        self
     }
 
     /// Reconcile keyed native state; ordinary guest renders must not recreate focused inputs.
@@ -130,6 +139,9 @@ impl PluginView {
             }
         }
         self.sync_native(window, cx);
+        // Closing a source-only overlay can retire this view before it is rendered again.
+        // Reconcile popup removal here as well so its previous native focus is returned first.
+        self.sync_widgets(window, cx);
         cx.notify();
     }
 

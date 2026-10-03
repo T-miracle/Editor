@@ -55,6 +55,16 @@ cargo test -p editor-app --bin editor-app capability_package_consent -- --ignore
 
 这三种操作当前仅在活动工作区实例可用，遵循统一超时、取消与实例撤销规则。原生宿主在执行副作用前检查请求状态；取消不意味着回滚已经完成的剪贴板写入或文档打开。
 
+## editor.edit 1.0 — 版本化选区与范围编辑
+
+`EditorOperation::ReadDocumentSelection { document }` 要求 `editor.edit` 与 `editor.read`，返回 `EditorValue::DocumentSelection { document, range, text }`。它读取指定内存文档及 revision 的选区，不跟随工具栏获得焦点后其他编辑器的当前状态。`api::TextRange { start, end }` 为半开 UTF-8 字节范围，空范围表示光标；不能把字符数、UTF-16 单元或生成预览的偏移当作源码字节。
+
+`ReplaceDocumentRange { document, range, text, selection, expected_selection }` 要求 `editor.edit` 与 `editor.write`。`range` 针对旧版本全文，替换文本最多 1 MiB；`selection` 针对替换后全文，定义结果选区。可选 `expected_selection` 针对旧版本，工具栏把读取时选区回传以拒绝选择竞态；无需该守卫的其他操作可留空。成功返回 `EditorValue::Edited { document, selection }`，其中 document 是事务后实际版本，不能提前返回旧 revision。
+
+运行时拒绝倒置范围和超配额文本；原生宿主在执行前核对 workspace、文档身份、路径、revision、实际长度和 UTF-8 字符边界，并检查可选选区守卫。过期、已关闭或已重开目标不会改写当前焦点文档。所有写入通过唯一 DocumentSession/EditorState 提交为一个可撤销事务，不能建立另一份可变文本或撤销栈。取消、超时和实例退休复用编辑请求完成门禁：未进入副作用阶段的请求不可执行；进入事务后取消等待不承诺回滚已发生的修改，晚到完成结果不能覆盖终态。
+
+两种操作只允许活动 workspace 实例，服务委派也分别核对来源 `editor.read` / `editor.write`。`editor.toolbar` 只提供源码顶部控件，布局、提示、预算与事件规则见 [UI.md](UI.md#源码工具栏editortoolbar-10)；执行格式动作必须另获上述编辑能力与权限。独立真实包回归为 runtime 的 `editor_edit` 集成测试，使用同一 SDK 示例重打包成不同插件身份。
+
 ## configuration 1.0
 
 协议 7 清单的 `settings` 以插件内部键声明 `title`、`value_type`、`default`、`scope` 和 `apply`。类型为 boolean、string（max_length）、integer（min/max）、enum（choices）；作用域为 user 或 project，后者允许明确确认的项目覆盖。此版本的生效方式为 `restart_instance`。最多 64 个字段、字符串最多 4096 字节、枚举最多 32 个不重复选项；无效默认值在包检查时拒绝。可执行包需声明必需能力 `configuration: ^1`。

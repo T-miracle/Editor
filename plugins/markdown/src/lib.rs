@@ -7,7 +7,10 @@ use plugin_protocol::{
 };
 use std::cell::RefCell;
 
+mod format;
+mod formatting;
 mod preview;
+mod toolbar;
 
 /// A host-supplied source snapshot is replaced atomically and is never edited or persisted here.
 struct Source {
@@ -15,21 +18,23 @@ struct Source {
     text: String,
 }
 
-/// Only derived preview state is mutable; the editor owns IME, selections and undo history.
+/// Only derived view state and task ownership are mutable; the editor owns IME, selection and undo.
 #[derive(Default)]
 struct State {
     environment: Environment,
     source: Option<Source>,
     blocks: Vec<ui::Node>,
+    /// The pending intent stores request ownership only; source text remains a readonly host snapshot.
+    formatting: formatting::Formatting,
     revision: u64,
 }
 
 thread_local! { static STATE: RefCell<State> = RefCell::new(State::default()); }
 
-struct MarkdownPreview;
+struct MarkdownPlugin;
 
-impl Guest for MarkdownPreview {
-    /// The public lifecycle delivers unsaved source without filesystem, clipboard or editor writes.
+impl Guest for MarkdownPlugin {
+    /// Source snapshots arrive through Preview; formatting writes use separate version-checked editor tasks.
     fn dispatch(payload: String) -> Result<String, String> {
         api::guest::dispatch(&payload, |message| {
             STATE.with(|cell| {
@@ -46,6 +51,7 @@ impl Guest for MarkdownPreview {
                                 "Unsupported Markdown preview snapshot",
                             ));
                         }
+                        state.formatting.source_changed();
                         *state = State {
                             environment,
                             ..Default::default()
@@ -73,7 +79,7 @@ impl Guest for MarkdownPreview {
     }
 }
 
-export!(MarkdownPreview);
+export!(MarkdownPlugin);
 
 impl State {
     /// Only the file-scoped preview notification may replace this readonly source snapshot.
@@ -85,6 +91,14 @@ impl State {
                 {
                     return;
                 }
+                let changed = match (&self.source, &document) {
+                    (Some(current), Some(next)) => current.version != *next || current.text != text,
+                    (None, None) => false,
+                    _ => true,
+                };
+                if changed {
+                    self.formatting.source_changed();
+                }
                 self.source = document.map(|version| Source { version, text });
                 self.refresh();
             }
@@ -95,7 +109,26 @@ impl State {
                     self.refresh();
                 }
             }
-            // Preview interactions are readonly in this stage; future writes need revision-checked APIs.
+            api::Notification::Ui(event) if panel == Some("preview") => {
+                if event.revision == self.revision && event.action == ui::Action::Click {
+                    if let Some(command) = toolbar::command(&event.node) {
+                        // Keeping the same revision for acceptance lets a later fast click replace this intent.
+                        if self.formatting.start(command, self.source.as_ref()) {
+                            self.revision = self.revision.saturating_add(1);
+                        }
+                    }
+                }
+            }
+            event @ api::Notification::Request { .. } => {
+                if self.formatting.request(
+                    &event,
+                    self.source.as_ref(),
+                    self.environment.locale.starts_with("en"),
+                ) {
+                    self.revision = self.revision.saturating_add(1);
+                }
+            }
+            // Other preview interactions remain readonly until separately scoped capabilities are implemented.
             _ => {}
         }
     }
@@ -116,6 +149,11 @@ impl State {
         let mut document = ui::Document::new(ui::Node::scroll("preview-scroll", body).grow())
             .revision(self.revision);
         document.source = self.source.as_ref().map(|source| source.version.clone());
+        if self.source.is_some() {
+            let english = self.environment.locale.starts_with("en");
+            document.editor_toolbar =
+                Some(toolbar::node(english, self.formatting.message(english)));
+        }
         // A large or deeply nested document should leave the guest alive and preserve its source authority.
         // The same public quotas apply to this preview and every other native plugin view.
         if document.validate().is_err() {

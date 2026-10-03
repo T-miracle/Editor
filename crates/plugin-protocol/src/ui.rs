@@ -26,6 +26,10 @@ pub struct Document {
     pub version: u32,
     pub revision: u64,
     pub root: Node,
+    /// Native controls above the source editor, bound to `source` and requiring `editor.toolbar`.
+    /// Node identities and quotas share the panel's root/dialog/menu namespace.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub editor_toolbar: Option<Node>,
     /// At most one modal per panel. Removing it closes the modal.
     #[serde(default)]
     pub dialog: Option<Dialog>,
@@ -41,6 +45,7 @@ impl Document {
             version: VERSION,
             revision: 0,
             root,
+            editor_toolbar: None,
             dialog: None,
             menu: None,
         }
@@ -61,15 +66,19 @@ impl Document {
         validate::document(self)
     }
 
-    /// Find an interactive node only in the active modal, or the panel when no modal exists.
+    /// Find a live root/toolbar target, while dialogs and popups retain exclusive input ownership.
     pub fn active_node(&self, id: &str) -> Option<&Node> {
-        if self.menu.is_some() && self.dialog.is_none() {
+        if let Some(dialog) = &self.dialog {
+            return dialog.content.find(id);
+        }
+        if self.menu.is_some() {
             return None;
         }
-        self.dialog
-            .as_ref()
-            .map_or(&self.root, |dialog| &dialog.content)
-            .find(id)
+        self.root.find(id).or_else(|| {
+            self.editor_toolbar
+                .as_ref()
+                .and_then(|toolbar| toolbar.find(id))
+        })
     }
 }
 
@@ -101,6 +110,9 @@ pub struct Node {
     /// Mapping does not grant document access or editing authority; it requires `ui.richtext`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source_range: Option<SourceRange>,
+    /// Localized hover/accessibility text; this counts toward the ordinary UI text budget.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tooltip: Option<String>,
     /// Resolves `plugins[plugin_id].ui[role]` colors and `typography[role]` fonts.
     /// If empty, the host uses the node kind (e.g. `button`) as the role.
     #[serde(default)]
@@ -130,6 +142,9 @@ pub struct Layout {
     pub height: Option<f32>,
     #[serde(default)]
     pub grow: bool,
+    /// Rows may wrap children into additional lines; the host derives height from their content.
+    #[serde(default)]
+    pub wrap: bool,
     #[serde(default)]
     pub padding: f32,
     #[serde(default)]
@@ -290,6 +305,7 @@ impl Node {
         Self {
             id: id.into(),
             source_range: None,
+            tooltip: None,
             role: String::new(),
             disabled: false,
             layout: Layout::default(),
@@ -341,6 +357,18 @@ impl Node {
             start: range.start,
             end: range.end,
         });
+        self
+    }
+
+    /// Attach localized hover/accessibility text; `Document::validate` enforces shared text quotas.
+    pub fn tooltip(mut self, text: impl Into<String>) -> Self {
+        self.tooltip = Some(text.into());
+        self
+    }
+
+    /// Let a row wrap its children instead of clipping a toolbar at a narrow editor width.
+    pub fn wrap(mut self) -> Self {
+        self.layout.wrap = true;
         self
     }
     pub fn button(id: impl Into<String>, label: impl Into<String>) -> Self {

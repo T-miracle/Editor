@@ -106,6 +106,8 @@ pub struct ExtensionPanel {
     bounds: Bounds<Pixels>,
     /// Keyed native controls own text editing, canvas input and composition.
     native_ui: Option<Entity<crate::ui::plugin::PluginView>>,
+    /// A source-local projection shares the approved UI version without duplicating document state.
+    native_toolbar: Option<Entity<crate::ui::plugin::PluginView>>,
     manager_open: bool,
     commands_open: bool,
     command_popup: Option<Entity<crate::ui::controls::menu::PopupMenu>>,
@@ -268,6 +270,7 @@ impl ExtensionPanel {
             focus: cx.focus_handle(),
             bounds: Bounds::default(),
             native_ui: None,
+            native_toolbar: None,
             manager_open: false,
             configuration_revision: 0,
             commands_open: false,
@@ -364,6 +367,7 @@ impl ExtensionPanel {
             focus: cx.focus_handle(),
             bounds: Bounds::default(),
             native_ui: None,
+            native_toolbar: None,
             manager_open: false,
             configuration_revision: 0,
             commands_open: false,
@@ -491,6 +495,7 @@ impl ExtensionPanel {
                     self.preview_version = None;
                     self.preview_error = None;
                     self.native_ui = None;
+                    self.native_toolbar = None;
                     self._focus_events.clear();
                     self.command_popup = None;
                     self.commands_open = false;
@@ -589,10 +594,16 @@ impl ExtensionPanel {
         }
         if changed {
             cx.notify();
-            if self.surface_id.is_none() {
+            if self.surface_id.is_none() || self.editor_preview {
                 let parent = self.parent.clone();
+                let editor_preview = self.editor_preview;
                 cx.defer(move |cx| {
                     let _ = parent.update(cx, |app, cx| {
+                        if editor_preview {
+                            // Source-local controls render in the dock's cached editor body, outside
+                            // this preview entity. A new publication must invalidate that body too.
+                            app.editor_panel.update(cx, |_, cx| cx.notify());
+                        }
                         // Close the transient list when the final runtime plugin finishes.
                         if app.plugin_popup.is_some_and(|(kind, _)| {
                             kind == PluginPopupKind::Loading && app.plugin_count(kind, cx) == 0
