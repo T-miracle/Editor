@@ -17,7 +17,7 @@
 
 | 验收项 | 结果 | 证据 |
 | --- | --- | --- |
-| 真实 URL 可访问，中英两版两条线页面齐全，无空页与占位页 | 通过 | 站点 `https://t-miracle.github.io/Editor/`（`build_type=workflow`）。部署流水线运行 [#2](https://github.com/T-miracle/Editor/actions/runs/37186100061)：`Build and check` 与 `Deploy to GitHub Pages` 均 success。线上核验：`/Editor/en/`、`/Editor/zh-cn/`、`/Editor/zh-cn/sdk/ui/`、`/Editor/en/search/` 全部 HTTP 200，侧栏 16 项（两栏目各 6/8 项）齐全，中文内容渲染无乱码 |
+| 真实 URL 可访问，中英两版两条线页面齐全，无空页与占位页 | 通过 | 部署流水线 [#3](https://github.com/T-miracle/Editor/actions/runs/37186401994)：`Build and check` 与 `Deploy to GitHub Pages` 均 success。线上对 9 个地址逐一核验，全部 HTTP 200：站点根 `/Editor/`、两棵树首页、两条线深层页（`/Editor/en/guide/getting-started/`、`/Editor/zh-cn/guide/plugins/`、`/Editor/en/sdk/ui/`、`/Editor/zh-cn/sdk/services/`）、搜索页与索引资源 |
 | 双语页面集合一致、切换入口互指 | 通过 | `tests/doc-sources.test.mjs` 的镜像与互指断言；线上语言切换在 `/Editor/en/sdk/ui/` 与 `/Editor/zh-cn/sdk/ui/` 之间互指 |
 | 逐页抽查中英内容语义一致，数值与标识符无偏差 | 通过 | 4 篇中文原生文档与原文按段落多重集比对逐字一致；9 对页面按数字与标识符集合比对，差异仅为写法（`100,000` 与 `100000`、`ui.canvas >=1.1` 与 `>= 1.1`） |
 | 站内链接与锚点全部可解析，切换/侧栏/页内/外链正常 | 通过 | `tests/links.test.mjs`（含"不得硬编码 base 前缀"断言）；线上页面源码中的链接均带 `/Editor/` 前缀 |
@@ -44,6 +44,20 @@ cargo check --workspace  → 通过
 
 `docs/`（方案、规格、工单、交接）与 `plugins/*/README.md`（插件包内容）均不在站点产物中；
 插件包说明由插件管理器在应用内显示，站点只写宿主行为。
+
+## 上线后修复的缺陷
+
+**站点根路径返回 404。** 所有页面都在语言前缀之下，产物里没有根级入口，因此访问项目 URL
+（`https://t-miracle.github.io/Editor/`）只会看到 GitHub Pages 的 404——站点看似不可运行，尽管
+36 页都已发布。
+
+成因是验证方式本身有盲点：核验时只检查了带语言前缀的地址（`/Editor/en/`、`/Editor/zh-cn/`），
+没有检查站点根。
+
+修复：新增静态入口 `website/public/index.html`，把根路径导向默认语言树，并为不跟随重定向的
+客户端保留可见链接；产物结构仍是"每语言一个目录"，因此两棵树依旧严格可比。门禁新增断言，
+要求该入口存在且同时指向两棵树，避免再次遗漏。修复后核验：`/Editor/` 返回 200 并导向
+`/Editor/en/`。
 
 ## 未验证项与限制
 
