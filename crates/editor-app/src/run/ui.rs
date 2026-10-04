@@ -6,6 +6,7 @@
 //! behaving like the control next to it.
 use super::{
     LaunchPlan, MAX_PREPARED_STEPS, RunConfigDraft, RunControls, RunMenuEntry, SequenceAction,
+    add_step, join_step_lines, move_step, remove_step, step_lines,
 };
 use crate::app::dialog as app_dialog;
 use crate::extensions::HostWork as Work;
@@ -77,7 +78,7 @@ impl RunConfigTab {
 
 /// One labelled single-line field of the basic page.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum RunField {
+pub enum RunField {
     Name,
     Program,
     Arguments,
@@ -160,6 +161,15 @@ impl RunField {
     }
 }
 
+/// One structural change to a prepared action list.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum StepEdit {
+    Add,
+    Remove,
+    Up,
+    Down,
+}
+
 /// State of the configuration dialog, owned by one entity so a draft survives repaints.
 ///
 /// The dialog's renderer in this module reads these fields; the entity exists so the draft, its text
@@ -173,6 +183,11 @@ pub struct RunConfigForm {
     error: Option<String>,
     /// Editing state for each field, created with the dialog so text never resets per frame.
     inputs: Vec<(RunField, Entity<InputState>)>,
+    /// One editing state per prepared action, for the lists that are edited row by row.
+    ///
+    /// A row is its own single-line field so an action can be moved or removed without its text
+    /// being re-parsed, and so the row controls always address the action the user sees.
+    rows: Vec<(RunField, Entity<InputState>)>,
     /// Subscriptions are retained here; dropping the form releases them with its inputs.
     _subscriptions: Vec<Subscription>,
 }
@@ -196,6 +211,7 @@ impl RunConfigForm {
             draft,
             error: None,
             inputs: Vec::new(),
+            rows: Vec::new(),
             _subscriptions: Vec::new(),
         };
         for field in RunField::ALL {
@@ -215,7 +231,89 @@ impl RunConfigForm {
             form._subscriptions.push(subscription);
             form.inputs.push((field, input));
         }
+        form.rebuild_rows(window, cx);
         form
+    }
+
+    /// Create one editing state per prepared action of each list.
+    fn rebuild_rows(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.rows.clear();
+        for field in [RunField::Build, RunField::Prelaunch] {
+            let lines = step_lines(&self.draft.field_text(field));
+            for line in lines {
+                let input = cx.new(|cx| InputState::new(window, cx).default_value(line));
+                let subscription = cx.subscribe(&input, move |form, _, event: &InputEvent, cx| {
+                    if matches!(event, InputEvent::Change) && form.error.take().is_some() {
+                        cx.notify();
+                    }
+                });
+                self._subscriptions.push(subscription);
+                self.rows.push((field, input));
+            }
+        }
+    }
+
+    /// The rows of one list, in the order they will run.
+    pub(crate) fn rows_of(&self, field: RunField) -> Vec<(usize, Entity<InputState>)> {
+        self.rows
+            .iter()
+            .filter(|(candidate, _)| *candidate == field)
+            .enumerate()
+            .map(|(index, (_, input))| (index, input.clone()))
+            .collect()
+    }
+
+    /// Read every row of one list back into the draft, before a structural change is applied.
+    fn sync_rows(&mut self, field: RunField, cx: &gpui_kit::App) {
+        let lines = self
+            .rows_of(field)
+            .into_iter()
+            .map(|(_, input)| input.read(cx).value().to_string())
+            .collect::<Vec<_>>();
+        let text = join_step_lines(&lines);
+        match field {
+            RunField::Build => self.draft.build = text,
+            RunField::Prelaunch => self.draft.prelaunch = text,
+            _ => {}
+        }
+    }
+
+    /// Apply a structural change to one list and rebuild its rows.
+    ///
+    /// The rows are read back first, so a change acts on what the user has typed rather than on the
+    /// text that was there when the dialog opened.
+    pub(crate) fn edit_rows(
+        &mut self,
+        field: RunField,
+        change: StepEdit,
+        index: usize,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.sync_rows(field, cx);
+        let current = match field {
+            RunField::Build => self.draft.build.clone(),
+            RunField::Prelaunch => self.draft.prelaunch.clone(),
+            _ => return,
+        };
+        let updated = match change {
+            StepEdit::Add => Some(add_step(&current)),
+            StepEdit::Remove => remove_step(&current, index),
+            StepEdit::Up => move_step(&current, index, true),
+            StepEdit::Down => move_step(&current, index, false),
+        };
+        let Some(updated) = updated else {
+            return;
+        };
+        match field {
+            RunField::Build => self.draft.build = updated,
+            RunField::Prelaunch => self.draft.prelaunch = updated,
+            _ => {}
+        }
+        // The row controls belong to the list that was just rearranged, so the states are rebuilt
+        // together with it; nothing else reads a row state in between.
+        self.rebuild_rows(window, cx);
+        cx.notify();
     }
 
     /// Current text of one field, read from its editing state.
@@ -232,6 +330,10 @@ impl RunConfigForm {
         for field in RunField::ALL {
             let value = self.text(field, cx);
             field.apply(&mut self.draft, value);
+        }
+        // The row-edited lists are gathered from their own rows, so what is saved is what is on screen.
+        for field in [RunField::Build, RunField::Prelaunch] {
+            self.sync_rows(field, cx);
         }
     }
 }
@@ -253,6 +355,19 @@ impl RunConfigForm {
     /// The labelled fields of the basic page, in the order they are presented.
     pub(crate) fn field_labels(&self) -> Vec<&'static str> {
         RunField::ALL.into_iter().map(RunField::label).collect()
+    }
+
+    /// How many rows one prepared-action list currently shows.
+    pub(crate) fn step_row_count(&self, field: RunField) -> usize {
+        self.rows_of(field).len()
+    }
+
+    /// The text of each row of one prepared-action list, in the order shown.
+    pub(crate) fn step_row_values(&self, field: RunField, cx: &gpui_kit::App) -> Vec<String> {
+        self.rows_of(field)
+            .into_iter()
+            .map(|(_, input)| input.read(cx).value().to_string())
+            .collect()
     }
 
     /// The draft currently being edited, for checks that read what the dialog would save.
@@ -1326,6 +1441,107 @@ fn run_state_label(state: plugin_runtime::ExecutionState) -> String {
 }
 
 /// Render the B1 form: configuration entry points, four tabs, fields and the footer.
+/// Render one prepared-action list: a row per action with its own move and remove controls, then an
+/// add control for the next action.
+///
+/// Each row is an ordinary single-line field, so a row edit never rewrites another row's text.
+fn render_step_rows(
+    app: &Entity<EditorApp>,
+    field: RunField,
+    shell: bool,
+    cx: &mut gpui_kit::App,
+) -> AnyElement {
+    let Some(form) = app.read(cx).run_form.clone() else {
+        return div().into_any_element();
+    };
+    let rows = form.read(cx).rows_of(field);
+    let count = rows.len();
+    let mut list = v_flex().gap_1();
+    for (index, input) in rows {
+        let owner = app.clone();
+        list = list.child(
+            h_flex()
+                .debug_selector(move || format!("{}-row-{index}", field.selector()))
+                .gap_1()
+                .items_center()
+                .child(div().flex_1().child(BaseInput::new(&input)))
+                .child(step_control(
+                    &owner,
+                    field,
+                    StepEdit::Up,
+                    index,
+                    index > 0,
+                    shell,
+                ))
+                .child(step_control(
+                    &owner,
+                    field,
+                    StepEdit::Down,
+                    index,
+                    index + 1 < count,
+                    shell,
+                ))
+                .child(step_control(
+                    &owner,
+                    field,
+                    StepEdit::Remove,
+                    index,
+                    true,
+                    shell,
+                )),
+        );
+    }
+    list.child(step_control(app, field, StepEdit::Add, count, true, shell))
+        .into_any_element()
+}
+
+/// One structural control for a prepared-action list.
+///
+/// A control that cannot act — moving the first row up, for example — is disabled rather than
+/// silently doing nothing, and each carries the row it addresses.
+fn step_control(
+    app: &Entity<EditorApp>,
+    field: RunField,
+    edit: StepEdit,
+    index: usize,
+    enabled: bool,
+    shell: bool,
+) -> AnyElement {
+    let (label, hint) = match edit {
+        StepEdit::Add => ("+ 添加", "在本配置中增加一条预置动作"),
+        StepEdit::Remove => ("删除", "从本配置中删除这条预置动作"),
+        StepEdit::Up => ("上移", "把这条动作提前一位"),
+        // A pre-launch step may require another configuration's build by naming it after `@`.
+        StepEdit::Down => ("下移", "把这条动作推后一位"),
+    };
+    let _ = shell;
+    let owner = app.clone();
+    let id = format!("{}-{label}-{index}", field.selector());
+    div()
+        .debug_selector(move || format!("{}-{label}-{index}", field.selector()))
+        .child(
+            Button::new(id)
+                .label(label)
+                .small()
+                .compact()
+                .ghost()
+                .disabled(!enabled)
+                .tooltip(hint)
+                .on_click(move |_, window, cx| {
+                    owner.update(cx, |state, cx| {
+                        let Some(form) = state.run_form.clone() else {
+                            return;
+                        };
+                        form.update(cx, |form, cx| {
+                            form.edit_rows(field, edit, index, window, cx);
+                        });
+                        cx.notify();
+                    });
+                }),
+        )
+        .into_any_element()
+}
+
 fn render_run_config_form(
     app: &WeakEntity<EditorApp>,
     content: DialogContent,
@@ -1429,6 +1645,9 @@ fn render_run_config_form(
                 (RunField::Arguments, true) => "解释器参数（每行一个）",
                 _ => field.label(),
             };
+            // A prepared-action list is edited row by row, so each action can be moved or removed
+            // without its text being re-parsed first.
+            let list = matches!(field, RunField::Build | RunField::Prelaunch);
             h_flex()
                 .gap_2()
                 .items_center()
@@ -1437,10 +1656,16 @@ fn render_run_config_form(
                     div()
                         .debug_selector(move || field.selector().into())
                         .flex_1()
-                        .child(match input {
-                            // The field renders its own editing state, so text never resets per frame.
-                            Some(input) => div().child(BaseInput::new(&input)).into_any_element(),
-                            None => div().child(text).into_any_element(),
+                        .child(if list {
+                            render_step_rows(&app, field, shell, cx).into_any_element()
+                        } else {
+                            match input {
+                                // The field renders its own editing state, so text never resets.
+                                Some(input) => {
+                                    div().child(BaseInput::new(&input)).into_any_element()
+                                }
+                                None => div().child(text).into_any_element(),
+                            }
                         }),
                 )
                 .into_any_element()

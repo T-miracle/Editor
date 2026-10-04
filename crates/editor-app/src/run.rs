@@ -10,6 +10,8 @@ use std::collections::BTreeMap;
 mod ui;
 pub use ui::RunConfigForm;
 pub(crate) use ui::RunMenu;
+#[cfg(test)]
+pub(crate) use ui::{RunField, StepEdit};
 mod sequence;
 pub use sequence::{RunSequence, SequenceAction, SequenceStep, StepOutcome, StepState};
 #[cfg(test)]
@@ -145,7 +147,10 @@ impl RunSession {
 pub const MAX_PREPARED_STEPS: usize = editor_core::MAX_RUN_STEPS + 1;
 
 /// Saved configurations plus everything this editor has launched from them.
-#[derive(Debug)]
+///
+/// Cloning is what lets a dialog edit a snapshot of the stored configurations without holding a
+/// borrow of the editor that owns them; it is not a second source of run state.
+#[derive(Clone, Debug)]
 pub struct RunControls {
     configs: RunConfigSet,
     /// Identity assigned to the next local session, used only before the runtime answers.
@@ -1211,6 +1216,20 @@ impl RunConfigDraft {
     }
 }
 
+impl RunConfigDraft {
+    /// The text one editable list currently holds, addressed by the field that edits it.
+    ///
+    /// This keeps the row controls independent of which list they belong to: the caller passes the
+    /// field it is rendering and gets that list back.
+    pub fn field_text(&self, field: crate::run::ui::RunField) -> String {
+        match field {
+            crate::run::ui::RunField::Build => self.build.clone(),
+            crate::run::ui::RunField::Prelaunch => self.prelaunch.clone(),
+            _ => String::new(),
+        }
+    }
+}
+
 /// Read one prepared action per line: `名称 = 程序或解释器 | 参数 | 参数`.
 ///
 /// The name comes first so a failure can say which step stopped the sequence, and arguments stay
@@ -1220,6 +1239,10 @@ pub fn parse_steps(text: &str) -> Result<Vec<editor_core::RunStep>, String> {
     for line in text.lines() {
         let line = line.trim();
         if line.is_empty() {
+            continue;
+        }
+        // A row added as a template is a comment until the user turns it into an action.
+        if line.starts_with('#') {
             continue;
         }
         let Some((name, rest)) = line.split_once('=') else {
@@ -1330,10 +1353,14 @@ pub fn remove_step(text: &str, index: usize) -> Option<String> {
     Some(join_step_lines(&lines))
 }
 
-/// Add an empty action line, so the user can describe the next action in place.
+/// Add a line for the next action, written as a comment so it is a template rather than an action.
+///
+/// The comment is a real line the user can edit in place, yet it stays out of the parsed actions: an
+/// empty line would simply vanish, and a bare name would make the configuration invalid until it was
+/// finished.
 pub fn add_step(text: &str) -> String {
     let mut lines = step_lines(text);
-    lines.push(String::new());
+    lines.push("# 名称 = 程序 | 参数".to_owned());
     join_step_lines(&lines)
 }
 

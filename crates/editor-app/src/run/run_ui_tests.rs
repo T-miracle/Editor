@@ -67,6 +67,143 @@ fn storage_key(app: &Entity<EditorApp>, cx: &mut TestAppContext) -> String {
     cx.update(|cx| app.read(cx).workspace_key())
 }
 
+/// The build page edits prepared actions row by row, with structural controls per row.
+#[gpui::test]
+fn the_build_page_edits_prepared_actions_row_by_row(cx: &mut TestAppContext) {
+    let root = tempfile::tempdir().unwrap();
+    let workspace = root.path().join("project");
+    std::fs::create_dir_all(&workspace).unwrap();
+    let (app, cx) = open_editor(cx, &workspace);
+    // A stored configuration with two build actions and one pre-launch step, opened for editing.
+    let stored = cx.update(|window, cx| {
+        let key = app.read(cx).workspace_key();
+        let mut set = editor_core::RunConfigSet::default();
+        let id = set.generate_id(&key);
+        let draft = crate::run::RunConfigDraft {
+            id: id.clone(),
+            name: "分步".into(),
+            shell: false,
+            program: "app.exe".into(),
+            arguments: String::new(),
+            script: String::new(),
+            directory: String::new(),
+            environment: String::new(),
+            tool_paths: String::new(),
+            build: "一 = cargo.exe | build\n二 = cargo.exe | test".into(),
+            prelaunch: "三 = tool.exe | gen".into(),
+        };
+        let configuration = draft.to_config().expect("the fixture is valid");
+        app.update(cx, |app, cx| {
+            app.run_controls.upsert(configuration, &key).unwrap();
+            cx.notify();
+        });
+        // The form reads the stored configuration from the same store the title bar uses.
+        let controls = app.read(cx).run_controls.clone();
+        cx.new(|cx| crate::run::RunConfigForm::open(&controls, &key, Some(&id), window, cx))
+    });
+    let (rows, labels) = cx.update(|window, cx| {
+        let _ = window;
+        let form = stored.read(cx);
+        (
+            (
+                form.step_row_count(crate::run::RunField::Build),
+                form.step_row_count(crate::run::RunField::Prelaunch),
+            ),
+            form.step_row_values(crate::run::RunField::Build, cx),
+        )
+    });
+    assert_eq!(rows, (2, 1), "one row per prepared action");
+    assert_eq!(
+        labels,
+        vec!["一 = cargo.exe | build", "二 = cargo.exe | test"]
+    );
+
+    // Moving the second build action up swaps the two rows and nothing else.
+    cx.update(|window, cx| {
+        stored.update(cx, |form, cx| {
+            form.edit_rows(
+                crate::run::RunField::Build,
+                crate::run::StepEdit::Up,
+                1,
+                window,
+                cx,
+            );
+        });
+    });
+    let reordered = cx.update(|window, cx| {
+        let _ = window;
+        let form = stored.read(cx);
+        (
+            form.step_row_values(crate::run::RunField::Build, cx),
+            form.draft().build.clone(),
+        )
+    });
+    assert_eq!(
+        reordered.0,
+        vec!["二 = cargo.exe | test", "一 = cargo.exe | build"]
+    );
+    assert_eq!(
+        reordered.1, "二 = cargo.exe | test\n一 = cargo.exe | build",
+        "the draft follows the rows"
+    );
+
+    // Removing a row takes the action the user addressed, and adding appends an empty one.
+    cx.update(|window, cx| {
+        stored.update(cx, |form, cx| {
+            form.edit_rows(
+                crate::run::RunField::Build,
+                crate::run::StepEdit::Remove,
+                0,
+                window,
+                cx,
+            );
+            form.edit_rows(
+                crate::run::RunField::Build,
+                crate::run::StepEdit::Add,
+                0,
+                window,
+                cx,
+            );
+        });
+    });
+    let after = cx.update(|window, cx| {
+        let _ = window;
+        let form = stored.read(cx);
+        (
+            form.step_row_count(crate::run::RunField::Build),
+            form.draft().build.clone(),
+        )
+    });
+    assert_eq!(
+        after.0, 2,
+        "one action was removed and a template row was added"
+    );
+    assert_eq!(
+        after.1, "一 = cargo.exe | build\n# 名称 = 程序 | 参数",
+        "the template row is a comment until it is turned into an action"
+    );
+    // The pre-launch list is edited on its own; the build list is untouched by it.
+    cx.update(|window, cx| {
+        stored.update(cx, |form, cx| {
+            form.edit_rows(
+                crate::run::RunField::Prelaunch,
+                crate::run::StepEdit::Up,
+                0,
+                window,
+                cx,
+            );
+        });
+    });
+    let untouched = cx.update(|window, cx| {
+        let _ = window;
+        stored.read(cx).draft().prelaunch.clone()
+    });
+    assert_eq!(
+        untouched, "三 = tool.exe | gen",
+        "a move past the end changes nothing"
+    );
+}
+
 /// The B1 configuration dialog is a native modal whose draft follows the approved structure.
 ///
 /// The dialog paints in its own window, so this check reads the state that window renders from

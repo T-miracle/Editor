@@ -690,8 +690,12 @@ fn prepared_actions_can_be_reordered_in_place() {
         Some("一 = a.exe\n三 = c.exe")
     );
     assert_eq!(remove_step(text, 9), None);
-    // Adding appends the next action, and a blank row is spacing rather than an action.
-    assert_eq!(add_step(text), "一 = a.exe\n二 = b.exe\n三 = c.exe\n");
+    // Adding appends a template row that is not yet an action, so it can be edited in place.
+    let added = add_step(text);
+    assert!(added.starts_with(text));
+    assert_eq!(added.lines().last(), Some("# 名称 = 程序 | 参数"));
+    let parsed = parse_steps(&added).expect("a template row is not an action yet");
+    assert_eq!(parsed.len(), 3, "the template is not an action");
     assert_eq!(
         step_lines("一 = a.exe\n\n二 = b.exe\n"),
         vec!["一 = a.exe".to_owned(), "二 = b.exe".to_owned()]
