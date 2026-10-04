@@ -928,3 +928,201 @@ fn a_restricted_workspace_refuses_to_launch_from_the_run_control(cx: &mut TestAp
         assert!(state.run_controls.sessions().is_empty());
     });
 }
+
+/// A shared configuration the project carries starts a real program with this machine's overrides.
+///
+/// Ticket 06's remaining acceptance: the earlier gap was that the editor control had never been shown
+/// starting a real program from a *shared* entry. The shared definition is read from the project's own
+/// file and the local values from this machine's store, which is what makes the two halves meaningful:
+/// the program and its arguments come from the project, while the environment and the tool directory
+/// come from here and are not written into the project file.
+#[gpui::test]
+#[ignore = "build terminal and capability-example through the public SDK first"]
+fn a_shared_configuration_starts_a_real_program_with_local_values(cx: &mut TestAppContext) {
+    cx.update(|cx| {
+        gpui_kit::init(cx);
+        typography::init(cx);
+        apply_theme(builtin_theme(false), cx);
+        cx.set_reduce_motion(true);
+    });
+    let project = tempfile::tempdir().unwrap().keep();
+    let workspace = project.display().to_string();
+    let mut manager = plugin_runtime::Manager::open(
+        project.join("runtime"),
+        protocol::Environment {
+            workspace: workspace.clone(),
+            os: "windows".into(),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    let terminal = Package::read(
+        &PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../dist/plugins/terminal.zip"),
+    )
+    .unwrap();
+    let grants = terminal.manifest.permissions.clone();
+    manager.install(&terminal, grants).unwrap();
+
+    // The project's half: what to run, written where a team shares it.
+    const MARKER: &str = "SHARED_CONFIG_RAN";
+    const ENV_MARKER: &str = "SHARED_CONFIG_ENV";
+    let mut shared = editor_core::SharedSet::default();
+    shared.upsert(editor_core::SharedConfig {
+        id: "shared-run".into(),
+        name: "共享运行".into(),
+        target: editor_core::RunTarget::Program {
+            program: "powershell.exe".into(),
+            args: vec![
+                "-NoProfile".into(),
+                "-Command".into(),
+                format!(
+                    "[Console]::Write('{MARKER}=' + $env:SHARED_CONFIG_ENV); Start-Sleep -Seconds 60"
+                ),
+            ],
+        },
+        directory: Some(editor_core::WORKSPACE_TOKEN.to_owned()),
+        build: Default::default(),
+        prelaunch: Default::default(),
+        breakpoints: Default::default(),
+    });
+    editor_core::save_shared(&project, &shared).unwrap();
+
+    // This machine's half: the value the program will print, kept out of the project file.
+    let local_root = project.join("local");
+    let mut mine = editor_core::RunConfigSet::default();
+    mine.upsert(editor_core::RunConfig {
+        id: "shared-run".into(),
+        name: "本机名字".into(),
+        target: editor_core::RunTarget::Program {
+            program: "powershell.exe".into(),
+            args: Vec::new(),
+        },
+        directory: None,
+        env: [(ENV_MARKER.to_owned(), "local-value".to_owned())].into(),
+        tool_paths: Default::default(),
+        build: Default::default(),
+        prelaunch: Default::default(),
+        source: editor_core::RunConfigSource::Project,
+        from_target: None,
+        provider: None,
+        breakpoints: Default::default(),
+        local: false,
+    })
+    .unwrap();
+    mine.select("shared-run");
+    editor_core::save(&local_root, &workspace, &mine).unwrap();
+    // The local values must not have travelled into the shared file.
+    let written = std::fs::read_to_string(editor_core::project_path(&project)).unwrap();
+    assert!(
+        !written.contains("local-value"),
+        "this machine's values stay out of the project file: {written}"
+    );
+
+    let slot = Rc::new(RefCell::new(None));
+    let capture = slot.clone();
+    let local = local_root.clone();
+    let key = workspace.clone();
+    let workspace_handle = Workspace::open(&project).unwrap();
+    let (_, cx) = cx.add_window_view(move |window, cx| {
+        let app = cx.new(|cx| EditorApp::new(workspace_handle, None, window, cx));
+        // Load exactly as the editor loads a workspace: the project's definitions merged with this
+        // machine's overrides, through the same entry point.
+        app.update(cx, |app, cx| {
+            app.run_controls = crate::run::RunControls::load_with_project(
+                &key,
+                Some(local),
+                Some(project.clone()),
+            );
+            assert!(app.run_controls.error.is_none());
+            // The shared definition is the project's: its name and its program are what the team
+            // shared. This machine's file contributes only what cannot be shared, so the name stays
+            // the project's even though a different one exists locally.
+            assert_eq!(
+                app.run_controls
+                    .configuration("shared-run")
+                    .map(|c| c.name.as_str()),
+                Some("共享运行"),
+                "the shared name is the project's"
+            );
+            assert_eq!(
+                app.run_controls
+                    .configuration("shared-run")
+                    .map(|c| c.env.get(ENV_MARKER).map(String::to_owned)),
+                Some(Some("local-value".to_owned())),
+                "this machine's environment is the local half"
+            );
+            cx.notify();
+        });
+        *capture.borrow_mut() = Some(app.clone());
+        Root::new(app, window, cx)
+    });
+    let app = slot.borrow_mut().take().unwrap();
+    cx.simulate_resize(size(px(1400.), px(900.)));
+    let mut renderer = images::VectorRenderer::default();
+    publish(&mut manager, &mut renderer, &app, cx);
+
+    // Running it is the user's action, through the same control as any other configuration.
+    cx.update(|window, cx| {
+        app.update(cx, |app, cx| app.start_selected_run(window, cx));
+    });
+    let mut launches = Vec::new();
+    for _ in 0..300 {
+        pump_recording(&mut manager, &app, cx, &mut launches);
+        manager.poll();
+        publish_with_launches(&mut manager, &mut renderer, &app, cx, &launches);
+        if !launches.is_empty() {
+            break;
+        }
+    }
+    assert_eq!(
+        launches.len(),
+        1,
+        "the shared configuration started one program"
+    );
+    let id = launches[0].0;
+    // The program's own output is the evidence that both halves arrived: the project's program and
+    // arguments, and this machine's environment value.
+    let shown = {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+        let mut text = String::new();
+        while std::time::Instant::now() < deadline {
+            manager.poll();
+            publish_with_launches(&mut manager, &mut renderer, &app, cx, &launches);
+            text = manager
+                .live
+                .get("terminal")
+                .and_then(|instance| instance.views.get("terminal"))
+                .map(|view| {
+                    // The terminal publishes a native grid, so the visible glyphs are what is read:
+                    // searching serialized JSON would match text that was never painted.
+                    let mut text = String::new();
+                    view.as_ref().root.visit(&mut |node| {
+                        // The terminal publishes paint commands rather than a document, so this reads
+                        // the glyphs that were painted; searching serialized JSON would match text
+                        // that never reached the screen.
+                        if let protocol::ui::Kind::Canvas(canvas) = &node.kind {
+                            for paint in &canvas.paint {
+                                if let protocol::Paint::Text { text: painted, .. } = paint {
+                                    text.push_str(painted);
+                                }
+                            }
+                        }
+                    });
+                    text
+                })
+                .unwrap_or_default();
+            if text.contains(MARKER) {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        text
+    };
+    assert!(
+        shown.contains(&format!("{MARKER}=local-value")),
+        "the project's program ran with this machine's environment: {shown}"
+    );
+    assert!(manager.execution(id).is_some_and(|s| s.stoppable()));
+    let _ = manager.stop_execution(id);
+    manager.shutdown();
+}
