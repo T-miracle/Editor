@@ -157,6 +157,8 @@
 - **R11**：`run::tests::a_plugin_lifecycle_change_names_the_sessions_it_affects`（本轮确认存在并已随 `run::` 60 项通过）。
 - **R10**：`host_execution` 的 `host_controls_stop_the_program_a_session_owns`、`closing_the_window_leaves_no_program_running`、`closing_while_a_launch_is_still_preparing_leaves_no_program_running`、`shutdown_with_no_sessions_is_immediate`。
 - **R09 的「停止只影响所选项」**：`run::` 的会话选择与停止边界用例；**输出落在提供者自己面板**由 `interactive_execution::consumer_executes_argv_in_a_visible_terminal_session` 与真实二进制冒烟共同覆盖。
+- **R03 的三句话各自有据**（本轮核实并运行，`editor-core run::discovery` 4 项通过）：**「重发现无重复」**是 `candidates_are_offered_once_each`；**「已保存修改不被覆盖」**是 `a_user_configuration_survives_re_discovery`；**「失效提示并经确认修复」**的一端是 `a_missing_target_is_reported`，另一端是 `a_confirmed_target_becomes_an_editable_configuration`（确认后才成为可编辑配置，即发现本身不写入）。编辑器侧另有 `extensions::contributions::a_mismatched_discovery_identity_is_refused` 守门声明式发现的身份。
+- **R05 的一半是断言、一半是代码结构**（本轮核实后如实拆分）：**「修改文件后运行使用新磁盘内容」有断言**——`run_ui_tests` 中先在原生编辑器里改文档、确认 `session.is_dirty()`、调用 `save_dirty_documents` 返回真、再断言磁盘内容已含该修改。而**「保存失败或取消不产生启动副作用」目前是代码结构而非用例**：`start_configuration` 与构建路径都在 `if !self.save_dirty_documents(cx) { return; }` 之后才继续，而 `save_dirty_documents` 在「需要覆盖确认」与「保存后仍为脏」两条路径上返回 `false` 并给出状态文案（含「保存失败，未启动」）。**行为是明确的，但我没有为它写用例**——这一条按「已实现、未单独断言」记录，不并入「已通过」的同一句话里。
 
 ### 工单 12 逐条进度
 
