@@ -155,3 +155,59 @@ fn host_controls_start_once_and_locate_the_retained_session() {
         .to_string();
     assert!(missing.contains(CONTRACT), "{missing}");
 }
+
+/// The host stops a running program through the provider's own session control.
+///
+/// The request names the session the provider returned; the host never borrows the provider's
+/// private process handle, and an acknowledgement is not treated as proof that the program exited.
+#[test]
+#[ignore = "build terminal and capability-example through the public SDK first"]
+fn host_controls_stop_the_program_a_session_owns() {
+    let root = tempfile::tempdir().unwrap();
+    let mut manager = manager(root.path());
+    let package = terminal();
+    let grants = package.manifest.permissions.clone();
+    manager.install(&package, grants).unwrap();
+    let request = RunRequest {
+        program: "powershell.exe".into(),
+        args: vec![
+            "-NoProfile".into(),
+            "-Command".into(),
+            "Start-Sleep -Seconds 60".into(),
+        ],
+        cwd: Some(root.path().display().to_string()),
+        name: Some("可停止".into()),
+    };
+    let session = manager.start_execution(request.clone()).unwrap();
+    let running = wait_until(
+        &mut manager,
+        |manager| manager.execution(session.id()).unwrap().snapshot().state,
+        |state| *state == ExecutionState::Running,
+    );
+    assert_eq!(running, ExecutionState::Running);
+    assert!(manager.execution(session.id()).unwrap().stoppable());
+    // A delegated program and the provider's own private shell are both alive here.
+    assert_eq!(manager.live["terminal"].process_count(), 2);
+    assert!(reveal_panel(&mut manager) >= 1);
+
+    // Stopping is accepted by the exact incarnation that started the program.
+    manager.stop_execution(session.id()).unwrap();
+    let deadline = Instant::now() + Duration::from_secs(30);
+    while manager.live["terminal"].process_count() > 1 && Instant::now() < deadline {
+        manager.poll();
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    // The owned program is gone while the provider's private session remains.
+    assert_eq!(manager.live["terminal"].process_count(), 1);
+    // The session keeps the only lifecycle fact this contract reports: the provider did start a
+    // program. Nothing in execution contract 1.1 reports a later exit back to a consumer, so the
+    // host does not invent a stopped state from the absence of a process.
+    assert_eq!(
+        manager.execution(session.id()).unwrap().state(),
+        ExecutionState::Running
+    );
+    // Repeating the stop is answered by the provider, which has nothing left to stop.
+    manager.stop_execution(session.id()).unwrap();
+    // An unknown session is refused instead of stopping an unrelated program.
+    assert!(manager.stop_execution(session.id() + 1000).is_err());
+}

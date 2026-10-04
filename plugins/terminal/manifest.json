@@ -1,7 +1,7 @@
 {
   "id": "terminal",
   "name": "终端",
-  "version": "0.7.1",
+  "version": "0.8.0",
   "protocol": 7,
   "api": {
     "base": "^1",
@@ -12,7 +12,7 @@
     }
   },
   "data_format": {"version": 1, "migration_hook": true},
-  "plugin_services": {"provides": {"interactive.execute": {"version":"1.0.0", "methods": {
+  "plugin_services": {"provides": {"interactive.execute": {"version":"1.1.0", "methods": {
     "execute": {
       "parameters":{"type":"record", "fields":{
         "program":{"type":"string","max_bytes":4096},
@@ -25,6 +25,16 @@
         "state":{"type":"string","max_bytes":32}
       }},
       "permissions":["process.exec","ui.panels"]
+    },
+    "stop": {
+      "parameters":{"type":"record", "fields":{
+        "session":{"type":"string","max_bytes":128}
+      }},
+      "result":{"type":"record","fields":{
+        "session":{"type":"string","max_bytes":128},
+        "state":{"type":"string","max_bytes":32}
+      }},
+      "permissions":["process.exec"]
     }
   }}}},
   "component": "terminal.wasm",

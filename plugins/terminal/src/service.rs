@@ -11,16 +11,84 @@ struct Execution {
     name: Option<String>,
 }
 
+/// Execution contract 1.1 names the session whose program should stop.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Stop {
+    /// Session identity this provider returned when the program was started.
+    session: String,
+}
+
 impl Terminal {
     /// Completion acknowledges process creation; it does not claim exit, rollback, or completed panel display.
     pub(super) fn execute_service(
         &mut self,
         call: plugin_protocol::service::Invocation,
     ) -> Result<serde_json::Value, Failure> {
-        if call.contract != "interactive.execute" || call.method != "execute" {
-            return Err(Failure::new(
+        match call.method.as_str() {
+            "execute" => self.execute_call(call),
+            "stop" => self.stop_call(call),
+            _ => Err(Failure::new(
                 ErrorCode::UnsupportedOperation,
                 "Unknown execution method",
+            )),
+        }
+    }
+
+    /// Stop the program a delegated session owns.
+    ///
+    /// The provider offers no interactive keystroke path here: a caller asked for a program to end,
+    /// so the owned process is terminated. The request is acknowledged once termination was issued,
+    /// which is not a claim that the program has already exited.
+    fn stop_call(
+        &mut self,
+        call: plugin_protocol::service::Invocation,
+    ) -> Result<serde_json::Value, Failure> {
+        if call.contract != "interactive.execute" {
+            return Err(Failure::new(
+                ErrorCode::UnsupportedOperation,
+                "Unknown execution contract",
+            ));
+        }
+        let request: Stop = serde_json::from_value(call.arguments)
+            .map_err(|error| Failure::new(ErrorCode::InvalidRequest, error.to_string()))?;
+        let session = request
+            .session
+            .parse::<u64>()
+            .map_err(|_| Failure::new(ErrorCode::InvalidRequest, "Unknown session identity"))?;
+        let index = self
+            .tabs
+            .iter()
+            .position(|tab| tab.id == session)
+            .ok_or_else(|| Failure::new(ErrorCode::InvalidHandle, "Session is no longer present"))?;
+        let tab = &mut self.tabs[index];
+        match tab.handle.take() {
+            Some(handle) => {
+                // A refused termination is reported as a failed stop, never as a stopped program.
+                if let Err(message) = host::process(process::Operation::Terminate {
+                    handle: handle.clone(),
+                }) {
+                    tab.handle = Some(handle);
+                    return Err(Failure::new(ErrorCode::OperationFailed, message));
+                }
+                // A delegated program is never restarted with this provider's private authority.
+                tab.resumable = false;
+                tab.exited = true;
+                Ok(serde_json::json!({"session": request.session, "state": "stopped"}))
+            }
+            // An exited session has nothing left to stop; reporting failure would be misleading.
+            None => Ok(serde_json::json!({"session": request.session, "state": "exited"})),
+        }
+    }
+
+    fn execute_call(
+        &mut self,
+        call: plugin_protocol::service::Invocation,
+    ) -> Result<serde_json::Value, Failure> {
+        if call.contract != "interactive.execute" {
+            return Err(Failure::new(
+                ErrorCode::UnsupportedOperation,
+                "Unknown execution contract",
             ));
         }
         let request: Execution = serde_json::from_value(call.arguments)

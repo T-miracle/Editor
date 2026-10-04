@@ -9,21 +9,36 @@ use std::{
 
 pub const CONTRACT: &str = "interactive.execute";
 
-/// This fixture declaration is an independent consumer's expectation of execution service 1.0.
+/// This fixture declaration is an independent consumer's expectation of execution service 1.1.
+///
+/// `stop` is declared here too: a consumer that promises a stop has to require it, otherwise it
+/// would match a provider that cannot end a program.
 pub fn methods() -> Value {
-    json!({"execute": {
-        "parameters": {"type":"record", "fields": {
-            "program":{"type":"string","max_bytes":4096},
-            "args":{"type":"array","max_items":128,"items":{"type":"string","max_bytes":4096}},
-            "cwd":{"type":"string","max_bytes":4096},
-            "name":{"type":"string","max_bytes":256}
-        }, "optional":["cwd","name"]},
-        "result":{"type":"record","fields":{
-            "session":{"type":"string","max_bytes":128},
-            "state":{"type":"string","max_bytes":32}
-        }},
-        "permissions":["process.exec","ui.panels"]
-    }})
+    json!({
+        "execute": {
+            "parameters": {"type":"record", "fields": {
+                "program":{"type":"string","max_bytes":4096},
+                "args":{"type":"array","max_items":128,"items":{"type":"string","max_bytes":4096}},
+                "cwd":{"type":"string","max_bytes":4096},
+                "name":{"type":"string","max_bytes":256}
+            }, "optional":["cwd","name"]},
+            "result":{"type":"record","fields":{
+                "session":{"type":"string","max_bytes":128},
+                "state":{"type":"string","max_bytes":32}
+            }},
+            "permissions":["process.exec","ui.panels"]
+        },
+        "stop": {
+            "parameters":{"type":"record","fields":{
+                "session":{"type":"string","max_bytes":128}
+            }},
+            "result":{"type":"record","fields":{
+                "session":{"type":"string","max_bytes":128},
+                "state":{"type":"string","max_bytes":32}
+            }},
+            "permissions":["process.exec"]
+        }
+    })
 }
 
 /// Repackage through admission so tests cannot silently mutate a validated manifest in memory.
@@ -70,13 +85,16 @@ pub fn fixture(id: &str, provider: bool, execution: bool) -> Package {
     }
     let mut methods = methods();
     if !execution {
-        // A consumer cannot weaken authority and still match the real execution contract.
+        // A consumer cannot weaken authority and still match the real execution contract. It also
+        // cannot offer a stop it has no authority to perform, so that method is dropped entirely.
         methods["execute"]["permissions"] = json!(["ui.panels"]);
+        methods.as_object_mut().unwrap().remove("stop");
     }
     manifest["plugin_services"] = if provider {
-        json!({"provides": {CONTRACT:{"version":"1.0.0","methods":methods}}})
+        // A provider implements both methods of the execution contract it advertises.
+        json!({"provides": {CONTRACT:{"version":"1.1.0","methods":methods}}})
     } else {
-        json!({"requires": {CONTRACT:{"version":"^1","optional":true,"methods":methods}}})
+        json!({"requires": {CONTRACT:{"version":">=1.1, <2","optional":true,"methods":methods}}})
     };
     archive(files, manifest)
 }

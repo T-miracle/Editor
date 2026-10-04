@@ -26,6 +26,8 @@ use std::{
 pub const EXECUTION_CONTRACT: &str = "interactive.execute";
 /// A start request that a provider neither accepts nor rejects within this window is abandoned.
 pub const EXECUTION_START_TIMEOUT_MS: u32 = 30_000;
+/// A stop request is a short control exchange; waiting longer hides an unreachable provider.
+pub const EXECUTION_STOP_TIMEOUT_MS: u32 = 10_000;
 /// Bound on retained host sessions for one workspace; ordinary work never approaches this.
 const MAX_HOST_EXECUTIONS: usize = 64;
 
@@ -242,6 +244,16 @@ impl HostExecution {
             ErrorCode::Cancelled,
         );
     }
+
+    /// Whether a stop is meaningful: the provider confirmed a program and is still present.
+    pub fn stoppable(&self) -> bool {
+        self.state() == ExecutionState::Running && self.provider_active()
+    }
+
+    /// Lifecycle as recorded by the provider, ignoring whether that provider is still present.
+    pub fn state(&self) -> ExecutionState {
+        self.lifecycle().0
+    }
 }
 
 /// Bounded host session table; entries stay after completion so a repeat launch locates its session.
@@ -348,36 +360,49 @@ fn provider_session_of(value: &Value) -> Option<String> {
 /// The dependency the host requires of any execution provider.
 ///
 /// A consumer matches a provider only by asking for the identical method shape, so these bounds and
-/// the declared authority mirror execution contract 1.0 exactly; the host's own permission set, not
-/// this declaration, decides what authority a start delegates to the provider.
+/// the declared authority mirror execution contract 1.1 exactly; the host's own permission set, not
+/// this declaration, decides what authority a start delegates to the provider. `stop` is required
+/// rather than optional: the run controls promise a stop, so a provider that cannot stop is
+/// incompatible instead of appearing available and then failing to end a program.
 pub(crate) fn execution_dependency() -> Result<Dependency, Failure> {
     let declaration: Value = serde_json::from_str(
-        r#"{"version":"1.0.0","methods":{"execute":{
-            "parameters":{"type":"record","fields":{
-                "program":{"type":"string","max_bytes":4096},
-                "args":{"type":"array","max_items":128,"items":{"type":"string","max_bytes":4096}},
-                "cwd":{"type":"string","max_bytes":4096},
-                "name":{"type":"string","max_bytes":256}},
-                "optional":["cwd","name"]},
-            "result":{"type":"record","fields":{
-                "session":{"type":"string","max_bytes":128},
-                "state":{"type":"string","max_bytes":32}}},
-            "permissions":["process.exec","ui.panels"]}}}"#,
+        r#"{"version":"1.1.0","methods":{
+            "execute":{
+                "parameters":{"type":"record","fields":{
+                    "program":{"type":"string","max_bytes":4096},
+                    "args":{"type":"array","max_items":128,"items":{"type":"string","max_bytes":4096}},
+                    "cwd":{"type":"string","max_bytes":4096},
+                    "name":{"type":"string","max_bytes":256}},
+                    "optional":["cwd","name"]},
+                "result":{"type":"record","fields":{
+                    "session":{"type":"string","max_bytes":128},
+                    "state":{"type":"string","max_bytes":32}}},
+                "permissions":["process.exec","ui.panels"]},
+            "stop":{
+                "parameters":{"type":"record","fields":{
+                    "session":{"type":"string","max_bytes":128}}},
+                "result":{"type":"record","fields":{
+                    "session":{"type":"string","max_bytes":128},
+                    "state":{"type":"string","max_bytes":32}}},
+                "permissions":["process.exec"]}}}"#,
     )
     .expect("execution contract declaration is valid JSON");
     let contract: plugin_protocol::service::Contract = serde_json::from_value(declaration)
         .map_err(|error| Failure::new(ErrorCode::OperationFailed, error.to_string()))?;
-    let mut methods = contract.methods;
-    let execute = methods
-        .remove("execute")
-        .ok_or_else(|| Failure::new(ErrorCode::OperationFailed, "Execution method removed"))?;
+    let methods = contract.methods;
+    if !methods.contains_key("execute") || !methods.contains_key("stop") {
+        return Err(Failure::new(
+            ErrorCode::OperationFailed,
+            "Execution contract is incomplete",
+        ));
+    }
     Ok(Dependency {
-        // A newer provider may add methods, but `execute` must keep this exact shape.
-        version: "^1"
+        // A newer provider may add methods, but these two must keep their exact shape.
+        version: ">=1.1, <2"
             .parse()
             .expect("execution version requirement is valid"),
         optional: false,
-        methods: BTreeMap::from([("execute".to_owned(), execute)]),
+        methods,
     })
 }
 
@@ -408,13 +433,36 @@ pub(crate) fn host_call(
     completion: Completion<Value>,
     alive: Arc<AtomicBool>,
 ) -> Result<Call, Failure> {
-    let signature = dependency
-        .methods
-        .get("execute")
-        .cloned()
-        .ok_or_else(|| Failure::new(ErrorCode::OperationFailed, "Execution method removed"))?;
-    let arguments = serde_json::to_value(request)
-        .map_err(|error| Failure::new(ErrorCode::InvalidRequest, error.to_string()))?;
+    host_method_call(
+        caller,
+        reference,
+        "execute",
+        serde_json::to_value(request)
+            .map_err(|error| Failure::new(ErrorCode::InvalidRequest, error.to_string()))?,
+        dependency,
+        completion,
+        alive,
+    )
+}
+
+/// Assemble a call for one method of the execution contract.
+///
+/// The declared method shape travels with the call, so a provider can only be asked for operations
+/// it actually advertised, and the result is validated against that same declaration. The deadline
+/// belongs to the completion, which is what a caller observes and cancels.
+pub(crate) fn host_method_call(
+    caller: &Caller,
+    reference: Reference,
+    method: &str,
+    arguments: Value,
+    dependency: &Dependency,
+    completion: Completion<Value>,
+    alive: Arc<AtomicBool>,
+) -> Result<Call, Failure> {
+    let signature =
+        dependency.methods.get(method).cloned().ok_or_else(|| {
+            Failure::new(ErrorCode::UnsupportedOperation, "Unknown execution method")
+        })?;
     // The broker keys queued work by known participants, so this request handle names the pinned
     // provider incarnation rather than the host itself: a call queued for a retired provider is
     // abandoned with it, exactly like a guest's queued call.
@@ -432,7 +480,7 @@ pub(crate) fn host_call(
     Ok(Call {
         handle,
         reference,
-        method: "execute".into(),
+        method: method.into(),
         signature,
         arguments,
         context,
@@ -496,6 +544,63 @@ impl Manager {
             .host_sessions
             .insert(provider, request, dedup_key, completion))
     }
+
+    /// Ask the session's own provider to stop the program it started.
+    ///
+    /// The request is addressed to the pinned provider incarnation and carries the session identity
+    /// that provider returned. An acknowledgement means termination was issued, never that the
+    /// program has already exited, and the host borrows no provider-private resource handle.
+    pub fn stop_execution(&mut self, session: u64) -> anyhow::Result<()> {
+        let execution = self
+            .host_sessions
+            .get(session)
+            .ok_or_else(|| anyhow::anyhow!("Unknown execution session {session}"))?;
+        anyhow::ensure!(
+            execution.stoppable(),
+            "Execution session {session} is not running under an available provider"
+        );
+        let provider_session = execution
+            .snapshot()
+            .provider_session
+            .ok_or_else(|| anyhow::anyhow!("Provider reported no session identity to stop"))?;
+        let dependency = execution_dependency().map_err(start_failure)?;
+        let scope = self.host_scope();
+        let caller = host_caller(&scope);
+        self.refresh_services();
+        let (reference, provider) = {
+            let broker = self.plugin_services.lock().unwrap();
+            // The session is pinned to the incarnation that answered it, so a replacement provider
+            // can never be asked to stop a program it did not start.
+            let reference = broker
+                .resolve(&caller, EXECUTION_CONTRACT, &dependency)
+                .map_err(start_failure)?;
+            if reference.provider.caller.instance != execution.provider_instance() {
+                return Err(anyhow::anyhow!(
+                    "Execution session {session} belongs to a provider that is no longer selected"
+                ));
+            }
+            let provider = reference.provider.clone();
+            (reference, provider)
+        };
+        // Stopping waits less than a start: a provider that cannot acknowledge promptly is reported
+        // instead of leaving the controls waiting on an unreachable session.
+        let completion = Completion::new(EXECUTION_STOP_TIMEOUT_MS);
+        let call = host_method_call(
+            &caller,
+            reference,
+            "stop",
+            serde_json::json!({ "session": provider_session }),
+            &dependency,
+            completion,
+            self.host_alive.clone(),
+        )
+        .map_err(start_failure)?;
+        if let Err(error) = self.plugin_services.lock().unwrap().enqueue(call) {
+            return Err(start_failure(error));
+        }
+        let _ = provider;
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -516,9 +621,11 @@ mod tests {
         let version: semver::Version = serde_json::from_value(declared["version"].clone()).unwrap();
         let execute: Method =
             serde_json::from_value(declared["methods"]["execute"].clone()).unwrap();
+        let stop: Method = serde_json::from_value(declared["methods"]["stop"].clone()).unwrap();
         let contract = plugin_protocol::service::Contract {
             version,
-            methods: BTreeMap::from([("execute".to_owned(), execute)]),
+            // Every method the host requires is declared here; a missing one is the drift under test.
+            methods: BTreeMap::from([("execute".to_owned(), execute), ("stop".to_owned(), stop)]),
         };
         let dependency = execution_dependency().unwrap();
         assert!(
