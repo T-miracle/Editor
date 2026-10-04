@@ -521,6 +521,29 @@ fn closing_the_window_leaves_no_program_running() {
     );
 }
 
+/// Whether any program is still running with this check's own marker in its command line.
+///
+/// The marker is unique to this check, so a concurrently running test starting its own programs
+/// cannot be mistaken for a leak here — which a machine-wide count of the same interpreter would be.
+fn marked_program_is_running(marker: &str) -> bool {
+    std::process::Command::new("powershell.exe")
+        .args([
+            "-NoProfile",
+            "-Command",
+            &format!(
+                // The probe's own command line contains the marker, so it excludes itself; otherwise
+                // it would always find one match and the check would never fail.
+                "$self = $PID; @(Get-CimInstance Win32_Process -Filter \"Name='powershell.exe'\" | \
+                 Where-Object {{ $_.CommandLine -like '*{marker}*' -and $_.ProcessId -ne $self }}).Count"
+            ),
+        ])
+        .output()
+        .ok()
+        .and_then(|output| String::from_utf8(output.stdout).ok())
+        .map(|text| text.trim().parse::<usize>().unwrap_or(0) > 0)
+        .unwrap_or(false)
+}
+
 /// Machine-wide count of the interpreter these checks launch, so a leaked program is visible.
 ///
 /// Counting the machine rather than the runtime is the point: a program the host merely forgot about
@@ -548,8 +571,9 @@ fn powershell_processes() -> usize {
 #[test]
 #[ignore = "build terminal and capability-example through the public SDK first"]
 fn closing_while_a_launch_is_still_preparing_leaves_no_program_running() {
+    /// Written into the launched program's command line, so only this check's program can match it.
+    const MARKER: &str = "RDB_PREPARING_CLOSE_CHECK";
     let root = tempfile::tempdir().unwrap();
-    let before = powershell_processes();
     let workspace = root.path().join("workspace");
     std::fs::create_dir(&workspace).unwrap();
     let plugins = root.path().join("plugins");
@@ -581,7 +605,7 @@ fn closing_while_a_launch_is_still_preparing_leaves_no_program_running() {
                 args: vec![
                     "-NoProfile".into(),
                     "-Command".into(),
-                    "Start-Sleep -Seconds 120".into(),
+                    format!("Start-Sleep -Seconds 120 # {MARKER}"),
                 ],
                 cwd: None,
                 name: None,
@@ -602,10 +626,12 @@ fn closing_while_a_launch_is_still_preparing_leaves_no_program_running() {
         ExecutionState::Starting,
         "the window closed while the launch was still preparing"
     );
-    let remaining = powershell_processes();
+    // What this can honestly measure is whether the program outlives the worker that asked for it.
+    // The marker is unique to this check, so a concurrently running test starting its own programs
+    // cannot be mistaken for one left behind here — which a machine-wide count would be.
     assert!(
-        remaining <= before,
-        "closing during a launch leaves no program running: {before} before, {remaining} after"
+        !marked_program_is_running(MARKER),
+        "the program the launch asked for did not outlive the window that asked for it"
     );
 }
 
@@ -788,6 +814,86 @@ fn losing_a_provider_fails_its_sessions_without_reviving_them() {
     );
     manager.stop_execution(replacement.id()).unwrap();
 }
+/// Restarting a provider recovers it without replaying a command anyone already asked for.
+///
+/// This is the no-replay half of the lifecycle ticket: a restart is the user asking for a working
+/// provider again, not a request to run anything, so the sessions that were lost stay lost and no
+/// program starts because a guest was rebuilt. The machine's own process table is what decides
+/// whether anything was replayed.
+#[test]
+#[ignore = "build terminal and capability-example through the public SDK first"]
+fn restarting_a_provider_replays_no_program() {
+    let root = tempfile::tempdir().unwrap();
+    let mut manager = manager(root.path());
+    let package = terminal();
+    let grants = package.manifest.permissions.clone();
+    manager.install(&package, grants).unwrap();
+    let program = RunRequest {
+        program: "powershell.exe".into(),
+        args: vec![
+            "-NoProfile".into(),
+            "-Command".into(),
+            "Start-Sleep -Seconds 120".into(),
+        ],
+        cwd: Some(root.path().display().to_string()),
+        name: Some("REPLAY_CHECK".into()),
+        env: Vec::new(),
+    };
+    let session = manager.start_execution(program.clone()).unwrap();
+    let state = wait_until(
+        &mut manager,
+        |manager| manager.execution(session.id()).unwrap().snapshot().state,
+        |state| *state == ExecutionState::Running,
+    );
+    assert_eq!(state, ExecutionState::Running);
+    assert!(reveal_panel(&mut manager) >= 1);
+    // One delegated program, plus the provider's own shell.
+    assert!(manager.live["terminal"].process_count() >= 2);
+    let before = powershell_processes();
+
+    // Disable and restart the provider: the guest is rebuilt from the committed checkpoint.
+    manager.disable("terminal").unwrap();
+    let failed = wait_until(
+        &mut manager,
+        |manager| manager.execution(session.id()).unwrap().snapshot().state,
+        |state| *state == ExecutionState::Failed,
+    );
+    assert_eq!(failed, ExecutionState::Failed);
+    manager.enable("terminal").unwrap();
+    manager.restart_plugin("terminal").unwrap();
+    // Give a replay every chance to happen before deciding it did not.
+    for _ in 0..25 {
+        manager.poll();
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    assert_eq!(
+        manager.execution(session.id()).unwrap().snapshot().state,
+        ExecutionState::Failed,
+        "a restart does not revive the session it lost"
+    );
+    assert!(
+        powershell_processes() <= before,
+        "no program was started again by the restart: {before} before, {} after",
+        powershell_processes()
+    );
+    assert!(
+        manager.live["terminal"].process_count() <= 1,
+        "the rebuilt provider owns no program of its own"
+    );
+
+    // A repeat launch after the restart is a real session, which is what shows the recovery worked
+    // without the host having replayed anything on its own.
+    let again = manager.start_execution(program).unwrap();
+    let state = wait_until(
+        &mut manager,
+        |manager| manager.execution(again.id()).unwrap().snapshot().state,
+        |state| *state == ExecutionState::Running,
+    );
+    assert_eq!(state, ExecutionState::Running);
+    assert_ne!(again.id(), session.id());
+    manager.stop_execution(again.id()).unwrap();
+}
+
 /// A session's end is observed through its provider, never predicted from elapsed time.
 #[test]
 #[ignore = "build terminal and capability-example through the public SDK first"]
