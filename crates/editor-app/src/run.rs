@@ -368,6 +368,38 @@ impl RunControls {
         self.persist(workspace)
     }
 
+    /// Confirm one discovered candidate and store it as an editable configuration.
+    ///
+    /// This is the only way a discovery adds anything: the user confirms it, and it becomes an
+    /// ordinary configuration from that moment on. Confirming the same target twice resolves to the
+    /// configuration that already exists instead of saving a second copy.
+    pub fn confirm_target(&mut self, target_id: &str, workspace: &str) -> Result<String, String> {
+        if let Some(existing) = self
+            .configs
+            .configurations
+            .iter()
+            .find(|config| config.from_target.as_deref() == Some(target_id))
+        {
+            let id = existing.id.clone();
+            self.select(&id, workspace);
+            return Ok(id);
+        }
+        let target = self
+            .discovered
+            .iter()
+            .find(|target| target.id == target_id)
+            .cloned()
+            .ok_or_else(|| format!("发现结果里没有这个目标：{target_id}"))?;
+        let id = self.generate_id(workspace);
+        // The target's display label is the natural name, so the user recognizes what they confirmed
+        // and can rename it in the form immediately afterwards.
+        let configuration =
+            editor_core::configuration_for(&target, id.clone(), target.label.clone());
+        self.upsert(configuration, workspace)?;
+        self.select(&id, workspace);
+        Ok(id)
+    }
+
     /// Identity for a new configuration in this workspace.
     pub fn generate_id(&self, workspace: &str) -> String {
         self.configs.generate_id(workspace)
@@ -1230,6 +1262,13 @@ pub enum RunMenuEntry {
     Session { id: u64, label: String },
     /// A saved configuration, which becomes the next launch target when selected.
     Configuration { id: String, label: String },
+    /// A discovered candidate the user may confirm; confirming stores it as a configuration.
+    Target {
+        id: String,
+        label: String,
+        /// The provider's own type, shown so two providers look different in the same list.
+        target_type: String,
+    },
     /// An action that changes the configuration list rather than starting anything.
     Action {
         id: String,
@@ -1315,6 +1354,23 @@ impl RunControls {
             },
             enabled: true,
         });
+        // Candidates nobody has confirmed yet, offered after the stored configurations so the list a
+        // user already knows stays where it was.
+        for target in &self.discovered {
+            if self
+                .configs
+                .configurations
+                .iter()
+                .any(|config| config.from_target.as_deref() == Some(target.id.as_str()))
+            {
+                continue;
+            }
+            entries.push(RunMenuEntry::Target {
+                id: target.id.clone(),
+                label: target.label.clone(),
+                target_type: target.target_type.clone(),
+            });
+        }
         // A configuration whose target is gone says so, so a failed launch is not the first hint.
         for (config, name) in self.invalid_targets() {
             entries.push(RunMenuEntry::Action {

@@ -475,6 +475,34 @@ impl EditorApp {
                 .action_context(previous_focus);
             for entry in entries {
                 match entry {
+                    RunMenuEntry::Target {
+                        id,
+                        label,
+                        target_type,
+                    } => {
+                        // Confirming is what stores anything: the candidate is shown with the
+                        // provider's own type, and nothing is added until this is clicked.
+                        let confirm = owner.clone();
+                        let title = format!("{label} · {target_type}");
+                        menu =
+                            menu.item(PopupMenuItem::new(title).on_click(move |_, window, cx| {
+                                let _ = confirm.update(cx, |app, cx| {
+                                    let workspace = app.workspace_key();
+                                    match app.run_controls.confirm_target(&id, &workspace) {
+                                        Ok(stored) => {
+                                            app.status = format!(
+                                                "已添加运行配置 {label}，可在配置弹窗中修改"
+                                            );
+                                            // The stored configuration opens for editing straight
+                                            // away, so confirming leads somewhere rather than
+                                            // leaving the user to find it in the list.
+                                            app.open_run_config_dialog(window, cx, Some(stored));
+                                        }
+                                        Err(message) => app.status = message,
+                                    }
+                                });
+                            }));
+                    }
                     RunMenuEntry::Separator => menu = menu.separator(),
                     RunMenuEntry::Session { id, label } => {
                         let locate = owner.clone();

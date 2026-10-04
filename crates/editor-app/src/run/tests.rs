@@ -745,6 +745,92 @@ fn a_discovery_reports_what_changed_without_changing_the_users_work() {
     );
 }
 
+/// Confirming a candidate stores one configuration, and confirming it again reuses that one.
+#[test]
+fn confirming_a_candidate_stores_it_once() {
+    use plugin_schema::DiscoveredTarget;
+    let target = |id: &str, label: &str, target_type: &str| DiscoveredTarget {
+        id: id.to_owned(),
+        provider: "rust-binary".into(),
+        target_type: target_type.to_owned(),
+        program: label.to_owned(),
+        label: label.to_owned(),
+        fields: Default::default(),
+        found_in: "Cargo.toml".into(),
+    };
+    let mut controls = controls();
+    let workspace = "C:/work".to_owned();
+    controls.reconcile_discovered(&[
+        target("rust-binary:my-app", "my-app", "rust-binary"),
+        target("tools:fmt", "fmt", "tool-command"),
+    ]);
+    controls.note_discovery();
+
+    // Both candidates are offered, and neither has been stored yet.
+    let offered = controls
+        .menu_entries()
+        .into_iter()
+        .filter_map(|entry| match entry {
+            RunMenuEntry::Target {
+                label, target_type, ..
+            } => Some((label, target_type)),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        offered,
+        vec![
+            ("my-app".to_owned(), "rust-binary".to_owned()),
+            ("fmt".to_owned(), "tool-command".to_owned())
+        ],
+        "a candidate from any provider is offered the same way"
+    );
+    assert!(
+        controls.configurations().is_empty(),
+        "discovery stores nothing"
+    );
+
+    // Confirming one stores exactly that target, named as the user saw it.
+    let stored = controls
+        .confirm_target("rust-binary:my-app", &workspace)
+        .expect("the candidate is confirmed");
+    assert_eq!(controls.configurations().len(), 1);
+    let configuration = controls.configuration(&stored).expect("it is stored");
+    assert_eq!(configuration.name, "my-app");
+    assert_eq!(configuration.target.executable(), "my-app");
+    assert_eq!(
+        configuration.from_target.as_deref(),
+        Some("rust-binary:my-app")
+    );
+    // The stored one is selected, so the form that opens next edits what was just confirmed.
+    assert_eq!(
+        controls.selected().map(|config| config.id.as_str()),
+        Some(stored.as_str())
+    );
+
+    // Confirming the same candidate again reuses the stored configuration.
+    let again = controls
+        .confirm_target("rust-binary:my-app", &workspace)
+        .expect("confirming again resolves");
+    assert_eq!(again, stored);
+    assert_eq!(controls.configurations().len(), 1);
+
+    // A confirmed candidate is no longer offered, and an unknown one is refused by name.
+    let labels = controls
+        .menu_entries()
+        .into_iter()
+        .filter_map(|entry| match entry {
+            RunMenuEntry::Target { label, .. } => Some(label),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(labels, vec!["fmt".to_owned()]);
+    let error = controls
+        .confirm_target("nobody:missing", &workspace)
+        .expect_err("an unknown candidate is refused");
+    assert!(error.contains("nobody:missing"), "{error}");
+}
+
 fn snapshot(
     id: u64,
     config: &str,
