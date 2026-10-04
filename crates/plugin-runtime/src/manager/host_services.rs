@@ -33,6 +33,17 @@ pub const EXECUTION_STATUS_TIMEOUT_MS: u32 = 5_000;
 /// Bound on retained host sessions for one workspace; ordinary work never approaches this.
 const MAX_HOST_EXECUTIONS: usize = 64;
 
+/// How one provider stands with respect to the contract a caller needs.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ProviderCandidate {
+    /// Package identity, which is what a user's choice names.
+    pub plugin: String,
+    /// Why this provider is not usable, or `None` when it is.
+    pub unavailable: Option<String>,
+    /// Whether a launch in this scope would use this provider right now.
+    pub selected: bool,
+}
+
 /// Version 1 requests carry literal argv and an optional working directory or label.
 ///
 /// The host never composes a shell string here: parameters stay an argument vector so quoting and
@@ -691,6 +702,58 @@ impl Manager {
             }
             std::thread::sleep(std::time::Duration::from_millis(2));
         }
+    }
+
+    /// Every installed plugin that declares a run execution contract, with its availability.
+    ///
+    /// This is descriptive: it never changes which provider is selected and holds no session. A
+    /// provider that is installed but unusable is still listed, because its reason is what a user
+    /// needs to act on and hiding it would make an incomplete choice look like the only one.
+    pub fn execution_providers(&self) -> Vec<ProviderCandidate> {
+        let dependency = execution_dependency().ok();
+        // The selection is asked about the same logical scope a launch would use, so the answer is
+        // what would actually happen rather than what some other scope's preference says.
+        let scope = self.host_scope();
+        let selected = self
+            .plugin_services
+            .lock()
+            .map(|broker| broker.selected_provider(&scope, EXECUTION_CONTRACT))
+            .ok()
+            .flatten();
+        let mut candidates = Vec::new();
+        // The installed registry is what a user's choice names, and it also holds the packages that
+        // are installed but not usable, whose reasons are what the user needs to act on.
+        for installed in self.installed.values() {
+            let Some(declaration) = installed
+                .manifest
+                .plugin_services
+                .provides
+                .get(EXECUTION_CONTRACT)
+            else {
+                continue;
+            };
+            let unavailable = if !installed.enabled {
+                Some("该插件未启用".to_owned())
+            } else if let Some(error) = installed.compatibility_error() {
+                Some(format!("与当前宿主不兼容：{error}"))
+            } else if let Some(error) = &installed.error {
+                Some(format!("插件运行出错：{error}"))
+            } else if let Some(dependency) = &dependency
+                && !dependency.matches(declaration)
+            {
+                Some("声明的执行契约与方法不完整".to_owned())
+            } else {
+                None
+            };
+            let plugin = installed.manifest.id.clone();
+            candidates.push(ProviderCandidate {
+                selected: selected.as_deref() == Some(plugin.as_str()),
+                unavailable,
+                plugin,
+            });
+        }
+        candidates.sort_by(|left, right| left.plugin.cmp(&right.plugin));
+        candidates
     }
 
     /// Ask a session's own provider what became of the program it started.

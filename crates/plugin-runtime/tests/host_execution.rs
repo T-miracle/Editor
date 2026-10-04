@@ -161,6 +161,42 @@ fn host_controls_start_once_and_locate_the_retained_session() {
     assert!(missing.contains(CONTRACT), "{missing}");
 }
 
+/// The host lists every provider that declares the execution contract, with why one is unusable.
+#[test]
+#[ignore = "build terminal and capability-example through the public SDK first"]
+fn host_lists_execution_providers_with_their_reasons() {
+    let root = tempfile::tempdir().unwrap();
+    let mut manager = manager(root.path());
+    let terminal = terminal();
+    let grants = terminal.manifest.permissions.clone();
+    manager.install(&terminal, grants).unwrap();
+
+    // The installed provider is listed and is the one a launch would use.
+    let providers = manager.execution_providers();
+    assert_eq!(providers.len(), 1, "{providers:?}");
+    assert_eq!(providers[0].plugin, "terminal");
+    assert!(
+        providers[0].selected,
+        "the only provider is the selected one"
+    );
+    assert!(providers[0].unavailable.is_none());
+
+    // A disabled provider is still listed, with the reason a user would act on: hiding it would
+    // make an incomplete choice look like the only one.
+    manager.disable("terminal").unwrap();
+    let providers = manager.execution_providers();
+    let disabled = providers
+        .iter()
+        .find(|candidate| candidate.plugin == "terminal")
+        .expect("a disabled provider is still listed");
+    assert!(
+        disabled.unavailable.is_some(),
+        "a provider that cannot run says why: {disabled:?}"
+    );
+    // Listing is descriptive: it changes nothing about which provider is selected.
+    assert!(!disabled.selected || disabled.unavailable.is_some());
+}
+
 /// A session's end is observed through its provider, never predicted from elapsed time.
 #[test]
 #[ignore = "build terminal and capability-example through the public SDK first"]

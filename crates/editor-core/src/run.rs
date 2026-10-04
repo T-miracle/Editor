@@ -7,7 +7,12 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
 mod discovery;
+mod providers;
 mod shared;
+pub use providers::{
+    RUN_PROVIDER_VERSION, RunProviderChoices, RunProviderError, load_providers, providers_path,
+    save_providers,
+};
 mod store;
 pub use discovery::{DiscoveryOutcome, configuration_for, reconcile, repair};
 pub use shared::{

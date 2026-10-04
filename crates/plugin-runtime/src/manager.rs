@@ -21,7 +21,7 @@ mod recovery;
 pub use data_updates::PreparedInstallation;
 pub use host_services::{
     EXECUTION_CONTRACT, EXECUTION_START_TIMEOUT_MS, EXECUTION_STOP_TIMEOUT_MS, ExecutionFailure,
-    ExecutionSnapshot, ExecutionState, HostExecution, RunEnvEntry, RunRequest,
+    ExecutionSnapshot, ExecutionState, HostExecution, ProviderCandidate, RunEnvEntry, RunRequest,
 };
 pub use preparation::InstallationPreparation;
 pub(crate) mod scopes;
