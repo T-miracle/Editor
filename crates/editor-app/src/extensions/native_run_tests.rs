@@ -330,6 +330,136 @@ fn leaving_stops_every_run_session_before_shutdown(cx: &mut TestAppContext) {
     let _ = std::fs::remove_file(stored);
 }
 
+/// Hiding a session's output only hides it: the program keeps running and the session stays active.
+#[gpui::test]
+#[ignore = "build terminal and capability-example through the public SDK first"]
+fn hiding_a_session_output_does_not_stop_its_program(cx: &mut TestAppContext) {
+    let root = tempfile::tempdir().unwrap();
+    let (mut manager, app, cx) = fixture(
+        cx,
+        root.path(),
+        "powershell.exe",
+        vec![
+            "-NoProfile".into(),
+            "-Command".into(),
+            "Start-Sleep -Seconds 60".into(),
+        ],
+    );
+    let mut renderer = images::VectorRenderer::default();
+    cx.update(|window, cx| {
+        app.update(cx, |app, cx| app.start_selected_run(window, cx));
+    });
+    let mut launches = Vec::new();
+    let mut session = None;
+    for _ in 0..200 {
+        pump_recording(&mut manager, &app, cx, &mut launches);
+        manager.poll();
+        publish_with_launches(&mut manager, &mut renderer, &app, cx, &launches);
+        if let Some((id, _, _)) = launches.first()
+            && manager
+                .execution(*id)
+                .is_some_and(|session| session.snapshot().provider_session.is_some())
+        {
+            session = Some(*id);
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    let session = session.expect("one session was started");
+    // The provider asked the editor for its ordinary panel; answering is what makes it appear.
+    let requests = manager
+        .live
+        .get_mut("terminal")
+        .unwrap()
+        .take_editor_requests();
+    assert!(!requests.is_empty());
+    cx.update(|_, cx| {
+        app.read(cx).extensions.clone().update(cx, |owner, cx| {
+            let mut state = owner.worker.state.lock().unwrap();
+            state.editor_requests.extend(
+                requests
+                    .into_iter()
+                    .map(|request| ("terminal".into(), request)),
+            );
+            drop(state);
+            owner.poll(cx);
+        });
+    });
+    for _ in 0..20 {
+        publish_with_launches(&mut manager, &mut renderer, &app, cx, &launches);
+        if cx.debug_bounds("plugin-ui-output").is_some() {
+            break;
+        }
+        cx.run_until_parked();
+    }
+    let running = manager.live["terminal"].process_count();
+    assert_eq!(running, 2, "the program and the provider's own shell");
+    assert!(cx.debug_bounds("plugin-ui-output").is_some());
+
+    // Hiding the output is a presentation choice, made through the host's own panel path.
+    cx.update(|_, cx| {
+        app.update(cx, |app, cx| {
+            app.hide_plugin_panel("terminal", "terminal", cx)
+        });
+    });
+    for _ in 0..20 {
+        manager.poll();
+        publish_with_launches(&mut manager, &mut renderer, &app, cx, &launches);
+        if cx.debug_bounds("plugin-ui-output").is_none() {
+            break;
+        }
+        cx.run_until_parked();
+    }
+    assert!(cx.debug_bounds("plugin-ui-output").is_none());
+    // The program is untouched by hiding: nothing was terminated and the session is still active.
+    assert_eq!(manager.live["terminal"].process_count(), running);
+    assert!(
+        manager.execution(session).unwrap().stoppable(),
+        "a hidden session is still a running program"
+    );
+    let sessions = cx.update(|_, cx| app.read(cx).run_controls.sessions());
+    assert_eq!(sessions.len(), 1);
+    assert!(sessions[0].is_active());
+
+    // The dropdown offers that session again, and selecting it brings its output back.
+    assert!(
+        cx.update(|_, cx| app.read(cx).run_controls.menu_entries().iter().any(
+            |entry| matches!(entry, crate::run::RunMenuEntry::Session { id, .. } if *id == session)
+        ))
+    );
+    cx.update(|window, cx| {
+        app.update(cx, |app, cx| {
+            app.reveal_run_session(session, &sessions[0].config, window, cx);
+        });
+    });
+    for _ in 0..20 {
+        manager.poll();
+        publish_with_launches(&mut manager, &mut renderer, &app, cx, &launches);
+        if cx.debug_bounds("plugin-ui-output").is_some() {
+            break;
+        }
+        cx.run_until_parked();
+    }
+    assert!(
+        cx.debug_bounds("plugin-ui-output").is_some(),
+        "the session's output is recoverable from the dropdown"
+    );
+    // Stopping from here still affects only this session, and only through its provider.
+    manager.stop_execution(session).unwrap();
+    for _ in 0..60 {
+        manager.poll();
+        if manager.live["terminal"].process_count() <= 1 {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    assert_eq!(manager.live["terminal"].process_count(), 1);
+    let stored = cx.update(|_, cx| {
+        editor_core::storage_path(&app.read(cx).workspace_key()).expect("host-local path")
+    });
+    let _ = std::fs::remove_file(stored);
+}
+
 /// Two independent configurations run side by side, each keeping its own session.
 #[gpui::test]
 #[ignore = "build terminal and capability-example through the public SDK first"]
