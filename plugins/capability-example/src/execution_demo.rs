@@ -14,6 +14,17 @@ struct Execution {
     /// Accepted as portable presentation metadata, with no authority or executable meaning.
     #[serde(rename = "name")]
     _name: Option<String>,
+    /// The caller's environment, forwarded as given. This provider adds nothing of its own, so it
+    /// cannot invent a variable a consumer never asked for.
+    #[serde(default)]
+    env: Vec<EnvEntry>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct EnvEntry {
+    name: String,
+    value: String,
 }
 
 /// Return the same creation receipt as any 1.0 provider, without waiting for process exit.
@@ -39,6 +50,12 @@ pub(super) fn execute(call: service::Invocation) -> Result<serde_json::Value, Fa
             args: args.args,
             cwd: args.cwd,
             transport: process::Transport::Stdio,
+            // Forwarded verbatim: whatever the caller asked for, and nothing else.
+            env: args
+                .env
+                .into_iter()
+                .map(|entry| (entry.name, entry.value))
+                .collect(),
         },
     });
     match result {

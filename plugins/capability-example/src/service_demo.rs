@@ -9,6 +9,8 @@ pub(super) struct Client {
     reference: Option<api::ResourceHandle>,
     task: Option<guest::Task>,
     continuation: Option<api::guest::EditorTask>,
+    /// The last answer this consumer received, kept so a caller can read what actually arrived.
+    last: Option<String>,
 }
 impl Client {
     /// Async host results must keep the service's restricted source authority during this continuation.
@@ -65,6 +67,26 @@ impl Client {
                 )?);
                 Ok("Accepted".into())
             }
+            // Call a contract by name rather than one fixed contract, so this consumer can exercise
+            // any versioned service the host offers — including the host's own session contract —
+            // through the same public path a real plugin would use.
+            "service-call-contract" => {
+                if let Some(handle) = self.reference.take() {
+                    api::guest::close_resource(handle)?;
+                }
+                let contract = args["contract"].as_str().ok_or_else(|| {
+                    Failure::new(api::ErrorCode::InvalidRequest, "A contract is required")
+                })?;
+                let reference = guest::open(contract)?;
+                self.reference = Some(reference.clone());
+                self.task = Some(guest::Task::start(
+                    &reference,
+                    args["method"].as_str().unwrap_or("list"),
+                    args["value"].clone(),
+                    args["timeout_ms"].as_u64().unwrap_or(30000) as u32,
+                )?);
+                Ok("Accepted".into())
+            }
             "service-cancel" => Ok(format!(
                 "{:?}",
                 self.task
@@ -72,14 +94,25 @@ impl Client {
                     .ok_or_else(|| Failure::new(api::ErrorCode::InvalidState, "No service call"))?
                     .cancel(api::CancelMode::TryTerminate)?
             )),
+            // A command's answer is what the host shows, so a check can read what this consumer
+            // received without reaching into guest state.
+            "service-last-answer" => Ok(self.last.clone().unwrap_or_default()),
             _ => Ok(String::new()),
         }
     }
     pub(super) fn update(&mut self, event: &service::Notification) -> Option<String> {
-        self.task
+        let text = self
+            .task
             .as_mut()?
             .update(event)
-            .map(|update| serde_json::to_string(&update).unwrap())
+            .map(|update| serde_json::to_string(&update).unwrap())?;
+        self.last = Some(text.clone());
+        Some(text)
+    }
+
+    /// The last answer this consumer received, or `None` while it is still waiting for one.
+    pub(super) fn last_answer(&self) -> Option<&str> {
+        self.last.as_deref()
     }
 }
 
