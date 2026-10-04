@@ -22,12 +22,10 @@ mod recovery;
 pub use data_updates::PreparedInstallation;
 pub use debug_services::{
     DebugAbilities, DebugAnswer, DebugBreakpoint, DebugFrame, DebugSession, DebugState,
-    DebugVariable, MAX_DEBUG_FRAMES, MAX_DEBUG_VARIABLES, debug_dependency_for_test,
-    frames_from_value, variables_from_value,
+    DebugVariable, debug_dependency_for_test, frames_from_value, variables_from_value,
 };
 pub use host_services::{
-    DEBUG_BREAKPOINT_TIMEOUT_MS, DEBUG_CONTRACT, DEBUG_CONTROL_TIMEOUT_MS, DEBUG_START_TIMEOUT_MS,
-    EXECUTION_CONTRACT, EXECUTION_START_TIMEOUT_MS, EXECUTION_STOP_TIMEOUT_MS, ExecutionFailure,
+    DEBUG_CONTRACT, EXECUTION_CONTRACT, EXECUTION_START_TIMEOUT_MS, ExecutionFailure,
     ExecutionSnapshot, ExecutionState, HostExecution, ProviderCandidate, RunEnvEntry, RunRequest,
 };
 pub use preparation::InstallationPreparation;

@@ -14,7 +14,6 @@ use plugin_protocol::{
     service::Dependency,
 };
 use serde_json::Value;
-use std::collections::BTreeMap;
 
 #[cfg(test)]
 #[path = "debug_services_tests.rs"]
