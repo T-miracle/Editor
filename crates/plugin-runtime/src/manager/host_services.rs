@@ -192,6 +192,17 @@ pub enum ExecutionState {
     Failed,
 }
 
+impl ExecutionState {
+    /// The name a consumer sees. These are part of the session contract, so they are stated once.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Starting => "starting",
+            Self::Running => "running",
+            Self::Failed => "failed",
+        }
+    }
+}
+
 /// Why a host session stopped being active, retained for the visible result of a launch.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ExecutionFailure {
@@ -628,6 +639,127 @@ pub(crate) fn session_provider(
 /// Reason a start could not even be requested, before any provider state changed.
 pub(crate) fn start_failure(error: Failure) -> anyhow::Error {
     anyhow::anyhow!("{:?}: {}", error.code, error.message)
+}
+
+/// The four operations the host answers on its session contract, as method names.
+pub(crate) const SESSION_METHODS: [&str; 4] = ["start", "list", "status", "stop"];
+
+/// Answer one call on the host's session contract from the table the title bar reads.
+///
+/// A consumer and the title bar therefore see one session, not two: `start` locates an existing
+/// session with the same identity instead of creating a second one, which is the rule the title bar
+/// already follows, and `list`, `status` and `stop` address that same entry. Nothing here decides
+/// which provider answers — the session records the incarnation it was started under, and stopping
+/// is refused once that incarnation is gone.
+pub(crate) fn session_answer(
+    manager: &mut Manager,
+    caller_scope: &str,
+    method: &str,
+    arguments: &Value,
+) -> Result<Value, Failure> {
+    let missing = |field: &str| {
+        Failure::new(
+            ErrorCode::InvalidRequest,
+            format!("Session method {method} requires {field}"),
+        )
+    };
+    let session_of = |manager: &Manager, arguments: &Value| {
+        let session = arguments
+            .get("session")
+            .and_then(Value::as_str)
+            .ok_or_else(|| missing("session"))?;
+        let id = session
+            .parse::<u64>()
+            .map_err(|_| missing("a numeric session"))?;
+        manager
+            .host_sessions
+            .get(id)
+            .ok_or_else(|| Failure::new(ErrorCode::InvalidHandle, "Unknown session"))
+    };
+    // A caller may only address the workspace it is scoped to; two workspaces never share a table.
+    if caller_scope != manager.host_scope() {
+        return Err(Failure::new(
+            ErrorCode::PermissionDenied,
+            "Session belongs to another workspace",
+        ));
+    }
+    match method {
+        "start" => {
+            let request: RunRequest = serde_json::from_value(arguments.clone())
+                .map_err(|error| Failure::new(ErrorCode::InvalidRequest, error.to_string()))?;
+            request
+                .validate()
+                .map_err(|error| Failure::new(ErrorCode::InvalidRequest, error.message))?;
+            // The rule the title bar follows: a launch that is already known locates its session.
+            let dedup_key = request.dedup_key(None);
+            if let Some(existing) = manager.host_sessions.find(&dedup_key) {
+                let snapshot = existing.snapshot();
+                return Ok(serde_json::json!({
+                    "session": snapshot.id.to_string(),
+                    "state": snapshot.state.as_str(),
+                    "located": true,
+                }));
+            }
+            // A launch nothing can serve is refused as a missing capability, before any session is
+            // recorded: the title bar must not offer to stop a program that was never started. The
+            // reason the listed providers give is what a consumer acts on.
+            let usable = manager
+                .execution_providers()
+                .into_iter()
+                .any(|candidate| candidate.unavailable.is_none());
+            if !usable {
+                return Err(Failure::new(
+                    ErrorCode::CapabilityUnavailable,
+                    format!("No provider can serve {EXECUTION_CONTRACT} in this workspace"),
+                ));
+            }
+            let session = manager
+                .start_execution(request)
+                .map_err(|error| Failure::new(ErrorCode::OperationFailed, format!("{error:#}")))?;
+            let snapshot = session.snapshot();
+            Ok(serde_json::json!({
+                "session": snapshot.id.to_string(),
+                "state": snapshot.state.as_str(),
+                "located": false,
+            }))
+        }
+        "list" => {
+            let sessions = manager
+                .host_sessions
+                .iter()
+                .map(|session| {
+                    let snapshot = session.snapshot();
+                    serde_json::json!({
+                        "session": snapshot.id.to_string(),
+                        "state": snapshot.state.as_str(),
+                    })
+                })
+                .collect::<Vec<_>>();
+            Ok(serde_json::json!({ "sessions": sessions }))
+        }
+        "status" => {
+            let snapshot = session_of(manager, arguments)?.snapshot();
+            Ok(serde_json::json!({
+                "session": snapshot.id.to_string(),
+                "state": snapshot.state.as_str(),
+            }))
+        }
+        "stop" => {
+            let session = session_of(manager, arguments)?;
+            manager
+                .stop_execution(session.id())
+                .map_err(|error| Failure::new(ErrorCode::OperationFailed, format!("{error:#}")))?;
+            let snapshot = session.snapshot();
+            Ok(serde_json::json!({
+                "session": snapshot.id.to_string(),
+                "state": snapshot.state.as_str(),
+            }))
+        }
+        other => Err(Failure::new(
+            ErrorCode::UnsupportedOperation,
+            format!("Unknown session method {other}"),
+        )),
+    }
 }
 
 /// Assemble the broker call for a host start from an already resolved reference.
@@ -1096,5 +1228,76 @@ mod tests {
         // The registration is only as alive as the runtime that owns the sessions.
         alive.store(false, std::sync::atomic::Ordering::Release);
         assert!(!provider.alive.load(std::sync::atomic::Ordering::Acquire));
+    }
+
+    /// The consumer's session surface refuses what it cannot answer, and only for its own workspace.
+    ///
+    /// This is the boundary a consumer meets before any provider is involved: a launch with nothing
+    /// able to serve it is refused rather than recorded, an unknown identity is not answered with a
+    /// different session, another workspace's sessions are not addressable, and a method the host does
+    /// not offer is not guessed at. That the two entry points then share one session entry is checked
+    /// against a real provider in `host_controls_start_once_and_locate_the_retained_session`.
+    #[test]
+    fn the_consumer_session_surface_refuses_what_it_cannot_answer() {
+        use plugin_protocol::api::ErrorCode;
+        let root = tempfile::tempdir().unwrap();
+        let workspace = root.path().join("workspace");
+        std::fs::create_dir_all(&workspace).unwrap();
+        let mut manager = Manager::open(
+            root.path().join("plugins"),
+            plugin_protocol::Environment {
+                workspace: workspace.display().to_string(),
+                os: "windows".into(),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let scope = manager.host_scope().to_owned();
+        // Nothing can serve this launch, so it is refused instead of leaving a failed session that
+        // the title bar would then offer to stop.
+        let refused = session_answer(
+            &mut manager,
+            &scope,
+            "start",
+            &serde_json::json!({"program":"tool.exe","args":[]}),
+        )
+        .unwrap_err();
+        assert_eq!(refused.code, ErrorCode::CapabilityUnavailable);
+        assert!(
+            manager.executions().is_empty(),
+            "a refused launch leaves no session behind"
+        );
+        // An unknown identity is refused rather than answered with whatever else is there.
+        let unknown = session_answer(
+            &mut manager,
+            &scope,
+            "status",
+            &serde_json::json!({"session": "9999"}),
+        )
+        .unwrap_err();
+        assert_eq!(unknown.code, ErrorCode::InvalidHandle);
+        // A missing identity is a malformed request, not an unknown one.
+        let missing =
+            session_answer(&mut manager, &scope, "stop", &serde_json::json!({})).unwrap_err();
+        assert_eq!(missing.code, ErrorCode::InvalidRequest);
+        // Another workspace cannot address this one's sessions, whatever it asks.
+        for method in SESSION_METHODS {
+            let foreign = session_answer(
+                &mut manager,
+                "C:/somewhere-else",
+                method,
+                &serde_json::json!({}),
+            )
+            .unwrap_err();
+            assert_eq!(foreign.code, ErrorCode::PermissionDenied, "{method}");
+        }
+        // A method the host does not offer is refused rather than guessed at.
+        let unsupported =
+            session_answer(&mut manager, &scope, "attach", &serde_json::json!({})).unwrap_err();
+        assert_eq!(unsupported.code, ErrorCode::UnsupportedOperation);
+        // Listing an empty table is an answer, not an error: there is simply nothing running.
+        let empty = session_answer(&mut manager, &scope, "list", &serde_json::json!({})).unwrap();
+        assert_eq!(empty["sessions"].as_array().unwrap().len(), 0);
+        manager.shutdown();
     }
 }
