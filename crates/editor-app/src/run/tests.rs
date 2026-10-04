@@ -24,6 +24,158 @@ fn config(id: &str, name: &str) -> RunConfig {
     }
 }
 
+/// A configuration whose build actions and pre-launch steps are the given edited lines.
+fn with_steps(id: &str, name: &str, build: &str, prelaunch: &str) -> RunConfig {
+    let draft = RunConfigDraft {
+        id: id.into(),
+        name: name.into(),
+        shell: false,
+        program: "app.exe".into(),
+        arguments: String::new(),
+        script: String::new(),
+        directory: None.or(Some(String::new())).unwrap_or_default(),
+        environment: String::new(),
+        tool_paths: String::new(),
+        build: build.into(),
+        prelaunch: prelaunch.into(),
+    };
+    draft
+        .to_config()
+        .expect("the fixture is a valid configuration")
+}
+
+/// A plan runs the configuration's build first, then its steps, then the program.
+#[test]
+fn a_plan_orders_build_steps_program() {
+    let mut controls = controls();
+    controls
+        .upsert(
+            with_steps(
+                "run-1",
+                "运行",
+                "构建 = cargo.exe | build",
+                "生成 = tool.exe | gen",
+            ),
+            "C:/work",
+        )
+        .unwrap();
+    let plan = controls.prepare_launch("run-1", "C:/work", 16).unwrap();
+    assert_eq!(
+        plan.steps.iter().map(|step| step.kind).collect::<Vec<_>>(),
+        vec![StepKind::Build, StepKind::Prelaunch, StepKind::Program]
+    );
+    assert_eq!(plan.steps[0].name, "构建");
+    assert_eq!(plan.steps[1].name, "生成");
+    assert_eq!(plan.steps[2].request.program, "app.exe");
+    // Every step inherits the configuration's launch context, so a build and the program it
+    // prepares cannot disagree about the directory they run in.
+    assert_eq!(plan.steps[0].request.cwd.as_deref(), Some("C:/work"));
+    assert!(plan.launches_program());
+}
+
+/// A step that names another configuration runs that configuration's current build actions.
+#[test]
+fn a_step_that_references_a_build_uses_its_current_definition() {
+    let mut controls = controls();
+    controls
+        .upsert(
+            with_steps("lib", "库配置", "编译库 = cargo.exe | build | -p lib", ""),
+            "C:/work",
+        )
+        .unwrap();
+    controls
+        .upsert(
+            with_steps("run-1", "运行", "", "先建库 = @库配置"),
+            "C:/work",
+        )
+        .unwrap();
+    let plan = controls.prepare_launch("run-1", "C:/work", 16).unwrap();
+    assert_eq!(
+        plan.steps.len(),
+        2,
+        "the reference expands to its own actions"
+    );
+    assert_eq!(plan.steps[0].kind, StepKind::Prelaunch);
+    assert_eq!(plan.steps[0].request.program, "cargo.exe");
+    assert_eq!(plan.steps[0].request.args, vec!["build", "-p lib"]);
+    // The expanded step says which step pulled it in, so a failure names both.
+    assert!(plan.steps[0].name.contains("先建库") && plan.steps[0].name.contains("编译库"));
+
+    // Editing the referenced build changes the next launch without touching the referencing step.
+    controls
+        .upsert(
+            with_steps(
+                "lib",
+                "库配置",
+                "编译库 = cargo.exe | build | --release",
+                "",
+            ),
+            "C:/work",
+        )
+        .unwrap();
+    let again = controls.prepare_launch("run-1", "C:/work", 16).unwrap();
+    assert_eq!(
+        again.steps[0].request.args,
+        vec!["build", "--release"],
+        "the command exists once, so it cannot drift"
+    );
+}
+
+/// A reference that cannot resolve blocks the launch before anything starts.
+#[test]
+fn an_unresolvable_reference_blocks_the_plan() {
+    let mut controls = controls();
+    controls
+        .upsert(
+            with_steps("run-1", "运行", "", "先建库 = @不存在的配置"),
+            "C:/work",
+        )
+        .unwrap();
+    let message = controls
+        .prepare("run-1", "C:/work", 16)
+        .expect_err("a missing referenced configuration is reported");
+    assert!(message.contains("不存在的配置"), "{message}");
+
+    // A configuration cannot reference its own build: that would be a cycle, not a sequence.
+    controls
+        .upsert(
+            with_steps(
+                "run-2",
+                "自引用",
+                "构建 = cargo.exe | build",
+                "自己 = @自引用",
+            ),
+            "C:/work",
+        )
+        .unwrap();
+    let message = controls
+        .prepare("run-2", "C:/work", 16)
+        .expect_err("a self reference is refused");
+    assert!(message.contains("自身"), "{message}");
+}
+
+/// A plan that would grow past its bound is refused rather than run halfway.
+#[test]
+fn a_plan_beyond_its_bound_is_refused() {
+    let mut controls = controls();
+    controls
+        .upsert(
+            with_steps(
+                "run-1",
+                "运行",
+                "一 = cargo.exe | build\n二 = cargo.exe | test",
+                "三 = tool.exe | gen",
+            ),
+            "C:/work",
+        )
+        .unwrap();
+    assert!(controls.prepare("run-1", "C:/work", 3).is_ok());
+    let message = controls
+        .prepare("run-1", "C:/work", 2)
+        .expect_err("a plan past its bound is refused");
+    assert!(message.contains('2'), "{message}");
+}
+
 fn snapshot(
     id: u64,
     config: &str,

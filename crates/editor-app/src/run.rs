@@ -10,10 +10,71 @@ use std::collections::BTreeMap;
 mod ui;
 pub use ui::RunConfigForm;
 pub(crate) use ui::RunMenu;
+mod sequence;
+pub use sequence::{RunSequence, SequenceAction, SequenceStep, StepOutcome, StepState};
 #[cfg(test)]
 mod run_ui_tests;
 #[cfg(test)]
 mod tests;
+
+/// Which part of a launch a prepared step belongs to.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum StepKind {
+    /// A build action: it produces something the program or a later step consumes.
+    Build,
+    /// A step that must succeed before the program itself starts.
+    Prelaunch,
+    /// The program the user asked to run.
+    Program,
+}
+
+impl StepKind {
+    /// The word shown for this phase in status and failure text.
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Build => "构建",
+            Self::Prelaunch => "启动前",
+            Self::Program => "程序",
+        }
+    }
+}
+
+/// One action a launch performs, in the order it must happen.
+///
+/// A step carries the request the provider will receive, so the sequence neither re-composes a
+/// command between steps nor depends on the configuration still being stored when it runs.
+#[derive(Clone, Debug)]
+pub struct PreparedStep {
+    pub kind: StepKind,
+    /// Name shown while the step runs, and in the failure that stops the sequence.
+    pub name: String,
+    /// The configuration whose stored definition produced this step, for de-duplication.
+    pub config: String,
+    pub request: plugin_runtime::RunRequest,
+}
+
+/// Every action one launch performs, in order, ending with the program itself.
+///
+/// The plan is computed once, before anything starts, so a failure while preparing a later step can
+/// never happen halfway through a sequence the user already saw begin.
+#[derive(Clone, Debug)]
+pub struct RunPlan {
+    pub steps: Vec<PreparedStep>,
+}
+
+impl RunPlan {
+    /// The step at this position, if the sequence still has one.
+    pub fn step(&self, index: usize) -> Option<&PreparedStep> {
+        self.steps.get(index)
+    }
+
+    /// Whether this plan starts a program at the end of its sequence.
+    pub fn launches_program(&self) -> bool {
+        self.steps
+            .last()
+            .is_some_and(|step| step.kind == StepKind::Program)
+    }
+}
 
 /// What a launch request should do, decided before any work is requested.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -276,6 +337,152 @@ impl RunControls {
                 .into_iter()
                 .map(|(name, value)| plugin_runtime::RunEnvEntry { name, value })
                 .collect(),
+        })
+    }
+
+    /// Every action a launch performs for one configuration, in order: build, then each pre-launch
+    /// step, then the program.
+    ///
+    /// A step that names another configuration expands that configuration's build actions here, once,
+    /// so the sequence cannot change halfway through a launch. `limit` bounds a plan without a
+    /// program, which is what a build-only request produces.
+    pub fn prepare(&self, id: &str, workspace_root: &str, limit: usize) -> Result<RunPlan, String> {
+        let config = self
+            .configs
+            .configurations
+            .iter()
+            .find(|config| config.id == id)
+            .ok_or_else(|| "运行配置不存在，请重新选择".to_owned())?;
+        let mut steps = Vec::new();
+        // A configuration's own build actions come first: a pre-launch step may then rely on them.
+        for step in &config.build {
+            steps.push(self.action_step(
+                config,
+                StepKind::Build,
+                &step.name,
+                &step.target,
+                workspace_root,
+            )?);
+        }
+        for step in &config.prelaunch {
+            match &step.target {
+                editor_core::StepTarget::Action { target } => {
+                    steps.push(self.action_step(
+                        config,
+                        StepKind::Prelaunch,
+                        &step.name,
+                        &editor_core::StepTarget::Action {
+                            target: target.clone(),
+                        },
+                        workspace_root,
+                    )?);
+                }
+                editor_core::StepTarget::Build { config: name } => {
+                    // A reference is resolved to the referenced configuration's own actions, so the
+                    // command exists once and an edit to it takes effect on the next launch.
+                    let referenced = self
+                        .configs
+                        .configurations
+                        .iter()
+                        .find(|candidate| candidate.name == *name)
+                        .ok_or_else(|| {
+                            format!("启动前步骤 {} 引用的构建配置不存在：{name}", step.name)
+                        })?;
+                    if referenced.id == config.id {
+                        return Err(format!(
+                            "启动前步骤 {} 不能引用当前配置自身的构建",
+                            step.name
+                        ));
+                    }
+                    for action in &referenced.build {
+                        steps.push(self.action_step(
+                            referenced,
+                            StepKind::Prelaunch,
+                            &format!("{} · {}", step.name, action.name),
+                            &action.target,
+                            workspace_root,
+                        )?);
+                    }
+                }
+            }
+        }
+        if limit == 0 || steps.len() > limit {
+            return Err(format!("一次启动的准备步骤不能超过 {limit} 个"));
+        }
+        Ok(RunPlan { steps })
+    }
+
+    /// Every action a launch performs, ending with the program itself.
+    ///
+    /// The program is appended here rather than in [`Self::prepare`], so a build-only request reuses
+    /// the same preparation rules without ever reaching a program step.
+    pub fn prepare_launch(
+        &self,
+        id: &str,
+        workspace_root: &str,
+        limit: usize,
+    ) -> Result<RunPlan, String> {
+        let mut plan = self.prepare(id, workspace_root, limit - 1)?;
+        let config = self
+            .configs
+            .configurations
+            .iter()
+            .find(|config| config.id == id)
+            .ok_or_else(|| "运行配置不存在，请重新选择".to_owned())?;
+        let directory = config
+            .directory
+            .clone()
+            .or_else(|| Some(workspace_root.to_owned()));
+        plan.steps.push(PreparedStep {
+            kind: StepKind::Program,
+            name: config.name.clone(),
+            config: config.id.clone(),
+            request: plugin_runtime::RunRequest {
+                program: config.target.executable().to_owned(),
+                args: config.literal_arguments(),
+                cwd: directory,
+                name: Some(config.name.clone()),
+                env: editor_core::launch_environment(&config.env, &config.tool_paths)
+                    .into_iter()
+                    .map(|(name, value)| plugin_runtime::RunEnvEntry { name, value })
+                    .collect(),
+            },
+        });
+        Ok(plan)
+    }
+
+    /// Build one prepared step for an action, applying the configuration's own launch context.
+    fn action_step(
+        &self,
+        config: &RunConfig,
+        kind: StepKind,
+        name: &str,
+        target: &editor_core::StepTarget,
+        workspace_root: &str,
+    ) -> Result<PreparedStep, String> {
+        let editor_core::StepTarget::Action { target } = target else {
+            return Err(format!("步骤 {name} 不是可直接执行的动作"));
+        };
+        let directory = config
+            .directory
+            .clone()
+            .or_else(|| Some(workspace_root.to_owned()));
+        Ok(PreparedStep {
+            kind,
+            name: name.to_owned(),
+            config: config.id.clone(),
+            request: plugin_runtime::RunRequest {
+                program: target.executable().to_owned(),
+                args: target.arguments().into_iter().map(str::to_owned).collect(),
+                cwd: directory,
+                name: Some(name.to_owned()),
+                // A step runs with the same environment the program will have, so a build and the
+                // program it prepares cannot disagree about which tools they are using.
+                env: editor_core::launch_environment(&config.env, &config.tool_paths)
+                    .into_iter()
+                    .map(|(name, value)| plugin_runtime::RunEnvEntry { name, value })
+                    .collect(),
+            },
         })
     }
 
