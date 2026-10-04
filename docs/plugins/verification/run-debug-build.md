@@ -158,6 +158,17 @@
 
 交付脚本侧的一处修正：`scripts/verify-plugin-sdk.ps1` 原先**无法运行**——它以默认编码读取含非 ASCII 的 fixture 清单（Windows PowerShell 按 ANSI 解码，JSON 解析失败），且在 `$ErrorActionPreference = 'Stop'` 下运行原生命令（Cargo 的 stderr 输出成为终止性错误，脚本在读取退出码之前中止）。修正后脚本完整通过，并以 `Verified public SDK export, repair and independent component build.` 结束；`sdk_distribution -- --ignored` 随之通过。这证明工单 12 第 1 条：访客在仓库之外的临时目录、仅凭公开 SDK 缓存构建成功。
 
+### 工单 08 第 3 条：公开会话边界（实现中）
+
+原状：**不成立**。独立消费者直连 `interactive.execute` 时，会话建在提供者内部，宿主会话表看不见它，因此两个入口**不可能共享去重与归属规则**。按父设计「必要的新接缝放在公开会话边界，供真实宿主和插件消费者共同使用」，正在扩展该边界：
+
+1. **已完成**：宿主作为 broker 参与者发布版本化契约 **`session.host` 1.0.0**（按工作区限定，四个操作 `start`/`list`/`status`/`stop`，各带声明形状；存活标志即运行时标志，注册随运行时消失）。
+2. **已完成**：四个方法由宿主作答，**取自 `host_sessions`——顶栏渲染的同一张表**；`start` 走与顶栏启动**完全相同的 `start_execution`**，去重规则是同一段代码。没有提供者能服务的启动**在记录会话之前**被拒为能力缺失。
+3. **已完成**：broker 把寻址到该契约的调用**派发进宿主自己的会话面**（不再去运行实例里找）；身份精确比较，只有宿主能被路由进宿主自己的面。消费者要求由 `session_dependency` 声明，从宿主公布的同一份声明构造，因此请求宿主没有的操作会在**打开时**而不是调用时被拒。
+4. **未完成**：尚无**真实访客插件**经该契约端到端跑通（需要一个声明 `session.host` 依赖的夹具包），因此第 3 条**仍不算通过**，工单 08 保持打开。
+
+**一处未验证并如实记录**：**伪造宿主身份的拒绝**没有测试。要测它需要构造带伪造提供者的 `Reference`，而 `Reference::revision` **刻意是私有字段**——为让测试能伪造而放开它，恰好会移除被测的那层保护。因此我**删掉了测试而不是去掉不变量**，检查仍在代码里。
+
 ## 未覆盖与限制
 
 - **`editor-app` 整二进制全量运行不可作为判据**（本任务开始前即如此）：`cargo test -p editor-app --bin editor-app` 会让不同用例互相污染宿主内的共享注册表，出现一批失败。**实测对照**：在提交 `3a50511`（本轮工作之前）上单跑 `app::plugins` 已是 `18 passed; 2 failed`，当前为 `19 passed; 1 failed`；且每个失败用例单独运行时都通过（`app::plugins::tests::restricting_startup_withdraws_declarations_before_worker_publication` 单独跑 `ok`）。因此按仓库验证约定使用**按模块过滤**的针对性运行：`run::` 59 项、`extensions::worker` 11 项、`language::code_highlighting` 12 项、`extensions::markdown_tests` 1 项（其余为 ignored）在本轮全绿。这不是本任务引入的缺陷，也不据它宣称通过。
