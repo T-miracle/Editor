@@ -1378,6 +1378,25 @@ impl RunControls {
             .map(|(_, _, verified)| *verified)
     }
 
+    /// The selected configuration's breakpoints in the order they were set.
+    ///
+    /// The panel needs the positions themselves to say which of them the provider bound, and the
+    /// editable field cannot carry that: it is parsed back on every keystroke, so an annotation in it
+    /// would have to survive `parse_breakpoints`. This is the same list the field renders, read
+    /// separately for the part that is evidence rather than input.
+    pub fn debug_breakpoint_positions(&self) -> Vec<(String, u32)> {
+        self.selected()
+            .map(|config| {
+                config
+                    .breakpoints
+                    .entries()
+                    .iter()
+                    .map(|entry| (entry.source.clone(), entry.line))
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
     /// End one configuration's debug session, handing the panel to another if there is one.
     pub fn end_debug_session(&mut self, config: &str) {
         self.debug_sessions.remove(config);

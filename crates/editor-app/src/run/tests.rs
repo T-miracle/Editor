@@ -2140,6 +2140,40 @@ fn breakpoints_are_requested_for_the_session_not_a_pause() {
     let _ = DebugSessionState::Running;
 }
 
+/// The panel lists the selected configuration's positions, from the configuration's own set.
+///
+/// This is the same list the editable field renders, read separately for the part that is evidence:
+/// what the provider bound cannot travel in the field, because the field is parsed back on every
+/// keystroke and an annotation would have to survive the parser. The order is the model's, not one this
+/// view imposes — a first version of this check asserted insertion order and was wrong about that.
+#[test]
+fn the_panel_lists_the_selected_configurations_breakpoints() {
+    let workspace = "C:/work".to_owned();
+    // With no configuration at all there is nothing to list, which is not an error.
+    let mut without = controls();
+    assert!(without.debug_breakpoint_positions().is_empty());
+    without.remove("run-1", &workspace).unwrap();
+    assert!(without.debug_breakpoint_positions().is_empty());
+
+    let mut controls = controls();
+    let mut stored = config("run-1", "第一个");
+    stored.breakpoints.insert("src/main.rs", 4).unwrap();
+    stored.breakpoints.insert("src/lib.rs", 12).unwrap();
+    controls.upsert(stored, &workspace).unwrap();
+    // The panel lists the selected configuration's positions, so the selection is stated rather than
+    // assumed.
+    controls.select("run-1", &workspace);
+
+    // The positions come from the configuration's own set, which keeps them ordered by source; the
+    // panel and the field therefore agree without either imposing an order of its own.
+    assert_eq!(
+        controls.debug_breakpoint_positions(),
+        vec![("src/lib.rs".to_owned(), 12), ("src/main.rs".to_owned(), 4)]
+    );
+    // Nothing has been asked of a provider yet, so every position waits.
+    assert_eq!(controls.debug_breakpoint_verified("src/main.rs", 4), None);
+}
+
 fn snapshot(
     id: u64,
     config: &str,

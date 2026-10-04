@@ -2596,6 +2596,28 @@ pub(crate) fn render_run_config_form(
                     inspection =
                         inspection.child(div().child("另一个调试会话已暂停，视图未自动跳转"));
                 }
+                // Where the debugger will actually stop, which the editable field cannot say: what the
+                // provider bound is evidence, not input. A position no answer has covered is reported
+                // as waiting rather than as bound, because the two look identical until a debugger
+                // confirms one — and a breakpoint the provider refused is the one case the user has to
+                // act on.
+                let positions = app.read(cx).run_controls.debug_breakpoint_positions();
+                if !positions.is_empty() {
+                    let controls = app.read(cx);
+                    let mut listed = div().debug_selector(|| "run-debug-breakpoints".into());
+                    for (source, line) in positions {
+                        let status = match controls
+                            .run_controls
+                            .debug_breakpoint_verified(&source, line)
+                        {
+                            Some(true) => "已绑定",
+                            Some(false) => "提供者未能绑定",
+                            None => "等待确认",
+                        };
+                        listed = listed.child(div().child(format!("{source}:{line}（{status}）")));
+                    }
+                    inspection = inspection.child(listed);
+                }
                 page.child(session).child(inspection)
             })
             .when_some(error, |form, message| {
