@@ -269,7 +269,10 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         let sdk = prepare_cache(root.path()).unwrap();
         for (relative, bytes) in SDK_FILES {
-            assert_eq!(std::fs::read(sdk.join(relative)).unwrap(), payload(relative, bytes));
+            assert_eq!(
+                std::fs::read(sdk.join(relative)).unwrap(),
+                payload(relative, bytes)
+            );
         }
         let manifest = sdk.join("Cargo.toml");
         let modified = manifest.metadata().unwrap().modified().unwrap();
@@ -279,7 +282,10 @@ mod tests {
         std::fs::remove_file(sdk.join("wit/plugin.wit")).unwrap();
         prepare_cache(root.path()).unwrap();
         for (relative, bytes) in SDK_FILES {
-            assert_eq!(std::fs::read(sdk.join(relative)).unwrap(), payload(relative, bytes));
+            assert_eq!(
+                std::fs::read(sdk.join(relative)).unwrap(),
+                payload(relative, bytes)
+            );
         }
     }
 
@@ -303,7 +309,8 @@ mod tests {
 
     #[test]
     fn frontmatter_stripping_leaves_other_text_alone() {
-        let with_frontmatter = b"---\ntitle: Example\nalternate: /en/x/\n---\n\n# Heading\n\nBody.\n";
+        let with_frontmatter =
+            b"---\ntitle: Example\nalternate: /en/x/\n---\n\n# Heading\n\nBody.\n";
         assert_eq!(
             String::from_utf8(payload("DOC.md", with_frontmatter)).unwrap(),
             "# Heading\n\nBody.\n"
