@@ -2009,6 +2009,60 @@ fn following_a_pause_is_decided_once_per_pause() {
     assert!(controls.take_debug_position_to_follow());
 }
 
+/// A preparation whose step has no session yet is still visible as work in flight.
+///
+/// Written while looking for a gap in `has_work_in_flight` and kept because it found the opposite: the
+/// pending-launch list already covers a preparation from the moment its sequence begins, which is why
+/// the extra "a sequence is active" condition I first added here turned out to be redundant and was
+/// removed. The check states the guarantee and its reason rather than the change I expected to need —
+/// a step that has not reached a provider has no session, so only the pending launch can account for it.
+#[test]
+fn a_preparation_without_a_session_is_still_work_in_flight() {
+    let mut controls = controls();
+    let workspace = "C:/work".to_owned();
+    controls
+        .upsert(config("run-1", "第一个"), &workspace)
+        .unwrap();
+    // Nothing has happened, so there is nothing to ask about.
+    assert!(!controls.has_work_in_flight());
+
+    // A composed plan for the configuration, begun without any session published yet.
+    let plan = controls
+        .prepare_launch("run-1", &workspace, 16)
+        .expect("the plan is usable");
+    let request_id = controls.begin("run-1");
+    controls.begin_sequence("run-1", plan, request_id);
+    let sequence = controls.preparation("run-1").expect("the sequence began");
+    assert!(
+        sequence.current_session().is_none(),
+        "the premise: a preparation whose step has not reached a provider has no session"
+    );
+    assert!(
+        controls.active_sessions().is_empty(),
+        "and therefore contributes no active session, so only the pending launch accounts for it"
+    );
+    assert!(
+        controls.has_work_in_flight(),
+        "the preparation is still work in flight"
+    );
+
+    // Asking it to stop is what the leave confirmation does, and it blocks the launch for good.
+    let stopped = controls.stop_preparations();
+    assert_eq!(
+        stopped.len(),
+        1,
+        "the preparing configuration was asked to stop"
+    );
+    assert!(
+        controls
+            .preparation("run-1")
+            .expect("still recorded")
+            .blocked_by()
+            .is_some(),
+        "and the launch is blocked rather than left to start its program"
+    );
+}
+
 fn snapshot(
     id: u64,
     config: &str,

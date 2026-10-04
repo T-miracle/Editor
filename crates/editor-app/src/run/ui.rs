@@ -770,6 +770,19 @@ impl EditorApp {
 
     /// Leave after stopping every run session through the provider that owns it.
     pub(crate) fn confirm_leave(&mut self, cx: &mut Context<Self>) {
+        // A preparation is asked to stop as a sequence, not as a program: its step may not have a
+        // session yet, and one asked to stop must not be followed by the program it was preparing.
+        for (config, session) in self.run_controls.stop_preparations() {
+            let Some(session) = session else {
+                continue;
+            };
+            let request_id = self.run_controls.begin_stop(&config, session);
+            let _ = self.extensions.read(cx).stage_host_run(Work::StopRun {
+                session,
+                config,
+                request_id,
+            });
+        }
         // Stopping is requested per session; the window does not wait for each answer, because a
         // provider that has already exited cannot answer and the host is leaving anyway.
         for session in self.run_controls.active_sessions() {
