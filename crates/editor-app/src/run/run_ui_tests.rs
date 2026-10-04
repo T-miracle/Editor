@@ -27,6 +27,8 @@ fn store_configuration(workspace_key: &str, name: &str) -> std::path::PathBuf {
         directory: None,
         env: Default::default(),
         tool_paths: Default::default(),
+        build: Default::default(),
+        prelaunch: Default::default(),
         local: true,
     })
     .unwrap();
@@ -89,7 +91,7 @@ fn the_run_configuration_dialog_owns_a_b1_draft(cx: &mut TestAppContext) {
             )
         })
     });
-    // The four tabs the prototype promises exist; only the pages this slice implements are enabled.
+    // The four tabs the prototype promises exist; the debug page is still to come.
     let tabs = cx.update(|window, cx| {
         let _ = window;
         form.read(cx)
@@ -102,7 +104,8 @@ fn the_run_configuration_dialog_owns_a_b1_draft(cx: &mut TestAppContext) {
         tabs,
         vec![
             ("基本".to_owned(), true),
-            ("构建".to_owned(), false),
+            // The build page edits the same stored configuration, so this slice implements it.
+            ("构建".to_owned(), true),
             ("调试".to_owned(), false),
             // The environment page edits the same stored configuration, so this slice implements it.
             ("环境".to_owned(), true),
@@ -127,7 +130,9 @@ fn the_run_configuration_dialog_owns_a_b1_draft(cx: &mut TestAppContext) {
             "脚本文本",
             "工作目录",
             "环境变量（每行 名称=值）",
-            "本机工具路径（每行一个目录，优先于继承的 PATH）"
+            "本机工具路径（每行一个目录，优先于继承的 PATH）",
+            "构建操作（每行 名称 = 程序 | 参数）",
+            "启动前步骤（每行 名称 = 程序 | 参数，顺序执行）"
         ]
     );
     // A new draft starts empty, on the basic page, with nothing to report yet.

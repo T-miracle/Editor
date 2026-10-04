@@ -56,7 +56,9 @@ impl RunTarget {
         }
     }
     /// The complete literal argument vector, including a script body for interpreter mode.
-    fn arguments(&self) -> Vec<&str> {
+    ///
+    /// Public so a caller can show or store exactly what will be passed, without re-deriving it.
+    pub fn arguments(&self) -> Vec<&str> {
         match self {
             Self::Program { args, .. } => args.iter().map(String::as_str).collect(),
             Self::Script { args, script, .. } => args
@@ -90,9 +92,69 @@ pub struct RunConfig {
     /// changes the editor, the plugin platform or any other program's search order.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub tool_paths: Vec<String>,
+    /// The configuration's own build actions, kept apart from starting the program.
+    ///
+    /// Build is a separate operation so Build can run without launching, and Launch can require it
+    /// without duplicating the command.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub build: Vec<RunStep>,
+    /// Steps that run in order before the program starts, each of which must succeed.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub prelaunch: Vec<RunStep>,
     /// Local-only configurations never modify project files; sharing is an explicit user action.
     #[serde(default = "crate::run::default_local")]
     pub local: bool,
+}
+
+/// One prepared action: a program, or an explicitly chosen interpreter running a script.
+///
+/// A step reuses the launch target so a build command is validated and stored by the same rules as
+/// a program the user starts directly, instead of a second, weaker grammar.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RunStep {
+    /// Shown while the step runs, and in the failure that stops the sequence.
+    pub name: String,
+    pub target: RunTarget,
+}
+
+/// Bound on prepared actions per list; the build page is a short sequence, not a task system.
+pub const MAX_RUN_STEPS: usize = 16;
+const MAX_STEP_NAME_BYTES: usize = 128;
+
+impl RunStep {
+    /// Validate a prepared action by the same rules the launch target obeys.
+    fn validate(&self) -> Result<(), RunConfigError> {
+        if self.name.trim().is_empty() {
+            return Err(RunConfigError::EmptyStepName);
+        }
+        if self.name.len() > MAX_STEP_NAME_BYTES {
+            return Err(RunConfigError::StepNameTooLong);
+        }
+        validate_target(&self.target)
+    }
+}
+
+/// The program or interpreter a target starts, with its bounded literal arguments.
+fn validate_target(target: &RunTarget) -> Result<(), RunConfigError> {
+    let executable = target.executable();
+    if executable.trim().is_empty() {
+        return Err(RunConfigError::EmptyProgram);
+    }
+    if executable.len() > MAX_PROGRAM_BYTES || executable.contains('\0') {
+        return Err(RunConfigError::ProgramTooLong);
+    }
+    let arguments = target.arguments();
+    if arguments.len() > MAX_RUN_ARGUMENTS {
+        return Err(RunConfigError::TooManyArguments);
+    }
+    if arguments
+        .iter()
+        .any(|argument| argument.len() > MAX_ARGUMENT_BYTES || argument.contains('\0'))
+    {
+        return Err(RunConfigError::ArgumentTooLong);
+    }
+    Ok(())
 }
 
 /// Sharing is off unless the user opts in, including for files written by older versions.
@@ -163,6 +225,11 @@ pub enum RunConfigError {
     InvalidToolPath {
         path: String,
     },
+    /// More prepared actions than one configuration may hold.
+    TooManySteps,
+    /// A prepared action without a name to show while it runs.
+    EmptyStepName,
+    StepNameTooLong,
     /// The identifier is empty or duplicated inside one set.
     InvalidIdentity {
         id: String,
@@ -202,6 +269,9 @@ impl std::fmt::Display for RunConfigError {
             Self::InvalidToolPath { path } => {
                 write!(formatter, "Invalid tool directory: {path}")
             }
+            Self::TooManySteps => write!(formatter, "Too many build or pre-launch steps"),
+            Self::EmptyStepName => write!(formatter, "A build or pre-launch step needs a name"),
+            Self::StepNameTooLong => write!(formatter, "A step name is too long"),
             Self::InvalidIdentity { id } => write!(formatter, "Invalid run configuration id: {id}"),
         }
     }
@@ -223,22 +293,12 @@ impl RunConfig {
         if self.name.len() > MAX_NAME_BYTES {
             return Err(RunConfigError::NameTooLong);
         }
-        let executable = self.target.executable();
-        if executable.trim().is_empty() {
-            return Err(RunConfigError::EmptyProgram);
+        validate_target(&self.target)?;
+        if self.build.len() > MAX_RUN_STEPS || self.prelaunch.len() > MAX_RUN_STEPS {
+            return Err(RunConfigError::TooManySteps);
         }
-        if executable.len() > MAX_PROGRAM_BYTES || executable.contains('\0') {
-            return Err(RunConfigError::ProgramTooLong);
-        }
-        let arguments = self.target.arguments();
-        if arguments.len() > MAX_RUN_ARGUMENTS {
-            return Err(RunConfigError::TooManyArguments);
-        }
-        if arguments
-            .iter()
-            .any(|argument| argument.len() > MAX_ARGUMENT_BYTES || argument.contains('\0'))
-        {
-            return Err(RunConfigError::ArgumentTooLong);
+        for step in self.build.iter().chain(self.prelaunch.iter()) {
+            step.validate()?;
         }
         if let Some(directory) = &self.directory {
             if directory.len() > MAX_DIRECTORY_BYTES || directory.contains('\0') {

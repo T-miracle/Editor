@@ -16,6 +16,8 @@ fn program_config(id: &str, name: &str) -> RunConfig {
         directory: Some("C:/work".into()),
         env: Default::default(),
         tool_paths: Default::default(),
+        build: Default::default(),
+        prelaunch: Default::default(),
         local: true,
     }
 }
@@ -170,6 +172,8 @@ fn program_arguments_are_never_reinterpreted_as_a_shell_command() {
         directory: None,
         env: Default::default(),
         tool_paths: Default::default(),
+        build: Default::default(),
+        prelaunch: Default::default(),
         local: true,
     };
     configuration.validate().unwrap();

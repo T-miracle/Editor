@@ -18,6 +18,8 @@ fn config(id: &str, name: &str) -> RunConfig {
         directory: None,
         env: Default::default(),
         tool_paths: Default::default(),
+        build: Default::default(),
+        prelaunch: Default::default(),
         local: true,
     }
 }
@@ -281,6 +283,9 @@ fn drafts_preserve_argument_boundaries() {
         arguments: "--flag\nC:/path with spaces/file.txt\n".into(),
         directory: " C:/work ".into(),
         tool_paths: String::new(),
+        // One prepared action per line: a name, then the program, then its literal arguments.
+        build: "构建 = cargo.exe | build".into(),
+        prelaunch: "生成代码 = tool.exe | gen | --out dir with spaces".into(),
         // Values keep everything after the first `=`, including spaces and further equals signs.
         environment: "APP_MODE=dev\nTOKEN=a=b c\nEMPTY=\n".into(),
     };
@@ -322,6 +327,88 @@ fn drafts_preserve_argument_boundaries() {
     );
 }
 
+/// Prepared actions keep their name, program and literal arguments across an edit.
+#[test]
+fn prepared_actions_round_trip_through_the_edited_form() {
+    let draft = RunConfigDraft {
+        id: "run-1".into(),
+        name: "构建".into(),
+        shell: false,
+        program: "app.exe".into(),
+        arguments: String::new(),
+        script: String::new(),
+        directory: String::new(),
+        environment: String::new(),
+        tool_paths: String::new(),
+        build: "构建 = cargo.exe | build | --release".into(),
+        // A value containing spaces stays one argument, because the separator is the only split.
+        prelaunch: "生成 = tool.exe | gen | --out dir with spaces\n复制 = copy.exe | a b".into(),
+    };
+    let configuration = draft.to_config().expect("the draft is usable");
+    assert_eq!(configuration.build.len(), 1);
+    assert_eq!(configuration.build[0].name, "构建");
+    assert_eq!(
+        configuration.build[0].target.arguments(),
+        vec!["build", "--release"]
+    );
+    assert_eq!(configuration.prelaunch.len(), 2);
+    assert_eq!(
+        configuration.prelaunch[1].target.arguments(),
+        vec!["a b"],
+        "a space is not a separator"
+    );
+    configuration
+        .validate()
+        .expect("prepared actions are valid");
+
+    // Reopening shows the same lines and produces the same actions.
+    let reopened = RunConfigDraft::from_config(Some(&configuration), "run-1".into());
+    assert_eq!(
+        reopened.build, "构建 = cargo.exe | build | --release",
+        "the rendered line is the line the user edits"
+    );
+    assert_eq!(reopened.to_config().unwrap().build, configuration.build);
+    assert_eq!(
+        reopened.to_config().unwrap().prelaunch,
+        configuration.prelaunch
+    );
+}
+
+/// A malformed prepared action is refused where the user can correct it.
+#[test]
+fn malformed_prepared_actions_are_refused() {
+    let base = RunConfigDraft {
+        id: "run-1".into(),
+        name: "构建".into(),
+        shell: false,
+        program: "app.exe".into(),
+        arguments: String::new(),
+        script: String::new(),
+        directory: String::new(),
+        environment: String::new(),
+        tool_paths: String::new(),
+        build: "没有等号".into(),
+        prelaunch: String::new(),
+    };
+    assert!(base.to_config().is_err());
+    let nameless = RunConfigDraft {
+        build: " = cargo.exe | build".into(),
+        ..base
+    };
+    assert!(nameless.to_config().is_err());
+    let empty_program = RunConfigDraft {
+        build: "构建 = ".into(),
+        ..nameless
+    };
+    assert!(empty_program.to_config().is_err());
+    // Blank lines are simply absent actions rather than errors.
+    let padded = RunConfigDraft {
+        build: "\n构建 = cargo.exe | build\n\n".into(),
+        ..empty_program
+    };
+    assert_eq!(padded.to_config().unwrap().build.len(), 1);
+}
+
 /// A malformed environment line is refused where the user can correct it.
 #[test]
 fn a_malformed_environment_line_is_refused() {
@@ -335,6 +422,8 @@ fn a_malformed_environment_line_is_refused() {
         directory: String::new(),
         environment: "没有等号".into(),
         tool_paths: String::new(),
+        build: String::new(),
+        prelaunch: String::new(),
     };
     let error = base.to_config().expect_err("a line without '=' is refused");
     assert!(error.contains("名称=值"), "{error}");
@@ -360,6 +449,8 @@ fn shell_mode_names_an_interpreter_and_passes_the_script_verbatim() {
         directory: String::new(),
         environment: String::new(),
         tool_paths: String::new(),
+        build: String::new(),
+        prelaunch: String::new(),
     };
     let configuration = draft.to_config().expect("the draft is usable");
     assert_eq!(configuration.target.executable(), "pwsh.exe");

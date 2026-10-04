@@ -55,6 +55,8 @@ fn fixture<'a>(
         directory: None,
         env: Default::default(),
         tool_paths: Default::default(),
+        build: Default::default(),
+        prelaunch: Default::default(),
         local: true,
     })
     .unwrap();
@@ -492,6 +494,8 @@ fn two_configurations_run_concurrently_with_their_own_sessions(cx: &mut TestAppC
                 directory: None,
                 env: Default::default(),
                 tool_paths: Default::default(),
+                build: Default::default(),
+                prelaunch: Default::default(),
                 local: true,
             };
             app.run_controls.upsert(configuration, &key).unwrap();
@@ -752,6 +756,8 @@ fn a_configuration_environment_reaches_the_program_it_starts(cx: &mut TestAppCon
                         directory: None,
                         env: Default::default(),
                         tool_paths: Default::default(),
+                        build: Default::default(),
+                        prelaunch: Default::default(),
                         local: true,
                     },
                     &key,
@@ -826,6 +832,8 @@ fn a_shell_configuration_runs_its_script_through_the_named_interpreter(cx: &mut 
                 directory: String::new(),
                 environment: String::new(),
                 tool_paths: String::new(),
+                build: String::new(),
+                prelaunch: String::new(),
             };
             app.run_controls
                 .upsert(draft.to_config().expect("the draft is valid"), &key)

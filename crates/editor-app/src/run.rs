@@ -522,6 +522,10 @@ pub struct RunConfigDraft {
     pub environment: String,
     /// Tool directories searched before the inherited path, one per line.
     pub tool_paths: String,
+    /// Build actions as `名称 = 程序或解释器 | 参数 | 脚本`, one per line.
+    pub build: String,
+    /// Steps that run in order before the program, in the same line form as the build actions.
+    pub prelaunch: String,
 }
 
 impl RunConfigDraft {
@@ -545,6 +549,8 @@ impl RunConfigDraft {
                 directory: config.directory.clone().unwrap_or_default(),
                 environment: render_environment(&config.env),
                 tool_paths: config.tool_paths.join("\n"),
+                build: render_steps(&config.build),
+                prelaunch: render_steps(&config.prelaunch),
             },
             None => Self {
                 id,
@@ -556,6 +562,8 @@ impl RunConfigDraft {
                 directory: String::new(),
                 environment: String::new(),
                 tool_paths: String::new(),
+                build: String::new(),
+                prelaunch: String::new(),
             },
         }
     }
@@ -598,9 +606,65 @@ impl RunConfigDraft {
                 .filter(|line| !line.is_empty())
                 .map(str::to_owned)
                 .collect(),
+            build: parse_steps(&self.build)?,
+            prelaunch: parse_steps(&self.prelaunch)?,
             local: true,
         })
     }
+}
+
+/// Read one prepared action per line: `名称 = 程序或解释器 | 参数 | 参数`.
+///
+/// The name comes first so a failure can say which step stopped the sequence, and arguments stay
+/// separate items rather than one command line, exactly as the stored action is defined.
+pub fn parse_steps(text: &str) -> Result<Vec<editor_core::RunStep>, String> {
+    let mut steps = Vec::new();
+    for line in text.lines() {
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        let Some((name, rest)) = line.split_once('=') else {
+            return Err(format!("步骤需要写成 名称 = 程序 | 参数：{line}"));
+        };
+        let name = name.trim();
+        if name.is_empty() {
+            return Err(format!("步骤缺少名称：{line}"));
+        }
+        let mut parts = rest.split('|').map(str::trim);
+        let executable = parts.next().unwrap_or_default();
+        if executable.is_empty() {
+            return Err(format!("步骤缺少要运行的程序：{line}"));
+        }
+        let arguments = parts
+            .map(str::to_owned)
+            .filter(|argument| !argument.is_empty())
+            .collect::<Vec<_>>();
+        steps.push(editor_core::RunStep {
+            name: name.to_owned(),
+            target: RunTarget::Program {
+                program: executable.to_owned(),
+                args: arguments,
+            },
+        });
+    }
+    Ok(steps)
+}
+
+/// Render stored actions back into the one-per-line form the field edits.
+pub fn render_steps(steps: &[editor_core::RunStep]) -> String {
+    steps
+        .iter()
+        .map(|step| {
+            let mut line = format!("{} = {}", step.name, step.target.executable());
+            for argument in step.target.arguments() {
+                line.push_str(" | ");
+                line.push_str(argument);
+            }
+            line
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 /// Read one `NAME=VALUE` entry per line, refusing anything that is not an environment entry.

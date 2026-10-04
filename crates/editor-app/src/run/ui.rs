@@ -60,7 +60,7 @@ impl RunConfigTab {
     fn hint(self) -> &'static str {
         match self {
             Self::Basic => "名称、程序、参数与工作目录",
-            Self::Build => "构建操作与启动前步骤随后续工单提供",
+            Self::Build => "构建操作与启动前步骤：前者可只构建，后者在启动前按顺序执行",
             Self::Debug => "调试提供者与断点设置随后续工单提供",
             Self::Environment => "本配置的环境变量，每行一个 名称=值",
         }
@@ -68,8 +68,8 @@ impl RunConfigTab {
 
     /// Tabs whose settings are not implemented yet are shown disabled instead of pretending.
     fn available(self) -> bool {
-        // The environment page edits the same stored configuration, so it is part of this slice.
-        matches!(self, Self::Basic | Self::Environment)
+        // Basic, environment and build all edit one stored configuration; only debug is still to come.
+        matches!(self, Self::Basic | Self::Environment | Self::Build)
     }
 }
 
@@ -83,10 +83,12 @@ enum RunField {
     Directory,
     Environment,
     ToolPaths,
+    Build,
+    Prelaunch,
 }
 
 impl RunField {
-    const ALL: [Self; 7] = [
+    const ALL: [Self; 9] = [
         Self::Name,
         Self::Program,
         Self::Arguments,
@@ -94,6 +96,8 @@ impl RunField {
         Self::Directory,
         Self::Environment,
         Self::ToolPaths,
+        Self::Build,
+        Self::Prelaunch,
     ];
 
     fn label(self) -> &'static str {
@@ -106,6 +110,8 @@ impl RunField {
             Self::Directory => "工作目录",
             Self::Environment => "环境变量（每行 名称=值）",
             Self::ToolPaths => "本机工具路径（每行一个目录，优先于继承的 PATH）",
+            Self::Build => "构建操作（每行 名称 = 程序 | 参数）",
+            Self::Prelaunch => "启动前步骤（每行 名称 = 程序 | 参数，顺序执行）",
         }
     }
 
@@ -118,6 +124,8 @@ impl RunField {
             Self::Directory => "run-config-directory",
             Self::Environment => "run-config-environment",
             Self::ToolPaths => "run-config-tool-paths",
+            Self::Build => "run-config-build",
+            Self::Prelaunch => "run-config-prelaunch",
         }
     }
 
@@ -130,6 +138,8 @@ impl RunField {
             Self::Directory => draft.directory.clone(),
             Self::Environment => draft.environment.clone(),
             Self::ToolPaths => draft.tool_paths.clone(),
+            Self::Build => draft.build.clone(),
+            Self::Prelaunch => draft.prelaunch.clone(),
         }
     }
 
@@ -142,6 +152,8 @@ impl RunField {
             Self::Directory => draft.directory = value,
             Self::Environment => draft.environment = value,
             Self::ToolPaths => draft.tool_paths = value,
+            Self::Build => draft.build = value,
+            Self::Prelaunch => draft.prelaunch = value,
         }
     }
 }
@@ -1115,7 +1127,9 @@ fn render_run_config_form(
         .collect::<Vec<_>>();
 
     // The environment page edits its own field; the basic page shows the launch settings.
-    let page_fields: &[RunField] = if tab == RunConfigTab::Environment {
+    let page_fields: &[RunField] = if tab == RunConfigTab::Build {
+        &[RunField::Build, RunField::Prelaunch]
+    } else if tab == RunConfigTab::Environment {
         &[RunField::Environment, RunField::ToolPaths]
     } else {
         // Shell mode replaces the program field's meaning and adds the script body.
