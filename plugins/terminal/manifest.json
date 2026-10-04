@@ -1,7 +1,7 @@
 {
   "id": "terminal",
   "name": "终端",
-  "version": "0.9.0",
+  "version": "0.10.0",
   "protocol": 7,
   "api": {
     "base": "^1",
@@ -12,7 +12,7 @@
     }
   },
   "data_format": {"version": 1, "migration_hook": true},
-  "plugin_services": {"provides": {"interactive.execute": {"version":"1.2.0", "methods": {
+  "plugin_services": {"provides": {"interactive.execute": {"version":"1.3.0", "methods": {
     "execute": {
       "parameters":{"type":"record", "fields":{
         "program":{"type":"string","max_bytes":4096},
@@ -37,6 +37,17 @@
         "session":{"type":"string","max_bytes":128},
         "state":{"type":"string","max_bytes":32}
       }},
+      "permissions":["process.exec"]
+    },
+    "status": {
+      "parameters":{"type":"record", "fields":{
+        "session":{"type":"string","max_bytes":128}
+      }},
+      "result":{"type":"record","fields":{
+        "session":{"type":"string","max_bytes":128},
+        "state":{"type":"string","max_bytes":32},
+        "code":{"type":"integer","min":0,"max":2147483647}
+      }, "optional":["code"]},
       "permissions":["process.exec"]
     }
   }}}},

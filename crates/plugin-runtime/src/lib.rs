@@ -19,6 +19,9 @@ pub use logs::{LogLevel, LogRecord, RuntimeLogs};
 mod request_state;
 pub use document_events::DocumentEvents;
 pub use editor_requests::EditorRequest;
+/// A caller-owned gate for one request; public so a host caller can await its own answer.
+pub use plugin_protocol::api::RequestUpdate;
+pub use request_state::Completion;
 mod instance;
 mod language_service;
 pub use language_service::{LanguageService, ServiceProcess};

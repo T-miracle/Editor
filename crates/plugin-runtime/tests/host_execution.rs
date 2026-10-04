@@ -9,7 +9,10 @@
 #[allow(dead_code)]
 mod packages;
 use packages::CONTRACT;
-use plugin_runtime::{ExecutionState, Manager, Package, RunRequest};
+use plugin_runtime::{
+    ExecutionState, Manager, Package, RunRequest, plugin_protocol::api::RequestUpdate,
+};
+use serde_json::Value;
 use std::{
     path::Path,
     time::{Duration, Instant},
@@ -94,6 +97,7 @@ fn host_controls_start_once_and_locate_the_retained_session() {
         ],
         cwd: Some(root.path().display().to_string()),
         name: Some("宿主运行".into()),
+        env: Vec::new(),
     };
     let session = manager.start_execution(request.clone()).unwrap();
     assert_eq!(session.plugin(), "terminal");
@@ -150,10 +154,68 @@ fn host_controls_start_once_and_locate_the_retained_session() {
             args: vec!["-NoProfile".into()],
             cwd: None,
             name: None,
+            env: Vec::new(),
         })
         .unwrap_err()
         .to_string();
     assert!(missing.contains(CONTRACT), "{missing}");
+}
+
+/// A session's end is observed through its provider, never predicted from elapsed time.
+#[test]
+#[ignore = "build terminal and capability-example through the public SDK first"]
+fn host_observes_a_program_exit_through_its_provider() {
+    let root = tempfile::tempdir().unwrap();
+    let mut manager = manager(root.path());
+    let package = terminal();
+    let grants = package.manifest.permissions.clone();
+    manager.install(&package, grants).unwrap();
+    // A program that ends on its own, so the observation is of a real exit rather than a stop.
+    let request = RunRequest {
+        program: "powershell.exe".into(),
+        args: vec!["-NoProfile".into(), "-Command".into(), "exit 7".into()],
+        cwd: Some(root.path().display().to_string()),
+        name: Some("会退出".into()),
+        env: Vec::new(),
+    };
+    let session = manager.start_execution(request).unwrap();
+    let running = wait_until(
+        &mut manager,
+        |manager| manager.execution(session.id()).unwrap().snapshot().state,
+        |state| *state == ExecutionState::Running,
+    );
+    assert_eq!(running, ExecutionState::Running);
+    assert!(reveal_panel(&mut manager) >= 1);
+
+    // Polling the provider is what turns "the program is gone" into a fact with a status.
+    let mut observed = None;
+    let deadline = Instant::now() + Duration::from_secs(30);
+    while observed.is_none() && Instant::now() < deadline {
+        manager.poll();
+        let query = manager.query_execution(session.id()).unwrap();
+        manager.poll();
+        if let RequestUpdate::Completed { result: Ok(value) } = query.status() {
+            let state = value
+                .get("state")
+                .and_then(Value::as_str)
+                .unwrap_or_default();
+            if state != "running" {
+                observed = Some(value.clone());
+            }
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    let value = observed.expect("the provider reported the program's end");
+    assert_eq!(value.get("state").and_then(Value::as_str), Some("exited"));
+    assert_eq!(
+        value.get("code").and_then(Value::as_u64),
+        Some(7),
+        "the exit status is the program's own, not a guess"
+    );
+    // The observation did not create a second session for the run controls to show.
+    assert_eq!(manager.executions().len(), 1);
+    // An unknown session is refused instead of answering for another program.
+    assert!(manager.query_execution(session.id() + 500).is_err());
 }
 
 /// The host stops a running program through the provider's own session control.
@@ -177,6 +239,7 @@ fn host_controls_stop_the_program_a_session_owns() {
         ],
         cwd: Some(root.path().display().to_string()),
         name: Some("可停止".into()),
+        env: Vec::new(),
     };
     let session = manager.start_execution(request.clone()).unwrap();
     let running = wait_until(

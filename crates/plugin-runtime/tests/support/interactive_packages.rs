@@ -9,10 +9,11 @@ use std::{
 
 pub const CONTRACT: &str = "interactive.execute";
 
-/// This fixture declaration is an independent consumer's expectation of execution service 1.1.
+/// This fixture declaration is an independent consumer's expectation of execution service 1.3.
 ///
-/// `stop` is declared here too: a consumer that promises a stop has to require it, otherwise it
-/// would match a provider that cannot end a program.
+/// `stop` and `status` are declared here too: a consumer that promises to end a program and to
+/// report what became of it has to require both, otherwise it would match a provider that can do
+/// neither.
 pub fn methods() -> Value {
     json!({
         "execute": {
@@ -36,6 +37,17 @@ pub fn methods() -> Value {
                 "session":{"type":"string","max_bytes":128},
                 "state":{"type":"string","max_bytes":32}
             }},
+            "permissions":["process.exec"]
+        },
+        "status": {
+            "parameters":{"type":"record","fields":{
+                "session":{"type":"string","max_bytes":128}
+            }},
+            "result":{"type":"record","fields":{
+                "session":{"type":"string","max_bytes":128},
+                "state":{"type":"string","max_bytes":32},
+                "code":{"type":"integer","min":0,"max":2147483647}
+            }, "optional":["code"]},
             "permissions":["process.exec"]
         }
     })
@@ -70,7 +82,7 @@ pub fn fixture(id: &str, provider: bool, execution: bool) -> Package {
     manifest["name"] = json!(id);
     manifest["settings_hook"] = json!(false);
     manifest["api"]["required"]["plugin.services"] = json!("^1");
-    manifest["api"]["required"]["process"] = json!(">=1.2, <2");
+    manifest["api"]["required"]["process"] = json!(">=1.3, <2");
     manifest["permissions"] = if execution {
         json!(["assets.read", "services.call", "process.exec", "ui.panels"])
     } else {
@@ -86,15 +98,16 @@ pub fn fixture(id: &str, provider: bool, execution: bool) -> Package {
     let mut methods = methods();
     if !execution {
         // A consumer cannot weaken authority and still match the real execution contract. It also
-        // cannot offer a stop it has no authority to perform, so that method is dropped entirely.
+        // cannot end or observe a program it has no authority over, so both are dropped entirely.
         methods["execute"]["permissions"] = json!(["ui.panels"]);
         methods.as_object_mut().unwrap().remove("stop");
+        methods.as_object_mut().unwrap().remove("status");
     }
     manifest["plugin_services"] = if provider {
-        // A provider implements both methods of the execution contract it advertises.
-        json!({"provides": {CONTRACT:{"version":"1.1.0","methods":methods}}})
+        // A provider implements every method of the execution contract it advertises.
+        json!({"provides": {CONTRACT:{"version":"1.3.0","methods":methods}}})
     } else {
-        json!({"requires": {CONTRACT:{"version":">=1.1, <2","optional":true,"methods":methods}}})
+        json!({"requires": {CONTRACT:{"version":">=1.3, <2","optional":true,"methods":methods}}})
     };
     archive(files, manifest)
 }

@@ -30,6 +30,16 @@ struct Stop {
     session: String,
 }
 
+/// Exit status reported for a program the caller terminated, which has no exit code of its own.
+const TERMINATED_CODE: u32 = 0xFFFF_FFFF;
+
+/// Execution contract 1.3 asks what became of one session.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Status {
+    session: String,
+}
+
 impl Terminal {
     /// Completion acknowledges process creation; it does not claim exit, rollback, or completed panel display.
     pub(super) fn execute_service(
@@ -39,11 +49,70 @@ impl Terminal {
         match call.method.as_str() {
             "execute" => self.execute_call(call),
             "stop" => self.stop_call(call),
+            "status" => self.status_call(call),
             _ => Err(Failure::new(
                 ErrorCode::UnsupportedOperation,
                 "Unknown execution method",
             )),
         }
+    }
+
+    /// Remember the exit code the host reports, so a status query answers from observation rather
+    /// than from an assumption about how long a program usually takes.
+    pub(super) fn note_process_update(&mut self, handle: &api::ResourceHandle, update: &process::Update) {
+        let code = match update {
+            process::Update::Exited { code } => Some(*code),
+            // A terminated program has no exit status of its own; the provider reports termination.
+            process::Update::Terminated => Some(TERMINATED_CODE),
+            process::Update::Output { .. } => None,
+        };
+        let Some(code) = code else {
+            return;
+        };
+        if let Some(tab) = self
+            .tabs
+            .iter_mut()
+            .find(|tab| tab.handle.as_ref() == Some(handle))
+        {
+            tab.exit_code = Some(code);
+        }
+    }
+
+    /// Report what became of one delegated session.
+    ///
+    /// The answer is an observation, never a prediction: a session whose program is still running
+    /// reports `running`, and one whose exit the provider has seen reports the code it saw.
+    fn status_call(
+        &mut self,
+        call: plugin_protocol::service::Invocation,
+    ) -> Result<serde_json::Value, Failure> {
+        if call.contract != "interactive.execute" {
+            return Err(Failure::new(
+                ErrorCode::UnsupportedOperation,
+                "Unknown execution contract",
+            ));
+        }
+        let request: Status = serde_json::from_value(call.arguments)
+            .map_err(|error| Failure::new(ErrorCode::InvalidRequest, error.to_string()))?;
+        let session = request
+            .session
+            .parse::<u64>()
+            .map_err(|_| Failure::new(ErrorCode::InvalidRequest, "Unknown session identity"))?;
+        let tab = self
+            .tabs
+            .iter()
+            .find(|tab| tab.id == session)
+            .ok_or_else(|| Failure::new(ErrorCode::InvalidHandle, "Session is no longer present"))?;
+        let state = match (tab.exited || tab.handle.is_none(), tab.exit_code) {
+            (false, _) => "running",
+            (true, None) => "ended",
+            (true, Some(_)) => "exited",
+        };
+        Ok(serde_json::json!({
+            "session": request.session,
+            "state": state,
+            "code": tab.exit_code,
+        }))
     }
 
     /// Stop the program a delegated session owns.

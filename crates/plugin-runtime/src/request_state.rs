@@ -9,7 +9,7 @@ use std::{
 };
 
 #[derive(Clone)]
-pub(crate) struct Completion<T> {
+pub struct Completion<T> {
     state: Arc<Mutex<(u64, RequestUpdate<T>, bool)>>,
     deadline: Instant,
     /// Instance retirement revokes queued native work even before the manager's next polling tick.

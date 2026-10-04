@@ -89,6 +89,16 @@ impl Guest for TerminalPlugin {
                         output.service_reply = Some(result);
                         output
                     }
+                    api::Input::Event {
+                        event: api::Notification::Process { handle, update },
+                        ..
+                    } => {
+                        // The plugin already receives every process update; remembering the exit code
+                        // is what lets a later status query answer a caller honestly.
+                        terminal.note_process_update(&handle, &update);
+                        terminal.notify(api::Notification::Process { handle, update });
+                        terminal.reply()
+                    }
                     api::Input::Event { event, .. } => {
                         terminal.notify(event);
                         terminal.reply()
@@ -130,6 +140,8 @@ struct Tab {
     /// Upstream screen and plugin selection stay inside WASM.
     term: emulator::Emulator,
     exited: bool,
+    /// Exit status the host reported for this session's program, when it reported one.
+    exit_code: Option<u32>,
     /// Delegated programs are never restarted using this provider's private authority.
     resumable: bool,
     /// A second lightweight VT observer captures only shell integration metadata.
@@ -295,6 +307,8 @@ impl Terminal {
             handle: None,
             term,
             exited: saved.exited,
+            // A restored session has no process, so it carries no observed exit status.
+            exit_code: None,
             resumable: true,
             metadata_parser: vte::Parser::new(),
             metadata: shell::Metadata::default(),

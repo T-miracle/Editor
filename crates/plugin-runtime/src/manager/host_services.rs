@@ -28,6 +28,8 @@ pub const EXECUTION_CONTRACT: &str = "interactive.execute";
 pub const EXECUTION_START_TIMEOUT_MS: u32 = 30_000;
 /// A stop request is a short control exchange; waiting longer hides an unreachable provider.
 pub const EXECUTION_STOP_TIMEOUT_MS: u32 = 10_000;
+/// A status query is a bounded read of state the provider already holds.
+pub const EXECUTION_STATUS_TIMEOUT_MS: u32 = 5_000;
 /// Bound on retained host sessions for one workspace; ordinary work never approaches this.
 const MAX_HOST_EXECUTIONS: usize = 64;
 
@@ -417,7 +419,7 @@ fn provider_session_of(value: &Value) -> Option<String> {
 /// incompatible instead of appearing available and then failing to end a program.
 pub(crate) fn execution_dependency() -> Result<Dependency, Failure> {
     let declaration: Value = serde_json::from_str(
-        r#"{"version":"1.2.0","methods":{
+        r#"{"version":"1.3.0","methods":{
             "execute":{
                 "parameters":{"type":"record","fields":{
                     "program":{"type":"string","max_bytes":4096},
@@ -438,13 +440,25 @@ pub(crate) fn execution_dependency() -> Result<Dependency, Failure> {
                 "result":{"type":"record","fields":{
                     "session":{"type":"string","max_bytes":128},
                     "state":{"type":"string","max_bytes":32}}},
+                "permissions":["process.exec"]},
+            "status":{
+                "parameters":{"type":"record","fields":{
+                    "session":{"type":"string","max_bytes":128}}},
+                "result":{"type":"record","fields":{
+                    "session":{"type":"string","max_bytes":128},
+                    "state":{"type":"string","max_bytes":32},
+                    "code":{"type":"integer","min":0,"max":2147483647}},
+                    "optional":["code"]},
                 "permissions":["process.exec"]}}}"#,
     )
     .expect("execution contract declaration is valid JSON");
     let contract: plugin_protocol::service::Contract = serde_json::from_value(declaration)
         .map_err(|error| Failure::new(ErrorCode::OperationFailed, error.to_string()))?;
     let methods = contract.methods;
-    if !methods.contains_key("execute") || !methods.contains_key("stop") {
+    if !methods.contains_key("execute")
+        || !methods.contains_key("stop")
+        || !methods.contains_key("status")
+    {
         return Err(Failure::new(
             ErrorCode::OperationFailed,
             "Execution contract is incomplete",
@@ -452,7 +466,7 @@ pub(crate) fn execution_dependency() -> Result<Dependency, Failure> {
     }
     Ok(Dependency {
         // A newer provider may add methods, but these two must keep their exact shape.
-        version: ">=1.2, <2"
+        version: ">=1.3, <2"
             .parse()
             .expect("execution version requirement is valid"),
         optional: false,
@@ -655,6 +669,59 @@ impl Manager {
         let _ = provider;
         Ok(())
     }
+
+    /// Ask a session's own provider what became of the program it started.
+    ///
+    /// Returns the request whose answer carries the observation, so a caller can wait for it and
+    /// act on a real exit instead of assuming one. The answer is the provider's, never a prediction
+    /// derived from elapsed time or from output the host happens to have seen.
+    pub fn query_execution(&mut self, session: u64) -> anyhow::Result<Completion<Value>> {
+        let execution = self
+            .host_sessions
+            .get(session)
+            .ok_or_else(|| anyhow::anyhow!("Unknown execution session {session}"))?;
+        anyhow::ensure!(
+            execution.provider_active(),
+            "Execution session {session} is not running under an available provider"
+        );
+        let provider_session = execution
+            .snapshot()
+            .provider_session
+            .ok_or_else(|| anyhow::anyhow!("Provider reported no session identity to query"))?;
+        let dependency = execution_dependency().map_err(start_failure)?;
+        let scope = self.host_scope();
+        let caller = host_caller(&scope);
+        self.refresh_services();
+        let reference = {
+            let broker = self.plugin_services.lock().unwrap();
+            let reference = broker
+                .resolve(&caller, EXECUTION_CONTRACT, &dependency)
+                .map_err(start_failure)?;
+            if reference.provider.caller.instance != execution.provider_instance() {
+                return Err(anyhow::anyhow!(
+                    "Execution session {session} belongs to a provider that is no longer selected"
+                ));
+            }
+            reference
+        };
+        let completion = Completion::new(EXECUTION_STATUS_TIMEOUT_MS);
+        let call = host_method_call(
+            &caller,
+            reference,
+            "status",
+            serde_json::json!({ "session": provider_session }),
+            &dependency,
+            completion.clone(),
+            self.host_alive.clone(),
+        )
+        .map_err(start_failure)?;
+        if let Err(error) = self.plugin_services.lock().unwrap().enqueue(call) {
+            return Err(start_failure(error));
+        }
+        // A query is not a session: it observes one. The caller owns the gate and reads the answer
+        // from it, so a status refresh never appears in the run controls as another program.
+        Ok(completion)
+    }
 }
 
 #[cfg(test)]
@@ -676,10 +743,15 @@ mod tests {
         let execute: Method =
             serde_json::from_value(declared["methods"]["execute"].clone()).unwrap();
         let stop: Method = serde_json::from_value(declared["methods"]["stop"].clone()).unwrap();
+        let status: Method = serde_json::from_value(declared["methods"]["status"].clone()).unwrap();
         let contract = plugin_protocol::service::Contract {
             version,
             // Every method the host requires is declared here; a missing one is the drift under test.
-            methods: BTreeMap::from([("execute".to_owned(), execute), ("stop".to_owned(), stop)]),
+            methods: BTreeMap::from([
+                ("execute".to_owned(), execute),
+                ("stop".to_owned(), stop),
+                ("status".to_owned(), status),
+            ]),
         };
         let dependency = execution_dependency().unwrap();
         assert!(
