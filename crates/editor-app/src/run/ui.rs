@@ -2059,7 +2059,67 @@ fn render_run_config_form(
                     }
                     page = page.child(row.child(text));
                 }
-                page
+                // The session's own state and the actions it allows. An action that is not offered
+                // says why, so a disabled control is never a mystery.
+                let state = app.read(cx).run_controls.debug_state().clone();
+                let controls = app.read(cx).run_controls.debug_controls();
+                let described = match &state {
+                    editor_core::DebugSessionState::Disconnected => "未开始调试".to_owned(),
+                    editor_core::DebugSessionState::Starting => "正在连接调试会话".to_owned(),
+                    editor_core::DebugSessionState::Running => "目标正在运行".to_owned(),
+                    editor_core::DebugSessionState::Paused {
+                        source,
+                        line,
+                        reason,
+                    } => format!(
+                        "已在 {source}:{line} 暂停{}",
+                        reason
+                            .as_ref()
+                            .map(|reason| format!("（{reason}）"))
+                            .unwrap_or_default()
+                    ),
+                    editor_core::DebugSessionState::Exited => "目标已退出".to_owned(),
+                    editor_core::DebugSessionState::Failed { reason } => {
+                        format!("调试会话失败：{reason}")
+                    }
+                };
+                let mut session = div()
+                    .debug_selector(|| "run-debug-session".into())
+                    .child(described);
+                for (selector, label, outcome) in [
+                    ("run-debug-resume", "继续", &controls.resume),
+                    ("run-debug-pause", "暂停", &controls.pause),
+                    ("run-debug-stop", "停止调试", &controls.stop),
+                ] {
+                    let owner = app.clone();
+                    let action = selector.to_owned();
+                    let mut button = div()
+                        .id(selector)
+                        .debug_selector({
+                            let action = action.clone();
+                            move || action.clone()
+                        })
+                        .child(label);
+                    match outcome {
+                        Ok(()) => {
+                            let reported = action.clone();
+                            button = button.on_click(move |_, _, cx| {
+                                owner.update(cx, |state, cx| {
+                                    // Starting a real debug session arrives with its own change; until
+                                    // then this reports what was confirmed rather than pretending.
+                                    state.status = format!("已确认可执行该调试操作（{reported}）");
+                                    cx.notify();
+                                });
+                            });
+                        }
+                        Err(reason) => {
+                            let reason = reason.clone();
+                            button = button.text_color(danger).child(format!("（{reason}）"));
+                        }
+                    }
+                    session = session.child(button);
+                }
+                page.child(session)
             })
             .when_some(error, |form, message| {
                 form.child(

@@ -188,6 +188,8 @@ pub struct RunControls {
     discovery_ran: bool,
     /// Which provider a debug launch would use, or the reason there is none.
     debug_availability: Option<Result<String, String>>,
+    /// What the debug session currently is, as its provider last reported it.
+    debug_state: editor_core::DebugSessionState,
     /// Set when the stored file could not be read or written; shown instead of silently defaulting.
     pub error: Option<String>,
 }
@@ -231,6 +233,7 @@ impl Default for RunControls {
             discovered: Vec::new(),
             discovery_ran: false,
             debug_availability: None,
+            debug_state: editor_core::DebugSessionState::Disconnected,
             error: None,
         }
     }
@@ -1180,6 +1183,24 @@ impl RunControls {
             // capability it has not been told about, and it may not fall back to running plainly.
             None => Err("尚未确认调试能力；打开调试页后重试"),
         }
+    }
+
+    /// Record what the debug session now is, as its provider reported it.
+    pub fn note_debug_state(&mut self, state: editor_core::DebugSessionState) {
+        self.debug_state = state;
+    }
+
+    /// What the debug session currently is.
+    pub fn debug_state(&self) -> &editor_core::DebugSessionState {
+        &self.debug_state
+    }
+
+    /// Which debug actions the panel may offer, each with the reason it may not.
+    ///
+    /// Both facts are assembled here so the panel and the launch path cannot disagree: availability
+    /// decides starting, the session state decides the rest.
+    pub fn debug_controls(&self) -> editor_core::DebugControls {
+        editor_core::DebugControls::derive(self.debug_availability(), &self.debug_state)
     }
 
     /// Whether this configuration may be debugged, and the reason it may not.

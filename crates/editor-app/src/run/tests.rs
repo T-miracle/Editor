@@ -1022,6 +1022,86 @@ fn breakpoints_round_trip_through_the_edit_form() {
     );
 }
 
+/// The debug controls follow the session's own state, not just whether debugging is available.
+#[test]
+fn debug_controls_follow_the_session_state() {
+    use editor_core::DebugSessionState;
+    let mut controls = controls();
+    // Nothing is confirmed yet, so nothing is offered — including stopping.
+    assert!(!controls.debug_controls().can_start());
+    assert!(!controls.debug_controls().can_stop());
+
+    controls.note_debug_availability(Ok("adapter".into()));
+    // Confirmed and idle: starting is offered and stopping is not.
+    assert!(controls.debug_controls().can_start());
+    assert!(!controls.debug_controls().can_stop());
+
+    // Connecting is a state a user needs a way out of.
+    controls.note_debug_state(DebugSessionState::Starting);
+    assert!(controls.debug_controls().can_stop());
+    assert!(!controls.debug_controls().can_start());
+
+    // Running: pausing is offered, resuming is not, and starting a second session is refused.
+    controls.note_debug_state(DebugSessionState::Running);
+    let running = controls.debug_controls();
+    assert!(running.pause.is_ok() && running.resume.is_err());
+    assert!(running.start.is_err() && running.can_stop());
+
+    // Paused: the location is carried, resuming is offered, pausing is not.
+    controls.note_debug_state(DebugSessionState::Paused {
+        source: "src/main.rs".into(),
+        line: 12,
+        reason: Some("breakpoint".into()),
+    });
+    assert_eq!(
+        controls.debug_state().paused_at(),
+        Some(("src/main.rs", 12)),
+        "the panel shows where the target stopped"
+    );
+    let paused = controls.debug_controls();
+    assert!(paused.resume.is_ok() && paused.pause.is_err());
+
+    // A failed session reports the provider's own reason and offers only a new start.
+    controls.note_debug_state(DebugSessionState::Failed {
+        reason: "适配器退出".into(),
+    });
+    let failed = controls.debug_controls();
+    assert!(failed.can_start() && !failed.can_stop());
+    assert!(failed.stop.unwrap_err().contains("适配器退出"));
+
+    // Every state and availability pair leaves an unavailable control with a reason.
+    for availability in [Ok("adapter".to_owned()), Err("无提供者".to_owned())] {
+        controls.note_debug_availability(availability);
+        for state in [
+            DebugSessionState::Disconnected,
+            DebugSessionState::Starting,
+            DebugSessionState::Running,
+            DebugSessionState::Paused {
+                source: "src/main.rs".into(),
+                line: 1,
+                reason: None,
+            },
+            DebugSessionState::Exited,
+            DebugSessionState::Failed {
+                reason: "失败".into(),
+            },
+        ] {
+            controls.note_debug_state(state.clone());
+            let derived = controls.debug_controls();
+            for outcome in [
+                &derived.start,
+                &derived.resume,
+                &derived.pause,
+                &derived.stop,
+            ] {
+                if let Err(reason) = outcome {
+                    assert!(!reason.trim().is_empty(), "{state:?} has a silent refusal");
+                }
+            }
+        }
+    }
+}
+
 fn snapshot(
     id: u64,
     config: &str,

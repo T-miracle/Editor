@@ -7,7 +7,9 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
 mod breakpoints;
+mod debug_state;
 mod discovery;
+pub use debug_state::{DebugControls, DebugSessionState};
 mod shared;
 pub use breakpoints::{
     BreakpointError, MAX_BREAKPOINT_SOURCE_BYTES, MAX_RUN_BREAKPOINTS, RunBreakpoint,
