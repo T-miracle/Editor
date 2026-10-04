@@ -16,6 +16,7 @@ import { join } from 'node:path';
 import { describe, it } from 'node:test';
 import {
   contentRoot,
+  isDraft,
   listPages,
   locales,
   requiredFields,
@@ -109,11 +110,36 @@ describe('documentation sources', () => {
     }
   });
 
-  it('publishes no empty placeholder page', () => {
+  it('publishes no empty placeholder page, and keeps drafts out of the build', () => {
     for (const page of pages) {
+      if (isDraft(page)) {
+        // A draft records an owed translation, so it must stay short: a long
+        // draft means content is being written where a real page belongs.
+        assert.ok(
+          page.body.trim().length < MIN_BODY_LENGTH,
+          `${page.id}: draft pages must stay short; write the page instead`,
+        );
+        continue;
+      }
       assert.ok(
         page.body.trim().length >= MIN_BODY_LENGTH,
         `${page.id}: body is too short to be useful (${page.body.trim().length} characters)`,
+      );
+    }
+  });
+
+  it('gives every draft a counterpart page that is already written', () => {
+    for (const page of pages.filter(isDraft)) {
+      const alternate = page.fields.alternate;
+      const target = pages.find(
+        (candidate) =>
+          `/${candidate.locale}/${candidate.trail}/`.replace(/\/index\/$/, '/') === alternate,
+      );
+      assert.ok(target, `${page.id}: draft alternate ${alternate} has no page`);
+      assert.equal(
+        isDraft(target),
+        false,
+        `${page.id}: both sides of a translation cannot be drafts`,
       );
     }
   });

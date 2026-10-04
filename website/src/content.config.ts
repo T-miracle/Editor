@@ -57,6 +57,16 @@ export const docs = defineCollection({
     order: z.number().int(),
     /** Counterpart page in the other language tree. */
     alternate: z.string().startsWith('/'),
+    /**
+     * Marks a page that is declared but not yet written.
+     *
+     * Draft pages keep the two language trees comparable while a translation is
+     * in progress: the page-set and counterpart checks still see them, so the
+     * missing translation stays visible, but the build skips them so readers
+     * never land on a placeholder. A draft page must be short — it exists only to
+     * record that something is owed.
+     */
+    draft: z.boolean().default(false),
   }),
 });
 

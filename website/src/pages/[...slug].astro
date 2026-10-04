@@ -13,11 +13,14 @@ import type { Locale } from '../lib/nav';
 
 export async function getStaticPaths() {
   const entries = await getCollection('docs');
-  return entries.map((entry) => ({
-    // `index` marks a directory page, so its route stops at the directory.
-    params: { slug: entry.id.replace(/\/index$/, '') },
-    props: { entry },
-  }));
+  return entries
+    // Draft pages record an owed translation; they must never reach a reader.
+    .filter((entry) => entry.data.draft !== true)
+    .map((entry) => ({
+      // `index` marks a directory page, so its route stops at the directory.
+      params: { slug: entry.id.replace(/\/index$/, '') },
+      props: { entry },
+    }));
 }
 
 const { entry } = Astro.props;

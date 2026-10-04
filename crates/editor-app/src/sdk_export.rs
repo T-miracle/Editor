@@ -1,4 +1,13 @@
 //! Supply the editor's compiled-in contract to independent Cargo plugin projects.
+//!
+//! The contract documents are authored for readers under `website/`, which is the single
+//! hand-written source: the same files are published on the documentation site and shipped
+//! to plugin projects through this export. Moving that directory therefore breaks this
+//! build on purpose.
+//!
+//! The exported names stay as they were before the move, so plugin projects and the
+//! distribution checks see an unchanged file set; only the sources changed location and
+//! became lower-case for readable URLs.
 use anyhow::Context;
 use sha2::{Digest, Sha256};
 use std::io::Write;
@@ -8,15 +17,15 @@ use std::process::Command;
 const SDK_FILES: &[(&str, &[u8])] = &[
     (
         "MIGRATION.md",
-        include_bytes!("../../plugin-protocol/MIGRATION.md"),
+        include_bytes!("../../../website/src/content/docs/en/sdk/migration.md"),
     ),
     (
         "FAULTS.md",
-        include_bytes!("../../plugin-protocol/FAULTS.md"),
+        include_bytes!("../../../website/src/content/docs/en/sdk/faults.md"),
     ),
     (
         "SERVICES.md",
-        include_bytes!("../../plugin-protocol/SERVICES.md"),
+        include_bytes!("../../../website/src/content/docs/en/sdk/services.md"),
     ),
     (
         "src/service.rs",
@@ -32,13 +41,16 @@ const SDK_FILES: &[(&str, &[u8])] = &[
     ),
     (
         "DEPENDENCIES.md",
-        include_bytes!("../../plugin-protocol/DEPENDENCIES.md"),
+        include_bytes!("../../../website/src/content/docs/en/sdk/dependencies.md"),
     ),
     (
         "src/dependencies.rs",
         include_bytes!("../../plugin-protocol/src/dependencies.rs"),
     ),
-    ("LSP.md", include_bytes!("../../plugin-protocol/LSP.md")),
+    (
+        "LSP.md",
+        include_bytes!("../../../website/src/content/docs/en/sdk/lsp.md"),
+    ),
     (
         "src/language.rs",
         include_bytes!("../../plugin-protocol/src/language.rs"),
@@ -69,16 +81,19 @@ const SDK_FILES: &[(&str, &[u8])] = &[
     ),
     (
         "README.md",
-        include_bytes!("../../plugin-protocol/README.md"),
+        include_bytes!("../../../website/src/content/docs/en/sdk/index.md"),
     ),
-    ("UI.md", include_bytes!("../../plugin-protocol/UI.md")),
+    (
+        "UI.md",
+        include_bytes!("../../../website/src/content/docs/en/sdk/ui.md"),
+    ),
     (
         "PROCESSES.md",
-        include_bytes!("../../plugin-protocol/PROCESSES.md"),
+        include_bytes!("../../../website/src/content/docs/en/sdk/processes.md"),
     ),
     (
         "LANGUAGES.md",
-        include_bytes!("../../plugin-protocol/LANGUAGES.md"),
+        include_bytes!("../../../website/src/content/docs/en/sdk/languages.md"),
     ),
     (
         "src/lib.rs",

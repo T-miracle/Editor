@@ -24,7 +24,7 @@
 | 站点范围 | 只发布"编辑器使用"与"插件系统对接"（能力协议） | 内部工单、验收记录、协作约定不进公开面 |
 | 插件包 README | 不进站点 | `management.rs` 从已安装包读取它并在管理器 Overview 显示，生命周期属于插件包，不属于站点 |
 | 插件使用说明 | 站点写一页**宿主行为**（安装、权限确认、启停更新卸载、受限工作区限制） | 这是宿主行为，不是插件包内容；不复述各插件自己的用法，避免与包 README 形成第二份源 |
-| SDK 文档位置 | 9 篇迁入 `website/en/sdk/`，成为唯一源 | 站点内容集中；`include_bytes!` 与 SDK 摘要缓存机制不受影响 |
+| SDK 文档位置 | 9 篇的内容并入站点英文 SDK 栏目，成为唯一手写源（页面落在 `website/src/content/docs/en/sdk/`） | 站点内容集中；`include_bytes!` 与 SDK 摘要缓存机制不受影响；导出名保持迁移前的大写形式 |
 | 技术选型 | Astro 自建管线 | 参照 [gpui-kit](https://github.com/longbridge/gpui-kit)，其站点位于主仓库 `website/` 目录 |
 | 双语 | `en/` 与 `zh-CN/` 平行，首次即双语 | 英文是权威正本，中文是译文 |
 | 权威正本 | 英文为权威；协议变更先改 `en/`，中文同步；SDK 导出取英文版 | 英文已是四篇的原生语言，且是面向第三方作者的公开契约 |
@@ -52,6 +52,9 @@ docs/website/
 
 ## 目标结构
 
+实施后页面落在 Astro 内容集合约定的路径下（`website/src/content/docs/<locale>/`）；方案初稿写的
+`website/en|zh-cn/` 是同一结构的简写，下面按实际路径给出。
+
 ```text
 website/                                 ← 新建，读者工作面唯一手写源
 ├─ AGENTS.md                               AI 协作约定与双语同步强制规则
@@ -60,28 +63,19 @@ website/                                 ← 新建，读者工作面唯一手�
 ├─ package.json                            scripts: dev / build / preview / test:*
 ├─ tsconfig.json
 ├─ src/
-│   ├─ layouts/                            版式（顶部导航、语言切换、侧栏、目录）
-│   ├─ components/                         页头、侧栏、版本提示等
-│   ├─ lib/
-│   │   ├─ remark-callouts.js              提示框语法
-│   │   └─ remark-snippets.js              从源码树引入片段，避免手抄快捷键
-│   └─ styles/                             主题样式
+│   ├─ content/docs/<locale>/              页面内容（内容集合，双语平行）
+│   │   ├─ index.md                        站点首页
+│   │   ├─ guide/                          编辑器使用
+│   │   └─ sdk/                            插件能力协议
+│   ├─ content.config.ts                   内容集合 schema（含草稿标记）
+│   ├─ layouts/  styles/                   版式与主题
+│   ├─ lib/                                导航模型与 remark 插件
+│   └─ pages/                              内容集合的动态路由
 ├─ tests/
-│   ├─ links.test.ts                       站内链接、锚点与外部链接可达性
-│   └─ doc-sources.test.ts                 页面集合、必填 frontmatter、双语页面对应
-├─ public/                                 图标、插图、CNAME 无关资源
-├─ en/                                     英文（权威正本）
-│   ├─ index.md
-│   ├─ guide/                              getting-started、editor-and-shortcuts、
-│   │                                      explorer-and-search、panels-and-layout、
-│   │                                      settings-and-themes、plugins-usage
-│   └─ sdk/                                index、capabilities、ui、services、
-│                                          processes、languages、lsp、dependencies、
-│                                          migration、faults
-└─ zh-CN/                                  中文（译文，页面集合必须与 en/ 一致）
-    ├─ index.md
-    ├─ guide/                              与 en/guide 一一对应
-    └─ sdk/                                与 en/sdk 一一对应
+│   ├─ helpers.mjs                         共享解析与链接工具
+│   ├─ links.test.mjs                      站内链接与锚点
+│   └─ doc-sources.test.mjs                页面集合、frontmatter、双语页面对应
+└─ public/                                 图标、插图等静态资源
 ```
 
 不再单独建 `scripts/` 下的站点脚本：构建入口是 `website/package.json` 的 `scripts`，部署由 GitHub Actions 调用它们，避免同一件事有两个入口。

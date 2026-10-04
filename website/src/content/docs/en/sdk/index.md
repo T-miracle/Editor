@@ -1,6 +1,6 @@
 ---
 title: Plugin contract
-description: Capability negotiation, native UI, services, processes and packaging for plugin authors.
+description: How to build a plugin package: capability negotiation, native UI, services, processes and packaging.
 section: sdk
 order: 0
 alternate: /zh-cn/sdk/
@@ -11,30 +11,237 @@ alternate: /zh-cn/sdk/
 This section is for people building plugin packages. A plugin is a declarative package,
 optionally carrying a WebAssembly component for behaviour that cannot be declared.
 
-The contract is versioned and negotiated: a manifest states which capabilities it needs
-and which are optional, and the editor checks those declarations before an instance runs.
-A plugin that requires a capability the editor cannot provide is rejected with a reason
-rather than started in a degraded state.
+The contract is versioned and negotiated: a manifest states which capabilities it needs and
+which are optional, and the editor checks those declarations before an instance runs. A
+plugin that requires a capability the editor cannot provide is rejected with a reason rather
+than started in a degraded state.
 
-## What the contract covers
+Cross-plugin collaboration, versioned contracts, provider selection and origin permissions
+are described in [Plugin services](/en/sdk/services/). Native services, interactive
+processes, permissions and reclamation are described in
+[Native processes](/en/sdk/processes/). Purely declarative language packages, and
+independently contributed recognition and highlighting providers, are described in
+[Language packages](/en/sdk/languages/); they do not need an empty lifecycle component, and
+install, enable, update and uninstall stay in sync with documents that are already open.
 
-- The package manifest and the capability declarations it carries.
-- Typed requests and notifications between the guest component and the editor.
-- The native UI tree a plugin publishes for its panel, including the canvas escape hatch.
-- Cross-plugin services with an explicit version and provider selection.
-- Native processes, including interactive ones, behind their own permissions.
-- Language packages: grammar and query resources, and language servers.
-- Private storage, configuration, data-format migration and fault recovery.
-- Independent builds through the editor's own Cargo entry point, and SDK export.
+## The current capability protocol
 
-## How the documentation is delivered
+The manifest's `protocol` marker selects the typed messages of the `api` module. It is not
+one version number shared by every feature: `api.base` carries the base-protocol SemVer
+range, while `api.required` and `api.optional` declare capability IDs with their own version
+ranges. The current base API is 1.0.0 and provides `package.assets` 1.0.0 and `ui.native`
+1.0.0; the plugin package version is managed separately.
 
-The contract documentation is also part of the SDK the editor hands to plugin projects:
-the editor embeds it, caches it by content digest, and serves it to `cargo` when you build
-a plugin. The pages in this section are the same text, published for reading here.
+A missing required interface or a version mismatch is rejected during package checks and
+instance recovery. An unavailable optional interface simply does not appear in the
+negotiation result of the prepare phase.
 
-## Where to start
+A plugin receives typed lifecycle messages through `api::guest::dispatch` and reads its
+resources through `api::guest::read_asset`. The SDK generates non-zero request IDs, encodes
+messages and verifies the request ID in responses. Missing methods, invalid arguments,
+unknown operations, unnegotiated capabilities, insufficient permissions, illegal paths and
+exceeded quotas are returned as a `Failure`; genuine transport errors that prevent decoding
+or calling the component still use the WIT error channel. Synchronous resource reads return
+their final result directly instead of fabricating a "processing" stage.
 
-If you have never written a plugin for this editor, start from the package manifest and
-capability declarations, then move to the UI or service chapter that matches what your
-plugin needs. Every chapter states the version it applies to.
+Availability of the `package.assets` capability is not authorization: the manifest must also
+declare `assets.read`, and the user approves it at install time. The operation reads only
+resources inside the current package version; the prepare phase may read them too, because
+they are immutable. It cannot read the workspace or another plugin's directory.
+
+## Native UI
+
+New UI output uses `api::View { panel, document }`, and an ordinary form does not require a
+canvas or character-grid field. The host checks that `ui.native` was negotiated and that the
+panel was declared. The `ui.canvas ^1` capability allows a canvas anywhere in the same tree,
+while `ui.grid ^1` separately provides optional character measurement. Native notifications
+keep their panel and node scope. Editor preview uses `editor.documents` with `editor.read`,
+driven by versioned in-memory text notifications. Legacy canvas and PTY messages do not
+become part of the new base protocol automatically; the composition protocol is documented
+in [Native UI](/en/sdk/ui/).
+
+## Installation and protocol compatibility
+
+Package installation and instance recovery currently require `protocol = 7` and a negotiable
+base API. Installation records from protocols 1–6 keep their settings, permissions,
+enablement scope and private data, and are shown as needing an update; their old components
+are never activated. Rebuilding and installing a new package of the same plugin with the
+current SDK restores use.
+
+Old runtime protocols and their converters have been removed. Legacy installation records
+only take part in management-view display and limited data import; they never resume
+execution.
+
+## Independent verification
+
+The independent verification plugin is `capability-example`, which is not part of the
+official distribution. Build the development host first, then run
+`scripts/verify-plugin-sdk.ps1`: the script copies the example sources, manifest, README and
+resources into a temporary directory and builds from there through the host's public
+`--plugin-cargo` entry point, without using the host repository's Cargo workspace or business
+source paths. The script also verifies a complete export and recovery from damaged files
+through `--export-plugin-sdk`. Verification commands:
+
+```powershell
+cargo build -p editor-app
+./scripts/verify-plugin-sdk.ps1 -HostExe ./target/debug/editor-app.exe
+cargo test -p plugin-runtime --test sdk_distribution -- --ignored
+cargo test -p plugin-runtime --test capability_packages
+cargo test -p plugin-runtime --test capability_packages -- --ignored
+cargo test -p editor-app --bin editor-app capability_package_consent -- --ignored
+```
+
+Tests that need the real component are ignored by default and require the test package to be
+built first; they are not skipped acceptance. The script writes the same ZIP to
+`target/plugin-sdk-test/capability-example.zip` and to the archive other tests already use,
+`target/plugin-api-test/capability-example.zip`; the package contains only the manifest,
+README, component and declared resources. The `sdk_distribution` test reads that package
+README, installs the real component and invokes a typed error-diagnostic command through the
+public `Package` and `Manager` interfaces. For everyday work
+`scripts/build-capability-example.ps1` is faster, but acceptance outside the repository is
+defined by `verify-plugin-sdk.ps1`.
+
+## workspace.files 1.1 and host.sdk 1.0
+
+`api::guest::find_files(&workspace, FileQuery { include, exclude, max_results })` uses the
+workspace root handle returned by `open_workspace`, and re-checks `workspace.files >= 1.1`
+together with `workspace.read` on every call. Handles for private data, other instances,
+released handles and retired handles cannot be used for discovery. Application-scoped
+plugins do not own a workspace root, and a call never follows whichever other workspace is
+currently selected.
+
+Queries use root-relative globs separated by `/`. `**/` may match zero directory levels and
+`*` does not cross a directory boundary. Absolute paths, drive prefixes, backslashes, empty
+segments and `.` or `..` segments are invalid. `include` needs at least one entry; include
+and exclude together may hold at most 32 entries of at most 1024 bytes each, and
+`max_results` ranges from 1 to 4096. Excludes prune directory entries, so `**/generated/**`
+never enters a `generated` directory. The host ships no built-in language or build-directory
+names; the plugin declares its own selection rules.
+
+Discovery honours nested and negated rules from `.gitignore` and `.ignore` inside the root,
+with `.ignore` taking precedence. It does not read parent or global ignore files outside the
+workspace, and it does not follow symbolic links, Windows junctions or other reparse points.
+`FileMatches.paths` are deduplicated, sorted UTF-8 workspace-relative paths; `skipped` holds
+relative paths that could not be read or parsed, and the caller decides whether to accept an
+incomplete discovery. The bounded budget covers 50,000 directory entries including ignored
+ones, 64 levels of directory depth, 512 KiB of encoded results and at most 64 skipped
+entries; a single ignore file may hold 64 KiB and all of them 512 KiB or 2048 lines.
+Exceeding a limit returns `LimitExceeded` instead of a truncated success. Traversal checks
+the current plugin call deadline between filesystem calls and returns `TimedOut`.
+
+`api::guest::describe_sdk()` requires the `host.sdk` capability and returns
+`SdkDescriptor { digest, root, cargo_config }` without needing workspace read permission. It
+describes the same interface cache the host itself uses: the digest is a content identity,
+and `root` plus `cargo_config` are absolute paths for native language tooling. It creates no
+file handles, no WASI preopen and no extra file-read permission; handing those paths to the
+workspace `read_file` operation is still rejected. The host returns `NotFound` when it has no
+SDK, `OperationFailed` when export fails, and `CapabilityUnavailable` when the capability was
+not negotiated.
+
+Both operations may be called by an active instance and from a read-only `LanguageService`
+prepare hook. The hook may close the file handles it opened during the call; remaining
+temporary handles are revoked when it returns. It cannot start writes, processes or editor
+operations through discovery. Migration hooks still have private-copy permission only. The
+host supplies an immutable `HostResources` through `Manager::open_with_resources`, and the
+same resource snapshot reaches background installation, settings replacement, workspace
+switching and instances restored after a failed rollback. Public integration regressions run
+through `cargo test -p plugin-runtime --test sdk_discovery -- --ignored` after the
+independent SDK build script above.
+
+## ui.clipboard 1.0 and storage.editor 1.0
+
+`EditorOperation::ReadClipboard` and `WriteClipboard { text }` return
+`EditorValue::Clipboard { text }` and `Unit` respectively. They require the negotiated
+`ui.clipboard` capability and the approved `clipboard` permission, with at most 1 MiB of text
+per call. Operations run through the editor request queue, so `Accepted` only means the
+request was queued; a plugin must wait for the completion notification of that request and
+must not apply a delayed result to a target that has since been switched or closed.
+
+`EditorOperation::OpenDataFile { path }` requires the negotiated `storage.editor` capability
+and the `storage` permission. The path is relative, uses `/`, and lives inside the plugin's
+own private directory; `..`, absolute paths and links that escape are rejected. Success
+returns `Unit` and the file enters the host's normal document lifecycle. It cannot open
+another plugin's file or an arbitrary file on the machine.
+
+All three operations are currently available only in an active workspace instance and follow
+the shared timeout, cancellation and instance-revocation rules. Native host code checks the
+request state before performing a side effect; cancelling does not mean rolling back a
+clipboard write or a document open that already happened.
+
+## configuration 1.0
+
+A protocol 7 manifest declares `settings` with `title`, `value_type`, `default`, `scope` and
+`apply` for each plugin-internal key. Types are boolean, string with `max_length`, integer
+with `min` and `max`, and enum with `choices`; scopes are `user` or `project`, and the latter
+allows an explicitly confirmed project override. In this version the effect of an applied
+value is `restart_instance`. A manifest may declare at most 64 fields, strings are at most
+4096 bytes, and an enum holds at most 32 distinct choices. Invalid defaults are rejected
+during package checks, and an executable package must declare the required
+`configuration: ^1` capability.
+
+The optional `settings_hook: true` receives `Notification::Configuration { phase: Validate,
+values }` and returns discovered values and errors through `Output.configuration: Proposal`.
+The hook runs while the candidate instance is being prepared, inherits bounded instructions
+and a memory budget, and cannot acquire active-instance resources or authority; reading
+package resources it already has permission for still works. Discovered values only fill
+entries that were not set explicitly, and any error fails the application. The apply phase
+then receives the final values together with their source, for `Activate` to use; a failure
+in that phase also leaves the old instance in place. Configuration is confined to the plugin
+namespace: a guest cannot obtain permissions or modify host user settings through it.
+
+User settings are independent of guest private files, and confirmed project values live in
+the workspace record managed by the host rather than being trusted from repository files.
+Hot application, initialization and reopening a workspace all use the same resolution path.
+A failed application keeps the previous configuration and the running instance; a successful
+one replaces only the affected instances and revokes their earlier resources.
+
+## Independent builds and SDK distribution
+
+The protocol crate is the versioned plugin interface of the main program. `wit/plugin.wit`
+defines the imports and exports of the WebAssembly Component Model, while the
+`plugin-protocol` Rust crate defines the JSON messages, documents and permission names that
+travel across it. The main program compiles these interface files into its executable and
+manages the interface cache that plugin compilation needs.
+
+`host.request` is the import the main program provides at runtime. Plugins use typed
+capability requests through `api::guest`; the main program checks the negotiated capability,
+the plugin permission, the instance scope and the handle on every call. WIT and the Rust
+types are used only while compiling a plugin: an installed `.wasm` never reads SDK files.
+
+A plugin declares `plugin-protocol = { version = "=0.2.0", features = ["guest"] }` in its
+`Cargo.toml` and uses `plugin_protocol::bindings::{Guest, editor, export}` for host calls and
+component exports, without generating WIT bindings itself. Compile an independent plugin by
+invoking the packaged editor:
+
+```powershell
+editor-app.exe --plugin-cargo capability-example/Cargo.toml build --target wasm32-wasip2 --release
+# The same entry point supports native unit tests and compile checks.
+editor-app.exe --plugin-cargo capability-example/Cargo.toml test --lib
+editor-app.exe --plugin-cargo capability-example/Cargo.toml check --target wasm32-wasip2
+```
+
+The editor caches its embedded interface by content digest under the system user cache
+directory at `MeEditor/plugin-sdk/<digest>/` (`%LOCALAPPDATA%/MeEditor/plugin-sdk/<digest>/`
+on Windows) and selects that cache through a dependency override for the duration of the
+Cargo command. Different interface versions never overwrite each other, and a missing or
+damaged cache is repaired automatically. A plugin project needs no `sdk/` directory and does
+not reference main-program sources; a distribution directory only needs the main program and
+the plugin packages. When the interface changes, check both the WIT package version and the
+`protocol` version in plugin manifests.
+
+A development machine needs Rust and Cargo with the `wasm32-wasip2` target; users of compiled
+plugins need neither. `--plugin-cargo` executes a developer-provided Cargo project and is a
+local development tool, not a runtime sandbox. `--export-plugin-sdk <directory>` remains
+available for other language toolchains and for interface inspection; ordinary builds and
+distribution do not call it.
+
+Developing a plugin inside this editor, a Rust plugin obtains the same host SDK cache as
+`--plugin-cargo` through `host.sdk` and discovers independent plugin projects through
+`workspace.files`. The plugin's WASM hook produces Rust Analyzer's `cargo.configPath`,
+`linkedProjects` and configuration sections, and the host passes that data through the
+generic LSP protocol. Project discovery follows ignore rules, and the Rust plugin declares
+which build outputs and vendor directories to exclude. Typing `plugin_protocol::api::`
+provides type completion, hover documentation and go-to-definition. A plugin directory needs
+no SDK, no Cargo configuration and no path into host sources; go-to-definition opens the
+protocol sources in the host cache. This needs the Rust language plugin enabled and Rust
+Analyzer installed.

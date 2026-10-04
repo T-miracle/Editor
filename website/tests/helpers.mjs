@@ -29,6 +29,18 @@ export const requiredFields = ['title', 'description', 'section', 'order', 'alte
 export const sections = ['guide', 'sdk'];
 
 /**
+ * True when a page is declared but not yet written.
+ *
+ * Draft pages exist so an owed translation stays visible to the page-set and
+ * counterpart checks without ever reaching a reader: the build skips them.
+ *
+ * @param {{ fields: Record<string, string> }} page parsed page
+ */
+export function isDraft(page) {
+  return page.fields.draft === 'true';
+}
+
+/**
  * Read the frontmatter block of a Markdown file.
  *
  * Only flat `key: value` pairs are supported, which is all the schema uses; a
