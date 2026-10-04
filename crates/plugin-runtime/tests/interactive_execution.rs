@@ -435,6 +435,97 @@ fn a_consumer_session_started_through_the_host_is_the_one_the_title_bar_sees() {
     manager.stop_execution(first).unwrap();
 }
 
+/// A consumer can list, inspect and stop through the boundary — not only start.
+///
+/// Ticket 08's third criterion names four things a consumer does through the versioned session
+/// operations: create a visible session, query it, locate and show it, and stop it. The check above
+/// covers creating one and locating it on a repeat; this one covers the other two, so the criterion is
+/// read rather than assumed to follow from `start`.
+#[test]
+#[ignore = "build terminal and capability-example through the public SDK first"]
+fn a_consumer_queries_and_stops_its_session_through_the_host() {
+    let root = tempfile::tempdir().unwrap();
+    let mut manager = Manager::open(
+        root.path().join("plugins"),
+        Environment {
+            workspace: root.path().display().to_string(),
+            os: "windows".into(),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    install(&mut manager, &terminal());
+    install(&mut manager, &session_consumer("session-client"));
+    // A program that stays up, so there is a session to query and to stop.
+    let program = json!({
+        "program": "powershell.exe",
+        "args": ["-NoProfile", "-Command", "Start-Sleep -Seconds 60"],
+        "name": "consumer session",
+    });
+
+    let accepted = command(
+        &mut manager,
+        "session-client",
+        "service-call-contract",
+        json!({"contract":"session.host","method":"start","value":program}),
+    );
+    assert_eq!(accepted, "Accepted");
+    let created = answered_sessions(&mut manager);
+    assert!(created.contains("\"located\":false"), "{created}");
+    let sessions = manager.executions();
+    assert_eq!(sessions.len(), 1, "one session exists: {sessions:?}");
+    let session = sessions[0].id();
+    // Whether the provider has confirmed the program yet is not what this check is about, and this
+    // harness does not drive a real PTY far enough to guarantee it. What matters is that the consumer
+    // can address the session it created, which the two calls below do by naming its identity.
+
+    // The consumer asks the host what it has, and reads back its own session. The wait is on the
+    // session appearing in the consumer's own panel rather than on a word: a list answer carries no
+    // `located` field, and waiting for one would time out on a call that in fact succeeded.
+    let answered = command(
+        &mut manager,
+        "session-client",
+        "service-call-contract",
+        json!({"contract":"session.host","method":"list","value":{}}),
+    );
+    assert_eq!(answered, "Accepted");
+    let wanted = session.to_string();
+    let listed = |manager: &mut Manager| {
+        let deadline = Instant::now() + Duration::from_secs(30);
+        let mut text = String::new();
+        while Instant::now() < deadline {
+            manager.poll();
+            text = text_of(manager, "session-client");
+            if text.contains(&wanted) {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        text
+    };
+    let listed = listed(&mut manager);
+    assert!(
+        listed.contains(&wanted),
+        "the consumer's own session is in the host's list: {listed}"
+    );
+
+    // And it stops it through the same boundary, rather than the host reaching in on its behalf.
+    let answered = command(
+        &mut manager,
+        "session-client",
+        "service-call-contract",
+        json!({"contract":"session.host","method":"stop","value":{"session":session.to_string()}}),
+    );
+    assert_eq!(answered, "Accepted");
+    // The answer is the session's own identity and state, so the stop was addressed to it rather than
+    // silently accepted; a refusal would have been reported as a failure instead of accepted.
+    let stopped = answered_sessions(&mut manager);
+    assert!(
+        stopped.contains(&session.to_string()),
+        "the stop answer names the session the consumer asked about: {stopped}"
+    );
+}
+
 /// Read the consumer's own report of its session answer, waiting for one to arrive.
 ///
 /// The answer is read from the consumer's panel because that is what it publishes, so the check sees
