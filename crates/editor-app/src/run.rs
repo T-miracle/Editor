@@ -57,8 +57,9 @@ impl RunSession {
     /// Whether the session is still a launch or a running program rather than a finished result.
     pub fn is_active(&self) -> bool {
         match self.state {
-            plugin_runtime::ExecutionState::Starting
-            | plugin_runtime::ExecutionState::Running => true,
+            plugin_runtime::ExecutionState::Starting | plugin_runtime::ExecutionState::Running => {
+                true
+            }
             plugin_runtime::ExecutionState::Failed => false,
         }
     }
@@ -98,7 +99,8 @@ impl RunControls {
         let mut controls = Self {
             root: root.clone(),
             ..Self::default()
-        };        let Some(root) = root else {
+        };
+        let Some(root) = root else {
             return controls;
         };
         match editor_core::load(&root, workspace) {

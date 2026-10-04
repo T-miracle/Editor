@@ -241,84 +241,74 @@ impl EditorApp {
             .items_center()
             .gap_1()
             .child(
-                div()
-                    .debug_selector(|| "run-config-selector".into())
-                    .child(
-                        Button::new("run-config-select")
-                            .label(short_label(&label))
-                            .small()
-                            .compact()
-                            .ghost()
-                            .tooltip(label.clone())
-                            .on_click(cx.listener(|this, _, window, cx| {
-                                this.open_run_config_dialog(window, cx, None);
-                            })),
-                    ),
+                div().debug_selector(|| "run-config-selector".into()).child(
+                    Button::new("run-config-select")
+                        .label(short_label(&label))
+                        .small()
+                        .compact()
+                        .ghost()
+                        .tooltip(label.clone())
+                        .on_click(cx.listener(|this, _, window, cx| {
+                            this.open_run_config_dialog(window, cx, None);
+                        })),
+                ),
             )
             .child(
-                div()
-                    .debug_selector(|| "run-build".into())
-                    .child(
-                        Button::new("run-build-action")
-                            .label("构建")
-                            .small()
-                            .compact()
-                            .ghost()
-                            // No build action exists yet, so Build stays disabled with a visible
-                            // reason instead of silently running the program.
-                            .disabled(true)
-                            .tooltip("此配置尚未设置构建操作")
-                            .on_click(|_, _, _| {}),
-                    ),
+                div().debug_selector(|| "run-build".into()).child(
+                    Button::new("run-build-action")
+                        .label("构建")
+                        .small()
+                        .compact()
+                        .ghost()
+                        // No build action exists yet, so Build stays disabled with a visible
+                        // reason instead of silently running the program.
+                        .disabled(true)
+                        .tooltip("此配置尚未设置构建操作")
+                        .on_click(|_, _, _| {}),
+                ),
             )
             .child(
-                div()
-                    .debug_selector(|| "run-start".into())
-                    .child(
-                        Button::new("run-start-action")
-                            .label("运行")
-                            .small()
-                            .compact()
-                            .ghost()
-                            .disabled(!permitted || selected.is_none())
-                            .tooltip(if permitted {
-                                "运行所选配置"
-                            } else {
-                                "受限工作区不能启动程序"
-                            })
-                            .on_click(cx.listener(|this, _, window, cx| {
-                                this.start_selected_run(window, cx);
-                            })),
-                    ),
+                div().debug_selector(|| "run-start".into()).child(
+                    Button::new("run-start-action")
+                        .label("运行")
+                        .small()
+                        .compact()
+                        .ghost()
+                        .disabled(!permitted || selected.is_none())
+                        .tooltip(if permitted {
+                            "运行所选配置"
+                        } else {
+                            "受限工作区不能启动程序"
+                        })
+                        .on_click(cx.listener(|this, _, window, cx| {
+                            this.start_selected_run(window, cx);
+                        })),
+                ),
             )
             .child(
-                div()
-                    .debug_selector(|| "run-debug".into())
-                    .child(
-                        Button::new("run-debug-action")
-                            .label("调试")
-                            .small()
-                            .compact()
-                            .ghost()
-                            // Debugging arrives with its own ticket; it must never behave like Run.
-                            .disabled(true)
-                            .tooltip("尚无兼容的调试提供者")
-                            .on_click(|_, _, _| {}),
-                    ),
+                div().debug_selector(|| "run-debug".into()).child(
+                    Button::new("run-debug-action")
+                        .label("调试")
+                        .small()
+                        .compact()
+                        .ghost()
+                        // Debugging arrives with its own ticket; it must never behave like Run.
+                        .disabled(true)
+                        .tooltip("尚无兼容的调试提供者")
+                        .on_click(|_, _, _| {}),
+                ),
             )
             .child(
-                div()
-                    .debug_selector(|| "run-stop".into())
-                    .child(
-                        Button::new("run-stop-action")
-                            .label("停止")
-                            .small()
-                            .compact()
-                            .ghost()
-                            .disabled(!running)
-                            .tooltip("停止所选会话")
-                            .on_click(cx.listener(|this, _, _, cx| this.stop_selected_run(cx))),
-                    ),
+                div().debug_selector(|| "run-stop".into()).child(
+                    Button::new("run-stop-action")
+                        .label("停止")
+                        .small()
+                        .compact()
+                        .ghost()
+                        .disabled(!running)
+                        .tooltip("停止所选会话")
+                        .on_click(cx.listener(|this, _, _, cx| this.stop_selected_run(cx))),
+                ),
             )
             .child(
                 // The short vertical rule keeps the run group distinct from the plugin icon.
@@ -437,13 +427,7 @@ impl EditorApp {
         let key = self.workspace_key();
         let editing_id = editing.clone();
         let form = cx.new(|cx| {
-            RunConfigForm::open(
-                &self.run_controls,
-                &key,
-                editing_id.as_deref(),
-                window,
-                cx,
-            )
+            RunConfigForm::open(&self.run_controls, &key, editing_id.as_deref(), window, cx)
         });
         self.run_form = Some(form);
         let title = if editing.is_some() {

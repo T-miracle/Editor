@@ -31,6 +31,8 @@ mod management_tests;
 mod markdown_tests;
 mod native_controls;
 #[cfg(test)]
+mod native_run_tests;
+#[cfg(test)]
 mod native_ui_tests;
 mod preview;
 #[cfg(test)]
@@ -64,8 +66,8 @@ use plugin_runtime::{
 #[cfg(test)]
 use std::cell::RefCell;
 use std::collections::BTreeMap;
-use worker::{LifecycleAction, OperationProgress, Work, Worker};
 pub use worker::{HostRunSnapshot, Work as HostWork};
+use worker::{LifecycleAction, OperationProgress, Work, Worker};
 
 actions!(extensions, [ToggleExtensions, QuitEditor]);
 /// Opens plugin management independently of plugin-owned panel visibility.
@@ -427,7 +429,8 @@ impl ExtensionPanel {
     }
     /// Publish worker results and hand native editor/clipboard requests to the UI thread.
     /// Apply host-local authority before accepting further worker views or contributions.
-    pub(crate) fn set_workspace_trusted(&mut self, trusted: bool, cx: &mut Context<Self>) {        if !trusted {
+    pub(crate) fn set_workspace_trusted(&mut self, trusted: bool, cx: &mut Context<Self>) {
+        if !trusted {
             self.bundled.cancel_request();
             self.worker.cancel_installation();
             // Startup declarations can exist before the worker publishes any installed entries.

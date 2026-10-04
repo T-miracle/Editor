@@ -221,16 +221,15 @@ impl Worker {
                             // missing or ambiguous provider is reported instead of being guessed at.
                             let result = manager.start_execution(request).map(|session| {
                                 // Remember which launch produced this session before it is published.
-                                run_requests.insert(
-                                    session.id(),
-                                    (config.clone(), request_id),
-                                );
+                                run_requests.insert(session.id(), (config.clone(), request_id));
                             });
                             if let Err(error) = &result {
                                 let mut published = output.lock().unwrap();
-                                published
-                                    .run_errors
-                                    .push((config.clone(), request_id, format!("{error:#}")));
+                                published.run_errors.push((
+                                    config.clone(),
+                                    request_id,
+                                    format!("{error:#}"),
+                                ));
                                 published.configuration_revision += 1;
                             }
                             result.map_err(|error| anyhow::anyhow!("{error:#}"))

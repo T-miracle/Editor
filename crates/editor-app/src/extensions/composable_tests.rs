@@ -279,7 +279,21 @@ pub(super) fn pump(
     app: &Entity<EditorApp>,
     cx: &mut gpui_kit::VisualTestContext,
 ) {
-    let work: Vec<_> = cx.update(|_, cx| {
+    let mut launches = Vec::new();
+    pump_recording(manager, app, cx, &mut launches);
+}
+
+/// Deliver queued worker work while recording each host launch the runtime accepted.
+///
+/// Host launches travel the same public contract any plugin uses, so the test harness performs
+/// exactly what the production worker does with this work item.
+pub(super) fn pump_recording(
+    manager: &mut plugin_runtime::Manager,
+    app: &Entity<EditorApp>,
+    cx: &mut gpui_kit::VisualTestContext,
+    launches: &mut Vec<(u64, String, u64)>,
+) {
+    let mut work: Vec<_> = cx.update(|_, cx| {
         app.read(cx)
             .extensions
             .read(cx)
@@ -289,6 +303,23 @@ pub(super) fn pump(
             .unwrap()
             .try_iter()
             .collect()
+    });
+    // A host launch reaches the runtime through the same public contract any plugin uses, so the
+    // test harness performs exactly what the production worker would do with this work item. These
+    // are taken first so the ordinary branches below keep their by-value patterns.
+    work.retain(|item| match item {
+        Work::StartRun {
+            request,
+            config,
+            request_id,
+        } => {
+            let session = manager
+                .start_execution(request.clone())
+                .expect("a compatible execution provider is installed");
+            launches.push((session.id(), config.clone(), *request_id));
+            false
+        }
+        _ => true,
     });
     for work in work {
         if let Work::ImageInput {
@@ -326,6 +357,17 @@ pub(super) fn publish(
     app: &Entity<EditorApp>,
     cx: &mut gpui_kit::VisualTestContext,
 ) {
+    publish_with_launches(manager, renderer, app, cx, &[]);
+}
+
+/// Publish the worker's view while joining host sessions to the launches that requested them.
+pub(super) fn publish_with_launches(
+    manager: &mut plugin_runtime::Manager,
+    renderer: &mut images::VectorRenderer,
+    app: &Entity<EditorApp>,
+    cx: &mut gpui_kit::VisualTestContext,
+    launches: &[(u64, String, u64)],
+) {
     let scenes: BTreeMap<_, _> = manager
         .live
         .iter()
@@ -338,16 +380,57 @@ pub(super) fn publish(
         .collect();
     let resources = manager.image_resources();
     let images = renderer.prepare_resources(&scenes, &resources);
+    // Host sessions are published through the same shared state the production worker writes, so the
+    // editor's reconciliation runs here exactly as it does in a real frame.
+    let host_executions = manager
+        .executions()
+        .into_iter()
+        .map(|session| {
+            let id = session.id();
+            let snapshot = session.snapshot();
+            (
+                id,
+                snapshot.plugin,
+                snapshot.state,
+                snapshot.provider_session,
+                snapshot.failure.map(|failure| failure.message),
+            )
+        })
+        .collect::<Vec<_>>();
     cx.update(|window, cx| {
         app.read(cx).extensions.clone().update(cx, |owner, cx| {
             let mut state = owner.worker.state.lock().unwrap();
             state.entries = manager.published_entries();
             state.views = scenes;
             state.images = images;
+            // The launch identity recorded by the harness joins each published session to its request.
+            state.host_executions = host_executions
+                .iter()
+                .map(|(id, plugin, state_, provider, failure)| {
+                    let (config, request_id) = launches
+                        .iter()
+                        .find(|(session, _, _)| session == id)
+                        .map(|(_, config, request_id)| (config.clone(), *request_id))
+                        .unwrap_or_default();
+                    HostRunSnapshot {
+                        id: *id,
+                        config,
+                        request_id,
+                        plugin: plugin.clone(),
+                        state: *state_,
+                        provider_session: provider.clone(),
+                        failure: failure.clone(),
+                    }
+                })
+                .collect();
             drop(state);
             owner.poll(cx);
         });
-        app.update(cx, |app, cx| app.sync_plugin_panels(window, cx));
+        app.update(cx, |app, cx| {
+            app.sync_plugin_panels(window, cx);
+            // A frame reconciles published sessions before painting, which is what this mirrors.
+            app.sync_run_controls(cx);
+        });
         for panel in app
             .read(cx)
             .plugin_panels

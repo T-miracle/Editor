@@ -20,7 +20,12 @@ fn config(id: &str, name: &str) -> RunConfig {
     }
 }
 
-fn snapshot(id: u64, config: &str, request_id: u64, state: plugin_runtime::ExecutionState) -> HostRunSnapshot {
+fn snapshot(
+    id: u64,
+    config: &str,
+    request_id: u64,
+    state: plugin_runtime::ExecutionState,
+) -> HostRunSnapshot {
     HostRunSnapshot {
         id,
         config: config.into(),
@@ -36,7 +41,9 @@ fn snapshot(id: u64, config: &str, request_id: u64, state: plugin_runtime::Execu
 #[test]
 fn a_running_configuration_resolves_to_its_session() {
     let mut controls = controls();
-    controls.upsert(config("run-1", "本机程序"), "C:/work").unwrap();
+    controls
+        .upsert(config("run-1", "本机程序"), "C:/work")
+        .unwrap();
     let request_id = controls.begin("run-1");
     controls.reconcile(&[snapshot(
         7,
@@ -59,7 +66,9 @@ fn a_running_configuration_resolves_to_its_session() {
 #[test]
 fn a_valid_configuration_plans_a_literal_request() {
     let mut controls = controls();
-    controls.upsert(config("run-1", "带空格"), "C:/work").unwrap();
+    controls
+        .upsert(config("run-1", "带空格"), "C:/work")
+        .unwrap();
     let plan = controls.plan_launch("run-1", "C:/work/project");
     let request = RunControls::request_for(&plan).expect("valid configuration plans a start");
     assert_eq!(request.program, "powershell.exe");
@@ -98,7 +107,9 @@ fn invalid_targets_are_reported_instead_of_launched() {
 #[test]
 fn sessions_follow_their_own_request_and_later_state() {
     let mut controls = controls();
-    controls.upsert(config("run-1", "本机程序"), "C:/work").unwrap();
+    controls
+        .upsert(config("run-1", "本机程序"), "C:/work")
+        .unwrap();
     let mine = controls.begin("run-1");
     // Another window's session must not be adopted as this editor's result.
     controls.reconcile(&[snapshot(
@@ -116,7 +127,10 @@ fn sessions_follow_their_own_request_and_later_state() {
         mine,
         plugin_runtime::ExecutionState::Starting,
     )]);
-    assert!(controls.is_pending("run-1"), "a requested start is still pending");
+    assert!(
+        controls.is_pending("run-1"),
+        "a requested start is still pending"
+    );
 
     // The provider retires: the published state replaces the stale one for a known session.
     controls.reconcile(&[HostRunSnapshot {
@@ -175,13 +189,18 @@ fn drafts_preserve_argument_boundaries() {
     };
     let configuration = draft.to_config();
     assert_eq!(configuration.name, "带空格");
-    assert_eq!(configuration.target.executable(), "C:/Program Files/tool.exe");
+    assert_eq!(
+        configuration.target.executable(),
+        "C:/Program Files/tool.exe"
+    );
     assert_eq!(
         configuration.literal_arguments(),
         vec!["--flag", "C:/path with spaces/file.txt"]
     );
     assert_eq!(configuration.directory.as_deref(), Some("C:/work"));
-    configuration.validate().expect("draft produces a valid configuration");
+    configuration
+        .validate()
+        .expect("draft produces a valid configuration");
 
     // An empty directory means the workspace root rather than an empty path.
     let bare = RunConfigDraft::from_config(None, "run-2".into());
