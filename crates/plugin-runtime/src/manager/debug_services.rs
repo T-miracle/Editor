@@ -295,6 +295,12 @@ pub const DEBUG_REQUIRED_METHODS: [&str; 6] = [
 /// simply never declares it, and a control that needs it is disabled with that reason instead of
 /// failing when pressed. Requiring them outright would make a capable provider unusable for lacking
 /// an unrelated ability.
+///
+/// The host reads the abilities from the declaration itself rather than from this list, so nothing in
+/// the application consults it; it is here because a check asserts that the declaration covers exactly
+/// the required and optional methods together. That is why it is compiled only for tests rather than
+/// sitting in the library as a second, divergent account of what a provider may offer.
+#[cfg(test)]
 pub const DEBUG_OPTIONAL_METHODS: [&str; 3] = ["step", "frames", "variables"];
 
 /// A debug provider's declaration, read as the methods it actually offers.

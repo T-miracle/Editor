@@ -653,6 +653,11 @@ const SESSION_METHODS: [&str; 4] = ["start", "list", "status", "stop"];
 /// A consumer states this to open the contract, and resolution compares it against what the host
 /// advertises, so asking for an operation the host does not offer is refused at open time rather
 /// than at the moment it is called.
+///
+/// Built from the host's own declaration, which is why it can be derived rather than repeated. The
+/// application does not consult it — the host is the provider, not a consumer of its own contract —
+/// and a check uses it to resolve the contract through the same path a guest would.
+#[cfg(test)]
 pub(crate) fn session_dependency() -> Result<Dependency, Failure> {
     let provider = session_provider(
         "dependency",
