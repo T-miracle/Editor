@@ -509,9 +509,16 @@ pub fn session_state_word(state: plugin_runtime::ExecutionState) -> &'static str
 pub struct RunConfigDraft {
     pub id: String,
     pub name: String,
+    /// Program mode starts an executable directly; shell mode interprets the script text.
+    ///
+    /// The two are separate modes rather than one field with quoting rules: a program's arguments
+    /// are never joined into a command line, and a script is never split into arguments.
+    pub shell: bool,
     pub program: String,
     /// One argument per line, so a value containing spaces is never re-split.
     pub arguments: String,
+    /// Script text for shell mode, passed to the interpreter as one final argument.
+    pub script: String,
     pub directory: String,
     /// Environment entries as `名称=值`, one per line; values keep everything after the first `=`.
     pub environment: String,
@@ -524,38 +531,61 @@ impl RunConfigDraft {
             Some(config) => Self {
                 id: config.id.clone(),
                 name: config.name.clone(),
+                shell: matches!(config.target, RunTarget::Script { .. }),
                 program: config.target.executable().to_owned(),
-                arguments: config.literal_arguments().join("\n"),
+                arguments: match &config.target {
+                    RunTarget::Program { args, .. } | RunTarget::Script { args, .. } => {
+                        args.join("\n")
+                    }
+                },
+                script: match &config.target {
+                    RunTarget::Script { script, .. } => script.clone(),
+                    RunTarget::Program { .. } => String::new(),
+                },
                 directory: config.directory.clone().unwrap_or_default(),
                 environment: render_environment(&config.env),
             },
             None => Self {
                 id,
                 name: String::new(),
+                shell: false,
                 program: String::new(),
                 arguments: String::new(),
+                script: String::new(),
                 directory: String::new(),
                 environment: String::new(),
             },
         }
     }
 
-    /// Build the configuration this draft describes, keeping program mode's literal arguments.
+    /// Build the configuration this draft describes.
     ///
+    /// The mode decides which fields mean what: program mode keeps a literal argv and never composes
+    /// a command line, shell mode passes the script text to the named interpreter as one argument.
     /// A malformed environment line is reported here, so an unusable entry never reaches a launch.
     pub fn to_config(&self) -> Result<RunConfig, String> {
+        let arguments = self
+            .arguments
+            .lines()
+            .map(str::to_owned)
+            .filter(|line| !line.is_empty())
+            .collect::<Vec<_>>();
+        let target = if self.shell {
+            RunTarget::Script {
+                interpreter: self.program.trim().to_owned(),
+                args: arguments,
+                script: self.script.clone(),
+            }
+        } else {
+            RunTarget::Program {
+                program: self.program.trim().to_owned(),
+                args: arguments,
+            }
+        };
         Ok(RunConfig {
             id: self.id.clone(),
             name: self.name.trim().to_owned(),
-            target: RunTarget::Program {
-                program: self.program.trim().to_owned(),
-                args: self
-                    .arguments
-                    .lines()
-                    .map(str::to_owned)
-                    .filter(|line| !line.is_empty())
-                    .collect(),
-            },
+            target,
             directory: (!self.directory.trim().is_empty())
                 .then(|| self.directory.trim().to_owned()),
             env: parse_environment(&self.environment)?,

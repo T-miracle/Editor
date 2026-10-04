@@ -79,15 +79,17 @@ enum RunField {
     Name,
     Program,
     Arguments,
+    Script,
     Directory,
     Environment,
 }
 
 impl RunField {
-    const ALL: [Self; 5] = [
+    const ALL: [Self; 6] = [
         Self::Name,
         Self::Program,
         Self::Arguments,
+        Self::Script,
         Self::Directory,
         Self::Environment,
     ];
@@ -98,6 +100,7 @@ impl RunField {
             Self::Program => "程序",
             // One argument per line keeps a value containing spaces literal.
             Self::Arguments => "参数（每行一个）",
+            Self::Script => "脚本文本",
             Self::Directory => "工作目录",
             Self::Environment => "环境变量（每行 名称=值）",
         }
@@ -108,6 +111,7 @@ impl RunField {
             Self::Name => "run-config-name",
             Self::Program => "run-config-program",
             Self::Arguments => "run-config-arguments",
+            Self::Script => "run-config-script",
             Self::Directory => "run-config-directory",
             Self::Environment => "run-config-environment",
         }
@@ -118,6 +122,7 @@ impl RunField {
             Self::Name => draft.name.clone(),
             Self::Program => draft.program.clone(),
             Self::Arguments => draft.arguments.clone(),
+            Self::Script => draft.script.clone(),
             Self::Directory => draft.directory.clone(),
             Self::Environment => draft.environment.clone(),
         }
@@ -128,6 +133,7 @@ impl RunField {
             Self::Name => draft.name = value,
             Self::Program => draft.program = value,
             Self::Arguments => draft.arguments = value,
+            Self::Script => draft.script = value,
             Self::Directory => draft.directory = value,
             Self::Environment => draft.environment = value,
         }
@@ -720,23 +726,54 @@ impl EditorApp {
                 let Some(mut request) = RunControls::request_for(&plan) else {
                     return;
                 };
-                // Explicit entries belong to this launch; the stored configuration's own entries are
-                // already part of the request the plan produced.
+                // Explicit entries belong to this launch, so the caller's environment is what the
+                // program receives; the stored configuration's own entries are already in the plan.
                 request.env = env;
-                let request_id = self.run_controls.begin(&config.id);
-                let queued = self.extensions.read(cx).stage_host_run(Work::StartRun {
-                    request,
-                    config: config.id.clone(),
-                    request_id,
-                });
-                self.status = if queued {
-                    format!("正在启动 {}", config.name)
-                } else {
-                    "插件后台服务不可用，无法启动".into()
-                };
-                cx.notify();
+                self.stage_run_request(&config, request, cx);
             }
         }
+    }
+
+    /// Stage one already-composed launch request for a configuration and report it.
+    fn stage_run_request(
+        &mut self,
+        config: &editor_core::RunConfig,
+        request: plugin_runtime::RunRequest,
+        cx: &mut Context<Self>,
+    ) {
+        let request_id = self.run_controls.begin(&config.id);
+        let queued = self.extensions.read(cx).stage_host_run(Work::StartRun {
+            request,
+            config: config.id.clone(),
+            request_id,
+        });
+        self.status = if queued {
+            format!("正在启动 {}", config.name)
+        } else {
+            "插件后台服务不可用，无法启动".into()
+        };
+        cx.notify();
+    }
+
+    /// Start a stored configuration exactly as its own target describes it.
+    ///
+    /// Used by the native acceptance for a mode the form produces, so the request under test is the
+    /// one the launch path builds rather than a hand-assembled equivalent.
+    pub(crate) fn start_stored_configuration(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let _ = window;
+        let Some(config) = self.run_controls.selected().cloned() else {
+            return;
+        };
+        let root = self.workspace_key();
+        let plan = self.run_controls.plan_launch(&config.id, &root);
+        let Some(request) = RunControls::request_for(&plan) else {
+            return;
+        };
+        self.stage_run_request(&config, request, cx);
     }
 
     /// Reveal one session's output: select its configuration and show the surface that owns it.
@@ -1006,7 +1043,7 @@ fn render_run_config_form(
     let Some(app) = app.upgrade() else {
         return content;
     };
-    let (tab, error, texts, inputs, saved) = {
+    let (tab, error, shell, texts, inputs, saved) = {
         let state = app.read(cx);
         let saved = state.run_controls.configurations().to_vec();
         let Some(form) = state.run_form.as_ref() else {
@@ -1016,6 +1053,7 @@ fn render_run_config_form(
         (
             form.tab,
             form.error.clone(),
+            form.draft.shell,
             RunField::ALL.map(|field| {
                 let text = form.text(field, cx);
                 text
@@ -1068,12 +1106,23 @@ fn render_run_config_form(
     let page_fields: &[RunField] = if tab == RunConfigTab::Environment {
         &[RunField::Environment]
     } else {
-        &[
-            RunField::Name,
-            RunField::Program,
-            RunField::Arguments,
-            RunField::Directory,
-        ]
+        // Shell mode replaces the program field's meaning and adds the script body.
+        if shell {
+            &[
+                RunField::Name,
+                RunField::Program,
+                RunField::Arguments,
+                RunField::Script,
+                RunField::Directory,
+            ]
+        } else {
+            &[
+                RunField::Name,
+                RunField::Program,
+                RunField::Arguments,
+                RunField::Directory,
+            ]
+        }
     };
     let fields = RunField::ALL
         .into_iter()
@@ -1081,10 +1130,16 @@ fn render_run_config_form(
         .zip(inputs)
         .filter(|((field, _), _)| page_fields.contains(field))
         .map(|((field, text), input)| {
+            // In shell mode the executable field names the interpreter, which is what it means.
+            let label = match (field, shell) {
+                (RunField::Program, true) => "解释器",
+                (RunField::Arguments, true) => "解释器参数（每行一个）",
+                _ => field.label(),
+            };
             h_flex()
                 .gap_2()
                 .items_center()
-                .child(div().w(px(150.)).child(field.label()))
+                .child(div().w(px(150.)).child(label))
                 .child(
                     div()
                         .debug_selector(move || field.selector().into())
@@ -1145,6 +1200,54 @@ fn render_run_config_form(
                     }),
             )
             .child(h_flex().gap_1().children(tabs))
+            .child(
+                // The mode is an explicit choice: a program's arguments are never a command line,
+                // and a script is never split into one.
+                h_flex()
+                    .gap_2()
+                    .items_center()
+                    .child(div().w(px(150.)).child("运行方式"))
+                    .child({
+                        let owner = app.clone();
+                        div()
+                            .id("run-config-mode-program")
+                            .debug_selector(|| "run-config-mode-program".into())
+                            .when(!shell, |mode| mode.font_semibold())
+                            .child("程序")
+                            .on_click(move |_, _, cx| {
+                                owner.update(cx, |state, cx| {
+                                    if let Some(form) = state.run_form.as_ref() {
+                                        form.update(cx, |form, cx| {
+                                            form.draft.shell = false;
+                                            form.error = None;
+                                            cx.notify();
+                                        });
+                                    }
+                                    cx.notify();
+                                });
+                            })
+                    })
+                    .child({
+                        let owner = app.clone();
+                        div()
+                            .id("run-config-mode-shell")
+                            .debug_selector(|| "run-config-mode-shell".into())
+                            .when(shell, |mode| mode.font_semibold())
+                            .child("Shell 脚本")
+                            .on_click(move |_, _, cx| {
+                                owner.update(cx, |state, cx| {
+                                    if let Some(form) = state.run_form.as_ref() {
+                                        form.update(cx, |form, cx| {
+                                            form.draft.shell = true;
+                                            form.error = None;
+                                            cx.notify();
+                                        });
+                                    }
+                                    cx.notify();
+                                });
+                            })
+                    }),
+            )
             .child(
                 v_flex()
                     .debug_selector(|| "run-config-basic".into())

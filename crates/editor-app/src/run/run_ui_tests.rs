@@ -122,6 +122,7 @@ fn the_run_configuration_dialog_owns_a_b1_draft(cx: &mut TestAppContext) {
             "名称",
             "程序",
             "参数（每行一个）",
+            "脚本文本",
             "工作目录",
             "环境变量（每行 名称=值）"
         ]

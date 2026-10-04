@@ -274,7 +274,9 @@ fn drafts_preserve_argument_boundaries() {
     let draft = RunConfigDraft {
         id: "run-1".into(),
         name: " 带空格 ".into(),
+        shell: false,
         program: " C:/Program Files/tool.exe ".into(),
+        script: String::new(),
         arguments: "--flag\nC:/path with spaces/file.txt\n".into(),
         directory: " C:/work ".into(),
         // Values keep everything after the first `=`, including spaces and further equals signs.
@@ -324,7 +326,9 @@ fn a_malformed_environment_line_is_refused() {
     let base = RunConfigDraft {
         id: "run-1".into(),
         name: "环境".into(),
+        shell: false,
         program: "tool.exe".into(),
+        script: String::new(),
         arguments: String::new(),
         directory: String::new(),
         environment: "没有等号".into(),
@@ -337,4 +341,60 @@ fn a_malformed_environment_line_is_refused() {
         ..base
     };
     assert!(invalid.to_config().is_err());
+}
+
+/// Shell mode is a separate mode, not quoting inside program mode.
+#[test]
+fn shell_mode_names_an_interpreter_and_passes_the_script_verbatim() {
+    let draft = RunConfigDraft {
+        id: "run-1".into(),
+        name: "脚本".into(),
+        shell: true,
+        program: " pwsh.exe ".into(),
+        arguments: "-NoProfile\n-Command\n".into(),
+        // A pipeline and a quoted value survive as one script, never as separate arguments.
+        script: "Get-ChildItem | Where-Object { $_.Name -like 'a b*' }".into(),
+        directory: String::new(),
+        environment: String::new(),
+    };
+    let configuration = draft.to_config().expect("the draft is usable");
+    assert_eq!(configuration.target.executable(), "pwsh.exe");
+    assert_eq!(
+        configuration.literal_arguments(),
+        vec![
+            "-NoProfile",
+            "-Command",
+            "Get-ChildItem | Where-Object { $_.Name -like 'a b*' }"
+        ]
+    );
+    configuration
+        .validate()
+        .expect("an interpreter with a script body is a valid configuration");
+
+    // Reopening keeps the mode, the interpreter and the script body.
+    let reopened = RunConfigDraft::from_config(Some(&configuration), "run-1".into());
+    assert!(reopened.shell);
+    assert_eq!(reopened.program, "pwsh.exe");
+    assert_eq!(
+        reopened.script,
+        "Get-ChildItem | Where-Object { $_.Name -like 'a b*' }"
+    );
+    assert_eq!(reopened.to_config().unwrap().target, configuration.target);
+
+    // Switching back to program mode drops the script body instead of keeping a hidden command.
+    let as_program = RunConfigDraft {
+        shell: false,
+        ..reopened
+    }
+    .to_config()
+    .unwrap();
+    assert!(matches!(
+        as_program.target,
+        RunTarget::Program { ref program, .. } if program == "pwsh.exe"
+    ));
+    assert_eq!(
+        as_program.literal_arguments(),
+        vec!["-NoProfile", "-Command"],
+        "a program launch never gains the script text"
+    );
 }

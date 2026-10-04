@@ -561,10 +561,17 @@ fn two_configurations_run_concurrently_with_their_own_sessions(cx: &mut TestAppC
 }
 
 /// Collect the glyphs a provider painted, which is how a program's output becomes observable.
+///
+/// A provider that is not running yet has painted nothing, so absence is empty text rather than a
+/// failure: the caller is waiting for output, not for the provider's existence.
 fn painted_text(manager: &plugin_runtime::Manager) -> String {
     use plugin_runtime::plugin_protocol::{Paint, ui::Kind};
     let mut text = String::new();
-    let Some(scene) = manager.live["terminal"].views.get("terminal") else {
+    let Some(scene) = manager
+        .live
+        .get("terminal")
+        .and_then(|instance| instance.views.get("terminal"))
+    else {
         return text;
     };
     scene.root.visit(&mut |node| {
@@ -691,6 +698,90 @@ fn a_configuration_environment_reaches_the_program_it_starts(cx: &mut TestAppCon
         editor_core::storage_path(&app.read(cx).workspace_key()).expect("host-local path")
     });
     let _ = std::fs::remove_file(stored);
+}
+
+/// A shell-mode configuration is interpreted by the interpreter it names, script text intact.
+#[gpui::test]
+#[ignore = "build terminal and capability-example through the public SDK first"]
+fn a_shell_configuration_runs_its_script_through_the_named_interpreter(cx: &mut TestAppContext) {
+    let root = tempfile::tempdir().unwrap();
+    let (mut manager, app, cx) = fixture(
+        cx,
+        root.path(),
+        "powershell.exe",
+        vec![
+            "-NoProfile".into(),
+            "-Command".into(),
+            "Write-Output program".into(),
+        ],
+    );
+    let mut renderer = images::VectorRenderer::default();
+    // The draft the environment page and the basic page produce, saved through the normal store.
+    let config = cx.update(|_, cx| {
+        app.update(cx, |app, cx| {
+            let key = app.workspace_key();
+            let id = app.run_controls.generate_id(&key);
+            let draft = crate::run::RunConfigDraft {
+                id: id.clone(),
+                name: "脚本模式".into(),
+                shell: true,
+                program: "powershell.exe".into(),
+                arguments: "-NoProfile\n-Command".into(),
+                // A pipeline with quoting stays one script body rather than several arguments.
+                script: "[Console]::Write('SCRIPT_MODE_OK ' + (1 + 1)); Start-Sleep -Seconds 60"
+                    .into(),
+                directory: String::new(),
+                environment: String::new(),
+            };
+            app.run_controls
+                .upsert(draft.to_config().expect("the draft is valid"), &key)
+                .expect("the configuration is stored");
+            app.run_controls.select(&id, &key);
+            cx.notify();
+            id
+        })
+    });
+    let mut launches = Vec::new();
+    cx.update(|window, cx| {
+        app.update(cx, |app, cx| app.start_stored_configuration(window, cx));
+    });
+    let mut session = None;
+    for _ in 0..200 {
+        pump_recording(&mut manager, &app, cx, &mut launches);
+        manager.poll();
+        publish_with_launches(&mut manager, &mut renderer, &app, cx, &launches);
+        // The paint concatenates the grid's cells, so a space is its own cell rather than part of a
+        // run; the marker is what proves the interpreter evaluated the script body.
+        if let Some((id, _, _)) = launches.first()
+            && painted_text(&manager).contains("SCRIPT_MODE_OK")
+        {
+            session = Some(*id);
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    let session = session.unwrap_or_else(|| {
+        let status = cx.update(|_, cx| app.read(cx).status.clone());
+        let painted = painted_text(&manager);
+        panic!("no session; status={status:?} painted={painted:?}")
+    });
+    // The request names the interpreter and carries the script as one final argument.
+    let request = manager.execution(session).unwrap().request().clone();
+    assert_eq!(request.program, "powershell.exe");
+    assert_eq!(
+        request.args,
+        vec![
+            "-NoProfile".to_owned(),
+            "-Command".to_owned(),
+            "[Console]::Write('SCRIPT_MODE_OK ' + (1 + 1)); Start-Sleep -Seconds 60".to_owned()
+        ]
+    );
+    // The evaluation happened: the same marker carries the interpreter's own arithmetic result.\n    let painted = painted_text(&manager);\n    assert!(painted.contains("SCRIPT_MODE_OK2"), "{painted:?}");
+    let stored = cx.update(|_, cx| {
+        editor_core::storage_path(&app.read(cx).workspace_key()).expect("host-local path")
+    });
+    let _ = std::fs::remove_file(stored);
+    let _ = config;
 }
 
 /// A restricted workspace never starts a program, whatever the stored configuration says.
