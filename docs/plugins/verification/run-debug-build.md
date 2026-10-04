@@ -338,6 +338,22 @@ Run and debug startup smoke passed: no program was left behind by shutdown.
 
 **合并后待办**：`docs/README.md`（文档总入口，位于主工作区且未被 git 跟踪）需补一行登记 `docs/run-debug-build.md`。
 
+### 证据的可证伪性：变异抽查（本轮）
+
+**判据不是「测试通过」，而是「测试能失败」。** 为验证这一点不只是一句口号，对关键判据做了**变异抽查**——故意改坏产品代码，确认对应用例**确实失败**，然后恢复：
+
+| 变异 | 期望被谁抓到 | 实测 |
+| --- | --- | --- |
+| 去掉「会话属于该插件」这一条件（`plugin_session_impact` 的 running 过滤） | `a_plugin_lifecycle_change_names_the_sessions_it_affects` | **失败**（第 1611 行断言） |
+| 把调试会话记给任意插件（而非选中的调试提供者） | 同上 | **失败**（第 1651 行断言） |
+| 把刚补的「丢失目标按身份与名字报告」断言改成空 | 该用例 | **失败**（`DELIBERATELY WRONG`） |
+
+三处恢复后 `run::` **62 项全绿**、`git diff` 为空。**结论**：这三条判据测得是它们声称的东西，而不是「碰巧在什么都没发生时成立」。
+
+**同时发现并修补的一处空洞**：`invalid_targets()` 此前**只有「发现未运行时应为空」一条断言**——一个只被覆盖空情况的方法，与一个永远不报告任何东西的方法无法区分。现已断言它**非空且内容正确**（前一条用例里顺带补上）。
+
+**另一处核对结果**：`sessions_follow_their_own_request_and_later_state` 里 `active_sessions().is_empty()` 看似可疑，但它**紧跟在 `sessions().len() == 1` 与 `!sessions[0].is_active()` 之后**，并由「同一配置可再次启动」交叉约束，因此不是空转。
+
 ## 未覆盖与限制
 
 - **`editor-app` 整二进制全量运行不可作为判据**（本任务开始前即如此）：`cargo test -p editor-app --bin editor-app` 会让不同用例互相污染宿主内的共享注册表，出现一批失败。**实测对照**：在提交 `3a50511`（本轮工作之前）上单跑 `app::plugins` 已是 `18 passed; 2 failed`，当前为 `19 passed; 1 failed`；且每个失败用例单独运行时都通过（`app::plugins::tests::restricting_startup_withdraws_declarations_before_worker_publication` 单独跑 `ok`）。因此按仓库验证约定使用**按模块过滤**的针对性运行：`run::` 59 项、`extensions::worker` 11 项、`language::code_highlighting` 12 项、`extensions::markdown_tests` 1 项（其余为 ignored）在本轮全绿。这不是本任务引入的缺陷，也不据它宣称通过。
