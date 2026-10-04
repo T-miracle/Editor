@@ -642,7 +642,11 @@ pub(crate) fn start_failure(error: Failure) -> anyhow::Error {
 }
 
 /// The four operations the host answers on its session contract, as method names.
-pub(crate) const SESSION_METHODS: [&str; 4] = ["start", "list", "status", "stop"];
+///
+/// Only checks name them for now: a consumer learns them from the declaration it opens rather than
+/// from a list here, so this exists to assert that the declaration and the answer agree.
+#[cfg(test)]
+const SESSION_METHODS: [&str; 4] = ["start", "list", "status", "stop"];
 
 /// What a consumer requires of the host's session contract.
 ///
