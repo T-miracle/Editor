@@ -40,6 +40,10 @@ impl Manager {
         }
     }
     /// Registry snapshots include exact live incarnations, including parked workspaces and consumers.
+    ///
+    /// The host is published beside them so a consumer's selection and this registry agree: the
+    /// session contract has exactly one provider per workspace, and it is the runtime that owns the
+    /// table those sessions live in.
     pub(super) fn refresh_services(&mut self) {
         let providers = self
             .live
@@ -47,7 +51,15 @@ impl Manager {
             .chain(self.parked.values().flat_map(|scope| scope.live.values()))
             .filter_map(Instance::service_provider)
             .collect();
-        self.plugin_services.lock().unwrap().reconcile(providers);
+        let scope = self.host_scope().to_owned();
+        let host = vec![super::host_services::session_provider(
+            &scope,
+            self.host_alive.clone(),
+        )];
+        self.plugin_services
+            .lock()
+            .unwrap()
+            .reconcile(providers, host);
         for instance in self.live.values_mut().chain(
             self.parked
                 .values_mut()

@@ -24,6 +24,18 @@ use std::{
 
 /// The only execution contract the host consumes directly; its version family is negotiated.
 pub const EXECUTION_CONTRACT: &str = "interactive.execute";
+/// The session contract the host itself offers, so a consumer plugin and the title bar share one table.
+///
+/// The host is the participant that owns a workspace's visible sessions: it decides what is running,
+/// which launch a session belongs to, and which request a repeated launch locates. A consumer that
+/// started a program through a provider directly would create a session the host cannot see, so this
+/// contract is the public seam where a consumer asks the host for a session instead. Both entry
+/// points therefore reach the same table and the same deduplication rule, and neither has to know
+/// which provider answers.
+pub const SESSION_CONTRACT: &str = "session.host";
+/// The host's session contract version. A consumer requires a family of it, such as `^1`, so the
+pub const SESSION_CONTRACT_VERSION: &str = "1.0.0";
+/// host can answer a later compatible revision without every consumer changing.
 /// The only debug contract the host consumes directly.
 ///
 /// Debugging is a provider contract like execution, so the host never learns which debugger answers,
@@ -535,6 +547,84 @@ pub(crate) fn host_caller(scope: &str) -> Caller {
     }
 }
 
+/// The host as a broker participant offering its session contract for one logical scope.
+///
+/// Aliveness is the runtime's own flag, so the registration disappears with the runtime that owns
+/// the sessions rather than outliving them: a consumer can only reach sessions that still exist.
+pub(crate) fn session_provider(
+    scope: &str,
+    alive: std::sync::Arc<std::sync::atomic::AtomicBool>,
+) -> crate::plugin_services::Provider {
+    use plugin_protocol::service::{Contract, Method};
+    let mut methods = std::collections::BTreeMap::new();
+    // Starting, listing, querying and stopping are the four operations the ticket names; each is a
+    // declared shape, so a consumer can only ask for what the host advertises. A session is named by
+    // the string the host publishes, which is what the title bar and the consumer both address.
+    let mut declare = |name: &str, parameters: &str, result: &str| {
+        methods.insert(
+            name.to_owned(),
+            Method {
+                parameters: serde_json::from_str(parameters).expect("session schema is valid"),
+                result: serde_json::from_str(result).expect("session schema is valid"),
+                permissions: std::collections::BTreeSet::new(),
+            },
+        );
+    };
+    declare(
+        "start",
+        r#"{"type":"record","fields":{
+            "program":{"type":"string","max_bytes":4096},
+            "args":{"type":"array","max_items":128,"items":{"type":"string","max_bytes":4096}},
+            "cwd":{"type":"string","max_bytes":4096},
+            "name":{"type":"string","max_bytes":256},
+            "env":{"type":"array","max_items":64,"items":{"type":"record","fields":{
+                "name":{"type":"string","max_bytes":128},
+                "value":{"type":"string","max_bytes":32768}}}}},
+            "optional":["cwd","name","env"]}"#,
+        r#"{"type":"record","fields":{
+            "session":{"type":"string","max_bytes":128},
+            "state":{"type":"string","max_bytes":32},
+            "located":{"type":"boolean"}}}"#,
+    );
+    declare(
+        "list",
+        r#"{"type":"record","fields":{}}"#,
+        r#"{"type":"record","fields":{
+            "sessions":{"type":"array","max_items":64,"items":{"type":"record","fields":{
+                "session":{"type":"string","max_bytes":128},
+                "state":{"type":"string","max_bytes":32}}}}}}"#,
+    );
+    declare(
+        "status",
+        r#"{"type":"record","fields":{"session":{"type":"string","max_bytes":128}}}"#,
+        r#"{"type":"record","fields":{
+            "session":{"type":"string","max_bytes":128},
+            "state":{"type":"string","max_bytes":32}}}"#,
+    );
+    declare(
+        "stop",
+        r#"{"type":"record","fields":{"session":{"type":"string","max_bytes":128}}}"#,
+        r#"{"type":"record","fields":{
+            "session":{"type":"string","max_bytes":128},
+            "state":{"type":"string","max_bytes":32}}}"#,
+    );
+    crate::plugin_services::Provider {
+        alive,
+        caller: host_caller(scope),
+        contracts: [(
+            SESSION_CONTRACT.to_owned(),
+            Contract {
+                version: SESSION_CONTRACT_VERSION
+                    .parse()
+                    .expect("session contract version is valid"),
+                methods,
+            },
+        )]
+        .into_iter()
+        .collect(),
+    }
+}
+
 /// Reason a start could not even be requested, before any provider state changed.
 pub(crate) fn start_failure(error: Failure) -> anyhow::Error {
     anyhow::anyhow!("{:?}: {}", error.code, error.message)
@@ -969,5 +1059,42 @@ mod tests {
             env: Vec::new(),
         };
         assert!(control_label.validate().is_err());
+    }
+
+    /// The host offers its session contract as a broker participant, for the workspace it owns.
+    #[test]
+    fn the_host_offers_its_session_contract_for_one_workspace() {
+        let alive = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true));
+        let provider = session_provider("C:/work", alive.clone());
+        // The caller identifies the host itself, scoped to one workspace, so two workspaces cannot
+        // address each other's sessions.
+        assert_eq!(provider.caller.plugin, "me-editor");
+        assert_eq!(provider.caller.instance, "host@C:/work");
+        assert_eq!(provider.caller.scope, "C:/work");
+        let contract = provider
+            .contracts
+            .get(SESSION_CONTRACT)
+            .expect("the host offers the session contract");
+        assert_eq!(contract.version.to_string(), SESSION_CONTRACT_VERSION);
+        // Exactly the operations the ticket names, each with a declared shape.
+        let names = contract.methods.keys().cloned().collect::<Vec<_>>();
+        assert_eq!(names, ["list", "start", "status", "stop"]);
+        for method in contract.methods.values() {
+            // A declared shape is what a consumer's dependency is matched against, so an empty one
+            // would let a consumer require nothing and still be told it matches.
+            assert_ne!(
+                serde_json::to_value(&method.parameters).unwrap(),
+                serde_json::json!(null),
+                "every session method declares its parameters"
+            );
+            assert_ne!(
+                serde_json::to_value(&method.result).unwrap(),
+                serde_json::json!(null),
+                "every session method declares its result"
+            );
+        }
+        // The registration is only as alive as the runtime that owns the sessions.
+        alive.store(false, std::sync::atomic::Ordering::Release);
+        assert!(!provider.alive.load(std::sync::atomic::Ordering::Acquire));
     }
 }

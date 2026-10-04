@@ -89,10 +89,16 @@ impl Broker {
             ..Default::default()
         }
     }
-    /// Reconciliation invalidates queued work when either exact instance incarnation is gone.
-    pub fn reconcile(&mut self, providers: Vec<Provider>) {
-        self.providers = providers
+    /// Every participant that offers contracts, whether a runtime instance or the host itself.
+    ///
+    /// A guest is discoverable because its instance is alive and active; the host's own session
+    /// services are offered for as long as the runtime they belong to is alive. Both are published
+    /// through this one list, so a consumer's selection and this registry cannot disagree about who
+    /// offers a contract.
+    pub fn reconcile(&mut self, guests: Vec<Provider>, host: Vec<Provider>) {
+        self.providers = guests
             .into_iter()
+            .chain(host)
             .map(|p| (p.caller.instance.clone(), p))
             .collect();
         self.refresh_selections();
