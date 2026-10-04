@@ -667,6 +667,53 @@ fn a_prelaunch_step_references_a_build_without_copying_it() {
     assert!(blank.to_config().is_err());
 }
 
+/// Actions can be added, removed and reordered without leaving the edited form.
+#[test]
+fn prepared_actions_can_be_reordered_in_place() {
+    let text = "一 = a.exe\n二 = b.exe\n三 = c.exe";
+    // Moving swaps neighbours, so the order the user sees is the order that will run.
+    assert_eq!(
+        move_step(text, 1, true).as_deref(),
+        Some("二 = b.exe\n一 = a.exe\n三 = c.exe")
+    );
+    assert_eq!(
+        move_step(text, 1, false).as_deref(),
+        Some("一 = a.exe\n三 = c.exe\n二 = b.exe")
+    );
+    // A move past either end is refused rather than clamped, so its control can stay disabled.
+    assert_eq!(move_step(text, 0, true), None);
+    assert_eq!(move_step(text, 2, false), None);
+    assert_eq!(move_step(text, 9, true), None);
+    // Removing takes the action the user addressed.
+    assert_eq!(
+        remove_step(text, 1).as_deref(),
+        Some("一 = a.exe\n三 = c.exe")
+    );
+    assert_eq!(remove_step(text, 9), None);
+    // Adding appends the next action, and a blank row is spacing rather than an action.
+    assert_eq!(add_step(text), "一 = a.exe\n二 = b.exe\n三 = c.exe\n");
+    assert_eq!(
+        step_lines("一 = a.exe\n\n二 = b.exe\n"),
+        vec!["一 = a.exe".to_owned(), "二 = b.exe".to_owned()]
+    );
+    // Blank rows never shift which action a row control addresses.
+    assert_eq!(
+        move_step("一 = a.exe\n\n二 = b.exe", 1, true).as_deref(),
+        Some("二 = b.exe\n一 = a.exe")
+    );
+    // The edited text is still read by the same parser, so reordering cannot change an action's
+    // meaning.
+    let reordered = move_step(text, 2, true).unwrap();
+    let steps = parse_steps(&reordered).expect("the reordered list is well formed");
+    assert_eq!(
+        steps
+            .iter()
+            .map(|step| step.name.as_str())
+            .collect::<Vec<_>>(),
+        vec!["一", "三", "二"]
+    );
+}
+
 /// A malformed prepared action is refused where the user can correct it.
 #[test]
 fn malformed_prepared_actions_are_refused() {

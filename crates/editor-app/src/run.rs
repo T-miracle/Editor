@@ -1282,6 +1282,61 @@ pub fn render_steps(steps: &[editor_core::RunStep]) -> String {
         .join("\n")
 }
 
+/// The actions one list holds, as editable lines.
+///
+/// Blank lines are not actions, so they are left out of the list the controls act on: moving or
+/// deleting a row must address the action the user sees rather than the spacing around it.
+pub fn step_lines(text: &str) -> Vec<String> {
+    text.lines()
+        .filter(|line| !line.trim().is_empty())
+        .map(str::to_owned)
+        .collect()
+}
+
+/// Write editable lines back into the field's text.
+pub fn join_step_lines(lines: &[String]) -> String {
+    lines.join("\n")
+}
+
+/// Move one action one place earlier or later in its list.
+///
+/// Returns the new text, or `None` when the move would go past an end — a control that cannot move a
+/// row stays disabled instead of silently doing nothing.
+pub fn move_step(text: &str, index: usize, up: bool) -> Option<String> {
+    let mut lines = step_lines(text);
+    if index >= lines.len() {
+        return None;
+    }
+    let target = if up {
+        index.checked_sub(1)?
+    } else {
+        let next = index + 1;
+        if next >= lines.len() {
+            return None;
+        }
+        next
+    };
+    lines.swap(index, target);
+    Some(join_step_lines(&lines))
+}
+
+/// Remove one action from its list.
+pub fn remove_step(text: &str, index: usize) -> Option<String> {
+    let mut lines = step_lines(text);
+    if index >= lines.len() {
+        return None;
+    }
+    lines.remove(index);
+    Some(join_step_lines(&lines))
+}
+
+/// Add an empty action line, so the user can describe the next action in place.
+pub fn add_step(text: &str) -> String {
+    let mut lines = step_lines(text);
+    lines.push(String::new());
+    join_step_lines(&lines)
+}
+
 /// Read one `NAME=VALUE` entry per line, refusing anything that is not an environment entry.
 ///
 /// Values are kept verbatim after the first `=`, so a value containing `=` or spaces is never
