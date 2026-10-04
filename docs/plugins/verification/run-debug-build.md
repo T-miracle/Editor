@@ -160,6 +160,8 @@
 
 ## 未覆盖与限制
 
+- **`editor-app` 整二进制全量运行不可作为判据**（本任务开始前即如此）：`cargo test -p editor-app --bin editor-app` 会让不同用例互相污染宿主内的共享注册表，出现一批失败。**实测对照**：在提交 `3a50511`（本轮工作之前）上单跑 `app::plugins` 已是 `18 passed; 2 failed`，当前为 `19 passed; 1 failed`；且每个失败用例单独运行时都通过（`app::plugins::tests::restricting_startup_withdraws_declarations_before_worker_publication` 单独跑 `ok`）。因此按仓库验证约定使用**按模块过滤**的针对性运行：`run::` 59 项、`extensions::worker` 11 项、`language::code_highlighting` 12 项、`extensions::markdown_tests` 1 项（其余为 ignored）在本轮全绿。这不是本任务引入的缺陷，也不据它宣称通过。
+
 - 被跳过的 `#[ignore]` 真实包测试需要先构建夹具（终端包与 capability-example）并已被显式执行；未执行的跳过项不计入通过。
 - 原生交互验收（深浅主题、缩放、滚动、弹窗受限尺寸、中文 IME）按改动涉及的控件就近检查；未逐项穷举整个矩阵。
 - **中文 IME 尚未端到端实测**：工单 04 的验收项包含它，因此该工单保持打开，直到这一步被真正验证，而不是按「其他项都过了」推断通过。
