@@ -476,6 +476,23 @@ probe C step=2..9 blocked=None      // 之后序列永远不阻塞，循环耗�
 
 **尚未做出的决定**：修**用例**（让它驱动提供者，或经 UI 的停止应答路径送达结果）还是修**代码**（让序列在停止请求发出后、即使没有应答也能凭观察判定结束）。**两者都可能，且都改变被测语义**，因此本轮**不动任何一边**，只留下这条机制说明与三行实测证据。
 
+**设计依据（父设计 `docs/run-debug-build.md` 第 47 行）**：
+
+> **停止**只作用于所选会话。**停止请求被受理不等于程序已结束：状态来自提供者的观察。**
+
+**这句话决定了哪一边是对的**：序列**本来就应该等提供者的观察**，而不是凭「停止请求已发出」就判定结束。**因此这条用例的前提与设计不符**——它直接调用 `manager.stop_execution`，**绕过了 `pump_recording` 中「按生产路径把 StopRun 交给提供者」的那一段**（该函数确实会执行 `manager.stop_execution` 并把结果发布到 `stop_results`），于是**提供者从未被驱动，`status` 永远不会回 `ended`/`exited`**，而设计要求的正是由那个回答判定结束。
+
+**第七次尝试（已撤回）**：按设计把守卫改为「**这个会话**是否已经发过停止」，记在序列上（`stop_sent_for: Option<u64>`），第一次放行、同一会话不重发、后续步骤仍可停止。**结果：`stopping_during_preparation…` 仍然失败，而 `leaving_stops…` 由通过变为失败**，`native_build_tests` 4/5、`native_run_tests` 6/7。
+
+**这解释了为什么两边都改不动**：
+
+- **改代码**（让序列凭观察结束）需要一条「会话已结束」的送达路径，而**本轮实测表明 `stop_execution` 之后编辑器侧的 `RunSession` 仍是 `Running`**——**这条路径不存在，且新建它会与「状态来自提供者的观察」冲突**；
+- **改用例**（让它驱动提供者）是**设计上正确的方向**，但**它同时是 `leaving_stops…` 所依赖的那条链路**：把停止交给序列发出的守卫一旦收紧，`leaving_stops…` 立刻失败。
+
+**结论**：这不是一处可以在现有形状里补上的连线，而是**「准备步骤的停止由谁发起、由谁确认」这件事在代码里没有单一表示**——**同一个「停止」在配置、会话、请求身份三个键上各被记录了一次**。**修它需要先合并这三个键，属于设计改动，不是缺陷修补**；本轮不做，改由本文档记录为**已知未完成项**。
+
+**仓库状态**：所有尝试已撤回，`native_run_tests` 7/7 通过、`native_build_tests` 5/6（失败者即本条）、`native_discovery_tests` 1/1。
+
 ## 未覆盖与限制
 
 - **`editor-app` 整二进制全量运行不可作为判据**（本任务开始前即如此）：`cargo test -p editor-app --bin editor-app` 会让不同用例互相污染宿主内的共享注册表，出现一批失败。**实测对照**：在提交 `3a50511`（本轮工作之前）上单跑 `app::plugins` 已是 `18 passed; 2 failed`，当前为 `19 passed; 1 failed`；且每个失败用例单独运行时都通过（`app::plugins::tests::restricting_startup_withdraws_declarations_before_worker_publication` 单独跑 `ok`）。因此按仓库验证约定使用**按模块过滤**的针对性运行：`run::` 59 项、`extensions::worker` 11 项、`language::code_highlighting` 12 项、`extensions::markdown_tests` 1 项（其余为 ignored）在本轮全绿。这不是本任务引入的缺陷，也不据它宣称通过。
