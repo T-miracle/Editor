@@ -190,6 +190,12 @@ pub struct RunControls {
     debug_availability: Option<Result<String, String>>,
     /// Every debug session this editor is running, one per configuration.
     debug_sessions: editor_core::DebugSessions,
+    /// Debug requests this editor has sent and not yet answered, oldest first.
+    ///
+    /// A debug call is asynchronous, so the scope a request belongs to is recorded with it: an answer
+    /// is applied to the pause it was asked about, and one that arrives after that pause ended is
+    /// reported rather than applied.
+    debug_requests: Vec<PendingDebugRequest>,
     /// What the selected debug provider declared it can do.
     ///
     /// Defaulting to nothing is deliberate: an ability the host has not been told about is not one it
@@ -197,6 +203,26 @@ pub struct RunControls {
     debug_capabilities: editor_core::DebugCapabilities,
     /// Set when the stored file could not be read or written; shown instead of silently defaulting.
     pub error: Option<String>,
+}
+
+/// One debug request this editor is waiting on.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PendingDebugRequest {
+    /// Identity the editor assigns, so an answer is joined to the request it answers.
+    pub id: u64,
+    /// Which debug method was asked for.
+    pub method: DebugMethod,
+    /// The pause the answer will describe, captured when the request was sent.
+    pub scope: editor_core::PauseScope,
+    /// The frame a variable request asked about.
+    pub frame: Option<u32>,
+}
+
+/// The debug methods this editor calls, so an answer can be joined to what it answers.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DebugMethod {
+    Frames,
+    Variables,
 }
 
 /// One frame row of the debug panel.
@@ -271,6 +297,7 @@ impl Default for RunControls {
             discovery_ran: false,
             debug_availability: None,
             debug_sessions: editor_core::DebugSessions::default(),
+            debug_requests: Vec::new(),
             debug_capabilities: editor_core::DebugCapabilities::default(),
             error: None,
         }
@@ -1362,6 +1389,80 @@ impl RunControls {
             .current()
             .and_then(|(_, session)| session.pause().scope())
     }
+    /// Record that a debug request was sent, and hand back its identity.
+    ///
+    /// The scope is captured here rather than by the caller, so a request can only ever be joined to
+    /// the pause that was current when it was sent.
+    pub fn begin_debug_request(&mut self, method: DebugMethod, frame: Option<u32>) -> Option<u64> {
+        let scope = self.debug_pause_scope()?;
+        // One request per method per pause: asking twice would leave two answers racing to describe
+        // the same pause, and the later one would win for no reason the user could see.
+        if self.debug_requests.iter().any(|request| {
+            request.scope == scope && request.method == method && request.frame == frame
+        }) {
+            return None;
+        }
+        let id = self
+            .debug_requests
+            .iter()
+            .map(|request| request.id)
+            .max()
+            .unwrap_or(0)
+            + 1;
+        self.debug_requests.push(PendingDebugRequest {
+            id,
+            method,
+            scope,
+            frame,
+        });
+        Some(id)
+    }
+
+    /// Apply an answer to the request it answers, refusing one whose pause is over.
+    ///
+    /// This is the only way an answer reaches the view, so a late result cannot replace a newer one
+    /// and a result for a request this editor never sent cannot arrive at all.
+    pub fn apply_debug_answer(
+        &mut self,
+        request: u64,
+        frames: Option<Vec<editor_core::StackFrame>>,
+        variables: Option<Vec<editor_core::DebugVariable>>,
+    ) -> Result<(), editor_core::InspectionError> {
+        let Some(index) = self
+            .debug_requests
+            .iter()
+            .position(|pending| pending.id == request)
+        else {
+            // An answer to nothing is an answer this editor did not ask for.
+            return Err(editor_core::InspectionError::NoSession);
+        };
+        let pending = self.debug_requests.remove(index);
+        // The answer is applied to the pause it was asked about, which is what refuses a late one.
+        match pending.method {
+            DebugMethod::Frames => self.apply_debug_frames(
+                pending.scope,
+                frames.ok_or(editor_core::InspectionError::NoSession)?,
+            ),
+            DebugMethod::Variables => self.apply_debug_variables(
+                pending.scope,
+                pending
+                    .frame
+                    .ok_or(editor_core::InspectionError::NoSession)?,
+                variables.ok_or(editor_core::InspectionError::NoSession)?,
+            ),
+        }
+    }
+
+    /// Drop a request whose answer arrived malformed, so it is not awaited forever.
+    pub fn abandon_debug_request(&mut self, request: u64) {
+        self.debug_requests.retain(|pending| pending.id != request);
+    }
+
+    /// How many debug requests are still unanswered.
+    pub fn pending_debug_requests(&self) -> usize {
+        self.debug_requests.len()
+    }
+
     /// The inspection rows the panel shows for the selected session.
     ///
     /// Described here rather than inside the view, so what the panel presents can be checked without a

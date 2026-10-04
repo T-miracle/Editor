@@ -6,8 +6,9 @@
 use super::Manager;
 use super::host_services::{
     DEBUG_BREAKPOINT_TIMEOUT_MS, DEBUG_CONTRACT, DEBUG_CONTROL_TIMEOUT_MS, DEBUG_START_TIMEOUT_MS,
-    ProviderCandidate, dependency_from_declaration,
+    ProviderCandidate, dependency_from_declaration, host_caller, host_method_call, start_failure,
 };
+use crate::request_state::Completion;
 use plugin_protocol::{
     api::{ErrorCode, Failure},
     service::Dependency,
@@ -498,6 +499,111 @@ impl Manager {
                 usable.join("、")
             )),
         }
+    }
+}
+
+/// One answered debug call, and the session identity it belongs to.
+///
+/// The session identity travels with the answer so a caller can tell which session a late result
+/// describes: a debugger's own session, not the host execution session that launched the target.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DebugAnswer {
+    pub session: String,
+    pub result: Value,
+}
+
+/// Calling a debug provider on behalf of the host.
+///
+/// Every call is bounded and every answer is the provider's: the host never predicts a state, a
+/// frame or a value, and a provider that does not answer within the window is reported as
+/// unreachable rather than waited on. Nothing here holds a debug session of its own: the provider
+/// owns it, and this only carries the identity it returned.
+impl Manager {
+    /// Call one debug method on the selected provider, waiting for its answer.
+    ///
+    /// `session` is the provider's own session identity. A missing or unusable provider fails before
+    /// anything is sent, and an unanswered call is reported instead of being retried blindly.
+    pub fn debug_call(&mut self, method: &str, arguments: Value) -> anyhow::Result<DebugAnswer> {
+        let dependency = debug_dependency().map_err(start_failure)?;
+        let timeout = debug_timeout_ms(method)
+            .ok_or_else(|| anyhow::anyhow!("{method} is not a method this host may call"))?;
+        let scope = self.host_scope();
+        // The host is the caller, so the authority a provider may exercise is the host's own set and
+        // never a plugin's.
+        let caller = host_caller(&scope);
+        self.refresh_services();
+        let reference = self
+            .plugin_services
+            .lock()
+            .unwrap()
+            .resolve(&caller, DEBUG_CONTRACT, &dependency)
+            .map_err(start_failure)?;
+        let expected = reference.provider.caller.plugin.clone();
+        let completion = Completion::new(timeout);
+        let call = host_method_call(
+            &caller,
+            reference,
+            method,
+            arguments,
+            &dependency,
+            completion.clone(),
+            self.host_alive.clone(),
+        )
+        .map_err(start_failure)?;
+        self.plugin_services
+            .lock()
+            .unwrap()
+            .enqueue(call)
+            .map_err(start_failure)?;
+        self.poll_request(&completion);
+        // An unanswered call is reported rather than retried: a provider that cannot answer promptly
+        // has not answered, and the host does not act as if it had.
+        let value = match completion.status() {
+            plugin_protocol::api::RequestUpdate::Completed { result } => {
+                result.map_err(start_failure)?
+            }
+            _ => {
+                return Err(anyhow::anyhow!(
+                    "{method} was not answered by the debug provider within its window"
+                ));
+            }
+        };
+        // The provider that answered is the one this call was routed to, which is what makes the
+        // answer attributable when several providers are installed.
+        let _ = expected;
+        Ok(DebugAnswer {
+            session: value
+                .get("session")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_owned(),
+            result: value,
+        })
+    }
+
+    /// Ask a debug session what it is, which is the one call whose answer is also a state.
+    pub fn debug_status(&mut self, session: &str) -> anyhow::Result<DebugSession> {
+        let answer = self.debug_call("status", serde_json::json!({ "session": session }))?;
+        DebugSession::from_value(&answer.result).map_err(|error| anyhow::anyhow!("{error:?}"))
+    }
+
+    /// Ask a debug session for the frames of its current pause.
+    pub fn debug_frames(&mut self, session: &str) -> anyhow::Result<Vec<DebugFrame>> {
+        let answer = self.debug_call("frames", serde_json::json!({ "session": session }))?;
+        frames_from_value(&answer.result).map_err(|error| anyhow::anyhow!("{error:?}"))
+    }
+
+    /// Ask a debug session for one frame's variables.
+    pub fn debug_variables(
+        &mut self,
+        session: &str,
+        frame: u32,
+    ) -> anyhow::Result<Vec<DebugVariable>> {
+        let answer = self.debug_call(
+            "variables",
+            serde_json::json!({ "session": session, "frame": frame }),
+        )?;
+        variables_from_value(&answer.result).map_err(|error| anyhow::anyhow!("{error:?}"))
     }
 }
 

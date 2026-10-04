@@ -606,8 +606,11 @@ pub(crate) fn host_method_call(
 
 /// The host's execution surface: the run controls consume the same contract as any plugin.
 impl Manager {
-    /// Workspace whose logical scope owns every execution started from these controls.
-    fn host_scope(&self) -> String {
+    /// Workspace whose logical scope owns every session this host starts or asks about.
+    ///
+    /// Shared with the debug side so a debug call is routed to the same scope its provider was
+    /// selected in; two answers about one workspace would otherwise be possible.
+    pub(super) fn host_scope(&self) -> String {
         scopes::workspace_key(&self.environment.workspace)
     }
     /// Every retained host session, newest identity last; finished sessions stay locatable by key.

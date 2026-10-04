@@ -1347,6 +1347,106 @@ fn the_panel_describes_the_selected_sessions_pause() {
     );
 }
 
+/// Answers are joined to the request they answer, and a late one cannot replace a newer view.
+#[test]
+fn only_the_answer_to_a_request_reaches_the_view() {
+    use editor_core::{DebugSessionState, DebugVariable, InspectionError, StackFrame};
+    let mut controls = controls();
+    let workspace = "C:/work".to_owned();
+    controls
+        .upsert(config("run-1", "第一个"), &workspace)
+        .unwrap();
+    controls.note_debug_state(
+        "run-1",
+        DebugSessionState::Paused {
+            source: "src/main.rs".into(),
+            line: 2,
+            reason: None,
+        },
+    );
+
+    // Nothing can be asked for before a pause exists.
+    assert_eq!(
+        controls.begin_debug_request(DebugMethod::Frames, None),
+        None
+    );
+    let scope = controls.begin_debug_pause().expect("a selected session");
+    let frames = controls
+        .begin_debug_request(DebugMethod::Frames, None)
+        .expect("a pause is being inspected");
+    assert_eq!(controls.pending_debug_requests(), 1);
+    // Asking twice about one pause would leave two answers racing to describe it.
+    assert_eq!(
+        controls.begin_debug_request(DebugMethod::Frames, None),
+        None
+    );
+    assert_eq!(controls.pending_debug_requests(), 1);
+
+    let described = vec![StackFrame {
+        id: 0,
+        name: "probe::add".into(),
+        source: "src/main.rs".into(),
+        line: 2,
+    }];
+    controls
+        .apply_debug_answer(frames, Some(described.clone()), None)
+        .expect("the answer matches its request");
+    assert_eq!(controls.debug_frames().len(), 1);
+    assert_eq!(
+        controls.pending_debug_requests(),
+        0,
+        "an answered request is no longer awaited"
+    );
+
+    // A request for one frame's variables names the frame, and an answer to nothing is refused.
+    let variables = controls
+        .begin_debug_request(DebugMethod::Variables, Some(0))
+        .expect("a pause is being inspected");
+    controls
+        .apply_debug_answer(
+            variables,
+            None,
+            Some(vec![DebugVariable {
+                name: "left".into(),
+                value: "2".into(),
+            }]),
+        )
+        .expect("the answer matches its request");
+    assert_eq!(controls.debug_variables(0).len(), 1);
+    assert_eq!(
+        controls.apply_debug_answer(999, Some(Vec::new()), None),
+        Err(InspectionError::NoSession),
+        "an answer to a request this editor never sent cannot arrive"
+    );
+
+    // A step ends the pause; the answer still on its way about it is refused, so the view is not
+    // replaced by a description of a moment the target has left.
+    let late = controls
+        .begin_debug_request(DebugMethod::Frames, None)
+        .expect("a pause is being inspected");
+    let next = controls.begin_debug_pause().expect("a new pause");
+    assert_ne!(next, scope);
+    assert_eq!(
+        controls.apply_debug_answer(late, Some(described), None),
+        Err(InspectionError::StalePause)
+    );
+    assert!(
+        controls.debug_frames().is_empty(),
+        "the late answer did not describe the new pause"
+    );
+
+    // A malformed answer is dropped rather than awaited forever.
+    let abandoned = controls
+        .begin_debug_request(DebugMethod::Frames, None)
+        .expect("a pause is being inspected");
+    controls.abandon_debug_request(abandoned);
+    assert_eq!(controls.pending_debug_requests(), 0);
+    assert_eq!(
+        controls.apply_debug_answer(abandoned, Some(Vec::new()), None),
+        Err(InspectionError::NoSession)
+    );
+}
+
 fn snapshot(
     id: u64,
     config: &str,
