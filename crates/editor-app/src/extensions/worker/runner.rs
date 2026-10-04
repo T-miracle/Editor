@@ -191,6 +191,15 @@ impl Worker {
                                             .map_err(|error| anyhow::anyhow!("{}", error.message))
                                     })
                                     .map(DebugAnswerMessage::Variables),
+                                // A step is answered by the session's new state, which the editor
+                                // applies as a state and never as a view of a pause.
+                                "step" => manager
+                                    .debug_call(&method, arguments)
+                                    .and_then(|answer| {
+                                        plugin_runtime::DebugSession::from_value(&answer.result)
+                                            .map_err(|error| anyhow::anyhow!("{:?}", error.message))
+                                    })
+                                    .map(DebugAnswerMessage::State),
                                 // A method this worker does not carry is refused rather than sent
                                 // without the reading its answer would need.
                                 other => Err(anyhow::anyhow!("{other} 不是本编辑器发出的调试调用")),

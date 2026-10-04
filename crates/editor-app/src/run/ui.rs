@@ -449,6 +449,29 @@ impl EditorApp {
                             .collect(),
                     ),
                 ),
+                // A step is answered by a state, so applying it is what begins the new pause; the
+                // provider's word is translated, never a state the host assumed.
+                DebugAnswerMessage::State(session) => {
+                    let state = match session.state {
+                        plugin_runtime::DebugState::Starting => {
+                            editor_core::DebugSessionState::Starting
+                        }
+                        plugin_runtime::DebugState::Running => {
+                            editor_core::DebugSessionState::Running
+                        }
+                        plugin_runtime::DebugState::Paused => {
+                            editor_core::DebugSessionState::Paused {
+                                source: session.source.clone().unwrap_or_default(),
+                                line: session.line.unwrap_or(0),
+                                reason: session.reason.clone(),
+                            }
+                        }
+                        plugin_runtime::DebugState::Exited => {
+                            editor_core::DebugSessionState::Exited
+                        }
+                    };
+                    self.run_controls.apply_debug_step(request, state)
+                }
                 // A failed call is released and reported; it is never shown as an empty stack.
                 DebugAnswerMessage::Failed(message) => self
                     .run_controls
@@ -1089,6 +1112,49 @@ impl EditorApp {
             .extensions
             .read(cx)
             .stage_host_run(crate::extensions::HostWork::SetRunProvider { provider });
+    }
+
+    /// Ask the provider to step the paused target, and remember which pause the answer describes.
+    ///
+    /// The request is only sent when the provider declared the ability and the target is stopped, so a
+    /// click can never become a call the provider did not offer. The step is answered by a state: the
+    /// editor waits for it rather than describing a pause the target has not reached.
+    pub(crate) fn step_debug(&mut self, kind: editor_core::DebugStep, cx: &mut Context<Self>) {
+        if let Err(reason) = self
+            .run_controls
+            .debug_controls()
+            .step
+            .into_iter()
+            .find(|(candidate, _)| *candidate == kind)
+            .map(|(_, outcome)| outcome)
+            .unwrap_or_else(|| Err("该调试会话不支持单步".into()))
+        {
+            self.status = reason;
+            cx.notify();
+            return;
+        }
+        let Some(request) = self
+            .run_controls
+            .begin_debug_request(crate::run::DebugMethod::Step(kind), None)
+        else {
+            self.status = "该暂停已有未完成的单步请求".into();
+            cx.notify();
+            return;
+        };
+        let (session, _) = self
+            .run_controls
+            .debug_session()
+            .map(|(config, session)| (config.to_owned(), session.state().clone()))
+            .unwrap_or_default();
+        if !self.extensions.read(cx).stage_debug_call(
+            request,
+            "step",
+            serde_json::json!({ "session": session, "kind": kind.as_str() }),
+        ) {
+            self.run_controls.abandon_debug_request(request);
+            self.status = "插件后台服务不可用，无法单步".into();
+        }
+        cx.notify();
     }
 
     /// Refuse or begin a debug launch, never substituting an ordinary run.
@@ -2161,6 +2227,41 @@ fn render_run_config_form(
                             let reason = reason.clone();
                             button = button.text_color(danger).child(format!("（{reason}）"));
                         }
+                    }
+                    session = session.child(button);
+                }
+                // The three step directions are separate controls, so a click says which way to move
+                // and a direction the provider did not offer is disabled with its reason.
+                for (kind, selector, label) in [
+                    (editor_core::DebugStep::Into, "run-debug-step-into", "步入"),
+                    (editor_core::DebugStep::Over, "run-debug-step-over", "步过"),
+                    (editor_core::DebugStep::Out, "run-debug-step-out", "步出"),
+                ] {
+                    let owner = app.clone();
+                    let outcome = controls
+                        .step
+                        .iter()
+                        .find(|(candidate, _)| *candidate == kind)
+                        .map(|(_, outcome)| outcome);
+                    let mut button = div()
+                        .id(selector)
+                        .debug_selector({
+                            let selector = selector.to_owned();
+                            move || selector.clone()
+                        })
+                        .child(label);
+                    match outcome {
+                        Some(Ok(())) => {
+                            button = button.on_click(move |_, _, cx| {
+                                owner.update(cx, |state, cx| state.step_debug(kind, cx));
+                            });
+                        }
+                        Some(Err(reason)) => {
+                            button = button.text_color(danger).child(format!("（{reason}）"));
+                        }
+                        // A control the panel cannot derive is not offered rather than being shown
+                        // without a reason.
+                        None => {}
                     }
                     session = session.child(button);
                 }

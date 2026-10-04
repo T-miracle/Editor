@@ -316,6 +316,8 @@ pub(super) struct Published {
 pub enum DebugAnswerMessage {
     Frames(Vec<plugin_runtime::DebugFrame>),
     Variables(Vec<plugin_runtime::DebugVariable>),
+    /// A step's answer, which is the session's new state rather than a view of a pause.
+    State(plugin_runtime::DebugSession),
     /// The provider reported a failure, with its own account of what went wrong.
     Failed(String),
 }

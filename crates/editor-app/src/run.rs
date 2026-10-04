@@ -223,6 +223,8 @@ pub struct PendingDebugRequest {
 pub enum DebugMethod {
     Frames,
     Variables,
+    /// Move the paused target, in one of the three directions.
+    Step(editor_core::DebugStep),
 }
 
 /// One frame row of the debug panel.
@@ -1450,6 +1452,9 @@ impl RunControls {
                     .ok_or(editor_core::InspectionError::NoSession)?,
                 variables.ok_or(editor_core::InspectionError::NoSession)?,
             ),
+            // A step's answer is its new state, which `apply_debug_step` takes; a view arriving for a
+            // step is not an answer to what was asked.
+            DebugMethod::Step(_) => Err(editor_core::InspectionError::NoSession),
         }
     }
 
@@ -1468,6 +1473,48 @@ impl RunControls {
             return editor_core::InspectionError::StalePause;
         }
         editor_core::InspectionError::Provider(message)
+    }
+
+    /// Apply a step's answer, which is the session's new state rather than a view of a pause.
+    ///
+    /// A state that is paused begins a new pause, so the old frames and variables stop describing a
+    /// moment the target has left; anything else simply ends the old one. The state is never
+    /// inferred: it is what the provider reported.
+    pub fn apply_debug_step(
+        &mut self,
+        request: u64,
+        state: editor_core::DebugSessionState,
+    ) -> Result<(), editor_core::InspectionError> {
+        let Some(index) = self
+            .debug_requests
+            .iter()
+            .position(|pending| pending.id == request)
+        else {
+            return Err(editor_core::InspectionError::NoSession);
+        };
+        let pending = self.debug_requests.remove(index);
+        let DebugMethod::Step(_) = pending.method else {
+            // An answer to one question is not an answer to another.
+            return Err(editor_core::InspectionError::NoSession);
+        };
+        let (config, session) = self
+            .debug_sessions
+            .current()
+            .ok_or(editor_core::InspectionError::NoSession)?;
+        let config = config.to_owned();
+        // The step is only applied to the pause it was asked about: a step whose answer arrived after
+        // another pause began describes a moment that is already over.
+        session.pause().accepts(pending.scope)?;
+        let session = self
+            .debug_sessions
+            .session_mut(&config)
+            .expect("the session was just selected");
+        let paused = matches!(state, editor_core::DebugSessionState::Paused { .. });
+        session.note_state(state);
+        if paused {
+            session.begin_pause();
+        }
+        Ok(())
     }
 
     /// Drop a request whose answer arrived malformed, so it is not awaited forever.

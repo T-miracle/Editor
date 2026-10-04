@@ -1447,6 +1447,122 @@ fn only_the_answer_to_a_request_reaches_the_view() {
     );
 }
 
+/// A step is answered by a new state, which begins a new pause and retires the old one.
+#[test]
+fn a_step_answer_begins_the_next_pause() {
+    use editor_core::{DebugSessionState, DebugStep, InspectionError, StackFrame};
+    let mut controls = controls();
+    let workspace = "C:/work".to_owned();
+    controls
+        .upsert(config("run-1", "第一个"), &workspace)
+        .unwrap();
+    controls.note_debug_state(
+        "run-1",
+        DebugSessionState::Paused {
+            source: "src/main.rs".into(),
+            line: 2,
+            reason: Some("breakpoint".into()),
+        },
+    );
+    let scope = controls.begin_debug_pause().expect("a session is selected");
+    controls
+        .apply_debug_frames(
+            scope,
+            vec![StackFrame {
+                id: 0,
+                name: "probe::add".into(),
+                source: "src/main.rs".into(),
+                line: 2,
+            }],
+        )
+        .expect("the pause is described");
+    assert_eq!(controls.debug_frames().len(), 1);
+
+    // A step names the direction, and a second step in the same pause is refused: two answers would
+    // race to describe the same move.
+    let step = controls
+        .begin_debug_request(DebugMethod::Step(DebugStep::Over), None)
+        .expect("a pause is being inspected");
+    assert_eq!(
+        controls.begin_debug_request(DebugMethod::Step(DebugStep::Over), None),
+        None
+    );
+    assert_eq!(
+        controls.begin_debug_request(DebugMethod::Step(DebugStep::Into), None),
+        Some(step + 1),
+        "a different direction is a different request"
+    );
+    controls.abandon_debug_request(step + 1);
+
+    // The provider answers with a new state. The target is stopped somewhere else now, so the old
+    // frames stop describing it and a new pause begins.
+    controls
+        .apply_debug_step(
+            step,
+            DebugSessionState::Paused {
+                source: "src/main.rs".into(),
+                line: 3,
+                reason: Some("step".into()),
+            },
+        )
+        .expect("the step answer matches its request");
+    assert!(
+        controls.debug_frames().is_empty(),
+        "the frames described the moment before the step"
+    );
+    let next = controls.debug_pause_scope().expect("a new pause");
+    assert_ne!(next, scope, "the new pause is its own moment");
+    assert_eq!(
+        controls.debug_state().paused_at(),
+        Some(("src/main.rs", 3)),
+        "the location is what the provider reported"
+    );
+
+    // A step answered by a running target ends the pause rather than inventing one.
+    let running = controls
+        .begin_debug_request(DebugMethod::Step(DebugStep::Out), None)
+        .expect("a pause is being inspected");
+    controls
+        .apply_debug_step(running, DebugSessionState::Running)
+        .expect("the step answer matches its request");
+    assert_eq!(controls.debug_pause_scope(), None);
+
+    // An answer about a pause that has ended is refused, as it is for a view.
+    controls.note_debug_state(
+        "run-1",
+        DebugSessionState::Paused {
+            source: "src/main.rs".into(),
+            line: 9,
+            reason: None,
+        },
+    );
+    // The step belongs to the pause that is current when it is asked for; a later pause ends it.
+    controls.begin_debug_pause().expect("a session is selected");
+    let stale = controls
+        .begin_debug_request(DebugMethod::Step(DebugStep::Into), None)
+        .expect("a pause is being inspected");
+    controls.begin_debug_pause().expect("a session is selected");
+    assert_eq!(
+        controls.apply_debug_step(
+            stale,
+            DebugSessionState::Paused {
+                source: "src/main.rs".into(),
+                line: 10,
+                reason: None,
+            }
+        ),
+        Err(InspectionError::StalePause)
+    );
+    // An answer to a view request is not an answer to a step.
+    let view = controls
+        .begin_debug_request(DebugMethod::Frames, None)
+        .expect("a pause is being inspected");
+    assert_eq!(
+        controls.apply_debug_step(view, DebugSessionState::Running),
+        Err(InspectionError::NoSession)
+    );
+}
+
 fn snapshot(
     id: u64,
     config: &str,
