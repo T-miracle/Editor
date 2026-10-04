@@ -200,6 +200,18 @@ impl Worker {
                                             .map_err(|error| anyhow::anyhow!("{:?}", error.message))
                                     })
                                     .map(DebugAnswerMessage::State),
+                                // Setting breakpoints is answered by the positions the provider could
+                                // bind, which is what makes an unverified one visible instead of
+                                // looking like a breakpoint that is merely waiting.
+                                "set_breakpoints" => manager
+                                    .debug_call(&method, arguments)
+                                    .and_then(|answer| {
+                                        plugin_runtime::DebugBreakpoint::list_from_value(
+                                            &answer.result,
+                                        )
+                                        .map_err(|error| anyhow::anyhow!("{}", error.message))
+                                    })
+                                    .map(DebugAnswerMessage::Breakpoints),
                                 // A method this worker does not carry is refused rather than sent
                                 // without the reading its answer would need.
                                 other => Err(anyhow::anyhow!("{other} 不是本编辑器发出的调试调用")),

@@ -324,6 +324,8 @@ pub enum DebugAnswerMessage {
     Variables(Vec<plugin_runtime::DebugVariable>),
     /// A step's answer, which is the session's new state rather than a view of a pause.
     State(plugin_runtime::DebugSession),
+    /// The positions a provider could bind, which is where a breakpoint became real or did not.
+    Breakpoints(Vec<plugin_runtime::DebugBreakpoint>),
     /// The provider reported a failure, with its own account of what went wrong.
     Failed(String),
 }

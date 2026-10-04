@@ -207,6 +207,12 @@ pub struct RunControls {
     /// Defaulting to nothing is deliberate: an ability the host has not been told about is not one it
     /// may offer, so a provider that has not been asked leaves its controls disabled with a reason.
     debug_capabilities: editor_core::DebugCapabilities,
+    /// Which configured breakpoints the running provider could actually bind.
+    ///
+    /// The set is per session, not per configuration: the same position may be bindable under one
+    /// target and not another, so this is cleared when a session begins and replaced by each answer.
+    /// A position absent from here has not been reported either way, which is not the same as unverified.
+    debug_breakpoints_verified: Vec<(String, u32, bool)>,
     /// Set when the stored file could not be read or written; shown instead of silently defaulting.
     pub error: Option<String>,
 }
@@ -275,6 +281,8 @@ pub struct PendingDebugRequest {
 pub enum DebugMethod {
     /// Begin a session. The only method that is not about a pause, because it is what starts one.
     Start,
+    /// Set the configuration's breakpoints, which belongs to the session rather than to any pause.
+    Breakpoints,
     Frames,
     Variables,
     /// Move the paused target, in one of the three directions.
@@ -364,6 +372,7 @@ impl Default for RunControls {
             debug_position_followed: true,
             debug_requests: Vec::new(),
             debug_capabilities: editor_core::DebugCapabilities::default(),
+            debug_breakpoints_verified: Vec::new(),
             error: None,
         }
     }
@@ -1349,6 +1358,31 @@ impl RunControls {
     /// Note that a session has begun, which is the first pause worth following.
     pub fn note_debug_session_begun(&mut self) {
         self.debug_position_followed = true;
+        // Nothing has been reported about this session's breakpoints yet, and the previous session's
+        // answer described a different target.
+        self.debug_breakpoints_verified.clear();
+    }
+
+    /// Record the positions the provider could bind, replacing whatever the last answer said.
+    ///
+    /// Replacing rather than merging is what makes a removed breakpoint stop being reported as bound:
+    /// the provider's answer describes the set it was just asked about, not a history of it.
+    pub fn note_debug_breakpoints(&mut self, bound: impl IntoIterator<Item = (String, u32, bool)>) {
+        self.debug_breakpoints_verified = bound
+            .into_iter()
+            .map(|(source, line, verified)| (source, line, verified))
+            .collect();
+    }
+
+    /// Whether the provider could bind this position: `None` when no answer has mentioned it.
+    ///
+    /// Distinct from `Some(false)` on purpose: a breakpoint that was asked about and refused is a
+    /// problem to fix, while one that no answer has covered is simply not described yet.
+    pub fn debug_breakpoint_verified(&self, source: &str, line: u32) -> Option<bool> {
+        self.debug_breakpoints_verified
+            .iter()
+            .find(|(known, known_line, _)| known_line == &line && known == source)
+            .map(|(_, _, verified)| *verified)
     }
 
     /// End one configuration's debug session, handing the panel to another if there is one.
@@ -1517,10 +1551,14 @@ impl RunControls {
     /// the pause that was current when it was sent.
     pub fn begin_debug_request(&mut self, method: DebugMethod, frame: Option<u32>) -> Option<u64> {
         // Starting is about no pause: it is what begins the session whose pauses are inspected later.
-        // Everything else names the pause it describes, so an answer can be refused once it is over.
+        // Setting breakpoints is likewise about the session, not about a moment in it — a user may set
+        // one while the target runs, and it has to reach the debugger before the next stop. Everything
+        // else names the pause it describes, so an answer can be refused once it is over.
         let scope = match self.debug_pause_scope() {
             Some(scope) => scope,
-            None if method == DebugMethod::Start => editor_core::PauseScope::starting(),
+            None if matches!(method, DebugMethod::Start | DebugMethod::Breakpoints) => {
+                editor_core::PauseScope::starting()
+            }
             None => return None,
         };
         // One request per method per pause: asking twice would leave two answers racing to describe
@@ -1582,6 +1620,7 @@ impl RunControls {
             // A session that has started is recorded with the provider's own identity, so every later
             // call names the session the provider knows rather than one the host made up.
             DebugMethod::Start => Err(editor_core::InspectionError::NoSession),
+            DebugMethod::Breakpoints => Err(editor_core::InspectionError::NoSession),
             DebugMethod::Frames => self.apply_debug_frames(
                 pending.scope,
                 frames.ok_or(editor_core::InspectionError::NoSession)?,

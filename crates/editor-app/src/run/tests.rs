@@ -2063,6 +2063,83 @@ fn a_preparation_without_a_session_is_still_work_in_flight() {
     );
 }
 
+/// A breakpoint answer replaces what is known, and a session begins knowing nothing.
+///
+/// Three states have to stay distinct or the panel lies: never asked about, asked and refused, and
+/// asked and bound. The first is `None`, which is why the accessor is not a boolean.
+#[test]
+fn breakpoint_answers_replace_what_is_known_about_a_session() {
+    let mut controls = controls();
+    let workspace = "C:/work".to_owned();
+    controls
+        .upsert(config("run-1", "第一个"), &workspace)
+        .unwrap();
+
+    // Nothing has been asked, so nothing is claimed either way.
+    assert_eq!(controls.debug_breakpoint_verified("src/main.rs", 4), None);
+
+    controls.note_debug_breakpoints([
+        ("src/main.rs".to_owned(), 4, true),
+        ("src/main.rs".to_owned(), 9, false),
+        ("src/lib.rs".to_owned(), 12, true),
+    ]);
+    assert_eq!(
+        controls.debug_breakpoint_verified("src/main.rs", 4),
+        Some(true)
+    );
+    assert_eq!(
+        controls.debug_breakpoint_verified("src/main.rs", 9),
+        Some(false),
+        "a position the provider refused is reported as refused, not as waiting"
+    );
+    assert_eq!(
+        controls.debug_breakpoint_verified("src/lib.rs", 12),
+        Some(true)
+    );
+    assert_eq!(
+        controls.debug_breakpoint_verified("src/other.rs", 1),
+        None,
+        "a position no answer mentioned is not described"
+    );
+
+    // A later answer describes the set it was asked about: a breakpoint removed in between is simply
+    // absent, which is what makes an answer about a removed position meaningful.
+    controls.note_debug_breakpoints([("src/main.rs".to_owned(), 4, true)]);
+    assert_eq!(controls.debug_breakpoint_verified("src/main.rs", 9), None);
+    assert_eq!(controls.debug_breakpoint_verified("src/lib.rs", 12), None);
+
+    // Beginning a session forgets the previous one's answer: it described a different target.
+    controls.note_debug_session_begun();
+    assert_eq!(controls.debug_breakpoint_verified("src/main.rs", 4), None);
+}
+
+/// Setting breakpoints is a session request, so it is accepted before any pause exists.
+#[test]
+fn breakpoints_are_requested_for_the_session_not_a_pause() {
+    use editor_core::DebugSessionState;
+    let mut controls = controls();
+    let workspace = "C:/work".to_owned();
+    controls
+        .upsert(config("run-1", "第一个"), &workspace)
+        .unwrap();
+    controls.select("run-1", &workspace);
+
+    // No pause has begun, which is exactly when a user sets breakpoints before starting.
+    assert_eq!(controls.debug_pause_scope(), None);
+    let request = controls
+        .begin_debug_request(DebugMethod::Breakpoints, None)
+        .expect("a session request is accepted without a pause");
+    assert!(!controls.debug_request_is_start(request));
+    // A view request in the same state is still refused, so this is not a general loosening.
+    assert_eq!(
+        controls.begin_debug_request(DebugMethod::Frames, None),
+        None
+    );
+    // The answer is applied as breakpoints rather than as a session start.
+    assert!(controls.apply_debug_answer(request, None, None).is_err());
+    let _ = DebugSessionState::Running;
+}
+
 fn snapshot(
     id: u64,
     config: &str,

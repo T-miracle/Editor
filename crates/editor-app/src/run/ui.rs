@@ -509,6 +509,17 @@ impl EditorApp {
                     }
                     outcome
                 }
+                DebugAnswerMessage::Breakpoints(bound) => {
+                    // The answer replaces what is known about this session's positions, so a
+                    // breakpoint the provider refused stops being reported as bound.
+                    self.run_controls.note_debug_breakpoints(
+                        bound
+                            .into_iter()
+                            .map(|entry| (entry.source, entry.line, entry.verified)),
+                    );
+                    self.run_controls.abandon_debug_request(request);
+                    Ok(())
+                }
                 // A failed call is released and reported; it is never shown as an empty stack.
                 DebugAnswerMessage::Failed(message) => self
                     .run_controls
@@ -524,6 +535,10 @@ impl EditorApp {
         // A pause is where the user wants to see the stack, so the editor asks for it. Without this
         // the panel renders frames and variables that nobody ever requested.
         self.fetch_debug_inspection(cx);
+        // And it is the moment to tell the debugger where to stop: a session that began before the user
+        // set its breakpoints would otherwise never learn them, and a removed one would stay set. Only
+        // while a session exists, because there is nothing to address before that.
+        self.send_debug_breakpoints(cx);
 
         self.run_controls.reconcile(&executions);
         // A step's session belongs to its preparation as soon as the runtime publishes it, so the
@@ -1220,6 +1235,56 @@ impl EditorApp {
             self.status = "插件后台服务不可用，无法执行调试操作".into();
         }
         cx.notify();
+    }
+
+    /// Ask the provider to set the configuration's breakpoints, so the debugger knows where to stop.
+    ///
+    /// The whole set goes every time, which is how a removed breakpoint stops being set: the answer
+    /// describes the positions the provider was just asked about, not a history of them. Sent while a
+    /// session exists and the provider declared breakpoint support; a provider that did not is never
+    /// asked, and the panel keeps saying the positions are unverified rather than implying they are in.
+    fn send_debug_breakpoints(&mut self, cx: &mut Context<Self>) {
+        if !self.run_controls.debug_capabilities.breakpoints {
+            return;
+        }
+        let Some(provider_session) = self.run_controls.debug_provider_session() else {
+            return;
+        };
+        let Some(config) = self
+            .run_controls
+            .debug_session()
+            .map(|(config, _)| config.to_owned())
+        else {
+            return;
+        };
+        let Some(configuration) = self.run_controls.configuration(&config) else {
+            return;
+        };
+        let breakpoints = configuration
+            .breakpoints
+            .entries()
+            .iter()
+            .map(|entry| {
+                serde_json::json!({
+                    "source": entry.source,
+                    "line": entry.line,
+                })
+            })
+            .collect::<Vec<_>>();
+        let Some(request) = self
+            .run_controls
+            .begin_debug_request(crate::run::DebugMethod::Breakpoints, None)
+        else {
+            return;
+        };
+        let queued = self.extensions.read(cx).stage_debug_call(
+            request,
+            "set_breakpoints",
+            serde_json::json!({ "session": provider_session, "breakpoints": breakpoints }),
+        );
+        if !queued {
+            self.run_controls.abandon_debug_request(request);
+        }
     }
 
     /// Ask the provider for the stack of the pause being inspected, and for the selected frame's
