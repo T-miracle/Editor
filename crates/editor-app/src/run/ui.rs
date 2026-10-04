@@ -649,6 +649,35 @@ impl EditorApp {
             self.open_run_config_dialog(window, cx, None);
             return;
         };
+        self.start_run_configuration(&config.id, window, cx);
+    }
+
+    /// Start one named configuration, or locate the session that configuration already has.
+    ///
+    /// Different configurations start independently, so two programs run side by side; the same
+    /// configuration resolves to its existing session instead of starting a second instance.
+    pub(crate) fn start_run_configuration(
+        &mut self,
+        config_id: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(config) = self
+            .run_controls
+            .configuration(config_id)
+            .cloned()
+            .or_else(|| {
+                self.run_controls
+                    .configurations()
+                    .iter()
+                    .find(|config| config.id == config_id)
+                    .cloned()
+            })
+        else {
+            self.status = "运行配置不存在，请重新选择".into();
+            cx.notify();
+            return;
+        };
         if !self.run_permitted(cx) {
             self.status = "受限工作区不能启动程序".into();
             cx.notify();

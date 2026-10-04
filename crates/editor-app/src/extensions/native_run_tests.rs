@@ -330,6 +330,104 @@ fn leaving_stops_every_run_session_before_shutdown(cx: &mut TestAppContext) {
     let _ = std::fs::remove_file(stored);
 }
 
+/// Two independent configurations run side by side, each keeping its own session.
+#[gpui::test]
+#[ignore = "build terminal and capability-example through the public SDK first"]
+fn two_configurations_run_concurrently_with_their_own_sessions(cx: &mut TestAppContext) {
+    let root = tempfile::tempdir().unwrap();
+    let (mut manager, app, cx) = fixture(
+        cx,
+        root.path(),
+        "powershell.exe",
+        vec![
+            "-NoProfile".into(),
+            "-Command".into(),
+            "Start-Sleep -Seconds 60".into(),
+        ],
+    );
+    // A second configuration differs only in which program it starts.
+    let second = cx.update(|_, cx| {
+        app.update(cx, |app, cx| {
+            let key = app.workspace_key();
+            let id = app.run_controls.generate_id(&key);
+            let configuration = editor_core::RunConfig {
+                id: id.clone(),
+                name: "第二个程序".into(),
+                target: editor_core::RunTarget::Program {
+                    program: "cmd.exe".into(),
+                    args: vec!["/c".into(), "ping -n 60 127.0.0.1 > NUL".into()],
+                },
+                directory: None,
+                local: true,
+            };
+            app.run_controls.upsert(configuration, &key).unwrap();
+            cx.notify();
+            id
+        })
+    });
+    let mut renderer = images::VectorRenderer::default();
+    let mut launches = Vec::new();
+    // Both configurations are started from the same control, one after the other.
+    let first_id = cx.update(|_, cx| app.read(cx).run_controls.selected().unwrap().id.clone());
+    for config in [first_id.clone(), second.clone()] {
+        cx.update(|window, cx| {
+            app.update(cx, |app, cx| {
+                app.start_run_configuration(&config, window, cx)
+            });
+        });
+        for _ in 0..200 {
+            pump_recording(&mut manager, &app, cx, &mut launches);
+            manager.poll();
+            publish_with_launches(&mut manager, &mut renderer, &app, cx, &launches);
+            if launches.iter().any(|(id, _, _)| {
+                manager
+                    .execution(*id)
+                    .is_some_and(|session| session.snapshot().provider_session.is_some())
+            }) {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+    }
+    // Two host sessions exist for two different literal commands.
+    assert_eq!(
+        launches.len(),
+        2,
+        "each configuration starts its own program"
+    );
+    let commands = launches
+        .iter()
+        .map(|(id, _, _)| manager.execution(*id).unwrap().request().program.clone())
+        .collect::<Vec<_>>();
+    assert!(commands.contains(&"powershell.exe".to_owned()));
+    assert!(commands.contains(&"cmd.exe".to_owned()));
+    // Both are active in the editor, each joined to its own configuration.
+    let sessions = cx.update(|_, cx| app.read(cx).run_controls.sessions());
+    assert_eq!(sessions.len(), 2);
+    assert!(sessions.iter().all(|session| session.is_active()));
+    let configs = sessions
+        .iter()
+        .map(|session| session.config.clone())
+        .collect::<Vec<_>>();
+    assert!(configs.contains(&first_id));
+    assert!(configs.contains(&second));
+    // Starting the same configuration again only locates its session.
+    let before = launches.len();
+    cx.update(|window, cx| {
+        app.update(cx, |app, cx| {
+            app.start_run_configuration(&second, window, cx);
+        });
+    });
+    let mut repeats = Vec::new();
+    pump_recording(&mut manager, &app, cx, &mut repeats);
+    assert_eq!(launches.len(), before, "a repeat launch starts nothing new");
+    assert!(repeats.is_empty());
+    let stored = cx.update(|_, cx| {
+        editor_core::storage_path(&app.read(cx).workspace_key()).expect("host-local path")
+    });
+    let _ = std::fs::remove_file(stored);
+}
+
 /// A restricted workspace never starts a program, whatever the stored configuration says.
 #[gpui::test]
 fn a_restricted_workspace_refuses_to_launch_from_the_run_control(cx: &mut TestAppContext) {
