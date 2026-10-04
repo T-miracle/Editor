@@ -13,24 +13,34 @@ fn action(name: &str, script: &str) -> String {
     format!("{name} = powershell.exe | -NoProfile | -Command | {script}")
 }
 
-/// Install the real terminal package and open the editor on one configuration with these steps.
-fn fixture<'a>(
-    cx: &'a mut TestAppContext,
-    root: &std::path::Path,
+/// A configuration whose steps are given as the build page's own line form.
+fn configuration(
+    id: &str,
+    name: &str,
+    program: &str,
     build: &str,
     prelaunch: &str,
-) -> (
-    plugin_runtime::Manager,
-    Entity<EditorApp>,
-    String,
-    &'a mut gpui_kit::VisualTestContext,
-) {
-    cx.update(|cx| {
-        gpui_kit::init(cx);
-        typography::init(cx);
-        apply_theme(builtin_theme(false), cx);
-        cx.set_reduce_motion(true);
-    });
+) -> editor_core::RunConfig {
+    editor_core::RunConfig {
+        id: id.to_owned(),
+        name: name.to_owned(),
+        target: editor_core::RunTarget::Program {
+            program: "powershell.exe".into(),
+            args: vec!["-NoProfile".into(), "-Command".into(), program.to_owned()],
+        },
+        directory: None,
+        env: Default::default(),
+        tool_paths: Default::default(),
+        // The steps are read by the same line form the build page edits, so the acceptance exercises
+        // the form's own rules rather than a hand-built structure.
+        build: crate::run::parse_steps(build).expect("the build actions are well formed"),
+        prelaunch: crate::run::parse_steps(prelaunch).expect("the steps are well formed"),
+        local: true,
+    }
+}
+
+/// Install the real terminal package on a fresh runtime for one workspace.
+fn runtime(root: &std::path::Path) -> plugin_runtime::Manager {
     let mut manager = plugin_runtime::Manager::open(
         root.join("runtime"),
         protocol::Environment {
@@ -46,50 +56,35 @@ fn fixture<'a>(
     .unwrap();
     let grants = terminal.manifest.permissions.clone();
     manager.install(&terminal, grants).unwrap();
+    manager
+}
 
-    let key = root.display().to_string();
-    let mut set = editor_core::RunConfigSet::default();
-    let id = set.generate_id(&key);
-    // The steps are read by the same line form the build page edits, so the acceptance exercises the
-    // form's own rules rather than a hand-built structure.
-    let build = crate::run::parse_steps(build).expect("the build actions are well formed");
-    let prelaunch = crate::run::parse_steps(prelaunch).expect("the steps are well formed");
-    set.upsert(editor_core::RunConfig {
-        id: id.clone(),
-        name: "验收配置".into(),
-        target: editor_core::RunTarget::Program {
-            program: "powershell.exe".into(),
-            args: vec![
-                "-NoProfile".into(),
-                "-Command".into(),
-                format!(
-                    "[Console]::Write('PROGRAM_RAN'); Set-Content -Path '{}' -Value ran",
-                    root.join("program.txt").display()
-                ),
-            ],
-        },
-        directory: None,
-        env: Default::default(),
-        tool_paths: Default::default(),
-        build,
-        prelaunch,
-        local: true,
-    })
-    .unwrap();
-    set.select(&id);
-
+/// Open the editor on a workspace holding these configurations, the last one selected.
+fn editor_on<'a>(
+    cx: &'a mut TestAppContext,
+    root: &std::path::Path,
+    configurations: Vec<editor_core::RunConfig>,
+) -> (Entity<EditorApp>, &'a mut gpui_kit::VisualTestContext) {
+    cx.update(|cx| {
+        gpui_kit::init(cx);
+        typography::init(cx);
+        apply_theme(builtin_theme(false), cx);
+        cx.set_reduce_motion(true);
+    });
+    let selected = configurations.last().map(|config| config.id.clone());
     let slot = Rc::new(RefCell::new(None));
     let capture = slot.clone();
-    let installed = id.clone();
     let workspace = Workspace::open(root).unwrap();
     let (_, cx) = cx.add_window_view(move |window, cx| {
         let app = cx.new(|cx| EditorApp::new(workspace, None, window, cx));
         app.update(cx, |app, cx| {
             let key = app.workspace_key();
-            app.run_controls
-                .upsert(set.configurations[0].clone(), &key)
-                .unwrap();
-            app.run_controls.select(&installed, &key);
+            for configuration in configurations {
+                app.run_controls.upsert(configuration, &key).unwrap();
+            }
+            if let Some(selected) = &selected {
+                app.run_controls.select(selected, &key);
+            }
             cx.notify();
         });
         *capture.borrow_mut() = Some(app.clone());
@@ -97,6 +92,36 @@ fn fixture<'a>(
     });
     let app = slot.borrow_mut().take().unwrap();
     cx.simulate_resize(size(px(1400.), px(900.)));
+    (app, cx)
+}
+
+/// Install the real terminal package and open the editor on one configuration with these steps.
+fn fixture<'a>(
+    cx: &'a mut TestAppContext,
+    root: &std::path::Path,
+    build: &str,
+    prelaunch: &str,
+) -> (
+    plugin_runtime::Manager,
+    Entity<EditorApp>,
+    String,
+    &'a mut gpui_kit::VisualTestContext,
+) {
+    let mut manager = runtime(root);
+    let key = root.display().to_string();
+    let mut set = editor_core::RunConfigSet::default();
+    let id = set.generate_id(&key);
+    let configuration = configuration(
+        &id,
+        "验收配置",
+        &format!(
+            "[Console]::Write('PROGRAM_RAN'); Set-Content -Path '{}' -Value ran",
+            root.join("program.txt").display()
+        ),
+        build,
+        prelaunch,
+    );
+    let (app, cx) = editor_on(cx, root, vec![configuration]);
     let mut renderer = images::VectorRenderer::default();
     publish_with_launches(&mut manager, &mut renderer, &app, cx, &[]);
     (manager, app, id, cx)
@@ -497,6 +522,155 @@ fn stopping_during_preparation_never_starts_the_program(cx: &mut TestAppContext)
     );
     assert_eq!(launches.len(), 1, "the program was never requested");
     shut_down(&mut manager, &app, cx);
+}
+
+/// A step that names another configuration runs that configuration's build as it is now, not as a
+/// copy: editing the referenced build changes what the next launch does.
+#[gpui::test]
+#[ignore = "build terminal and capability-example through the public SDK first"]
+fn a_step_that_references_a_build_tracks_its_current_definition(cx: &mut TestAppContext) {
+    let root = tempfile::tempdir().unwrap();
+    let mut manager = runtime(root.path());
+    let first = root.path().join("library-v1.txt");
+    let second = root.path().join("library-v2.txt");
+    let key = root.path().display().to_string();
+    let running = format!("{key}-run");
+    let library = "库配置";
+    let (app, cx) = editor_on(
+        cx,
+        root.path(),
+        vec![
+            configuration(
+                "lib",
+                library,
+                "Start-Sleep -Seconds 60",
+                &action(
+                    "编译库",
+                    &format!("Set-Content -Path '{}' -Value v1", first.display()),
+                ),
+                "",
+            ),
+            configuration(
+                &running,
+                "运行",
+                &format!(
+                    "[Console]::Write('PROGRAM_RAN'); Set-Content -Path '{}' -Value ran",
+                    root.path().join("program.txt").display()
+                ),
+                "",
+                &format!("先建库 = @{library}"),
+            ),
+        ],
+    );
+    let mut renderer = images::VectorRenderer::default();
+    publish_with_launches(&mut manager, &mut renderer, &app, cx, &[]);
+    cx.update(|window, cx| {
+        app.update(cx, |app, cx| app.start_selected_run(window, cx));
+    });
+    let launches = run_until(&mut manager, &app, cx, |app, cx| {
+        cx.update(|_, cx| {
+            let state = app.read(cx);
+            state.run_controls.preparation_complete(&running)
+        })
+    });
+    // The reference ran the library's build action, then the program, as two sessions.
+    let named = launches
+        .iter()
+        .map(|(id, _, _)| {
+            manager
+                .execution(*id)
+                .and_then(|session| session.request().name.clone())
+                .unwrap_or_default()
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        named.len(),
+        2,
+        "the referenced build and the program: {named:?}"
+    );
+    assert!(
+        named[0].contains("先建库"),
+        "the step names its reference: {named:?}"
+    );
+    assert_eq!(named[1], "运行");
+    // The program is a fresh process, so it is given its own moment to produce its output.
+    let mut extra = Vec::new();
+    for _ in 0..100 {
+        frame(&mut manager, &mut renderer, &app, cx, &mut extra);
+        if first.exists() && root.path().join("program.txt").exists() {
+            break;
+        }
+    }
+    assert!(
+        first.exists(),
+        "the referenced configuration's own build action ran"
+    );
+    assert!(root.path().join("program.txt").exists());
+    // The program step is still running, so this launch is stopped before the next one starts.
+    let sessions = cx.update(|_, cx| app.read(cx).run_controls.active_sessions());
+    for session in sessions {
+        let _ = manager.stop_execution(session.id);
+    }
+    for _ in 0..60 {
+        manager.poll();
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    // Editing the referenced build changes what this configuration's step does, with no copy of the
+    // command anywhere in the referencing configuration.
+    cx.update(|_, cx| {
+        app.update(cx, |app, cx| {
+            let key = app.workspace_key();
+            let mut updated = app.run_controls.configuration("lib").cloned().unwrap();
+            updated.build = crate::run::parse_steps(&action(
+                "编译库",
+                &format!("Set-Content -Path '{}' -Value v2", second.display()),
+            ))
+            .unwrap();
+            app.run_controls.upsert(updated, &key).unwrap();
+            // The referencing step still says only `@库配置`.
+            let step = app.run_controls.configuration(&running).unwrap();
+            assert_eq!(
+                step.prelaunch[0].target,
+                editor_core::StepTarget::Build {
+                    config: library.to_owned()
+                },
+                "the reference is an identity, not a copied command"
+            );
+            cx.notify();
+        });
+    });
+    // The edited definitions are launched again, from a fresh editor over the same stored
+    // configurations: a second launch is a new decision, not a resumption of the first one, and the
+    // first launch's own programs are not part of it.
+    let edited = cx.update(|_, cx| {
+        let app = app.read(cx);
+        vec![
+            app.run_controls.configuration("lib").cloned().unwrap(),
+            app.run_controls.configuration(&running).cloned().unwrap(),
+        ]
+    });
+    let (second_app, cx) = editor_on(cx, root.path(), edited);
+    cx.update(|window, cx| {
+        second_app.update(cx, |app, cx| app.start_selected_run(window, cx));
+    });
+    for _ in 0..300 {
+        frame(
+            &mut manager,
+            &mut renderer,
+            &second_app,
+            cx,
+            &mut Vec::new(),
+        );
+        if second.exists() {
+            break;
+        }
+    }
+    assert!(
+        second.exists(),
+        "the edited build definition is what the next launch ran; status={:?}",
+        cx.update(|_, cx| second_app.read(cx).status.clone())
+    );
+    shut_down(&mut manager, &second_app, cx);
 }
 
 /// A configuration without build actions says why Build cannot run.
