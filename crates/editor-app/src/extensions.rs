@@ -65,6 +65,7 @@ use plugin_runtime::{
 use std::cell::RefCell;
 use std::collections::BTreeMap;
 use worker::{LifecycleAction, OperationProgress, Work, Worker};
+pub use worker::{HostRunSnapshot, Work as HostWork};
 
 actions!(extensions, [ToggleExtensions, QuitEditor]);
 /// Opens plugin management independently of plugin-owned panel visibility.
@@ -426,8 +427,7 @@ impl ExtensionPanel {
     }
     /// Publish worker results and hand native editor/clipboard requests to the UI thread.
     /// Apply host-local authority before accepting further worker views or contributions.
-    pub(crate) fn set_workspace_trusted(&mut self, trusted: bool, cx: &mut Context<Self>) {
-        if !trusted {
+    pub(crate) fn set_workspace_trusted(&mut self, trusted: bool, cx: &mut Context<Self>) {        if !trusted {
             self.bundled.cancel_request();
             self.worker.cancel_installation();
             // Startup declarations can exist before the worker publishes any installed entries.
@@ -977,6 +977,34 @@ impl DockPanel for ExtensionPanel {
         true
     }
 }
+impl ExtensionPanel {
+    /// Whether this workspace may start programs and language tools at all.
+    ///
+    /// The run controls read the same host-local authority the worker enforces, so a restricted
+    /// workspace never offers a launch.
+    pub(crate) fn workspace_trusted(&self) -> bool {
+        self.worker
+            .trusted
+            .load(std::sync::atomic::Ordering::Acquire)
+    }
+
+    /// Stage one host start for the plugin worker, reporting whether it could be queued.
+    pub(crate) fn stage_host_run(&self, work: HostWork) -> bool {
+        self.worker.tx.send(work).is_ok()
+    }
+
+    /// Published host sessions and the start refusals reported by the worker.
+    ///
+    /// Reading drains the refusal list, so each failed launch is explained exactly once.
+    pub(crate) fn take_host_runs(&self) -> (Vec<HostRunSnapshot>, Vec<(String, u64, String)>) {
+        let mut state = self.worker.state.lock().unwrap();
+        (
+            state.host_executions.clone(),
+            std::mem::take(&mut state.run_errors),
+        )
+    }
+}
+
 impl EditorApp {
     /// Keep the window alive while snapshots finish; GPUI's final quit grace is only 200 ms.
     pub(crate) fn shutdown_plugins(&mut self, cx: &mut Context<Self>) {

@@ -3,6 +3,8 @@ mod editor;
 mod explorer;
 mod extensions;
 pub mod language;
+/// Run controls own saved configurations and the sessions launched from them.
+mod run;
 mod sdk_export;
 #[cfg(test)]
 mod tests;
@@ -192,6 +194,13 @@ struct EditorApp {
     plugin_popup_snapshot: Option<PluginPopupSnapshot>,
     dark_theme: bool,
     session_state: SessionState,
+    /// Saved run configurations and the sessions this editor launched from them.
+    run_controls: run::RunControls,
+    /// The B1 configuration dialog's draft, retained while its modal window is open.
+    run_form: Option<Entity<run::RunConfigForm>>,
+    /// Native configuration window handle and its close subscription.
+    run_dialog: Option<(Entity<app_dialog::AppDialog>, WindowHandle<Root>)>,
+    _run_dialog_closed: Option<Subscription>,
     _tree_subscription: Subscription,
     _dock_subscription: Subscription,
     _bounds_subscription: Option<Subscription>,
@@ -260,6 +269,11 @@ impl EditorApp {
                 .placeholder(t!("editor.select_file").to_string())
         });
         let session_state = SessionState::load(workspace.root());
+        // Run configurations are host-local and read once; a broken file is reported, never replaced.
+        let run_controls = run::RunControls::load(
+            &workspace.root().display().to_string(),
+            editor_core::default_root(),
+        );
         let tree_state = cx.new(|cx| TreeState::new(cx));
         let tree_subscription = cx.subscribe(&tree_state, |this, _, event: &TreeEvent, cx| {
             let id = match event {
@@ -418,6 +432,10 @@ impl EditorApp {
             plugin_popup_snapshot: None,
             dark_theme: false,
             session_state,
+            run_controls,
+            run_form: None,
+            run_dialog: None,
+            _run_dialog_closed: None,
             _tree_subscription: tree_subscription,
             _dock_subscription: dock_subscription,
             _bounds_subscription: None,

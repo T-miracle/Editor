@@ -42,6 +42,8 @@ impl Worker {
             let mut bundled_install: Option<super::super::bundled::Candidate> = None;
             let mut deferred = VecDeque::new();
             let mut instance_ids = BTreeMap::<String, String>::new();
+            // Host session identity joined to the configuration and launch that requested it.
+            let mut run_requests = BTreeMap::<u64, (String, u64)>::new();
             loop {
                 // Only the candidate travels between threads. Cutover remains serialized with live dispatch.
                 let completed = preparation
@@ -209,6 +211,29 @@ impl Worker {
                             ));
                             published.configuration_revision += 1;
                             result
+                        }
+                        Some(Work::StartRun {
+                            request,
+                            config,
+                            request_id,
+                        }) => {
+                            // The runtime selects a compatible provider by contract and scope; a
+                            // missing or ambiguous provider is reported instead of being guessed at.
+                            let result = manager.start_execution(request).map(|session| {
+                                // Remember which launch produced this session before it is published.
+                                run_requests.insert(
+                                    session.id(),
+                                    (config.clone(), request_id),
+                                );
+                            });
+                            if let Err(error) = &result {
+                                let mut published = output.lock().unwrap();
+                                published
+                                    .run_errors
+                                    .push((config.clone(), request_id, format!("{error:#}")));
+                                published.configuration_revision += 1;
+                            }
+                            result.map_err(|error| anyhow::anyhow!("{error:#}"))
                         }
                         Some(Work::Shutdown(ack)) => {
                             drop(manager);
@@ -505,6 +530,31 @@ impl Worker {
                 }
                 if published.configurations != configurations {
                     published.configurations = configurations;
+                    published.configuration_revision += 1;
+                }
+                // Host executions are published as views; the launch identity joins each answer to
+                // the request that produced it, so another window's session is never adopted here.
+                let host_executions = manager
+                    .executions()
+                    .into_iter()
+                    .map(|session| {
+                        let id = session.id();
+                        let snapshot = session.snapshot();
+                        let (config, request_id) =
+                            run_requests.get(&id).cloned().unwrap_or_default();
+                        HostRunSnapshot {
+                            id,
+                            config,
+                            request_id,
+                            plugin: snapshot.plugin,
+                            state: snapshot.state,
+                            provider_session: snapshot.provider_session,
+                            failure: snapshot.failure.map(|failure| failure.message),
+                        }
+                    })
+                    .collect::<Vec<_>>();
+                if published.host_executions != host_executions {
+                    published.host_executions = host_executions;
                     published.configuration_revision += 1;
                 }
                 published

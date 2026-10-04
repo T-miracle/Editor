@@ -1,0 +1,381 @@
+//! Run controls: saved configurations, their launches, and the sessions they produced.
+//!
+//! The editor owns the configuration and the visible session list; the execution itself belongs to
+//! whichever compatible provider the runtime selects. Nothing here inspects a program name to decide
+//! behavior: a configuration is either valid, or it is not.
+use crate::extensions::HostRunSnapshot;
+use editor_core::{RunConfig, RunConfigSet, RunTarget};
+use std::collections::BTreeMap;
+
+mod ui;
+pub use ui::RunConfigForm;
+#[cfg(test)]
+mod run_ui_tests;
+#[cfg(test)]
+mod tests;
+
+/// What a launch request should do, decided before any work is requested.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum LaunchPlan {
+    /// A session for this literal command is already retained; reveal it instead of starting again.
+    Existing { session: u64 },
+    /// Ask the runtime to start this configuration.
+    Start {
+        config: RunConfig,
+        /// Absolute working directory, or the workspace root when the configuration omits one.
+        directory: Option<String>,
+        /// Request label shown by the provider for this session.
+        name: String,
+    },
+    /// The configuration cannot be launched as stored; the reason is shown instead of guessing.
+    Invalid { message: String },
+}
+
+/// A launch that has been requested from the runtime but has no published session identity yet.
+#[derive(Clone, Debug)]
+pub struct PendingRun {
+    pub config: String,
+    pub request_id: u64,
+}
+
+/// One execution this editor requested, joined to the configuration that produced it.
+#[derive(Clone, Debug)]
+pub struct RunSession {
+    /// Runtime session identity.
+    pub id: u64,
+    /// Configuration identity at start time; later edits do not retarget a running session.
+    pub config: String,
+    /// Provider package identity, reported for transparency.
+    pub plugin: String,
+    pub state: plugin_runtime::ExecutionState,
+    pub provider_session: Option<String>,
+    /// Provider-reported failure, when the launch did not reach a running program.
+    pub failure: Option<String>,
+}
+
+impl RunSession {
+    /// Whether the session is still a launch or a running program rather than a finished result.
+    pub fn is_active(&self) -> bool {
+        match self.state {
+            plugin_runtime::ExecutionState::Starting
+            | plugin_runtime::ExecutionState::Running => true,
+            plugin_runtime::ExecutionState::Failed => false,
+        }
+    }
+}
+
+/// Saved configurations plus everything this editor has launched from them.
+#[derive(Debug)]
+pub struct RunControls {
+    configs: RunConfigSet,
+    /// Identity assigned to the next local session, used only before the runtime answers.
+    next_request: u64,
+    pending: Vec<PendingRun>,
+    sessions: BTreeMap<u64, RunSession>,
+    /// Storage directory used for host-local configuration files.
+    root: Option<std::path::PathBuf>,
+    /// Set when the stored file could not be read or written; shown instead of silently defaulting.
+    pub error: Option<String>,
+}
+
+/// Controls without a storage directory, used while a workspace has no host-local state yet.
+impl Default for RunControls {
+    fn default() -> Self {
+        Self {
+            configs: RunConfigSet::default(),
+            next_request: 0,
+            pending: Vec::new(),
+            sessions: BTreeMap::new(),
+            root: None,
+            error: None,
+        }
+    }
+}
+
+impl RunControls {
+    /// Load the configurations stored for one workspace, reporting an unreadable file.
+    pub fn load(workspace: &str, root: Option<std::path::PathBuf>) -> Self {
+        let mut controls = Self {
+            root: root.clone(),
+            ..Self::default()
+        };        let Some(root) = root else {
+            return controls;
+        };
+        match editor_core::load(&root, workspace) {
+            Ok(configs) => controls.configs = configs,
+            // An unreadable file is never replaced by defaults: the user's previous configurations
+            // must survive until they decide what to do with the file.
+            Err(error) => controls.error = Some(error.to_string()),
+        }
+        controls
+    }
+
+    /// A stored configuration by identity, used when the form reopens an existing entry.
+    pub fn configuration(&self, id: &str) -> Option<&RunConfig> {
+        self.configs.find(id)
+    }
+
+    pub fn configurations(&self) -> &[RunConfig] {
+        &self.configs.configurations
+    }
+
+    pub fn selected(&self) -> Option<&RunConfig> {
+        self.configs.selected()
+    }
+
+    /// Select a stored configuration and remember the choice for the next start.
+    pub fn select(&mut self, id: &str, workspace: &str) -> bool {
+        let selected = self.configs.select(id);
+        if selected {
+            // Selection is persisted, so reopening the editor keeps the same visible target.
+            let _ = self.persist(workspace);
+        }
+        selected
+    }
+
+    /// Save or replace one configuration and persist the result.
+    pub fn upsert(&mut self, configuration: RunConfig, workspace: &str) -> Result<(), String> {
+        // A rejected configuration is reported here as well as returned, so the visible error and the
+        // refused edit cannot disagree.
+        if let Err(error) = self.configs.upsert(configuration) {
+            let message = error.to_string();
+            self.error = Some(message.clone());
+            return Err(message);
+        }
+        self.persist(workspace)
+    }
+
+    pub fn remove(&mut self, id: &str, workspace: &str) -> Result<(), String> {
+        self.configs.remove(id);
+        // A removed configuration's finished sessions stay visible; running ones are not hidden.
+        self.persist(workspace)
+    }
+
+    /// Identity for a new configuration in this workspace.
+    pub fn generate_id(&self, workspace: &str) -> String {
+        self.configs.generate_id(workspace)
+    }
+
+    fn persist(&mut self, workspace: &str) -> Result<(), String> {
+        let Some(root) = self.root.clone() else {
+            return Ok(());
+        };
+        match editor_core::save(&root, workspace, &self.configs) {
+            Ok(()) => {
+                self.error = None;
+                Ok(())
+            }
+            Err(error) => {
+                let message = error.to_string();
+                self.error = Some(message.clone());
+                Err(message)
+            }
+        }
+    }
+
+    /// All sessions this editor knows about, newest request last.
+    pub fn sessions(&self) -> Vec<RunSession> {
+        self.sessions.values().cloned().collect()
+    }
+
+    /// Active sessions only, which is what the top bar offers to stop or reveal.
+    pub fn active_sessions(&self) -> Vec<RunSession> {
+        self.sessions
+            .values()
+            .filter(|session| session.is_active())
+            .cloned()
+            .collect()
+    }
+
+    /// Sessions belonging to one configuration, so the menu can group running work by target.
+    pub fn sessions_for(&self, config: &str) -> Vec<RunSession> {
+        self.sessions
+            .values()
+            .filter(|session| session.config == config)
+            .cloned()
+            .collect()
+    }
+
+    /// A running program for this configuration, if one is known.
+    ///
+    /// Starting a second program for the same configuration is never implicit: a duplicate click
+    /// resolves to the session that already exists.
+    pub fn running_for(&self, config: &str) -> Option<RunSession> {
+        self.sessions
+            .values()
+            .find(|session| session.config == config && session.is_active())
+            .cloned()
+    }
+
+    /// Decide what a launch means before any work is requested from the runtime.
+    ///
+    /// A configuration that is already starting or running resolves to its session; an invalid one
+    /// reports why; otherwise the runtime is asked to start it.
+    pub fn plan_launch(&self, id: &str, workspace_root: &str) -> LaunchPlan {
+        let Some(config) = self.configs.find(id) else {
+            return LaunchPlan::Invalid {
+                message: "运行配置不存在，请重新选择".into(),
+            };
+        };
+        if let Err(error) = config.validate() {
+            return LaunchPlan::Invalid {
+                message: error.to_string(),
+            };
+        }
+        if let Some(session) = self.running_for(id) {
+            return LaunchPlan::Existing {
+                session: session.id,
+            };
+        }
+        // A configuration without a directory launches from the workspace root; a stored directory is
+        // absolute, so it never depends on where the editor was started.
+        let directory = config
+            .directory
+            .clone()
+            .or_else(|| Some(workspace_root.to_owned()));
+        LaunchPlan::Start {
+            config: config.clone(),
+            directory,
+            name: config.name.clone(),
+        }
+    }
+
+    /// Literal program arguments for the planned request, including interpreter script mode.
+    pub fn request_for(plan: &LaunchPlan) -> Option<plugin_runtime::RunRequest> {
+        let LaunchPlan::Start {
+            config,
+            directory,
+            name,
+        } = plan
+        else {
+            return None;
+        };
+        Some(plugin_runtime::RunRequest {
+            program: config.target.executable().to_owned(),
+            args: config.literal_arguments(),
+            cwd: directory.clone(),
+            name: Some(name.clone()),
+        })
+    }
+
+    /// Record that a start was requested; the runtime answers with the session identity later.
+    pub fn begin(&mut self, config: &str) -> u64 {
+        self.next_request += 1;
+        self.pending.push(PendingRun {
+            config: config.to_owned(),
+            request_id: self.next_request,
+        });
+        self.next_request
+    }
+
+    /// Accept the session identities the runtime published for the requests this editor made.
+    ///
+    /// A launch with no matching pending request is not adopted: another window's session must not
+    /// appear as this one's result. Published state is authoritative for sessions already known here.
+    pub fn reconcile(&mut self, published: &[HostRunSnapshot]) {
+        let by_id = published
+            .iter()
+            .map(|snapshot| (snapshot.id, snapshot))
+            .collect::<BTreeMap<_, _>>();
+        for (id, session) in &mut self.sessions {
+            if let Some(snapshot) = by_id.get(id) {
+                session.state = snapshot.state;
+                session.provider_session = snapshot.provider_session.clone();
+                session.failure = snapshot.failure.clone();
+            }
+        }
+        let adoptable = published
+            .iter()
+            .filter(|snapshot| {
+                self.pending.iter().any(|pending| {
+                    pending.config == snapshot.config && pending.request_id == snapshot.request_id
+                })
+            })
+            .map(|snapshot| (snapshot.config.clone(), snapshot.request_id))
+            .collect::<Vec<_>>();
+        for (config, request_id) in adoptable {
+            let Some(snapshot) = published
+                .iter()
+                .find(|snapshot| snapshot.config == config && snapshot.request_id == request_id)
+            else {
+                continue;
+            };
+            // A queued start stays pending: the session exists, but the provider has not yet
+            // confirmed a running program, so the launch is still in flight.
+            if snapshot.state != plugin_runtime::ExecutionState::Starting {
+                self.pending.retain(|pending| {
+                    !(pending.config == config && pending.request_id == request_id)
+                });
+            }
+            self.sessions.insert(
+                snapshot.id,
+                RunSession {
+                    id: snapshot.id,
+                    config: snapshot.config.clone(),
+                    plugin: snapshot.plugin.clone(),
+                    state: snapshot.state,
+                    provider_session: snapshot.provider_session.clone(),
+                    failure: snapshot.failure.clone(),
+                },
+            );
+        }
+    }
+
+    /// Whether a launch request for this configuration is still awaiting its session identity.
+    pub fn is_pending(&self, config: &str) -> bool {
+        self.pending.iter().any(|pending| pending.config == config)
+    }
+}
+
+/// A configuration the user is editing before it is saved.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RunConfigDraft {
+    pub id: String,
+    pub name: String,
+    pub program: String,
+    /// One argument per line, so a value containing spaces is never re-split.
+    pub arguments: String,
+    pub directory: String,
+}
+
+impl RunConfigDraft {
+    /// Start a draft from a stored configuration, or an empty draft for a new one.
+    pub fn from_config(config: Option<&RunConfig>, id: String) -> Self {
+        match config {
+            Some(config) => Self {
+                id: config.id.clone(),
+                name: config.name.clone(),
+                program: config.target.executable().to_owned(),
+                arguments: config.literal_arguments().join("\n"),
+                directory: config.directory.clone().unwrap_or_default(),
+            },
+            None => Self {
+                id,
+                name: String::new(),
+                program: String::new(),
+                arguments: String::new(),
+                directory: String::new(),
+            },
+        }
+    }
+
+    /// Build the configuration this draft describes, keeping program mode's literal arguments.
+    pub fn to_config(&self) -> RunConfig {
+        RunConfig {
+            id: self.id.clone(),
+            name: self.name.trim().to_owned(),
+            target: RunTarget::Program {
+                program: self.program.trim().to_owned(),
+                args: self
+                    .arguments
+                    .lines()
+                    .map(str::to_owned)
+                    .filter(|line| !line.is_empty())
+                    .collect(),
+            },
+            directory: (!self.directory.trim().is_empty())
+                .then(|| self.directory.trim().to_owned()),
+            local: true,
+        }
+    }
+}

@@ -13,7 +13,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-pub(super) enum Work {
+pub enum Work {
     /// Provider choices are explicit host actions, never executable project configuration.
     SetServiceProvider {
         request: u64,
@@ -65,6 +65,16 @@ pub(super) enum Work {
         plugin: String,
         command: String,
         arguments: serde_json::Value,
+    },
+    /// The editor's run controls start a program through the public execution contract.
+    ///
+    /// The request already carries literal arguments and an absolute directory; the worker only asks
+    /// the runtime, which selects a compatible provider by contract rather than by plugin identity.
+    StartRun {
+        request: plugin_runtime::RunRequest,
+        config: String,
+        /// Identity of the launch that requested this start, so the answer joins its own request.
+        request_id: u64,
     },
     Shutdown(Option<futures::channel::oneshot::Sender<()>>),
 }
@@ -178,6 +188,13 @@ pub(super) struct Published {
     /// Bounded typed work has a completion gate that survives queue transfer and rejects stale callbacks.
     pub editor_requests: Vec<(String, plugin_runtime::EditorRequest)>,
     pub entries: Vec<Installed>,
+    /// One entry per execution this editor started, joined to the configuration that produced it.
+    ///
+    /// A snapshot is a view of the runtime's session, never a second process model: the worker
+    /// republishes it and the UI joins it to the saved configuration.
+    pub host_executions: Vec<HostRunSnapshot>,
+    /// Result of a start request the worker could not even queue, keyed by launch identity.
+    pub run_errors: Vec<(String, u64, String)>,
     pub startup: BTreeMap<String, String>,
     pub views: BTreeMap<String, Arc<ui::Document>>,
     /// Each scene's full-color image operations are ready before the UI observes that scene.
@@ -195,6 +212,24 @@ pub(super) struct Published {
 pub(super) struct OperationStatus {
     pub plugin: Option<String>,
     pub message: String,
+}
+
+/// A published execution session, carrying only what the run controls display or join.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct HostRunSnapshot {
+    /// Runtime session identity.
+    pub id: u64,
+    /// Configuration that requested this session, from the launching editor.
+    pub config: String,
+    /// Launch identity, so an answer is adopted only by the request that produced it.
+    pub request_id: u64,
+    /// Resolved provider package identity, reported rather than used for routing.
+    pub plugin: String,
+    pub state: plugin_runtime::ExecutionState,
+    /// Provider-reported session identity, when its answer carried one.
+    pub provider_session: Option<String>,
+    /// Provider-reported failure, retained as the visible result of the launch.
+    pub failure: Option<String>,
 }
 /// The channel disconnect also shuts down when the last UI owner is released.
 pub(super) struct Worker {

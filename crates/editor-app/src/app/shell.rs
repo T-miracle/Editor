@@ -333,6 +333,7 @@ impl Render for EditorApp {
         // Open plugin-owned settings through the normal editor document path.
         self.sync_plugin_panels(window, cx);
         self.sync_plugin_documents(cx);
+        self.sync_run_controls(cx);
         self.dispatch_editor_requests(window, cx);
         if let Some(path) = self.pending_plugin_file.take() {
             self.open_file(path, window, cx);
@@ -458,6 +459,7 @@ impl Render for EditorApp {
                                 }
                             })),
                     )
+                    .child(self.render_run_controls(cx))
                     .child(self.render_extensions_button(cx))
                     .child(self.render_settings_dialog(cx))
                     .child(self.render_window_controls(window, cx)),
