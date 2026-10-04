@@ -7,8 +7,10 @@
 // cannot fix, so their presence is reported but not enforced.
 
 import assert from 'node:assert/strict';
+import { existsSync, readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { describe, it } from 'node:test';
-import { basePrefix, collectLinks, listPages } from './helpers.mjs';
+import { basePrefix, collectLinks, listPages, siteRoot } from './helpers.mjs';
 
 const pages = listPages();
 
@@ -118,5 +120,21 @@ describe('documentation links', () => {
     );
     // No assertion: external availability is not under this repository's control.
     console.log(`external links referenced: ${external.length}`);
+  });
+
+  it('publishes an entry point at the site root', () => {
+    // Every page lives under a language prefix, so the project URL has nothing to
+    // serve without this file and answers 404 even though the whole site is
+    // published. The redirect is a build artifact rather than a page, so it is
+    // checked here instead of through the content collection.
+    const entry = join(siteRoot, 'public', 'index.html');
+    assert.ok(existsSync(entry), 'public/index.html must exist to serve the site root');
+    const html = readFileSync(entry, 'utf8');
+    for (const locale of ['en', 'zh-cn']) {
+      assert.ok(
+        html.includes(`${basePrefix}/${locale}/`),
+        `the root entry point must link to the ${locale} tree`,
+      );
+    }
   });
 });
