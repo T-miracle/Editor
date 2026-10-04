@@ -150,6 +150,12 @@
 
 **判定汇总**：20 项中 **18 项已通过**、**2 项未验证**（R16、R20）、**0 项未通过**。两项未验证都源自本机环境或原生交互框架的限制，已在下方「未覆盖与限制」中逐条给出具体原因；它们**不计为通过**。
 
+### 工单 12 逐条进度
+
+- **第 1 条（用宿主导出的 SDK 独立构建并安装）已通过**：`scripts/verify-plugin-sdk.ps1` 完整跑完导出 → 损坏 → 修复 → 逐文件哈希比对 → **在仓库之外独立构建访客组件**，并以 `Verified public SDK export, repair and independent component build.` 结束；`sdk_distribution -- --ignored` 通过。访客在系统临时目录里对着**已安装的公开 SDK 缓存**编译，未引用仓库 `crates/`（六份插件 `Cargo.toml` 均无仓库相对依赖）。
+- **第 2 条（公开能力文档）本轮补齐**：本分支此前**没有任何文档描述 `interactive.execute` 或 `debug.session`**——两者只存在于代码与决策记录中。新增 `crates/plugin-protocol/SESSIONS.md` 覆盖发现、程序与 Shell、构建、会话观察、停止、调试与资源生命周期，并从 `README.md` 索引；文档中的每个形状都与宿主实际声明的值逐项核对（`env` 值上限 32768、`frames` 上限 256、`variables` 上限 512、步进方向字词 `into`/`over`/`out`、版本范围 `>=1.3,<2` 与 `>=1,<2`）。
+- **第 7 条（读者文档与内部文档的工作面分离）本轮无法满足，原因不在本分支**：仓库的读者工作面 `website/` **在本机不存在**（`docs/README.md` 自己写着读者文档面在 `website/`，但该目录未被跟踪、也未创建；静态文档站点是另一批议题 #39–#47，状态为待实施）。因此「读者使用说明与插件协议正文只写入读者文档工作面」**没有可写入的目标**。按现约不在 `docs/` 复制读者正文，本轮只做内部侧：不新增读者正文副本。这一条随 `website/` 落地后由站点侧承接。
+
 交付脚本侧的一处修正：`scripts/verify-plugin-sdk.ps1` 原先**无法运行**——它以默认编码读取含非 ASCII 的 fixture 清单（Windows PowerShell 按 ANSI 解码，JSON 解析失败），且在 `$ErrorActionPreference = 'Stop'` 下运行原生命令（Cargo 的 stderr 输出成为终止性错误，脚本在读取退出码之前中止）。修正后脚本完整通过，并以 `Verified public SDK export, repair and independent component build.` 结束；`sdk_distribution -- --ignored` 随之通过。这证明工单 12 第 1 条：访客在仓库之外的临时目录、仅凭公开 SDK 缓存构建成功。
 
 ## 未覆盖与限制

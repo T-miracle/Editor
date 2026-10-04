@@ -9,6 +9,7 @@
 跨插件协作、版本化契约、提供者选择及来源权限见 [SERVICES.md](SERVICES.md)。
 
 原生服务、交互式进程、权限与回收契约见 [PROCESSES.md](PROCESSES.md)。
+提供运行与调试服务的提供者契约（interactive.execute 1.3、debug.session 1.0）、观察与清理语义见 [SESSIONS.md](SESSIONS.md)。
 
 纯声明式语言包及独立识别、高亮提供者的格式见 [LANGUAGES.md](LANGUAGES.md)。无需附带空生命周期组件；安装、启停、更新和卸载会同步到已打开文档。
 
