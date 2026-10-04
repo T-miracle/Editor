@@ -2,6 +2,13 @@
 use super::*;
 
 pub(super) const MAX_FAILURES: usize = 3;
+/// Typed recovery state prevents callers from guessing alert severity from localized text.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum RecoveryState {
+    WaitingRetry,
+    Recovered,
+    Paused,
+}
 #[derive(Default)]
 pub(super) struct Recovery {
     failures: usize,
@@ -78,21 +85,37 @@ impl LanguageServer {
         let result = work();
         // All paths acquire the transport lock before the recovery lock; request failure uses that order too.
         if result.is_err() {
-            *self.connection.lock().unwrap() = None;
+            let mut connection = self.connection.lock().unwrap();
+            if let Some(connection) = connection.as_mut() {
+                // Transport/readiness faults retain stderr tails; a retired plan's cutoff still wins.
+                connection.failed = true;
+            }
+            *connection = None;
         }
+        // Cancellation of an obsolete adapter never spends a retry budget or alerts its replacement.
+        ensure!(self.is_active(), "LSP provider has been retired");
         let mut recovery = self.recovery.lock().unwrap();
         let now = clock();
         let mut log = None;
         match &result {
-            Ok(_) => recovery.succeeded(now),
+            Ok(_) => {
+                let recovered = !recovery.running && recovery.failures > 0;
+                recovery.succeeded(now);
+                if recovered {
+                    log = Some((
+                        plugin_runtime::LogLevel::Info,
+                        rust_i18n::t!("plugins.logs.lsp_recovered").to_string(),
+                    ));
+                }
+            }
             Err(error) => {
                 recovery.failed(operation, error, now);
-                log = recovery.message.clone();
+                log = Some(recovery.failure_log());
             }
         }
         drop(recovery);
-        if let Some(message) = log {
-            self.log_failure(operation, &message);
+        if let Some((level, message)) = log {
+            self.log_failure(level, operation, &message);
         }
         result
     }
@@ -128,13 +151,17 @@ impl LanguageServer {
         connection: &mut Option<LanguageServerConnection>,
     ) {
         if let Err(error) = result {
+            if let Some(connection) = connection.as_mut() {
+                // Mark the failure before Drop chooses controlled or fault-aware process shutdown.
+                connection.failed = true;
+            }
             *connection = None;
             if self.is_active() {
                 let mut recovery = self.recovery.lock().unwrap();
                 recovery.failed(operation, error, self.started.elapsed());
-                let message = recovery.message.clone().unwrap_or_default();
+                let (level, message) = recovery.failure_log();
                 drop(recovery);
-                self.log_failure(operation, &message);
+                self.log_failure(level, operation, &message);
             }
         } else {
             self.recovery
@@ -142,6 +169,18 @@ impl LanguageServer {
                 .unwrap()
                 .healthy(self.started.elapsed());
         }
+    }
+    /// Expose one semantic state alongside the existing readable recovery details.
+    pub(crate) fn recovery_state(&self) -> Option<RecoveryState> {
+        let recovery = self.recovery.lock().unwrap();
+        recovery.message.as_ref()?;
+        Some(if recovery.failures >= MAX_FAILURES {
+            RecoveryState::Paused
+        } else if recovery.running {
+            RecoveryState::Recovered
+        } else {
+            RecoveryState::WaitingRetry
+        })
     }
     pub(crate) fn recovery_status(&self) -> Option<String> {
         let recovery = self.recovery.lock().unwrap();
@@ -162,8 +201,40 @@ impl LanguageServer {
         ))
     }
     /// Structured bounded logs identify the owner and operation without serializing document or request payloads.
-    fn log_failure(&self, operation: &str, message: &str) {
+    fn log_failure(&self, level: plugin_runtime::LogLevel, operation: &str, message: &str) {
         let plugin = self.service.owner.as_str();
         tracing::warn!(plugin, scope=%self.root.display(), operation, message, "language service failure");
+        self.service.append_runtime_log(
+            &self.retired,
+            level,
+            &format!("lsp/{}/{operation}", self.service.provider.id),
+            message,
+        );
+    }
+}
+
+impl Recovery {
+    /// Record retry transitions once per actual failure; rejected calls during backoff add no log spam.
+    fn failure_log(&self) -> (plugin_runtime::LogLevel, String) {
+        let (level, state) = if self.failures >= MAX_FAILURES {
+            (
+                plugin_runtime::LogLevel::Error,
+                rust_i18n::t!("plugins.logs.lsp_paused"),
+            )
+        } else {
+            (
+                plugin_runtime::LogLevel::Warning,
+                rust_i18n::t!("plugins.logs.lsp_retry"),
+            )
+        };
+        (
+            level,
+            format!(
+                "{state} ({}/{}): {}",
+                self.failures,
+                MAX_FAILURES,
+                self.message.as_deref().unwrap_or_default()
+            ),
+        )
     }
 }

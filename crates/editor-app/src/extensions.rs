@@ -36,6 +36,7 @@ mod preview;
 #[cfg(test)]
 mod preview_tests;
 mod recovery;
+pub(crate) use recovery::{level_label, log_time, severity_icon};
 #[cfg(test)]
 mod recovery_tests;
 #[cfg(test)]
@@ -78,6 +79,8 @@ pub fn init(cx: &mut App) {
 pub struct ExtensionPanel {
     /// Form observers redraw only when configuration publication changes.
     configuration_revision: u64,
+    /// Log arrivals and viewing changes redraw every native consumer of the shared process history.
+    log_generation: u64,
     parent: WeakEntity<EditorApp>,
     visible: Rc<Cell<bool>>,
     workspace: PathBuf,
@@ -134,11 +137,15 @@ pub struct ExtensionPanel {
     /// Only the active detail page scrolls; the header and tab strip remain outside this handle.
     manager_detail_scroll: gpui_kit::ScrollHandle,
     manager_detail_tab: management::DetailTab,
+    /// Entry boundary is captured once; later arrivals are read only when their message is visible.
+    manager_log_view: Option<(String, u64)>,
     manager_packages: Vec<Package>,
     confirm: Option<(String, bool)>,
     /// Keep an uninstall confirmation to one overlay per click.
     confirm_dialog_open: bool,
     status: Option<worker::OperationStatus>,
+    /// Viewing an ownerless failure confirms this publication; a later status always rearms it.
+    manager_error_confirmed: std::cell::Cell<bool>,
     progress: Option<OperationProgress>,
     processes: HashMap<String, usize>,
     _task: gpui_kit::Task<()>,
@@ -282,6 +289,7 @@ impl ExtensionPanel {
             native_toolbar: None,
             manager_open: false,
             configuration_revision: 0,
+            log_generation: 0,
             commands_open: false,
             command_popup: None,
             pending: None,
@@ -297,10 +305,12 @@ impl ExtensionPanel {
             manager_detail_focus: cx.focus_handle(),
             manager_detail_scroll: gpui_kit::ScrollHandle::new(),
             manager_detail_tab: management::DetailTab::Overview,
+            manager_log_view: None,
             manager_packages: vec![],
             confirm: None,
             confirm_dialog_open: false,
             status: None,
+            manager_error_confirmed: std::cell::Cell::new(false),
             progress: None,
             processes: HashMap::new(),
             _task: task,
@@ -382,6 +392,7 @@ impl ExtensionPanel {
             native_toolbar: None,
             manager_open: false,
             configuration_revision: 0,
+            log_generation: 0,
             commands_open: false,
             command_popup: None,
             pending: None,
@@ -397,10 +408,12 @@ impl ExtensionPanel {
             manager_detail_focus: cx.focus_handle(),
             manager_detail_scroll: gpui_kit::ScrollHandle::new(),
             manager_detail_tab: management::DetailTab::Overview,
+            manager_log_view: None,
             manager_packages: vec![],
             confirm: None,
             confirm_dialog_open: false,
             status: None,
+            manager_error_confirmed: std::cell::Cell::new(false),
             progress: None,
             processes: HashMap::new(),
             _task: task,
@@ -445,6 +458,11 @@ impl ExtensionPanel {
                     }
                     changed = true;
                 }
+            }
+            let log_generation = state.logs.generation();
+            if self.log_generation != log_generation {
+                self.log_generation = log_generation;
+                changed = true;
             }
             if self.configuration_revision != state.configuration_revision {
                 self.configuration_revision = state.configuration_revision;
@@ -587,6 +605,8 @@ impl ExtensionPanel {
             if self.surface_id.is_none() {
                 if let Some(status) = state.status.take() {
                     changed = true;
+                    // Equal messages from a new publication still represent a fresh viewing round.
+                    self.manager_error_confirmed.set(false);
                     self.status = Some(status);
                 }
             }
@@ -666,6 +686,11 @@ impl ExtensionPanel {
             .worker
             .tx
             .send(Work::Event(id.into(), epoch, panel, event));
+    }
+
+    /// The manager, language host and bottom popover use one in-memory history and viewing state.
+    pub(crate) fn runtime_logs(&self) -> plugin_runtime::logs::RuntimeLogs {
+        self.worker.state.lock().unwrap().logs.clone()
     }
     /// Queue a plugin lifecycle operation and expose its waiting state on this frame.
     fn queue_lifecycle(&mut self, work: Work) -> bool {
@@ -1198,7 +1223,9 @@ impl EditorApp {
         let manager = self.extensions.clone();
         // A newly opened manager starts at Overview; activating an existing window keeps its current page.
         manager.update(cx, |manager, cx| {
+            manager.manager_open = true;
             manager.manager_detail_tab = management::DetailTab::Overview;
+            manager.manager_log_view = None;
             manager.manager_detail_scroll.set_offset(Default::default());
             cx.notify();
         });
@@ -1215,11 +1242,58 @@ impl EditorApp {
             if closed_id == window_id {
                 let _ = owner.update(cx, |this, cx| {
                     this.extensions_window = None;
+                    this.extensions.update(cx, |panel, cx| {
+                        // Delayed acknowledgements cannot survive the native dialog's close boundary.
+                        panel.manager_open = false;
+                        panel.manager_log_view = None;
+                        cx.notify();
+                    });
                     cx.notify();
                 });
             }
         }));
         self.extensions_window = Some(handle);
+        cx.notify();
+    }
+
+    /// Open the installed plugin's complete log from a status summary, even with an active search filter.
+    pub(crate) fn open_plugin_logs(
+        &mut self,
+        plugin: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        // Retained summaries can outlive uninstall; validate the owner before changing selection or focus.
+        if !self
+            .extensions
+            .read(cx)
+            .entries
+            .iter()
+            .any(|entry| entry.manifest.id == plugin)
+        {
+            return;
+        }
+        self.close_plugin_popup(window, cx);
+        self.toggle_extensions(window, cx);
+        self.extensions.update(cx, |panel, cx| {
+            // Recreate the empty search input instead of emitting a delayed Change that could undo routing.
+            panel.manager_search_subscription = None;
+            panel.manager_search = None;
+            panel.manager_market = false;
+            panel.manager_selected = Some(plugin);
+            panel.manager_detail_tab = management::DetailTab::RuntimeLog;
+            panel.manager_log_view = None;
+            panel.manager_detail_scroll.set_offset(Default::default());
+            cx.notify();
+        });
+        if let Some(handle) = self.extensions_window {
+            let manager = self.extensions.clone();
+            let _ = handle.update(cx, |_, window, cx| {
+                // Release the panel read before focus mutates the application context.
+                let detail_focus = manager.read(cx).manager_detail_focus.clone();
+                detail_focus.focus(window, cx);
+            });
+        }
         cx.notify();
     }
 }

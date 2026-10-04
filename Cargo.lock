@@ -5509,6 +5509,7 @@ name = "plugin-runtime"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "bytes",
  "dirs 6.0.0",
  "glob",
  "globset",
@@ -5522,6 +5523,7 @@ dependencies = [
  "serde_json",
  "sha2 0.10.9",
  "tempfile",
+ "tokio",
  "ureq",
  "uuid",
  "wasmtime",

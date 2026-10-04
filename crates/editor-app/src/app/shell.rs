@@ -353,16 +353,19 @@ impl Render for EditorApp {
         let title_bar_style = component_styles(cx, ThemeComponent::WindowTitleBar).base;
         let badge_style = component_styles(cx, ThemeComponent::ProjectBadge).base;
         let status_style = component_styles(cx, ThemeComponent::StatusBar).base;
+        // Observe the exact entry chosen for this frame before confirmation can rebuild the same severity later.
+        let plugin_indicator = self.plugin_indicator(cx);
+        self.track_plugin_indicator_frame(plugin_indicator);
         v_flex()
             .id("editor-shell")
             .key_context("EditorShell")
             .relative()
             .on_mouse_down(
                 MouseButton::Left,
-                cx.listener(|this, _, _, cx| {
+                cx.listener(|this, _, window, cx| {
                     // A click outside the anchored card dismisses its transient details.
                     if this.plugin_popup.take().is_some() {
-                        cx.notify();
+                        this.close_plugin_popup(window, cx);
                     }
                     if this.explorer_menu.take().is_some() {
                         cx.notify();
@@ -484,13 +487,8 @@ impl Render for EditorApp {
                                 |bar| bar.right(self.render_syntax_error_indicator(cx)),
                             )
                             // Keep plugin indicators immediately before the cursor position.
-                            .when(self.plugin_count(PluginPopupKind::Loading, cx) > 0, |bar| {
-                                bar.right(
-                                    self.render_plugin_indicator(PluginPopupKind::Loading, cx),
-                                )
-                            })
-                            .when(self.plugin_count(PluginPopupKind::Error, cx) > 0, |bar| {
-                                bar.right(self.render_plugin_indicator(PluginPopupKind::Error, cx))
+                            .when_some(plugin_indicator, |bar, kind| {
+                                bar.right(self.render_plugin_indicator(kind, cx))
                             })
                             .right(if self.active_path.is_some() {
                                 t!(

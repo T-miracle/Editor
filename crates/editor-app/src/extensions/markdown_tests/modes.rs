@@ -2,6 +2,55 @@
 use super::*;
 use harness::NativeMarkdown;
 
+/// SVG opts into the same public presentation contract; native controls require no language branch.
+#[gpui::test]
+#[ignore = "build svg through scripts/build-plugins.ps1 first"]
+fn delivered_svg_modes_share_native_status_buttons_and_preserve_document(cx: &mut TestAppContext) {
+    let package = Package::read(
+        &PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../dist/plugins/svg.zip"),
+    )
+    .unwrap();
+    let original = "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"16\" height=\"16\"/>";
+    let (mut fixture, ui) = NativeMarkdown::mount_package(cx, &[("image.svg", original)], &package);
+    fixture.open("image.svg", ui);
+    let tools = ui.debug_bounds("editor-panel-tools").unwrap();
+    let separator = ui
+        .debug_bounds("editor-preview-mode-separator")
+        .expect("SVG contributes the generic mode group");
+    let source_button = ui.debug_bounds("editor-preview-source-mode").unwrap();
+    assert!(tools.right() <= separator.left() && separator.right() <= source_button.left());
+    let identity = ui.update(|_, cx| fixture.app.read(cx).editor.entity_id());
+    for (selector, source, preview) in [
+        ("editor-preview-source-mode", true, false),
+        ("editor-preview-preview-mode", false, true),
+        ("editor-preview-split-mode", true, true),
+    ] {
+        fixture.click(selector, ui);
+        assert_eq!(ui.debug_bounds("editor-source-pane").is_some(), source);
+        assert_eq!(ui.debug_bounds("editor-preview-pane").is_some(), preview);
+        assert_eq!(
+            ui.update(|_, cx| fixture.app.read(cx).editor.entity_id()),
+            identity
+        );
+        assert_eq!(
+            ui.update(|_, cx| fixture.app.read(cx).editor.read(cx).text().to_string()),
+            original
+        );
+    }
+    ui.update(|_, cx| apply_theme(builtin_theme(true), cx));
+    fixture.settle(ui);
+    for selector in [
+        "editor-preview-source-mode",
+        "editor-preview-split-mode",
+        "editor-preview-preview-mode",
+    ] {
+        assert!(
+            ui.debug_bounds(selector).is_some(),
+            "dark-theme SVG mode {selector}"
+        );
+    }
+}
+
 /// Mode changes alter layout alone; source identity, selection and undo history remain native.
 #[gpui::test]
 #[ignore = "build markdown through scripts/build-plugins.ps1 first"]

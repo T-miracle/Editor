@@ -4,6 +4,16 @@ use crate::editor_requests::{EditorRequest, PendingRequest};
 use api::{EditorOperation, ErrorCode, Failure, Notification, Value};
 use resource_roots::RootKind;
 
+/// Return the target's required grant for direct and delegated navigation alike.
+/// Callers also require editor.read; sharing this mapping prevents stronger provider grants leaking.
+pub(super) fn navigation_permission(target: &api::NavigationTarget) -> &'static str {
+    match target {
+        api::NavigationTarget::PreviewNode { .. } => "editor.read",
+        api::NavigationTarget::RelativeDocument { .. } => "workspace.read",
+        api::NavigationTarget::ExternalUrl { .. } => "navigation.external",
+    }
+}
+
 impl State {
     /// Editor access never follows an application's currently selected workspace implicitly.
     pub(super) fn editor_request(
@@ -48,20 +58,15 @@ impl State {
                         "Navigation requires editor.read",
                     ));
                 }
-                let permission = match target {
-                    api::NavigationTarget::PreviewNode { panel, .. } => {
-                        if !self.declared_editor_panels.contains(panel) {
-                            return Err(Failure::new(
-                                ErrorCode::PermissionDenied,
-                                "Navigation panel is not owned by this instance",
-                            ));
-                        }
-                        "editor.read"
+                if let api::NavigationTarget::PreviewNode { panel, .. } = target {
+                    if !self.declared_editor_panels.contains(panel) {
+                        return Err(Failure::new(
+                            ErrorCode::PermissionDenied,
+                            "Navigation panel is not owned by this instance",
+                        ));
                     }
-                    api::NavigationTarget::RelativeDocument { .. } => "workspace.read",
-                    api::NavigationTarget::ExternalUrl { .. } => "navigation.external",
-                };
-                ("editor.navigation", permission)
+                }
+                ("editor.navigation", navigation_permission(target))
             }
             EditorOperation::SaveImageInput { .. } => ("editor.images", "workspace.write"),
             EditorOperation::ReadDocumentSelection { .. } => ("editor.edit", "editor.read"),

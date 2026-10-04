@@ -19,6 +19,7 @@ mod plugin_services;
 mod process_calls;
 mod resource_roots;
 mod settings;
+mod stdio;
 use resource_roots::ResourceRoots;
 wasmtime::component::bindgen!({path:"../plugin-protocol/wit",world:"plugin",require_store_data_send:true});
 
@@ -217,16 +218,39 @@ impl Instance {
             "Plugin needs additional permission consent"
         );
         std::fs::create_dir_all(&data)?;
-        let component = Component::new(engine, bytes)?;
+        let component = Component::new(engine, bytes).inspect_err(|error| {
+            host_resources.logs.append(
+                &manifest.id,
+                crate::LogLevel::Error,
+                "wasm/compile",
+                format!("{error:#}"),
+            );
+        })?;
         let mut linker = Linker::<State>::new(engine);
         wasmtime_wasi::p2::add_to_linker_sync(&mut linker)?;
         Plugin::add_to_linker::<_, HasSelf<_>>(&mut linker, |state| state)?;
+        let stdout = stdio::capture(
+            host_resources.logs.clone(),
+            &manifest.id,
+            crate::LogLevel::Info,
+            "wasi/stdout",
+        )?;
+        let stderr = stdio::capture(
+            host_resources.logs.clone(),
+            &manifest.id,
+            crate::LogLevel::Warning,
+            "wasi/stderr",
+        )?;
+        let native_diagnostics =
+            crate::faults::NativeDiagnostics::with_logs(host_resources.logs.clone());
+        let mut wasi = WasiCtx::builder();
+        wasi.stdout(stdout).stderr(stderr);
         // No preopened directories, environment inheritance or network access is granted to WASI.
         let mut state = State {
             plugin_services: Default::default(),
             api,
             host_resources,
-            native_diagnostics: Default::default(),
+            native_diagnostics,
             call_deadline: std::time::Instant::now(),
             roots: ResourceRoots::new(&environment.workspace, application, manifest.storage_limit),
             editor_requests: Default::default(),
@@ -243,7 +267,7 @@ impl Instance {
                 .filter(|panel| panel.position == "editor")
                 .map(|panel| panel.id.clone())
                 .collect(),
-            wasi: WasiCtx::builder().build(),
+            wasi: wasi.build(),
             table: ResourceTable::new(),
             limits: Default::default(),
             permissions: manifest.permissions.clone(),
@@ -267,7 +291,15 @@ impl Instance {
         store.limiter(|s| &mut s.limits);
         store.set_fuel(100_000_000)?;
         store.set_epoch_deadline(crate::faults::CALL_DEADLINE_MS / crate::faults::EPOCH_TICK_MS);
-        let bindings = Plugin::instantiate(&mut store, &component, &linker)?;
+        let bindings =
+            Plugin::instantiate(&mut store, &component, &linker).inspect_err(|error| {
+                store.data().host_resources.logs.append(
+                    &manifest.id,
+                    crate::LogLevel::Error,
+                    "wasm/instantiate",
+                    format!("{error:#}"),
+                );
+            })?;
         let mut instance = Self {
             diagnostics: Vec::new(),
             preview_sources: Default::default(),
@@ -310,6 +342,13 @@ impl Instance {
                 "{} [{}] {operation}: {message}",
                 principal.plugin, principal.scope
             ));
+            // Log at the originating call, not when a later UI selection happens to publish diagnostics.
+            self.store.data().host_resources.logs.append(
+                &principal.plugin,
+                crate::LogLevel::Error,
+                &format!("wasm/{operation}"),
+                format!("scope={} {message}", principal.scope),
+            );
             self.diagnostics.push(crate::faults::Diagnostic::new(
                 principal.plugin.clone(),
                 principal.scope.clone(),

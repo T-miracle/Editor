@@ -189,6 +189,14 @@ impl EditorApp {
             self.dynamic_languages
                 .entries
                 .push((provider.clone(), Ok(false)));
+            let logs = self.extensions.read(cx).runtime_logs();
+            let source = format!("language.grammar:{}", provider.declaration.language);
+            logs.append(
+                &provider.owner,
+                plugin_runtime::logs::LogLevel::Info,
+                &source,
+                t!("plugins.logs.grammar_loading").to_string(),
+            );
             cx.spawn(async move |this, cx| {
                 let loading = provider.clone();
                 let result = cx
@@ -209,6 +217,15 @@ impl EditorApp {
                     else {
                         return;
                     };
+                    // Attribution and generation are checked before publishing either resources or diagnostics.
+                    let (level, message) = match &result {
+                        Ok(_) => (
+                            plugin_runtime::logs::LogLevel::Info,
+                            t!("plugins.logs.grammar_ready").to_string(),
+                        ),
+                        Err(error) => (plugin_runtime::logs::LogLevel::Error, format!("{error:#}")),
+                    };
+                    logs.append(&provider.owner, level, &source, message);
                     *state = match result {
                         Ok((grammar, query)) => {
                             language_plugins::publish_dynamic(&language, grammar, query);
@@ -251,24 +268,5 @@ impl EditorApp {
         self.dynamic_language_ids = current;
         self.reset_syntax_diagnostics(cx);
         cx.notify();
-    }
-
-    /// The existing status indicator also exposes failures and loading of unfamiliar providers.
-    pub(crate) fn dynamic_language_status(&self, kind: PluginPopupKind) -> Vec<(String, String)> {
-        self.dynamic_languages
-            .entries
-            .iter()
-            .filter_map(|(provider, state)| {
-                let detail = match (state, kind) {
-                    (Ok(false), PluginPopupKind::Loading) => t!("plugins.loading").to_string(),
-                    (Err(error), PluginPopupKind::Error) => error.clone(),
-                    _ => return None,
-                };
-                Some((
-                    format!("{} · {}", provider.declaration.language, provider.owner),
-                    detail,
-                ))
-            })
-            .collect()
     }
 }

@@ -1,6 +1,7 @@
 //! The production actor keeps dispatching old instances while a separate thread prepares a candidate.
 use super::preparation::BackgroundPreparation;
 use super::*;
+use rust_i18n::t;
 use std::collections::VecDeque;
 
 impl Worker {
@@ -19,6 +20,7 @@ impl Worker {
             // Prepare the public SDK off the UI thread. A failure is delivered only to guests that request it.
             let resources = plugin_runtime::HostResources {
                 sdk: Some(crate::sdk_export::descriptor().map_err(|error| format!("{error:#}"))),
+                logs: output.lock().unwrap().logs.clone(),
             };
             let mut manager =
                 match Manager::open_with_resources(root, environment, trusted, resources) {
@@ -320,9 +322,39 @@ impl Worker {
                                 .copied()
                                 .unwrap_or(0);
                             if epoch == current {
-                                manager.event(&id, panel, event)
+                                let native_callback = matches!(
+                                    event,
+                                    api::Notification::Ui(_) | api::Notification::Preview { .. }
+                                );
+                                match manager.event(&id, panel, event) {
+                                    Err(error)
+                                        if native_callback
+                                            && error
+                                                .downcast_ref::<api::Failure>()
+                                                .is_some_and(|failure| {
+                                                    failure.code == api::ErrorCode::StaleRevision
+                                                }) =>
+                                    {
+                                        // Only typed obsolete native input is benign. Guest faults and every other
+                                        // rejection continue through the ordinary diagnostic/error path.
+                                        output.lock().unwrap().logs.append(
+                                            &id,
+                                            plugin_runtime::logs::LogLevel::Info,
+                                            "host.ui.stale",
+                                            format!("{error:#}"),
+                                        );
+                                        Ok(())
+                                    }
+                                    other => other,
+                                }
                             } else {
                                 // Late native callbacks belong to an older surface, never to its replacement.
+                                output.lock().unwrap().logs.append(
+                                    &id,
+                                    plugin_runtime::logs::LogLevel::Info,
+                                    "host.ui.retired",
+                                    t!("plugins.log_retired_callback").to_string(),
+                                );
                                 Ok(())
                             }
                         }
@@ -436,6 +468,31 @@ impl Worker {
                         }
                     });
                 if services_changed {
+                    for (key, service) in &language_services {
+                        let changed = match (service, published.language_services.get(key)) {
+                            (Ok(new), Some(Ok(old))) => !Arc::ptr_eq(new, old),
+                            (Err(new), Some(Err(old))) => new != old,
+                            _ => true,
+                        };
+                        if !changed {
+                            continue;
+                        }
+                        // Preparation errors retain the manifest-owned key before a lease exists.
+                        let plugin = key.split_once('/').map(|(plugin, _)| plugin).unwrap_or(key);
+                        let (level, message) = match service {
+                            Ok(_) => (
+                                plugin_runtime::logs::LogLevel::Info,
+                                t!("plugins.log_service_prepared").to_string(),
+                            ),
+                            Err(error) => (plugin_runtime::logs::LogLevel::Error, error.clone()),
+                        };
+                        published.logs.append(
+                            plugin,
+                            level,
+                            &format!("language.prepare:{key}"),
+                            message,
+                        );
+                    }
                     // Retired providers must not leave a previous version's ready badge behind.
                     let unchanged = published.language_services.iter().filter_map(|(key, old)| {
                         matches!((old, language_services.get(key)), (Ok(old), Some(Ok(new))) if Arc::ptr_eq(old,new)).then_some(key.clone())
@@ -506,15 +563,33 @@ impl Worker {
                 }
                 // Startup loading ends only after Manager::open has restored every enabled plugin.
                 published.startup.clear();
-                if let Err(e) = result {
+                if let Err(e) = &result {
+                    let message = if let Some(operation) = &lifecycle {
+                        format!("{}失败：{e:#}", operation.action.label())
+                    } else {
+                        format!("{e:#}")
+                    };
+                    if let Some(plugin) = &status_plugin {
+                        published.logs.append(
+                            plugin,
+                            plugin_runtime::logs::LogLevel::Error,
+                            "host.operation",
+                            message.clone(),
+                        );
+                    }
                     published.status = Some(OperationStatus {
                         plugin: status_plugin,
-                        message: if let Some(operation) = &lifecycle {
-                            format!("{}失败：{e:#}", operation.action.label())
-                        } else {
-                            format!("{e:#}")
-                        },
+                        message,
                     });
+                } else if let Some(operation) =
+                    lifecycle.as_ref().filter(|_| status_plugin.is_some())
+                {
+                    published.logs.append(
+                        &operation.id,
+                        plugin_runtime::logs::LogLevel::Info,
+                        &format!("host.lifecycle.{:?}", operation.action),
+                        t!("plugins.log_operation_complete").to_string(),
+                    );
                 }
                 if lifecycle.is_some() {
                     published.progress = None;
@@ -542,7 +617,24 @@ impl Worker {
                     retire_publication(&mut published, id);
                 }
                 instance_ids = next_instances;
-                published.entries = manager.published_entries();
+                let entries = manager.published_entries();
+                for entry in &entries {
+                    let previous = published
+                        .entries
+                        .iter()
+                        .find(|old| old.manifest.id == entry.manifest.id);
+                    if entry.error.is_some()
+                        && previous.and_then(|old| old.error.as_ref()) != entry.error.as_ref()
+                    {
+                        published.logs.append(
+                            &entry.manifest.id,
+                            plugin_runtime::logs::LogLevel::Error,
+                            "host.plugin",
+                            entry.error.clone().unwrap(),
+                        );
+                    }
+                }
+                published.entries = entries;
                 published.ready = true;
                 published.diagnostics = manager
                     .installed

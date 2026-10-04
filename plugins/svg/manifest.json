@@ -1,9 +1,9 @@
 {
   "id": "svg",
   "name": "SVG",
-  "version": "0.2.1",
+  "version": "0.3.0",
   "protocol": 7,
-  "api": {"base":"^1","required":{"ui.native":"^1","ui.canvas":">=1.1, <2","editor.documents":"^1"}},
+  "api": {"base":"^1","required":{"ui.native":"^1","ui.canvas":">=1.1, <2","editor.documents":"^1","editor.presentation":"^1"}},
   "component": "svg.wasm",
   "permissions": ["editor.read"],
   "storage_limit": 1024,
@@ -13,7 +13,12 @@
       "title": "SVG",
       "position": "editor",
       "file_extensions": ["svg"],
-      "default_visible": true
+      "default_visible": true,
+      "view_modes": {
+        "source": "icons/view-source.svg",
+        "split": "icons/view-split.svg",
+        "preview": "icons/view-preview.svg"
+      }
     }
   ],
   "commands": []

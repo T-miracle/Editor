@@ -1,4 +1,4 @@
-//! A first-use consent drives the production actor, then draws its genuine preparation failure in native UI.
+//! Real restore and first-use actors publish failures through the native reminder and consent routes.
 use super::{Fixture, Manager, Package, Work, Worker};
 use crate::extensions::ExtensionPanel;
 use crate::*;
@@ -79,6 +79,97 @@ fn wait_for_native(
             "native first-use actor publication timed out"
         );
         std::thread::sleep(Duration::from_millis(5));
+    }
+}
+
+/// An ownerless store failure is confirmed once; a later identical failure starts a new reminder.
+#[gpui::test]
+fn native_recovery_error_confirmation_preserves_details_and_rearms_new_failure(
+    cx: &mut TestAppContext,
+) {
+    cx.update(|cx| {
+        gpui_kit::init(cx);
+        typography::init(cx);
+        apply_theme(builtin_theme(false), cx);
+        cx.set_reduce_motion(true);
+    });
+    let mut fixture = Fixture::new();
+    fixture.root = fixture.workspace.join(".runtime-plugin-test");
+    std::fs::create_dir_all(&fixture.root).unwrap();
+    std::fs::write(fixture.root.join("registry.json"), "{invalid registry").unwrap();
+    let worker = Arc::new(Worker::start_background(
+        fixture.root.clone(),
+        fixture.environment(),
+        true,
+    ));
+    let _actor = RunningActor(worker.clone());
+    super::wait_for(&worker, |state| state.status.is_some());
+    let workspace = Workspace::open(&fixture.workspace).unwrap();
+    let capture = Rc::new(RefCell::new(None));
+    let captured = capture.clone();
+    let transport = worker.clone();
+    let (_, ui) = cx.add_window_view(move |window, cx| {
+        let app = cx.new(|cx| EditorApp::new(workspace, None, window, cx));
+        app.read(cx).extensions.clone().update(cx, |panel, cx| {
+            panel.worker = transport;
+            panel.poll(cx);
+        });
+        *captured.borrow_mut() = Some(app.clone());
+        Root::new(app, window, cx)
+    });
+    let app = capture.borrow_mut().take().unwrap();
+    ui.update(|window, _| window.activate_window());
+    ui.simulate_resize(size(px(1200.), px(800.)));
+    publish_frame(&app, ui);
+    let error = ui.update(|_, cx| {
+        app.read(cx)
+            .extensions
+            .read(cx)
+            .manager_error()
+            .unwrap()
+            .to_owned()
+    });
+    for round in 0..2 {
+        if round == 1 {
+            // Use a fresh production actor against the invalid store; no status is synthesized.
+            let fresh = Arc::new(Worker::start_background(
+                fixture.root.clone(),
+                fixture.environment(),
+                true,
+            ));
+            super::wait_for(&fresh, |state| state.status.is_some());
+            ui.update(|_, cx| {
+                app.read(cx).extensions.clone().update(cx, |panel, cx| {
+                    panel.worker = fresh;
+                    panel.poll(cx);
+                })
+            });
+            publish_frame(&app, ui);
+        }
+        let indicator = ui
+            .debug_bounds("plugin-error-indicator")
+            .expect("Each new failure is announced");
+        ui.simulate_click(indicator.center(), Default::default());
+        publish_frame(&app, ui);
+        assert!(ui.debug_bounds("plugin-manager-status-detail").is_some());
+        assert!(
+            ui.debug_bounds("plugin-error-indicator").is_none(),
+            "Viewing round {round} confirms only that failure"
+        );
+        assert_eq!(
+            ui.update(|_, cx| app
+                .read(cx)
+                .extensions
+                .read(cx)
+                .manager_error()
+                .unwrap()
+                .to_owned()),
+            error
+        );
+        // Escape uses the existing Base dismissal route; button IDs are not debug-bounds selectors.
+        ui.simulate_keystrokes("escape");
+        publish_frame(&app, ui);
+        assert!(ui.debug_bounds("plugin-status-popup").is_none());
     }
 }
 
@@ -167,7 +258,9 @@ fn first_use_actor_preparation_failure_is_visible_in_native_status(cx: &mut Test
     publish_frame(&app, ui);
     assert!(ui.debug_bounds("plugin-status-popup").is_some());
     assert!(
-        ui.debug_bounds("plugin-manager-status-detail").is_some(),
+        // Main's log summary presents owned preparation failures even before installation creates a row.
+        ui.debug_bounds("plugin-summary-open-bundled-prose")
+            .is_some(),
         "the status popup must draw the actual preparation failure without opening plugin management"
     );
 }

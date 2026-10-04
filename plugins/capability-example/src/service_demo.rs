@@ -122,7 +122,11 @@ pub(super) fn provide(call: service::Invocation) -> Result<serde_json::Value, Fa
             Ok(serde_json::json!("Resources released"))
         }
         "bad-result" => Ok(serde_json::json!(42)),
-        "trap" => panic!("service fixture trap"),
+        "trap" => {
+            // The real SDK fixture exposes both WASI stdout and panic stderr before host fault retirement.
+            println!("service fixture stdout before trap");
+            panic!("service fixture trap")
+        }
         _ => Err(Failure::new(
             api::ErrorCode::UnsupportedOperation,
             "Unknown fixture method",

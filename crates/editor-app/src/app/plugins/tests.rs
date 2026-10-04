@@ -436,7 +436,7 @@ fn removed_html_plugin_resets_aliases_and_preserves_unrelated_state(cx: &mut Tes
     });
 }
 
-/// Both transient states expose clickable icons and anchored plugin lists.
+/// Normal loading and unconfirmed errors expose clickable icons and anchored plugin lists.
 #[gpui::test]
 fn status_indicators_open_plugin_lists(cx: &mut TestAppContext) {
     cx.update(|cx| {
@@ -459,10 +459,17 @@ fn status_indicators_open_plugin_lists(cx: &mut TestAppContext) {
     cx.simulate_resize(size(px(1000.), px(800.)));
     cx.update(|window, cx| {
         view.update(cx, |app, cx| {
-            // The status UI also renders failures from packages loaded after startup.
+            // Readiness supplies loading state; startup failures separately emit an owned runtime log.
+            // Keep both seams in this fixture so a persistent Failed state cannot recreate confirmed alerts.
             app.language_service_states.insert(
                 "custom-language".into(),
                 ServiceLoadState::Failed("missing service".into()),
+            );
+            app.extensions.read(cx).runtime_logs().append(
+                "custom-plugin",
+                plugin_runtime::LogLevel::Error,
+                "language.status:custom-plugin/analysis",
+                "missing service",
             );
             cx.notify();
         });

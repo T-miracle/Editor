@@ -5,12 +5,19 @@ impl LanguageServerConnection {
     pub(super) fn start(
         root_uri: &Uri,
         service: &Arc<plugin_runtime::LanguageService>,
-        retired: &std::sync::atomic::AtomicBool,
+        retired: &Arc<std::sync::atomic::AtomicBool>,
     ) -> anyhow::Result<Self> {
         // Every server is launched by its permission-checked runtime owner.
         let configuration = service.provider.initialization_options.clone();
         let (child, input, stdout) = service.spawn_for_owner(retired)?;
-        let output = transport::reader(stdout)?;
+        service.append_runtime_log(
+            retired,
+            plugin_runtime::LogLevel::Info,
+            &format!("lsp/{}", service.provider.id),
+            rust_i18n::t!("plugins.logs.lsp_started").to_string(),
+        );
+        // Unsolicited server messages must reach the same log sink even with no open document.
+        let output = transport::reader(stdout, service.clone(), retired.clone())?;
         let mut connection = Self {
             documents: Default::default(),
             child,
@@ -23,11 +30,15 @@ impl LanguageServerConnection {
             diagnostics: diagnostics::DiagnosticsStore::default(),
             save_notifications: None,
             pull_diagnostics: false,
-            ready: None,
             configuration,
+            failed: false,
         };
 
-        connection.initialize(root_uri)?;
+        if let Err(error) = connection.initialize(root_uri) {
+            // Failed initialization still owns the server's final stderr diagnostic until bounded teardown.
+            connection.failed = true;
+            return Err(error);
+        }
         Ok(connection)
     }
 

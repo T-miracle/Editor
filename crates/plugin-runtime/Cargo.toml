@@ -6,6 +6,10 @@ license.workspace = true
 
 [dependencies]
 anyhow.workspace = true
+# WASI's public output traits name bytes::Bytes and tokio::io::AsyncWrite; direct dependencies
+# implement bounded nonblocking admission without blocking OutputFile or copied upstream code.
+bytes = "=1.12.1"
+tokio = { version = "=1.53.1", default-features = false, features = ["io-util"] }
 # Native tool discovery and bounded workspace discovery reuse existing dependency families.
 dirs.workspace = true
 glob = "0.3"

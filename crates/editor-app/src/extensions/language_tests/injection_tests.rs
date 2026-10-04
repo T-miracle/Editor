@@ -31,12 +31,15 @@ fn installed_injection_queries_cannot_borrow_undeclared_native_grammars(cx: &mut
         Root::new(app, window, cx)
     });
     let app = slot.borrow_mut().take().unwrap();
+    // Base activation and popup placement need the same active, measured window as user interaction.
+    cx.update(|window, _| window.activate_window());
+    cx.simulate_resize(size(px(1200.), px(800.)));
     cx.update(|window, cx| app.update(cx, |app, cx| app.open_file(path, window, cx)));
     cx.run_until_parked();
     let registry = gpui_kit::component::highlighter::LanguageRegistry::singleton();
     // JSON has an upstream native grammar; rejecting publication must precede any injection lookup.
     assert!(registry.language("json").unwrap().language.is_some());
-    for (id, query, allowed_languages, expected_error) in [
+    for (index, (id, query, allowed_languages, expected_error)) in [
         (
             "novel-static-injection",
             "((string) @injection.content (#set! injection.language \"json\"))",
@@ -58,7 +61,10 @@ fn installed_injection_queries_cannot_borrow_undeclared_native_grammars(cx: &mut
             "[\"novel-injection\"]",
             "injection target must be explicitly declared",
         ),
-    ] {
+    ]
+    .into_iter()
+    .enumerate()
+    {
         let mut files = language_package(id).files;
         let declaration = String::from_utf8(files["plugin.toml"].clone())
             .unwrap()
@@ -81,11 +87,16 @@ fn installed_injection_queries_cannot_borrow_undeclared_native_grammars(cx: &mut
                 app.editor.read(cx).language_name().as_ref(),
                 "novel-injection"
             );
-            assert_eq!(app.plugin_count(PluginPopupKind::Error, cx), 1);
+            // Main keeps earlier unconfirmed errors after their providers are uninstalled.
+            assert_eq!(app.plugin_count(PluginPopupKind::Error, cx), index + 1);
             assert!(
-                app.dynamic_language_status(PluginPopupKind::Error)
+                // The integrated main host routes grammar failures through its public log summaries.
+                app.extensions
+                    .read(cx)
+                    .runtime_logs()
+                    .records(id)
                     .iter()
-                    .any(|(_, error)| error.contains(expected_error))
+                    .any(|record| record.message.contains(expected_error))
             );
         });
         let config = registry.language("novel-injection").unwrap();

@@ -18,6 +18,78 @@ const TOOLS: &[(&str, &str)] = &[
     ("plugin-ui-format-table", "| 中文 |  |"),
 ];
 
+/// Every empty-selection button inserts the approved template and selects its editable placeholder.
+/// Real Undo/Redo verifies one document transaction rather than merely checking the guest's formatter.
+#[gpui::test]
+#[ignore = "build markdown through scripts/build-plugins.ps1 first"]
+fn delivered_markdown_toolbar_inserts_all_empty_selection_templates(cx: &mut TestAppContext) {
+    // The native environment otherwise follows the runner's English locale. Restore even on failure.
+    struct RestoreLocale(String);
+    impl Drop for RestoreLocale {
+        fn drop(&mut self) {
+            rust_i18n::set_locale(&self.0);
+        }
+    }
+    let _locale = RestoreLocale(rust_i18n::locale().to_string());
+    let (mut fixture, ui) = NativeMarkdown::mount(cx, &[("notes.md", "")]);
+    rust_i18n::set_locale("zh-CN");
+    fixture.open("notes.md", ui);
+    for (selector, expected, placeholder) in [
+        ("plugin-ui-format-heading", "# 标题", "标题"),
+        ("plugin-ui-format-bold", "**粗体**", "粗体"),
+        ("plugin-ui-format-italic", "*斜体*", "斜体"),
+        ("plugin-ui-format-strike", "~~删除线~~", "删除线"),
+        ("plugin-ui-format-inline-code", "`代码`", "代码"),
+        ("plugin-ui-format-code-block", "```\n代码\n```", "代码"),
+        ("plugin-ui-format-quote", "> 引用", "引用"),
+        ("plugin-ui-format-unordered", "- 列表项", "列表项"),
+        ("plugin-ui-format-ordered", "1. 列表项", "列表项"),
+        ("plugin-ui-format-task", "- [ ] 任务", "任务"),
+        (
+            "plugin-ui-format-link",
+            "[链接文字](https://example.com)",
+            "链接文字",
+        ),
+        (
+            "plugin-ui-format-image",
+            "![图片说明](image.png)",
+            "图片说明",
+        ),
+        (
+            "plugin-ui-format-table",
+            "| 列1 | 列2 |\n| --- | --- |\n| 内容 | 内容 |",
+            "列1",
+        ),
+    ] {
+        fixture.focus_editor(ui);
+        ui.simulate_keystrokes("ctrl-home");
+        fixture.click(selector, ui);
+        let (text, selection) = ui.update(|_, cx| {
+            let editor = fixture.app.read(cx).editor.read(cx);
+            (
+                editor.text().to_string(),
+                editor.selected_text().to_string(),
+            )
+        });
+        assert_eq!(text, expected, "{selector}");
+        assert_eq!(selection, placeholder, "{selector} placeholder");
+        for (key, expected) in [("ctrl-z", ""), ("ctrl-y", expected), ("ctrl-z", "")] {
+            ui.simulate_keystrokes(key);
+            ui.run_until_parked();
+            fixture.settle(ui);
+            assert_eq!(
+                ui.update(|_, cx| fixture.app.read(cx).editor.read(cx).text().to_string()),
+                expected,
+                "{selector} {key} must use one native transaction"
+            );
+        }
+    }
+    assert_eq!(
+        std::fs::read_to_string(fixture.directory.path().join("notes.md")).unwrap(),
+        ""
+    );
+}
+
 /// Pointer focus must preserve UTF-8 selection and each formatting command owns one undo step.
 #[gpui::test]
 #[ignore = "build markdown through scripts/build-plugins.ps1 first"]

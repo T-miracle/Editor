@@ -29,7 +29,7 @@ fn fresh_markdown_first_use_confirms_real_package_and_retains_disabled_choice(
         fixture.native.manager.installed["markdown"]
             .manifest
             .version,
-        "0.11.0"
+        "0.11.1"
     );
     assert!(ui.debug_bounds("editor-preview-pane").is_some());
     assert!(ui.debug_bounds("editor-source-toolbar").is_some());

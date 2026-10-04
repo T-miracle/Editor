@@ -143,9 +143,15 @@ impl ExtensionPanel {
         &self,
         key: &str,
         plan: &Arc<plugin_runtime::LanguageService>,
+        level: plugin_runtime::logs::LogLevel,
         message: String,
         cx: &mut Context<Self>,
     ) {
+        // A retired plan can remain in an older publication while cancellation finishes asynchronously.
+        // Its matching Arc is no longer authority to turn an intentional stop into a new error.
+        if !plan.is_active() {
+            return;
+        }
         let mut state = self.worker.state.lock().unwrap();
         if !state
             .language_services
@@ -156,6 +162,19 @@ impl ExtensionPanel {
             return;
         }
         if state.service_states.get(key) == Some(&message) {
+            return;
+        }
+        // The provider lease makes retirement and append atomic. This host status has no separate
+        // transport epoch; its authority is the current published plan checked above.
+        if plan
+            .append_runtime_log(
+                &std::sync::atomic::AtomicBool::new(false),
+                level,
+                &format!("language.status:{key}"),
+                message.clone(),
+            )
+            .is_none()
+        {
             return;
         }
         state.service_states.insert(key.into(), message);

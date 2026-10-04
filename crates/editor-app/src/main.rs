@@ -54,7 +54,7 @@ use std::{
 #[cfg(target_os = "windows")]
 use app::WindowsTimerResolution;
 use app::dialog as app_dialog;
-use app::plugins::PluginPopupKind;
+use app::plugins::{PluginPopupKind, PluginPopupSnapshot};
 use app::session as session_state;
 use app::{EditorDockPanel, EditorDockPanelKind};
 use assets::AppAssets;
@@ -188,6 +188,8 @@ struct EditorApp {
     plugin_documents:
         std::collections::BTreeMap<String, plugin_runtime::plugin_protocol::api::DocumentVersion>,
     plugin_popup: Option<(PluginPopupKind, Point<Pixels>)>,
+    /// An immutable summary boundary separates reminder confirmation from visible-record reading.
+    plugin_popup_snapshot: Option<PluginPopupSnapshot>,
     dark_theme: bool,
     session_state: SessionState,
     _tree_subscription: Subscription,
@@ -413,6 +415,7 @@ impl EditorApp {
             plugin_saves: Default::default(),
             plugin_documents: Default::default(),
             plugin_popup: None,
+            plugin_popup_snapshot: None,
             dark_theme: false,
             session_state,
             _tree_subscription: tree_subscription,

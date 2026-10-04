@@ -5,6 +5,25 @@ use gpui_kit::component::WindowExt as _;
 use gpui_kit::component::dialog::{DialogAction, DialogClose, DialogFooter};
 use gpui_kit::rgb;
 impl ExtensionPanel {
+    /// A store recovery failure has no plugin log owner and remains a separate manager diagnostic.
+    pub(crate) fn unowned_manager_error(&self) -> Option<&str> {
+        if self.manager_error_confirmed.get() {
+            return None;
+        }
+        self.status
+            .as_ref()
+            .filter(|status| status.plugin.is_none())?;
+        self.manager_error()
+    }
+
+    /// Confirm only the currently displayed ownerless status; keep its details for plugin management.
+    /// Worker statuses delivered after this click reset the flag even when their messages are identical.
+    pub(crate) fn confirm_unowned_manager_error(&self) {
+        if self.unowned_manager_error().is_some() {
+            self.manager_error_confirmed.set(true);
+        }
+    }
+
     /// Return a current operation failure not already displayed by an installed entry.
     /// Recovery, inspection and first preparation may fail before an entry exists. Exact identity
     /// and message matching avoids counting the same failure twice while retaining newer operation errors.

@@ -5,9 +5,9 @@ use gpui_base::Button as BaseButton;
 use gpui_base::StyledExt as _;
 use gpui_kit::component::{ActiveTheme as _, IconName};
 use gpui_kit::{
-    AnyElement, App, ClickEvent, ElementId, Hsla, InteractiveElement, IntoElement, ParentElement,
-    RenderOnce, SharedString, StatefulInteractiveElement, StyleRefinement, Styled, Window, div,
-    prelude::FluentBuilder as _, px,
+    AnyElement, App, ClickEvent, ElementId, FocusHandle, Hsla, InteractiveElement, IntoElement,
+    ParentElement, RenderOnce, SharedString, StatefulInteractiveElement, StyleRefinement, Styled,
+    Window, div, prelude::FluentBuilder as _, px,
 };
 
 #[derive(Clone, Copy)]
@@ -74,6 +74,7 @@ pub(crate) struct Button {
     outline: bool,
     loading: bool,
     disabled: bool,
+    content_full_width: bool,
 }
 
 impl Button {
@@ -91,6 +92,7 @@ impl Button {
             outline: false,
             loading: false,
             disabled: false,
+            content_full_width: false,
         }
     }
 
@@ -101,6 +103,18 @@ impl Button {
 
     pub(crate) fn accessibility_label(mut self, label: impl Into<SharedString>) -> Self {
         self.base = self.base.accessibility_label(label);
+        self
+    }
+
+    /// Use an owner-managed handle for focus observation; Base still owns tab order and activation.
+    pub(crate) fn track_focus(mut self, handle: &FocusHandle) -> Self {
+        self.base = self.base.track_focus(handle);
+        self
+    }
+
+    /// Constrain composed card content to the button's width; normal labels keep their intrinsic centered layout.
+    pub(crate) fn content_full_width(mut self) -> Self {
+        self.content_full_width = true;
         self
     }
 
@@ -124,12 +138,6 @@ impl Button {
 
     pub(crate) fn disabled(mut self, disabled: bool) -> Self {
         self.disabled = disabled;
-        self
-    }
-
-    /// Keep focus stable across immutable scene replacements while Base owns Tab and key activation.
-    pub(crate) fn track_focus(mut self, handle: &gpui_kit::FocusHandle) -> Self {
-        self.base = self.base.track_focus(handle);
         self
     }
 
@@ -251,6 +259,9 @@ impl RenderOnce for Button {
             .flex()
             .items_center()
             .gap_1()
+            .when(self.content_full_width, |content| {
+                content.w_full().min_w_0()
+            })
             .when_some(icon, |this, icon| this.child(icon.small()))
             .when_some(self.label.clone(), |this, label| this.child(label))
             .children(self.children);

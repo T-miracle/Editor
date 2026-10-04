@@ -203,6 +203,60 @@ plugins.no_readme:
 plugins.no_runtime_logs:
   en: "No runtime information for this plugin yet."
   zh-CN: "此插件暂无运行信息。"
+plugins.log_info:
+  en: "Info"
+  zh-CN: "信息"
+plugins.log_warning:
+  en: "Warning"
+  zh-CN: "警告"
+plugins.log_error:
+  en: "Error"
+  zh-CN: "错误"
+plugins.log_retired_callback:
+  en: "Ignored a callback from a retired plugin view."
+  zh-CN: "已忽略旧插件界面的迟到回调。"
+plugins.log_service_prepared:
+  en: "Language service preparation completed."
+  zh-CN: "语言服务准备完成。"
+plugins.log_operation_complete:
+  en: "Plugin operation completed."
+  zh-CN: "插件操作完成。"
+plugins.logs.grammar_loading:
+  en: "Loading syntax highlighting resources."
+  zh-CN: "正在加载语法高亮资源。"
+plugins.logs.grammar_ready:
+  en: "Syntax highlighting resources are ready."
+  zh-CN: "语法高亮资源已就绪。"
+plugins.logs.lsp_started:
+  en: "Language service process started."
+  zh-CN: "语言服务进程已启动。"
+plugins.logs.lsp_starting:
+  en: "Starting the language service."
+  zh-CN: "正在启动语言服务。"
+plugins.logs.lsp_ready:
+  en: "Language service is ready."
+  zh-CN: "语言服务已就绪。"
+plugins.logs.lsp_stopped:
+  en: "Language service stopped."
+  zh-CN: "语言服务已停止。"
+plugins.logs.lsp_output_failed:
+  en: "Language service output closed or could not be read."
+  zh-CN: "语言服务输出已关闭或读取失败。"
+plugins.logs.lsp_retry:
+  en: "Waiting for a limited retry."
+  zh-CN: "等待有限重试。"
+plugins.logs.lsp_paused:
+  en: "Automatic retries paused; restart the plugin to recover."
+  zh-CN: "自动重试已暂停，请重启插件恢复。"
+plugins.logs.lsp_recovered:
+  en: "Language service recovered."
+  zh-CN: "语言服务已恢复。"
+plugins.logs.lsp_invalid_message:
+  en: "Invalid language service message."
+  zh-CN: "语言服务消息格式无效。"
+plugins.logs.notification_overflow:
+  en: "The document notification queue is full; extra notifications were dropped. Runtime logs remain available."
+  zh-CN: "文档通知队列已满，额外通知已丢弃；运行日志仍可查看。"
 plugins.empty_market:
   en: "No plugin packages available in the local market."
   zh-CN: "插件市场暂无可用插件包。"
@@ -467,6 +521,36 @@ plugins.error:
 plugins.loading_list:
   en: "Loading plugins"
   zh-CN: "正在加载的插件"
+plugins.warning:
+  en: "Plugin warnings"
+  zh-CN: "插件警告"
+plugins.status_title:
+  en: "Plugin status"
+  zh-CN: "插件运行状态"
+plugins.status_starting:
+  en: "Starting the plugin."
+  zh-CN: "正在启动插件。"
+plugins.status_highlight_loading:
+  en: "Loading syntax highlighting for %{language}."
+  zh-CN: "正在加载 %{language} 的语法高亮。"
+plugins.status_service_loading:
+  en: "Starting %{language} language service · %{service}"
+  zh-CN: "正在启动 %{language} 语言服务 · %{service}"
+plugins.status_view_log:
+  en: "View runtime log"
+  zh-CN: "查看运行日志"
+plugins.status_uninstalled:
+  en: "Plugin is no longer installed"
+  zh-CN: "插件已卸载"
+plugins.status_source:
+  en: "Source · %{source}"
+  zh-CN: "来源 · %{source}"
+plugins.status_close:
+  en: "Close plugin status"
+  zh-CN: "关闭插件运行状态"
+plugins.status_loading_summary:
+  en: "Loading"
+  zh-CN: "加载中"
 plugins.error_list:
   en: "Plugins that failed to load"
   zh-CN: "加载失败的插件"

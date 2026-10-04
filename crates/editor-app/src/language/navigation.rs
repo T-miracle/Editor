@@ -4,6 +4,7 @@ mod diagnostics;
 mod documents;
 pub(crate) use documents::DocumentLease;
 mod recovery;
+pub(crate) use recovery::RecoveryState;
 mod service;
 mod startup;
 mod transport;
@@ -23,6 +24,8 @@ use std::{
 
 #[cfg(test)]
 mod readiness_tests;
+#[cfg(test)]
+mod runtime_log_tests;
 
 /// Shares one language server and its document state across language tabs.
 pub struct LanguageServer {
@@ -33,7 +36,8 @@ pub struct LanguageServer {
     root: PathBuf,
     root_uri: Uri,
     service: Arc<plugin_runtime::LanguageService>,
-    retired: std::sync::atomic::AtomicBool,
+    /// Reader callbacks share this adapter lifetime so a retired view cannot publish new alerts.
+    retired: Arc<std::sync::atomic::AtomicBool>,
     connection: Mutex<Option<LanguageServerConnection>>,
 }
 
@@ -70,16 +74,36 @@ impl LanguageServer {
             return Ok(());
         };
         let deadline = Instant::now() + Duration::from_millis(readiness.timeout_ms.into());
-        while connection.ready != Some(true) {
+        loop {
+            ensure!(self.is_active(), "LSP provider has been retired");
+            ensure!(
+                Instant::now() < deadline,
+                "language server readiness timed out"
+            );
+            // Process pending server requests before accepting a reader-observed readiness signal.
+            // The shared state also survives discarded ordinary notifications and log-only readiness.
+            connection.drain_messages_until(deadline)?;
+            // A ready signal received during an expired or retired reply wait cannot revive this plan.
+            ensure!(self.is_active(), "LSP provider has been retired");
+            ensure!(
+                Instant::now() < deadline,
+                "language server readiness timed out"
+            );
+            if connection.output.is_ready() {
+                return Ok(());
+            }
             let remaining = deadline.saturating_duration_since(Instant::now());
             ensure!(!remaining.is_zero(), "language server readiness timed out");
-            let message = connection
+            // Control-state updates do not need a document-queue slot to wake this bounded wait.
+            match connection
                 .output
-                .recv_timeout(remaining)
-                .context("wait for LSP readiness")??;
-            connection.handle_server_message(&message)?;
+                .recv_timeout(remaining.min(Duration::from_millis(100)))
+            {
+                Ok(message) => connection.handle_server_message_until(&message?, deadline)?,
+                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
+                Err(error) => return Err(error).context("wait for LSP readiness"),
+            }
         }
-        Ok(())
     }
 
     /// Requests a definition after synchronizing the current document.
@@ -236,9 +260,10 @@ struct LanguageServerConnection {
     save_notifications: Option<bool>,
     /// Prefer standard pull diagnostics when advertised, including for unsaved buffers.
     pull_diagnostics: bool,
-    ready: Option<bool>,
     /// Keep host-injected options available for subsequent workspace/configuration requests.
     configuration: Value,
+    /// Fault teardown permits a bounded stderr EOF drain; ordinary retirement cuts off alerts first.
+    failed: bool,
 }
 
 impl LanguageServerConnection {
@@ -334,7 +359,7 @@ impl LanguageServerConnection {
         Ok(uri_text)
     }
 
-    /// Wait for the matching response while preserving every diagnostic push.
+    /// Wait for the matching response while processing retained diagnostic pushes and server requests.
     fn request(&mut self, method: &str, params: Value) -> anyhow::Result<Value> {
         ensure!(self.service.is_active(), "LSP provider has been retired");
         let id = self.next_id;
@@ -361,7 +386,7 @@ impl LanguageServerConnection {
                     return Err(error).context(format!("wait for language server {method}"));
                 }
             };
-            self.handle_server_message(&message)?;
+            self.handle_server_message_until(&message, deadline)?;
             // Client and server IDs are independent; only a response satisfies this request.
             if message.get("method").is_none()
                 && message.get("id").and_then(Value::as_u64) == Some(id)
@@ -388,8 +413,22 @@ impl LanguageServerConnection {
 
 impl Drop for LanguageServerConnection {
     fn drop(&mut self) {
-        // Closing the editor session must not leave its language-server process behind.
-        self.child.stop();
+        // Stop reader alerts before terminating the pipe; deliberate cleanup must not look like a crash.
+        self.output.stop_logging();
+        if self.failed {
+            // Failure output belongs to the old immutable owner and must survive its connection's drop.
+            // Runtime teardown also respects any concurrent controlled retirement's earlier cutoff.
+            self.child.stop_after_failure();
+        } else {
+            self.child.stop();
+        }
+        // The immutable plan retains the old owner even when a replacement is already selected.
+        self.service.runtime_logs().append(
+            &self.service.owner,
+            plugin_runtime::LogLevel::Info,
+            &format!("lsp/{}", self.service.provider.id),
+            rust_i18n::t!("plugins.logs.lsp_stopped").to_string(),
+        );
     }
 }
 

@@ -6,9 +6,9 @@
 
 用户明确要求本插件总方案、工单放在插件目录内；这仅覆盖仓库中央归档的默认位置，不改变架构、权限或验证规则。中央索引保留链接，不再维护另一份总方案正文。
 
-1. 检查工作区提供的仓库根 AGENTS.md（存在时阅读）和用户当前协作约定，再读已跟踪的[需求基线](../../docs/需求整理.md)、[开发计划](../../docs/开发计划.md)，检查 git status --short，辨别用户和其他任务的已有改动。不得依赖其他聊天尚未提交的文档副本。
+1. 检查工作区提供的仓库根 AGENTS.md（存在时阅读）和用户当前协作约定，再读[需求基线](../../docs/project/需求整理.md)、[开发计划](../../docs/project/开发计划.md)，检查 git status --short，辨别用户和其他任务的已有改动。不得依赖其他聊天尚未提交的文档副本。
 2. 阅读[总方案](docs/spec.md)和[工单目录](docs/tickets/README.md)，然后读本次工单及其直接前置工单和实际验收记录。
-3. 阅读[插件平台规格](../../docs/specs/plugin-api-platform.md)、[领域约定](../../docs/agents/domain.md)、[议题约定](../../docs/agents/issue-tracker.md)及涉及的[公开协议](../../crates/plugin-protocol/README.md)专题；修改宿主目录前检查该目录约定。资料重归档后，以实际跟踪的文件为准更新这些链接。
+3. 阅读[插件平台规格](../../docs/plugins/specs/plugin-api-platform.md)、[领域约定](../../docs/agents/domain.md)、[议题约定](../../docs/agents/issue-tracker.md)及涉及的[公开协议](../../crates/plugin-protocol/README.md)专题；修改宿主目录前检查该目录约定。资料重归档后，以实际跟踪的文件为准更新这些链接。
 4. 核对已安装公共能力、相关实现、调用方与测试；不要把当前 API 缺失或历史实现当作缩减需求的理由。
 
 ## 任务状态与执行

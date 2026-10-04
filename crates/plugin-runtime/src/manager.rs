@@ -81,6 +81,11 @@ pub struct Manager {
     retired_image_sources: BTreeMap<String, api::DocumentVersion>,
 }
 impl Manager {
+    /// Share the process-local log owner with host UI and independent real-package verification.
+    /// Background preparation and retired native reporters append to this same sink.
+    pub fn runtime_logs(&self) -> crate::RuntimeLogs {
+        self.host_resources.logs.clone()
+    }
     /// Expose an opaque live incarnation for host publications, never authority for guest-supplied requests.
     pub fn instance_id(&self, id: &str) -> Option<&str> {
         self.live.get(id).and_then(Instance::instance_id)
@@ -126,7 +131,9 @@ impl Manager {
         let mut manager = Self {
             _runtime_lock: None,
             diagnostic_history: BTreeMap::new(),
-            native_diagnostics: Default::default(),
+            native_diagnostics: crate::faults::NativeDiagnostics::with_logs(
+                host_resources.logs.clone(),
+            ),
             plugin_services: std::sync::Arc::new(std::sync::Mutex::new(
                 crate::plugin_services::Broker::new(plugin_services::read_preferences(&root)?),
             )),

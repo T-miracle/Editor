@@ -4,6 +4,7 @@ param(
     [string]$HostExe = '',
     # Restrict verification to named packages without rebuilding unrelated components.
     [ValidateSet('terminal', 'example', 'svg', 'rust', 'toml', 'html', 'javascript', 'markdown')]
+    # Default and release packaging include every bundled plugin; the host must provide their SDK capabilities.
     [string[]]$Packages = @('terminal', 'example', 'svg', 'rust', 'toml', 'html', 'javascript', 'markdown')
 )
 $ErrorActionPreference = 'Stop'
@@ -37,7 +38,7 @@ try {
         & $hostPath --plugin-cargo 'plugins/rust/Cargo.toml' build --target wasm32-wasip2 --release
         if ($LASTEXITCODE -ne 0) { throw 'Rust language WASM build failed' }
         }
-        # Markdown owns parsing inside an ordinary file-scoped guest built against the public SDK.
+        # Markdown requires the public SDK of a host supporting its declared preview capabilities.
         if ($Packages -contains 'markdown') {
         & $hostPath --plugin-cargo 'plugins/markdown/Cargo.toml' build --target wasm32-wasip2 --release
         if ($LASTEXITCODE -ne 0) { throw 'Markdown preview WASM build failed' }
@@ -74,7 +75,7 @@ try {
         }
         if ($plugin[0] -eq 'svg') {
             # Keep editable vector sources beside the component that embeds the same toolbar assets.
-            foreach ($icon in @('zoom-in', 'zoom-out', 'actual-size', 'fit-window')) {
+            foreach ($icon in @('zoom-in', 'zoom-out', 'actual-size', 'fit-window', 'view-source', 'view-split', 'view-preview')) {
                 $packageFiles += ,@("icons/$icon.svg", "plugins/svg/icons/$icon.svg")
             }
         }
@@ -89,7 +90,7 @@ try {
     }
     foreach ($name in @('rust', 'toml', 'html', 'javascript', 'markdown')) {
         if ($Packages -notcontains $name) { continue }
-        # Policy and document-preview guests may accompany the same declaration-only language resources.
+        # Rust and Markdown include guest components; the remaining language packages are resource-only.
         $destination = [IO.Path]::GetFullPath((Join-Path $Output "$name.zip"))
         $stream = [IO.File]::Create($destination)
         $archive = [IO.Compression.ZipArchive]::new($stream, [IO.Compression.ZipArchiveMode]::Create)
@@ -99,14 +100,20 @@ try {
             $packageFiles = @('manifest.json', 'README.md', 'plugin.toml') | ForEach-Object {
                 ,@($_, (Join-Path $pluginRoot $_))
             }
-            # Resource-only languages may reuse the host's generic file icon without an icon catalog.
+            # Preview packages may omit an icon catalog while still shipping toolbar SVG assets.
             if (Test-Path -LiteralPath (Join-Path $pluginRoot 'icons.json')) {
                 $packageFiles += ,@('icons.json', (Join-Path $pluginRoot 'icons.json'))
             }
             foreach ($directory in @('grammar', 'queries', 'icons')) {
-                if (-not (Test-Path -LiteralPath (Join-Path $pluginRoot $directory))) { continue }
                 foreach ($file in Get-ChildItem -LiteralPath (Join-Path $pluginRoot $directory) -Recurse -File | Sort-Object FullName) {
-                    $relative = [IO.Path]::GetRelativePath($pluginRoot, $file.FullName).Replace('\', '/')
+                    # Windows PowerShell 5.1 lacks Path.GetRelativePath. Enumeration is rooted
+                    # in this plugin, so remove its normalized prefix and retain the ZIP separators.
+                    $resourcePrefix = [IO.Path]::GetFullPath($pluginRoot).TrimEnd([char[]]@('\', '/')) + [IO.Path]::DirectorySeparatorChar
+                    $resourcePath = [IO.Path]::GetFullPath($file.FullName)
+                    if (-not $resourcePath.StartsWith($resourcePrefix, [StringComparison]::OrdinalIgnoreCase)) {
+                        throw "Plugin resource is outside its package directory: $resourcePath"
+                    }
+                    $relative = $resourcePath.Substring($resourcePrefix.Length).Replace('\', '/')
                     $packageFiles += ,@($relative, $file.FullName)
                 }
             }
@@ -114,6 +121,7 @@ try {
                 $packageFiles += ,@('rust.wasm', (Join-Path $projectRoot 'target/wasm32-wasip2/release/rust_language_guest.wasm'))
             }
             if ($name -eq 'markdown') {
+                # Distribute only runtime resources and licenses, never source or build caches.
                 $packageFiles += ,@('markdown.wasm', (Join-Path $projectRoot 'target/wasm32-wasip2/release/markdown_guest.wasm'))
                 $packageFiles += ,@('licenses/pulldown-cmark-LICENSE', (Join-Path $pluginRoot 'src/pulldown-cmark-LICENSE'))
             }
@@ -127,30 +135,4 @@ try {
         } finally { $archive.Dispose(); $stream.Dispose() }
         Write-Output $destination
     }
-    # This release policy is data consumed by the generic first-use host flow, never a host ID branch.
-    # Hash only ZIPs present in this output: partial builds must not point to missing packages.
-    $bundlePackages = @()
-    foreach ($defaultPackage in @(@{ file = 'markdown.zip'; file_extensions = @('md', 'markdown') })) {
-        $packagePath = Join-Path $Output $defaultPackage.file
-        if (Test-Path -LiteralPath $packagePath -PathType Leaf) {
-            $bundlePackages += @{
-                file = $defaultPackage.file
-                sha256 = (Get-FileHash -LiteralPath $packagePath -Algorithm SHA256).Hash.ToLowerInvariant()
-                file_extensions = $defaultPackage.file_extensions
-            }
-        }
-    }
-    $catalog = @{ version = 1; packages = @($bundlePackages) } | ConvertTo-Json -Depth 5
-    $catalogPath = [IO.Path]::GetFullPath((Join-Path $Output 'bundle-defaults.json'))
-    $catalogTemporary = Join-Path (Split-Path -Parent $catalogPath) ('.bundle-defaults-' + [guid]::NewGuid().ToString('N') + '.tmp')
-    try {
-        # Atomic replacement prevents a reader from observing a half-written catalog after a package build.
-        [IO.File]::WriteAllText($catalogTemporary, $catalog, [Text.UTF8Encoding]::new($false))
-        [IO.File]::Move($catalogTemporary, $catalogPath, $true)
-    } finally {
-        if (Test-Path -LiteralPath $catalogTemporary -PathType Leaf) {
-            Remove-Item -LiteralPath $catalogTemporary
-        }
-    }
-    Write-Output $catalogPath
 } finally { Pop-Location }

@@ -18,10 +18,12 @@ impl EditorApp {
         result: anyhow::Result<()>,
         cx: &mut Context<Self>,
     ) {
-        if !self
-            .language_servers
-            .get(language)
-            .is_some_and(|active| Arc::ptr_eq(active, server))
+        // A cancelled provider may still be present in the last UI map until worker publication arrives.
+        if !server.is_active()
+            || !self
+                .language_servers
+                .get(language)
+                .is_some_and(|active| Arc::ptr_eq(active, server))
         {
             return;
         }
@@ -40,35 +42,27 @@ impl EditorApp {
         cx.notify();
     }
 
-    /// Status popovers report arbitrary declared languages, with no built-in identity list.
-    pub(crate) fn language_service_details(&self, kind: PluginPopupKind) -> Vec<(String, String)> {
-        self.language_service_states
-            .iter()
-            .filter_map(|(language, state)| {
-                let message = match (state, kind) {
-                    (ServiceLoadState::Loading, PluginPopupKind::Loading) => {
-                        t!("plugins.loading").to_string()
-                    }
-                    (ServiceLoadState::Failed(error), PluginPopupKind::Error) => error.clone(),
-                    _ => return None,
-                };
-                Some((format!("{language} · LSP"), message))
-            })
-            .collect()
-    }
-
     pub(crate) fn sync_dynamic_language_servers(&mut self, cx: &mut Context<Self>) {
         let selected = crate::language::providers::language_servers();
         let available = self.extensions.read(cx).language_services();
         // Worker publications also carry ongoing transport failures, not only the initial handshake result.
         for server in self.language_servers.values() {
-            if let Some(message) = server.recovery_status() {
+            if let Some(recovery) = server.recovery_state()
+                && let Some(message) = server.recovery_status()
+            {
+                let level = match recovery {
+                    language_navigation::RecoveryState::WaitingRetry => {
+                        plugin_runtime::LogLevel::Warning
+                    }
+                    language_navigation::RecoveryState::Paused => plugin_runtime::LogLevel::Error,
+                    language_navigation::RecoveryState::Recovered => plugin_runtime::LogLevel::Info,
+                };
                 for (key, plan) in &available {
                     if let Ok(plan) = plan
                         && server.uses_service(plan)
                     {
                         self.extensions.update(cx, |panel, cx| {
-                            panel.language_service_status(key, plan, message.clone(), cx)
+                            panel.language_service_status(key, plan, level, message.clone(), cx)
                         });
                     }
                 }
@@ -120,7 +114,13 @@ impl EditorApp {
                     .insert(language.clone(), ServiceLoadState::Loading);
                 let service_key = id.expect("selected plan has an ID");
                 self.extensions.update(cx, |extensions, cx| {
-                    extensions.language_service_status(&service_key, &plan, "正在启动…".into(), cx)
+                    extensions.language_service_status(
+                        &service_key,
+                        &plan,
+                        plugin_runtime::LogLevel::Info,
+                        t!("plugins.logs.lsp_starting").to_string(),
+                        cx,
+                    )
                 });
                 cx.spawn(async move |this, cx| {
                     let current = server.clone();
@@ -134,17 +134,28 @@ impl EditorApp {
                             .language_servers
                             .get(&language)
                             .is_some_and(|server| Arc::ptr_eq(server, &current))
+                            // Cancellation can finish before the UI receives the retired provider snapshot.
+                            && current.is_active()
                         {
-                            let message = match &result {
-                                Ok(()) => "已就绪".to_owned(),
+                            let (level, message) = match &result {
+                                Ok(()) => (
+                                    plugin_runtime::LogLevel::Info,
+                                    t!("plugins.logs.lsp_ready").to_string(),
+                                ),
                                 Err(error) => {
                                     app.status = format!("LSP {language}: {error:#}");
-                                    format!("启动失败：{error:#}")
+                                    (plugin_runtime::LogLevel::Error, format!("{error:#}"))
                                 }
                             };
                             app.finish_server_loading(&language, &current, result, cx);
                             app.extensions.update(cx, |extensions, cx| {
-                                extensions.language_service_status(&service_key, &plan, message, cx)
+                                extensions.language_service_status(
+                                    &service_key,
+                                    &plan,
+                                    level,
+                                    message,
+                                    cx,
+                                )
                             });
                             cx.notify();
                         }

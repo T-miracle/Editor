@@ -83,6 +83,19 @@ fn with_manager(
             owner.manager_packages = vec![update];
             let mut state = owner.worker.state.lock().unwrap();
             state.entries = manager.published_entries();
+            state.logs = manager.runtime_logs();
+            state.logs.append(
+                "manager-first",
+                plugin_runtime::logs::LogLevel::Info,
+                "language.status:manager-first/analysis",
+                "Ready",
+            );
+            state.logs.append(
+                "manager-first",
+                plugin_runtime::logs::LogLevel::Error,
+                "host.operation",
+                "First plugin operation failed",
+            );
             state
                 .service_states
                 .insert("manager-first/analysis".into(), "Ready".into());
@@ -120,6 +133,11 @@ fn click(form: &mut VisualTestContext, selector: &'static str) {
         .unwrap_or_else(|| panic!("missing {selector}"));
     form.simulate_click(bounds.center(), Default::default());
     draw(form);
+}
+
+/// GPUI's test lookup requires static selectors; the two dynamic record names live for this test process.
+fn record_selector(id: u64) -> &'static str {
+    Box::leak(format!("plugin-log-record-{id}").into_boxed_str())
 }
 
 /// Both local tab strips must retain fixed bounds while only README content scrolls.
@@ -164,6 +182,132 @@ fn newly_opened_manager_starts_at_overview(cx: &mut TestAppContext) {
             reopened.update(|_, cx| owner.read(cx).manager_detail_tab),
             management::DetailTab::Overview
         );
+    });
+}
+
+/// Native navigation acknowledges one plugin while preserving its history, other plugins and colors.
+#[gpui::test]
+fn log_view_shares_read_state_without_clearing_other_plugins(cx: &mut TestAppContext) {
+    with_manager(cx, "zh-CN", false, |form, owner| {
+        let logs = form.update(|_, cx| owner.read(cx).runtime_logs());
+        let second = logs.append(
+            "manager-second",
+            plugin_runtime::logs::LogLevel::Warning,
+            "guest.stderr",
+            "另一个插件的警告",
+        );
+        let first_error = logs.records("manager-first").last().unwrap().id;
+        draw(form);
+        assert!(form.debug_bounds("plugin-detail-tabs-5-Error").is_some());
+        click(form, "plugin-detail-tabs-5");
+        draw(form);
+        assert!(form.debug_bounds("plugin-detail-tabs-5-Error").is_none());
+        assert_eq!(logs.unread_severity("manager-first"), None);
+        assert_eq!(
+            logs.records("manager-first").last().unwrap().id,
+            first_error
+        );
+        assert_eq!(
+            logs.records("manager-first").last().unwrap().level,
+            plugin_runtime::logs::LogLevel::Error
+        );
+        assert_eq!(
+            logs.unread_severity("manager-second"),
+            Some(plugin_runtime::logs::LogLevel::Warning)
+        );
+        click(form, "plugin-row-manager-second");
+        assert!(form.debug_bounds("plugin-detail-tabs-5-Warning").is_some());
+        click(form, "plugin-detail-tabs-5");
+        draw(form);
+        assert_eq!(logs.unread_severity("manager-second"), None);
+        assert!(form.debug_bounds(record_selector(second)).is_some());
+        click(form, "plugin-detail-tabs-0");
+        logs.append(
+            "manager-second",
+            plugin_runtime::logs::LogLevel::Info,
+            "guest.stdout",
+            "normal output",
+        );
+        draw(form);
+        assert!(form.debug_bounds("plugin-detail-tabs-5-Warning").is_none());
+        logs.append(
+            "manager-second",
+            plugin_runtime::logs::LogLevel::Warning,
+            "guest.stderr",
+            "new warning",
+        );
+        draw(form);
+        assert!(form.debug_bounds("plugin-detail-tabs-5-Warning").is_some());
+        logs.append(
+            "manager-second",
+            plugin_runtime::logs::LogLevel::Error,
+            "host.plugin",
+            "new failure",
+        );
+        draw(form);
+        assert!(form.debug_bounds("plugin-detail-tabs-5-Error").is_some());
+    });
+}
+
+/// A long run stays confined to the detail viewport at the larger supported font size.
+#[gpui::test]
+fn long_runtime_logs_scroll_below_fixed_tabs(cx: &mut TestAppContext) {
+    with_manager(cx, "en", true, |form, owner| {
+        let logs = form.update(|_, cx| owner.read(cx).runtime_logs());
+        let initial_count = logs.records("manager-first").len();
+        for index in 0..100 {
+            logs.append(
+                "manager-first",
+                plugin_runtime::logs::LogLevel::Warning,
+                "guest.stderr",
+                format!(
+                    "record {index}: {}",
+                    "可读的长日志 readable text ".repeat(12)
+                ),
+            );
+        }
+        form.update(|_, cx| {
+            typography::set_font_size(cx, 20.);
+            apply_theme(builtin_theme(true), cx);
+        });
+        draw(form);
+        click(form, "plugin-detail-tabs-5");
+        draw(form);
+        assert_eq!(logs.unread_severity("manager-first"), None);
+        let late = logs.append(
+            "manager-first",
+            plugin_runtime::logs::LogLevel::Error,
+            "host.plugin",
+            "new offscreen error",
+        );
+        draw(form);
+        assert_eq!(
+            logs.unread_severity("manager-first"),
+            Some(plugin_runtime::logs::LogLevel::Error)
+        );
+        let header = form.debug_bounds("plugin-manager-header").unwrap();
+        let tabs = form.debug_bounds("plugin-detail-tabs-5").unwrap();
+        let viewport = form.debug_bounds("plugin-manager-detail-content").unwrap();
+        form.simulate_event(gpui_kit::ScrollWheelEvent {
+            position: viewport.center(),
+            delta: gpui_kit::ScrollDelta::Pixels(point(px(0.), px(-600.))),
+            touch_phase: gpui_kit::TouchPhase::Moved,
+            modifiers: Default::default(),
+        });
+        draw(form);
+        assert_eq!(header, form.debug_bounds("plugin-manager-header").unwrap());
+        assert_eq!(tabs, form.debug_bounds("plugin-detail-tabs-5").unwrap());
+        assert!(form.update(|_, cx| owner.read(cx).manager_detail_scroll.offset().y < px(0.)));
+        assert_eq!(logs.records("manager-first").len(), initial_count + 101);
+        form.simulate_event(gpui_kit::ScrollWheelEvent {
+            position: viewport.center(),
+            delta: gpui_kit::ScrollDelta::Pixels(point(px(0.), px(-99_999.))),
+            touch_phase: gpui_kit::TouchPhase::Moved,
+            modifiers: Default::default(),
+        });
+        draw(form);
+        assert!(form.debug_bounds(record_selector(late)).is_some());
+        assert_eq!(logs.unread_severity("manager-first"), None);
     });
 }
 

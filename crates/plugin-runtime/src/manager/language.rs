@@ -194,8 +194,14 @@ impl Manager {
         } else {
             service.args
         };
-        let mut language_service =
-            LanguageService::new(entry.manifest.id.clone(), provider, root, program, args);
+        let mut language_service = LanguageService::new(
+            entry.manifest.id.clone(),
+            provider,
+            root,
+            program,
+            args,
+            self.host_resources.logs.clone(),
+        );
         language_service.dependencies = prepared.map(|prepared| prepared.locks).unwrap_or_default();
         Ok(language_service)
     }

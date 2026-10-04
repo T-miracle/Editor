@@ -1,5 +1,6 @@
 //! Editor-owned underline tabs; gpui-base supplies pointer and accessibility semantics.
 //! Compound keyboard navigation stays here so callers cannot activate disabled placeholders.
+use super::StatusIcon;
 use std::rc::Rc;
 
 use gpui_base::{Tab, Tabs};
@@ -17,6 +18,7 @@ pub(crate) fn tab_strip<const N: usize>(
     id: &'static str,
     selected: usize,
     labels: [(SharedString, bool); N],
+    badges: [Option<StatusIcon>; N],
     focus: &FocusHandle,
     on_change: impl Fn(usize, &mut Window, &mut App) + 'static,
     cx: &App,
@@ -97,8 +99,26 @@ pub(crate) fn tab_strip<const N: usize>(
                 .when(!disabled, |tab| {
                     tab.hover(|style| style.bg(palette.list_hover))
                 })
-                // A narrow window or large font keeps titles on one line; hover exposes the full label.
-                .child(div().min_w(px(0.)).truncate().child(label)),
+                .child(
+                    // Severity and title share one line without allowing a long label to squash its icon.
+                    div()
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .gap_1()
+                        .min_w(px(0.))
+                        .when_some(badges[index], |row, badge| {
+                            row.child(
+                                div()
+                                    .debug_selector(move || {
+                                        format!("{id}-{index}-{:?}", badge).into()
+                                    })
+                                    .flex_shrink_0()
+                                    .child(badge.icon(cx)),
+                            )
+                        })
+                        .child(div().min_w(px(0.)).truncate().child(label)),
+                ),
         );
     }
     tabs
