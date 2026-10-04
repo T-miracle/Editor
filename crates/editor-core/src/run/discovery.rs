@@ -17,6 +17,14 @@ mod tests;
 const BUILD_PROGRAM_FIELD: &str = "build_program";
 /// Field a provider may report to name the build arguments, separated by newlines.
 const BUILD_ARGS_FIELD: &str = "build_args";
+/// Field a provider may report to name the program's own arguments, separated by newlines.
+const PROGRAM_ARGS_FIELD: &str = "program_args";
+/// The one program whose own subcommands select a build for every target language.
+///
+/// A package manager is not the artifact, so a package manager's own subcommand belongs in the
+/// pre-launch step rather than in the program field: a debugger attached to `cargo run` would debug
+/// the manager, not the program the user asked for.
+const PACKAGE_MANAGER: &str = "cargo";
 
 /// What a discovery run did to the stored configurations.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -36,6 +44,18 @@ pub struct DiscoveryOutcome {
 /// gets a build action; one that does not gets none, so Build stays honestly unavailable rather than
 /// running a command the provider never described.
 pub fn configuration_for(target: &DiscoveredTarget, id: String, name: String) -> RunConfig {
+    let program = arguments(&target.fields, PROGRAM_ARGS_FIELD);
+    // A provider that runs a target through a package manager says so by using it as the program;
+    // the manager's own subcommand then has to succeed before the program is started.
+    let through_manager = target
+        .program
+        .rsplit(['/', '\\'])
+        .next()
+        .map(|name| {
+            name.trim_end_matches(".exe")
+                .eq_ignore_ascii_case(PACKAGE_MANAGER)
+        })
+        .unwrap_or(false);
     RunConfig {
         id,
         name,
@@ -43,26 +63,42 @@ pub fn configuration_for(target: &DiscoveredTarget, id: String, name: String) ->
         // ran a label would fail at launch with a message about a missing file.
         target: RunTarget::Program {
             program: target.program.clone(),
-            args: target
-                .fields
-                .get("program_args")
-                .map(|args| {
-                    args.lines()
-                        .map(str::to_owned)
-                        .filter(|line| !line.is_empty())
-                        .collect()
-                })
-                .unwrap_or_default(),
+            args: program.clone(),
         },
         directory: None,
         env: Default::default(),
         tool_paths: Default::default(),
         build: build_steps(target),
-        prelaunch: Vec::new(),
+        prelaunch: if through_manager {
+            vec![RunStep {
+                name: format!("构建 {}", target.label),
+                target: StepTarget::Action {
+                    target: RunTarget::Program {
+                        program: target.program.clone(),
+                        args: program,
+                    },
+                },
+            }]
+        } else {
+            Vec::new()
+        },
         source: RunConfigSource::Local,
         from_target: Some(target.id.clone()),
         local: true,
     }
+}
+
+/// One provider field as a literal argument list, one argument per line.
+fn arguments(fields: &std::collections::BTreeMap<String, String>, key: &str) -> Vec<String> {
+    fields
+        .get(key)
+        .map(|args| {
+            args.lines()
+                .map(str::to_owned)
+                .filter(|line| !line.is_empty())
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 /// The build action a provider's own fields describe, if it described one.
@@ -70,16 +106,7 @@ fn build_steps(target: &DiscoveredTarget) -> Vec<RunStep> {
     let Some(program) = target.fields.get(BUILD_PROGRAM_FIELD) else {
         return Vec::new();
     };
-    let args = target
-        .fields
-        .get(BUILD_ARGS_FIELD)
-        .map(|args| {
-            args.lines()
-                .map(str::to_owned)
-                .filter(|line| !line.is_empty())
-                .collect()
-        })
-        .unwrap_or_default();
+    let args = arguments(&target.fields, BUILD_ARGS_FIELD);
     vec![RunStep {
         name: format!("构建 {}", target.label),
         target: StepTarget::Action {

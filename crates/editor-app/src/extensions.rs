@@ -33,6 +33,8 @@ mod markdown_tests;
 mod native_build_tests;
 mod native_controls;
 #[cfg(test)]
+mod native_discovery_tests;
+#[cfg(test)]
 mod native_run_tests;
 #[cfg(test)]
 mod native_ui_tests;

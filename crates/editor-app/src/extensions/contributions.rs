@@ -376,6 +376,19 @@ fn workspace_files(workspace: &Path) -> Vec<String> {
     files
 }
 
+/// Publish one plugin's declarative contributions the way the registry does.
+///
+/// Exists for the native acceptance, which must exercise the shipped package's own declaration
+/// without installing a whole registry into a temporary runtime.
+#[cfg(test)]
+pub fn publish_declarative_plugin_for_test(root: &Path, id: &str) {
+    let contribution = Contribution::read(root, "plugin.toml", id, &"c".repeat(64))
+        .unwrap_or_else(|error| panic!("the plugin's contributions read: {error:#}"));
+    let mut catalog = Catalog::default();
+    catalog.plugins.insert(id.to_owned(), contribution);
+    *CATALOG.write().unwrap() = Arc::new(catalog);
+}
+
 /// Locate an enabled package so its grammar can be validated off the UI thread.
 #[cfg(test)]
 pub fn plugin_root(id: &str) -> Option<PathBuf> {

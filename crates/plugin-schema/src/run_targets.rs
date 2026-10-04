@@ -82,6 +82,12 @@ pub struct FieldShape {
     /// Whether a file without this value is still a candidate.
     #[serde(default)]
     pub optional: bool,
+    /// Value to use when the file does not have one.
+    ///
+    /// A provider often knows something its project files do not say — which tool runs a target, for
+    /// instance — and a default lets it state that once instead of asking every project to repeat it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default: Option<String>,
 }
 
 /// What one recognized entry contributes to a target.
@@ -216,6 +222,14 @@ impl RunTargetDiscovery {
                         field.name
                     )));
                 }
+                if let Some(default) = &field.default
+                    && !bounded(default)
+                {
+                    return Err(DiscoveryError::Invalid(format!(
+                        "field {} has an unusable default",
+                        field.name
+                    )));
+                }
                 names.push(field.name.as_str());
             }
             if names.is_empty() {
@@ -304,8 +318,9 @@ impl RunTargetDiscovery {
     ) -> Option<BTreeMap<String, String>> {
         let mut values = BTreeMap::new();
         for field in &rule.fields {
-            let found =
-                value_at(document, field).and_then(|value| value.as_str().map(str::to_owned));
+            let found = value_at(document, field)
+                .and_then(|value| value.as_str().map(str::to_owned))
+                .or_else(|| field.default.clone());
             match found {
                 Some(value) => {
                     values.insert(field.name.clone(), value);

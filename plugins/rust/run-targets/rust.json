@@ -10,10 +10,13 @@
       "fields": [
         {"name": "package", "section": "package", "key": "name"},
         {"name": "version", "section": "package", "key": "version", "optional": true},
-        {"name": "program", "section": "package", "key": "name"}
+        {"name": "program", "key": "program", "default": "cargo", "optional": true},
+        {"name": "program_args", "key": "program_args", "default": "run", "optional": true},
+        {"name": "build_program", "key": "build_program", "default": "cargo.exe", "optional": true},
+        {"name": "build_args", "key": "build_args", "default": "build", "optional": true}
       ],
       "targets": [
-        {"name_from": "package", "fields": ["package", "version", "program"]}
+        {"name_from": "package", "fields": ["package", "version", "program", "program_args", "build_program", "build_args"]}
       ]
     },
     {
@@ -22,10 +25,13 @@
       "fields": [
         {"name": "bin", "section": "bin", "key": "name"},
         {"name": "package", "section": "package", "key": "name", "optional": true},
-        {"name": "program", "section": "bin", "key": "name"}
+        {"name": "program", "key": "program", "default": "cargo", "optional": true},
+        {"name": "program_args", "key": "program_args", "default": "run", "optional": true},
+        {"name": "build_program", "key": "build_program", "default": "cargo.exe", "optional": true},
+        {"name": "build_args", "key": "build_args", "default": "build", "optional": true}
       ],
       "targets": [
-        {"name_from": "bin", "fields": ["bin", "package", "program"]}
+        {"name_from": "bin", "fields": ["bin", "package", "program", "program_args", "build_program", "build_args"]}
       ]
     }
   ]
