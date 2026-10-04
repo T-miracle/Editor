@@ -68,3 +68,4 @@ jobs:
     steps:
       - id: deployment
         uses: actions/deploy-pages@v4
+# Triggered by a real change; the workflow only runs for website or workflow edits.
