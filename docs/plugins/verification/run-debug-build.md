@@ -292,10 +292,11 @@ Run and debug startup smoke passed: no program was left behind by shutdown.
 | --- | --- | --- |
 | 管理操作识别受影响会话；确认后进入破坏性变更，取消保持原样 | 已通过 | `plugin_session_impact` 用例 + 确认对话框 `extra_impact` |
 | 正常停止/立即终止/超时清理沿公共会话入口；普通运行、构建准备与断点暂停 | **部分未验证** | 普通运行与「准备中启动」已通过（`closing_while_a_launch_is_still_preparing_...`、`a_silent_provider_leaves_the_session_as_reported`）；**断点暂停状态下的清理未验证**（需真机断点） |
-| 更新准备失败保留旧实例 | 已通过 | 前序工单的更新事务用例（`hot_update`、`failed_update_restores_durable_writes_...`） |
-| 崩溃/来源撤销使相关会话明确失败并清理，不影响无关会话 | 已通过 | `losing_a_provider_fails_its_sessions_without_reviving_them`（实例消失、程序不再声称运行、无关提供者不受影响） |
-| 旧引用不能复活会话或作用于新实例 | 已通过 | 同上用例（重新启用后旧会话仍失败、停止被拒） |
-| **沿真实插件管理流程注入故障并核对实际进程与原生提示** | **部分已验证** | 真实包 + 公开管理器路径已用（停用/启用/重启、进程表对照）；**「原生提示」由确认对话框用例覆盖，但未在真实崩溃场景下人工核对** |
+| 更新准备失败保留旧实例 | **已通过（本轮核实）** | `runtime_logs::failed_preparation_is_visible_without_replacing_the_live_instance`（**本轮单独运行通过**）：准备失败后活动实例的视图**是同一个 Arc**、安装摘要仍是旧版本、失败以 Error 级记入共享日志；另见 `data_migration::failed_migration_activation_and_commit_preserve_old_data` 与 `hot_update::mixed_update_rollback_replaces_all_owners_and_preserves_latest_data` |
+| 崩溃/来源撤销使相关会话明确失败并清理，不影响无关会话 | 已通过 | `losing_a_provider_fails_its_sessions_without_reviving_them` |
+| 旧引用不能复活会话或作用于新实例 | 已通过 | 同上用例 |
+| 沿真实插件管理流程注入故障并核对实际进程与原生提示 | **部分已验证** | 真实包 + 公开管理器路径已用（停用/启用/重启、进程表对照）；「原生提示」由确认对话框用例覆盖，未在真实崩溃场景下人工核对 |
+| 本工单补全管理确认与事务交互；前序基础保障不推迟到此 | 已通过 | 权限与不重放由前序工单的用例覆盖（`sdk_distribution`、`hot_update`、`scoped_instances`） |
 
 ### 12 — 独立插件接入与整体验收交付（#60）
 
