@@ -115,7 +115,7 @@ const GROUPS: &[(&str, &[Tool])] = &[
     ),
 ];
 
-/// Only declared toolbar nodes route to formatting; preview text and readonly tasks have no edit action.
+/// Only declared toolbar nodes route to formatting; parsed task edits and preview links have separate routing.
 pub(super) fn command(node: &str) -> Option<Command> {
     GROUPS
         .iter()

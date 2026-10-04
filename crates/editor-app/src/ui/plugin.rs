@@ -4,6 +4,10 @@ pub(crate) mod bitmap;
 mod canvas;
 pub(crate) mod controls;
 pub(crate) mod images;
+mod layout;
+#[cfg(test)]
+mod link_tests;
+mod links;
 mod render;
 mod svg;
 #[cfg(test)]
@@ -41,6 +45,12 @@ pub(crate) struct PluginView {
     sink: EventSink,
     inputs: BTreeMap<String, NativeInput>,
     scrolls: BTreeMap<String, ScrollHandle>,
+    /// Read-only source block ownership and one revision-bound reveal; native scroll remains in Base.
+    scene_layout: layout::SceneLayout,
+    /// Base resolves the release target; the local adapter retains the real native press owner.
+    link_press: Option<links::LinkPress>,
+    /// Per-target Base focus survives source refresh; subscriptions reveal only the focused link cue.
+    link_focus: BTreeMap<String, links::LinkFocus>,
     canvases: BTreeMap<String, Entity<canvas::CanvasView>>,
     /// Collection widgets retain native rename/drag state independently of canvas redraws.
     collections: BTreeMap<String, Entity<controls::CollectionView>>,
@@ -95,6 +105,7 @@ impl PluginView {
             });
         self.photos = photos;
         if changed {
+            self.link_press = None;
             cx.notify();
         }
         for (id, canvas) in &self.canvases {
@@ -172,6 +183,9 @@ impl PluginView {
             sink: Rc::new(sink),
             inputs: BTreeMap::new(),
             scrolls: BTreeMap::new(),
+            scene_layout: Default::default(),
+            link_press: None,
+            link_focus: BTreeMap::new(),
             canvases: BTreeMap::new(),
             collections: BTreeMap::new(),
             popup: None,
@@ -226,6 +240,8 @@ impl PluginView {
             return;
         }
         let old_dialog = self.document.dialog.as_ref().map(|d| d.id.clone());
+        // A new scene/theme cannot adopt an earlier pointer press, even when node IDs are reused.
+        self.link_press = None;
         let next_dialog = document.dialog.as_ref().map(|d| d.id.clone());
         let menu_changed = self.document.menu.as_ref().map(|menu| &menu.id)
             != document.menu.as_ref().map(|menu| &menu.id);
@@ -278,6 +294,8 @@ impl PluginView {
     }
 
     fn sync_native(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.scene_layout.reset(&self.document);
+        self.sync_link_focus(window, cx);
         let mut nodes = vec![];
         self.document
             .root

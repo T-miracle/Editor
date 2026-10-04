@@ -36,6 +36,9 @@ pub struct Document {
     /// This additive declaration requires `source`; ordinary panels and older guests leave it false.
     #[serde(default)]
     pub editor_image_input: bool,
+    /// Emit clicked native rich-text links through `ui.links`; false retains inert link defaults.
+    #[serde(default)]
+    pub link_events: bool,
     /// At most one modal per panel. Removing it closes the modal.
     #[serde(default)]
     pub dialog: Option<Dialog>,
@@ -53,6 +56,7 @@ impl Document {
             root,
             editor_toolbar: None,
             editor_image_input: false,
+            link_events: false,
             dialog: None,
             menu: None,
         }
@@ -119,6 +123,10 @@ impl Dialog {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Node {
     pub id: String,
+    /// Explicit read-only link targets for native keyboard focus and linked images/alternative text.
+    /// URIs use rendered href spelling, not a host-parsed domain format; requires `ui.links`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub links: Vec<LinkTarget>,
     /// Optional UTF-8 source bytes in the immutable version echoed by `Document.source`.
     /// Mapping does not grant document access or editing authority; it requires `ui.richtext`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -135,6 +143,17 @@ pub struct Node {
     #[serde(default)]
     pub layout: Layout,
     pub kind: Kind,
+}
+
+/// One bounded native activation target. The guest supplies its visible caption and destination;
+/// `Document.link_events` enables events, while navigation remains a separately authorized request.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LinkTarget {
+    /// Exact rendered href, at most 4096 bytes; no controls or implicit URL effect.
+    pub uri: String,
+    /// Author/user-localized accessible caption, at most 256 UTF-8 bytes; empty uses host locale.
+    pub label: String,
 }
 
 /// Half-open UTF-8 byte offsets for one rendered block in its source document version.
@@ -297,6 +316,10 @@ pub struct UiEvent {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", content = "value", rename_all = "snake_case")]
 pub enum Action {
+    /// URI supplied by a clicked native rich-text link, never by parsing or layout alone.
+    Link {
+        uri: String,
+    },
     Canvas(CanvasEvent),
     Click,
     Change(String),
@@ -327,6 +350,7 @@ impl Node {
     pub fn new(id: impl Into<String>, kind: Kind) -> Self {
         Self {
             id: id.into(),
+            links: Vec::new(),
             source_range: None,
             tooltip: None,
             role: String::new(),

@@ -361,7 +361,9 @@ impl Instance {
             let mut enhanced_canvas = false;
             let mut rich_text = false;
             let mut images = false;
+            let mut links = view.document.link_events;
             let mut visit = |node: &ui::Node| {
+                links |= !node.links.is_empty();
                 if let ui::Kind::Canvas(value) = &node.kind {
                     canvas = true;
                     grid |= value.grid;
@@ -382,6 +384,13 @@ impl Instance {
             }
             if let Some(dialog) = &view.document.dialog {
                 dialog.content.visit(&mut visit);
+            }
+            if links && !api.capabilities.contains_key("ui.links") {
+                return Err(Failure::new(
+                    ErrorCode::CapabilityUnavailable,
+                    "ui.links was not negotiated",
+                )
+                .into());
             }
             if enhanced_canvas
                 && !api

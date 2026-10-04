@@ -38,6 +38,15 @@ impl Document {
             )
         })?;
         let valid = match (&node.kind, &event.action) {
+            (Kind::Image { .. } | Kind::Text { .. }, Action::Link { uri }) => {
+                self.link_events && node.links.iter().any(|link| link.uri == *uri)
+            }
+            (Kind::RichText { .. }, Action::Link { uri }) => {
+                self.link_events
+                    && !uri.is_empty()
+                    && uri.len() <= 4096
+                    && !uri.chars().any(char::is_control)
+            }
             (Kind::SideTabs(tabs), action) => tabs.accepts(action),
             (Kind::Button { .. }, Action::Click) | (Kind::Checkbox { .. }, Action::Toggle(_)) => {
                 true

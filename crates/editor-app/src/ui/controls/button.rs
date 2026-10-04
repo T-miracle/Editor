@@ -127,6 +127,12 @@ impl Button {
         self
     }
 
+    /// Keep focus stable across immutable scene replacements while Base owns Tab and key activation.
+    pub(crate) fn track_focus(mut self, handle: &gpui_kit::FocusHandle) -> Self {
+        self.base = self.base.track_focus(handle);
+        self
+    }
+
     pub(crate) fn loading(mut self, loading: bool) -> Self {
         self.loading = loading;
         self

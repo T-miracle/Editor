@@ -1,5 +1,7 @@
 # 插件 SDK
 
+原生链接事件、文档／预览块／HTTP(S) 导航与权限契约见 [NAVIGATION.md](NAVIGATION.md)。
+
 跨插件协作、版本化契约、提供者选择及来源权限见 [SERVICES.md](SERVICES.md)。
 
 原生服务、交互式进程、权限与回收契约见 [PROCESSES.md](PROCESSES.md)。

@@ -38,3 +38,5 @@ Windows，Markdown `0.7.0`、protocol 7；复用现有 `ui.native`、`ui.richtex
 独立 Standards 复审：硬性违规 0、Fowler 判断性发现 0；独立 Spec 复审：0 findings。审查基线固定为 `1a8e65f`；依已授权“测试与审查 → 提交”顺序使用 `git diff <base> -- crates/editor-app plugins/markdown` 与新增文件，`git log <base>..HEAD` 为空，如实审查工作树而非宣称提交差异。已修复初审的版本手势、原生焦点和非空格任务标记问题，并各自保存真实 RED／GREEN。
 
 #26 保持原状态；提交／推送／关闭读回后续追加，不改写已推送历史。SDK 公共契约在本单未变化，使用 06 已验证的摘要 `592bd51824e94f5a79f06eb75664ad7f9cb27033bee7786c265e86a3c682a988` 独立构建当前包；没有因无关 SDK 变更追加验证。
+
+2026-10-04 交付：普通提交 `24a27dc8bbfc2cb16557fc7d28f22bbafa2872ed` 已推送 `origin/codex/markdown-plugin`，`git ls-remote` 的远端 SHA 一致；GitHub #33 PATCH 后独立 GET 读回 `closed / completed`。此读回追加于下一工单，不改写已推送历史。

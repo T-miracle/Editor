@@ -9,6 +9,7 @@ use plugin_runtime::{
 
 mod edits;
 mod images;
+mod navigation;
 
 impl EditorApp {
     /// Drain requests in effect order so each edit's native Change event advances its revision first.
@@ -113,6 +114,10 @@ impl EditorApp {
         }
         if matches!(request.operation(), Op::SaveImageInput { .. }) {
             self.save_plugin_image(request, window, cx);
+            return;
+        }
+        if matches!(request.operation(), Op::NavigateDocument { .. }) {
+            self.navigate_plugin_document(plugin, request, window, cx);
             return;
         }
         let result = (|| match request.operation() {
@@ -228,7 +233,8 @@ impl EditorApp {
             }
             Op::SaveDocument { .. }
             | Op::ReplaceDocumentRange { .. }
-            | Op::SaveImageInput { .. } => unreachable!(),
+            | Op::SaveImageInput { .. }
+            | Op::NavigateDocument { .. } => unreachable!(),
         })();
         request.finish(result);
     }

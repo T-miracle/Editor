@@ -1,5 +1,7 @@
 # Capability Example
 
+0.15.6 使用当前独立 SDK 验证 `editor.navigation`／`ui.links`。公开 `scope-probe` 能发起版本化通用导航；测试重新打包为另一身份，验证非 Markdown 文档、权限、场景归属及取消。默认示例不增加浏览器权限，导航按测试夹具的声明与批准执行。
+
 0.15.5 增加独立 `image-input-fixture` 的 `editor.images` 验收：组合树在没有 `Document.source` 时隐藏图片输入声明；原生图片通知只传元数据，示例使用公开 `scope-probe` 发起保存并展示异步回执。测试覆盖权限、跨实例句柄、名称边界、配额、碰撞重试与源版本撤销；默认包不增加图片写入权限。
 
 0.15.4 增加独立 `images-fixture` 图片资源验收。组合 UI 资产中的 Image 在没有 `Document.source` 时仅发布替代文字，原模板保留，收到版本化 Preview 后声明资源。实际 ZIP 验证 `ui.images` 协商、逐图权限错误、本地工作区边界与异步 HTTP 回收；默认示例权限和界面不变。

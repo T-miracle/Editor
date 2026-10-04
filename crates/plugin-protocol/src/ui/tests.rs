@@ -1,6 +1,117 @@
 //! Contract regression cases are also shipped with the standalone SDK.
 use super::*;
 
+/// Alternative text is a real link only with an explicit target and opt-in; replaced scenes stay inert.
+#[test]
+fn declared_content_links_match_their_target_and_scene() {
+    let mut node = Node::text("alt", "打开图片");
+    node.links.push(LinkTarget {
+        uri: "next.md".into(),
+        label: "打开图片".into(),
+    });
+    let mut document = Document::new(node).revision(3);
+    assert!(document.validate().is_ok());
+    let mut event = UiEvent {
+        revision: 3,
+        node: "alt".into(),
+        action: Action::Link {
+            uri: "next.md".into(),
+        },
+    };
+    assert!(document.validate_event(&event).is_err());
+    document.link_events = true;
+    assert!(document.validate_event(&event).is_ok());
+    event.action = Action::Link {
+        uri: "other.md".into(),
+    };
+    assert!(document.validate_event(&event).is_err());
+    event.action = Action::Link {
+        uri: "next.md".into(),
+    };
+    event.revision = 2;
+    assert_eq!(
+        document.validate_event(&event).unwrap_err().code,
+        crate::api::ErrorCode::StaleRevision
+    );
+    event.revision = 3;
+    document.root.disabled = true;
+    assert!(document.validate_event(&event).is_err());
+    document.root.disabled = false;
+    document.dialog = Some(Dialog::new("modal", "Title", Node::text("body", "body")));
+    assert!(document.validate_event(&event).is_err());
+}
+
+/// A guest cannot hide unlimited focus controls or labels inside one otherwise small read-only node.
+#[test]
+fn declared_links_share_ui_budgets_and_read_only_kinds() {
+    let target = LinkTarget {
+        uri: "#title".into(),
+        label: "标题".into(),
+    };
+    let mut node = Node::button("bad", "Bad");
+    node.links.push(target.clone());
+    assert!(Document::new(node).validate().is_err());
+    let mut node = Node::rich_text("links", "<p>links</p>");
+    node.links = vec![target.clone(); 2048];
+    assert!(
+        Document::new(node.clone())
+            .validate()
+            .unwrap_err()
+            .contains("node quota")
+    );
+    node.links = vec![LinkTarget {
+        label: "中".repeat(86),
+        ..target.clone()
+    }];
+    assert!(Document::new(node.clone()).validate().is_err());
+    node.links = vec![LinkTarget {
+        uri: "unsafe\n".into(),
+        ..target.clone()
+    }];
+    assert!(Document::new(node).validate().is_err());
+    let mut alt = Node::text("alt", "alt");
+    alt.links = vec![target; 2];
+    assert!(Document::new(alt).validate().is_err());
+}
+
+/// Opt-in links obey the same stale, disabled and modal gates as other native interactions.
+#[test]
+fn links_require_opt_in_and_current_active_rich_text() {
+    let mut document = Document::new(Node::new(
+        "link",
+        Kind::RichText {
+            html: "<a href=\"#x\">x</a>".into(),
+        },
+    ));
+    let mut event = UiEvent {
+        revision: 0,
+        node: "link".into(),
+        action: Action::Link { uri: "#x".into() },
+    };
+    assert!(document.validate_event(&event).is_err());
+    document.link_events = true;
+    assert!(document.validate_event(&event).is_ok());
+    event.revision = 1;
+    assert_eq!(
+        document.validate_event(&event).unwrap_err().code,
+        crate::api::ErrorCode::StaleRevision
+    );
+    event.revision = 0;
+    document.root.disabled = true;
+    assert!(document.validate_event(&event).is_err());
+    document.root.disabled = false;
+    document.dialog = Some(Dialog::new("modal", "Title", Node::text("body", "body")));
+    assert!(document.validate_event(&event).is_err());
+    document.dialog = None;
+    for uri in ["", "x\n"] {
+        event.action = Action::Link { uri: uri.into() };
+        assert!(document.validate_event(&event).is_err());
+    }
+    document.root = Node::text("link", "plain");
+    event.action = Action::Link { uri: "#x".into() };
+    assert!(document.validate_event(&event).is_err());
+}
+
 /// A wrapping row retains this portable layout flag across independent SDK serialization.
 #[test]
 fn row_wrap_is_a_portable_layout_flag() {

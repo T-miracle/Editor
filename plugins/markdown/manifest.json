@@ -1,11 +1,11 @@
 {
   "id": "markdown",
   "name": "Markdown",
-  "version": "0.7.0",
+  "version": "0.8.0",
   "protocol": 7,
   "contributions": "plugin.toml",
   "component": "markdown.wasm",
-  "permissions": ["editor.read", "editor.write", "workspace.read", "workspace.write", "clipboard", "network.images"],
+  "permissions": ["editor.read", "editor.write", "workspace.read", "workspace.write", "clipboard", "network.images", "navigation.external"],
   "storage_limit": 1024,
   "api": {
     "base": "^1",
@@ -13,11 +13,13 @@
       "ui.native": "^1",
       "ui.richtext": "^1",
       "ui.images": "^1",
+      "ui.links": "^1",
       "editor.documents": "^1",
       "editor.presentation": "^1",
       "editor.edit": "^1",
       "editor.toolbar": "^1",
-      "editor.images": "^1"
+      "editor.images": "^1",
+      "editor.navigation": "^1"
     }
   },
   "panels": [

@@ -140,6 +140,7 @@ impl ExtensionPanel {
                         let network_image_permission = rust_i18n::t!("plugins.permission_network_images");
                         // This grant is scoped to host-owned image inputs, rather than arbitrary file writes.
                         let workspace_write_permission = rust_i18n::t!("plugins.permission_workspace_write");
+                        let external_navigation_permission = rust_i18n::t!("plugins.permission_external_navigation");
                         let explanation = match permission.as_str() {
                             "assets.read" => "读取此插件安装包内的资源文件",
                             "process.exec" => "执行任意本机程序（含交互式终端）：以当前用户权限访问文件与网络，WASM 沙箱不限制这些程序",
@@ -149,6 +150,7 @@ impl ExtensionPanel {
                             "workspace.read" => "读取当前工作区文件",
                             "workspace.write" => workspace_write_permission.as_ref(),
                             "network.images" => network_image_permission.as_ref(),
+                            "navigation.external" => external_navigation_permission.as_ref(),
                             "clipboard" => "读写系统剪贴板",
                             "storage" => "保存插件私有配置与会话数据",
                             _ => permission,

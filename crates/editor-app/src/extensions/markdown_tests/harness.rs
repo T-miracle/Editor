@@ -2,6 +2,34 @@
 use super::*;
 use gpui_kit::VisualTestContext;
 
+/// Inspect the delivered ZIP so all native scenarios execute its real component and resources.
+fn delivered_package() -> Package {
+    Package::read(
+        &PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../dist/plugins/markdown.zip"),
+    )
+    .unwrap()
+}
+
+/// Remove one declared permission before public installation, preserving the actual guest and assets.
+/// A legal smaller declaration lets its SDK operation fail without bypassing startup grant checks.
+pub(super) fn package_without_permission(permission: &str) -> Package {
+    let mut files = delivered_package().files;
+    let mut manifest: serde_json::Value = serde_json::from_slice(&files["manifest.json"]).unwrap();
+    let permissions = manifest["permissions"].as_array_mut().unwrap();
+    let original_len = permissions.len();
+    permissions.retain(|declared| declared.as_str() != Some(permission));
+    assert_eq!(
+        permissions.len() + 1,
+        original_len,
+        "permission was declared once"
+    );
+    files.insert(
+        "manifest.json".into(),
+        serde_json::to_vec(&manifest).unwrap(),
+    );
+    language_tests::packages::repack(files).unwrap()
+}
+
 pub(super) struct NativeMarkdown {
     pub directory: tempfile::TempDir,
     pub manager: plugin_runtime::Manager,
@@ -14,6 +42,16 @@ impl NativeMarkdown {
     pub fn mount<'a>(
         cx: &'a mut TestAppContext,
         files: &[(&str, &str)],
+    ) -> (Self, &'a mut VisualTestContext) {
+        Self::mount_package(cx, files, &delivered_package())
+    }
+
+    /// Mount an inspected real package with exactly its declared grants in an isolated native workspace.
+    /// Package variants enter through Manager.install; no live Store permissions or host API are patched.
+    pub fn mount_package<'a>(
+        cx: &'a mut TestAppContext,
+        files: &[(&str, &str)],
+        package: &Package,
     ) -> (Self, &'a mut VisualTestContext) {
         cx.update(|cx| {
             gpui_kit::init(cx);
@@ -34,12 +72,8 @@ impl NativeMarkdown {
             },
         )
         .unwrap();
-        let package = Package::read(
-            &PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../dist/plugins/markdown.zip"),
-        )
-        .unwrap();
         manager
-            .install(&package, package.manifest.permissions.clone())
+            .install(package, package.manifest.permissions.clone())
             .unwrap();
         let (app, ui) = Self::window(workspace, cx);
         let mut fixture = Self {
@@ -64,6 +98,9 @@ impl NativeMarkdown {
             *capture.borrow_mut() = Some(app.clone());
             Root::new(app, window, cx)
         });
+        // Native focus listeners describe the foreground window; synthetic key input alone does not activate it.
+        ui.update(|window, _| window.activate_window());
+        ui.run_until_parked();
         ui.simulate_resize(size(px(1400.), px(900.)));
         (slot.borrow_mut().take().unwrap(), ui)
     }

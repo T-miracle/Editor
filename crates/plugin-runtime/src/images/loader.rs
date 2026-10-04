@@ -50,14 +50,14 @@ pub(super) fn authorize(identity: &Identity) -> Result<Uri, api::Failure> {
             "workspace.read grant required",
         ));
     }
-    let decoded = decode_path(source)?;
+    let decoded = api::decode_uri_component(source)?;
     if decoded.is_empty()
         || decoded.starts_with('/')
         || decoded.contains(['\\', ':'])
         || decoded.chars().any(char::is_control)
         || source.contains(['?', '#'])
         || Path::new(&decoded).is_absolute()
-        || decoded.split('/').any(device_name)
+        || decoded.split('/').any(api::is_windows_device_segment)
     {
         return Err(failure(
             api::ErrorCode::InvalidPath,
@@ -65,54 +65,6 @@ pub(super) fn authorize(identity: &Identity) -> Result<Uri, api::Failure> {
         ));
     }
     Ok(Uri::Local(decoded))
-}
-
-/// Decode percent escapes once before checking Windows device names, separators and alternate streams.
-fn decode_path(source: &str) -> Result<String, api::Failure> {
-    let bytes = source.as_bytes();
-    let mut decoded = Vec::with_capacity(bytes.len());
-    let mut index = 0;
-    while index < bytes.len() {
-        if bytes[index] == b'%' {
-            let digit = |byte: u8| (byte as char).to_digit(16).map(|value| value as u8);
-            let pair = bytes
-                .get(index + 1..index + 3)
-                .ok_or_else(|| failure(api::ErrorCode::InvalidPath, "Invalid image path escape"))?;
-            let high = digit(pair[0])
-                .ok_or_else(|| failure(api::ErrorCode::InvalidPath, "Invalid image path escape"))?;
-            let low = digit(pair[1])
-                .ok_or_else(|| failure(api::ErrorCode::InvalidPath, "Invalid image path escape"))?;
-            decoded.push(high * 16 + low);
-            index += 3;
-        } else {
-            decoded.push(bytes[index]);
-            index += 1;
-        }
-    }
-    String::from_utf8(decoded)
-        .map_err(|_| failure(api::ErrorCode::InvalidPath, "Image path is not UTF-8"))
-}
-
-/// Reject DOS device spellings on every platform so a portable declaration has one meaning.
-fn device_name(segment: &str) -> bool {
-    let name = segment
-        .trim_end_matches([' ', '.'])
-        .split('.')
-        .next()
-        .unwrap_or("")
-        .to_ascii_uppercase();
-    matches!(
-        name.as_str(),
-        "CON" | "PRN" | "AUX" | "NUL" | "CONIN$" | "CONOUT$"
-    ) || name
-        .strip_prefix("COM")
-        .or_else(|| name.strip_prefix("LPT"))
-        .is_some_and(|number| {
-            matches!(
-                number,
-                "1" | "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9" | "¹" | "²" | "³"
-            )
-        })
 }
 
 pub(super) fn load(

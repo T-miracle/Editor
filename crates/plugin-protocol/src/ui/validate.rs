@@ -106,6 +106,30 @@ impl Validator {
         }
         self.budget(1)?;
         self.id(&node.id)?;
+        if !node.links.is_empty() {
+            if !matches!(
+                node.kind,
+                Kind::RichText { .. } | Kind::Image { .. } | Kind::Text { .. }
+            ) {
+                return Err("Only read-only content can declare native links".into());
+            }
+            if !matches!(node.kind, Kind::RichText { .. }) && node.links.len() > 1 {
+                return Err("An image or alternative text has one native link target".into());
+            }
+            // Focus targets consume the same whole-tree control budget, even inside one rich block.
+            self.budget(node.links.len())?;
+            for link in &node.links {
+                if link.uri.is_empty()
+                    || link.uri.len() > 4096
+                    || link.uri.chars().any(char::is_control)
+                    || link.label.len() > 256
+                {
+                    return Err("Invalid native link target".into());
+                }
+                self.text(&link.uri)?;
+                self.text(&link.label)?;
+            }
+        }
         if let Some(tooltip) = &node.tooltip {
             self.text(tooltip)?;
         }

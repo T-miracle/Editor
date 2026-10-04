@@ -351,6 +351,7 @@ impl Package {
                     "workspace.read",
                     "workspace.write",
                     "network.images",
+                    "navigation.external",
                     "storage",
                     "clipboard",
                     "assets.read",

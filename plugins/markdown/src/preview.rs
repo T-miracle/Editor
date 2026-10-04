@@ -30,14 +30,12 @@ impl Part<'_> {
 
 /// Parse only the approved extensions, then discard the intermediate event tree.
 pub(super) fn blocks(source: &str, locale: &str) -> Vec<ui::Node> {
-    let options =
-        Options::ENABLE_TABLES | Options::ENABLE_TASKLISTS | Options::ENABLE_STRIKETHROUGH;
     let mut stack = vec![Element {
         tag: None,
         range: 0..source.len(),
         children: Vec::new(),
     }];
-    for (event, range) in Parser::new_ext(source, options).into_offset_iter() {
+    for (event, range) in parser(source).into_offset_iter() {
         match event {
             Event::Start(tag) => stack.push(Element {
                 tag: Some(tag),
@@ -64,6 +62,14 @@ pub(super) fn blocks(source: &str, locale: &str) -> Vec<ui::Node> {
         }
     }
     Renderer { locale }.blocks(&stack.pop().unwrap().children)
+}
+
+/// Navigation and visible blocks use exactly the same approved Markdown extensions and source events.
+pub(super) fn parser(source: &str) -> Parser<'_> {
+    Parser::new_ext(
+        source,
+        Options::ENABLE_TABLES | Options::ENABLE_TASKLISTS | Options::ENABLE_STRIKETHROUGH,
+    )
 }
 
 struct Renderer<'a> {

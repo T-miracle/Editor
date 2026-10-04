@@ -3,6 +3,11 @@ use semver::{Version, VersionReq};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
+mod navigation;
+pub use navigation::{
+    NavigationTarget, decode_uri_component, document_relative_path, is_windows_device_segment,
+};
+
 #[cfg(test)]
 mod images_tests;
 
@@ -371,6 +376,12 @@ pub struct DocumentChange {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum EditorOperation {
+    /// Navigate from the exact active source version. Requires `editor.navigation` and `editor.read`;
+    /// relative documents additionally require `workspace.read`, external URLs `navigation.external`.
+    NavigateDocument {
+        document: DocumentVersion,
+        target: NavigationTarget,
+    },
     /// Create an input's bytes beside its bound source document, without overwriting an existing file.
     /// Requires `editor.images`, `editor.read`, `editor.write` and `workspace.write`.
     /// `name` is a basename with the resource's canonical suffix. Conflict retains the input for retry;
@@ -418,6 +429,10 @@ pub enum EditorOperation {
 /// Values describe the actual document and revision observed or saved, rather than an acknowledgement.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum EditorValue {
+    /// Actual identity/version opened by a controlled relative navigation, for optional follow-up anchors.
+    Opened {
+        document: DocumentVersion,
+    },
     /// The complete file was created. `name` is relative to this original document's directory.
     /// A later source change cannot turn this receipt into permission to edit another document.
     ImageSaved {

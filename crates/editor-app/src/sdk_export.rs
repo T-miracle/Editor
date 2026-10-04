@@ -7,6 +7,14 @@ use std::process::Command;
 
 const SDK_FILES: &[(&str, &[u8])] = &[
     (
+        "NAVIGATION.md",
+        include_bytes!("../../plugin-protocol/NAVIGATION.md"),
+    ),
+    (
+        "src/api/navigation.rs",
+        include_bytes!("../../plugin-protocol/src/api/navigation.rs"),
+    ),
+    (
         "MIGRATION.md",
         include_bytes!("../../plugin-protocol/MIGRATION.md"),
     ),

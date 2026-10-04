@@ -31,6 +31,7 @@ impl PluginView {
             .child(body);
         // Popup anchors use this composed view's native origin, never the containing editor window origin.
         let owner = cx.entity().downgrade();
+        let released = cx.entity().downgrade();
         view = view.child(
             gpui_kit::canvas(
                 move |bounds, _, cx| {
@@ -41,7 +42,19 @@ impl PluginView {
                         }
                     });
                 },
-                |_, _, _, _| {},
+                move |_, _, window, _| {
+                    // Every release ends ownership, including releases outside the link's hit box.
+                    // Defer cleanup so Base can consume a matching link release in this dispatch.
+                    let released = released.clone();
+                    window.on_mouse_event(move |_: &gpui_kit::MouseUpEvent, phase, _, cx| {
+                        if phase.capture() {
+                            let released = released.clone();
+                            cx.defer(move |cx| {
+                                let _ = released.update(cx, |view, _| view.link_press = None);
+                            });
+                        }
+                    });
+                },
             )
             .absolute()
             .size_full(),
@@ -247,23 +260,46 @@ impl PluginView {
                         .into_any_element()
                 }
             }
-            Kind::RichText { html } => crate::ui::controls::rich_text_view(
-                native_id.clone(),
-                html.clone(),
-                px(self
-                    .environment
-                    .font_style(&self.plugin, node.theme_role(), false)
-                    .size_px
-                    .unwrap_or(14.)),
-                crate::ui::controls::RichTextColors {
-                    foreground: colors.foreground,
-                    background: colors.background,
-                    border: colors.border,
-                    link: colors.accent,
-                },
-                cx,
-            )
-            .into_any_element(),
+            Kind::RichText { html } => {
+                let owner = cx.entity().downgrade();
+                let revision = self.document.revision;
+                let link_events = self.document.link_events;
+                crate::ui::controls::rich_text_view(
+                    SharedString::from(format!("{native_id}-scene-{revision}")),
+                    html.clone(),
+                    px(self
+                        .environment
+                        .font_style(&self.plugin, node.theme_role(), false)
+                        .size_px
+                        .unwrap_or(14.)),
+                    crate::ui::controls::RichTextColors {
+                        foreground: colors.foreground,
+                        background: colors.background,
+                        border: colors.border,
+                        link: colors.accent,
+                    },
+                    cx,
+                )
+                // Base resolves real link hit targets and selection gestures. No URI is opened here;
+                // a negotiated event reaches the guest and then the versioned native effect boundary.
+                .on_link_click(move |uri, event, _, cx| {
+                    if link_events {
+                        let _ = owner.update(cx, |this, cx| {
+                            if this.accept_link_click(&id, revision, event) {
+                                this.emit_version(
+                                    &id,
+                                    revision,
+                                    Action::Link {
+                                        uri: uri.to_string(),
+                                    },
+                                    cx,
+                                );
+                            }
+                        });
+                    }
+                })
+                .into_any_element()
+            }
             Kind::CodeBlock { text, .. } => {
                 // Each literal line keeps its whitespace; the host never parses guest code as markup.
                 let font = self
@@ -509,9 +545,15 @@ impl PluginView {
             Kind::Spacer => div().min_h(px(8.)).into_any_element(),
         };
         let debug_id = format!("plugin-ui-{}", node.id);
+        let content = self.linked_content(content, node, disabled, window, cx);
+        let owner = cx.entity().downgrade();
+        let block = node.id.clone();
+        let revision = self.document.revision;
+        let pressed_node = node.id.clone();
         self.font(
             div()
                 .id(SharedString::from(format!("plugin-ui-{}-wrapper", node.id)))
+                .relative()
                 .debug_selector(move || debug_id.clone())
                 .flex()
                 .flex_col()
@@ -527,7 +569,34 @@ impl PluginView {
                 .bg(colors.background)
                 .text_color(colors.foreground)
                 .when(disabled, |v| v.opacity(0.5))
-                .child(content),
+                .child(content)
+                .when(
+                    self.document.link_events
+                        && matches!(node.kind, Kind::RichText { .. })
+                        && !disabled,
+                    |view| {
+                        view.capture_any_mouse_down(cx.listener(move |this, event, _, _| {
+                            this.press_link(&pressed_node, revision, event);
+                        }))
+                    },
+                )
+                .when(
+                    node.source_range.is_some() || !node.links.is_empty(),
+                    |view| {
+                        view.child(
+                            gpui_kit::canvas(
+                                move |bounds, _, cx| {
+                                    let _ = owner.update(cx, |this, cx| {
+                                        this.measure_block(&block, revision, bounds, cx);
+                                    });
+                                },
+                                |_, _, _, _| {},
+                            )
+                            .absolute()
+                            .size_full(),
+                        )
+                    },
+                ),
             node.theme_role(),
         )
         .into_any_element()

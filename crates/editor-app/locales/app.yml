@@ -50,6 +50,12 @@ plugins.permission_network_images:
 plugins.permission_workspace_write:
   en: "Save pasted or dropped images as new files beside their bound document, without overwriting files"
   zh-CN: "将粘贴或拖入的图片保存为绑定文档同级的新文件，不覆盖已有文件"
+plugins.permission_external_navigation:
+  en: "Open clicked HTTP(S) links through the system browser"
+  zh-CN: "通过系统浏览器打开用户点击的 HTTP(S) 链接"
+preview.open_link:
+  en: "Open link"
+  zh-CN: "打开链接"
 preview.source_mode:
   en: "Editor only"
   zh-CN: "仅编辑"

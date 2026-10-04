@@ -1,5 +1,7 @@
 # 插件原生界面协议 v1
 
+`ui.links ^1` 允许 `Document.link_events` 启用实际富文本链接事件 `Action::Link { uri }`；默认惰性，不在解析或绘制时打开地址。节点、UI revision、模态、禁用与实例归属门禁仍有效。事件与版本化 `editor.navigation` 请求的权限、目标及取消契约见 [NAVIGATION.md](NAVIGATION.md)。
+
 ## 可组合布局（清单 protocol 7）
 
 `ui.collections ^1` 增加 `Kind::SideTabs` 与 `Document.menu`。SideTabs 是普通布局节点，可在行列树任意位置组合；节点 ID 与集合 ID 相同，条目动作仍按稳定 ID 返回。插件通过节点宽度响应 `Resize(width)`，相邻画布会得到独立的实际尺寸测量。PopupMenu 锚点相对文档，覆盖正文、不占布局空间；显示时只接受该菜单的选择或关闭，Dialog 优先。
@@ -80,6 +82,8 @@
 插件生成的提示、图片替代说明和空状态应跟随 `Environment.locale`，同时保留中英文。该字段在 Prepare 时提供，并随 `Notification::Theme` 更新；缺失或空值沿用既有简体中文默认，不从工作区文件推断用户界面语言。
 
 富文本控件必须覆盖默认链接点击与图片资源加载回调：出现 `href` 或 `src` 不自动打开浏览器，不读取本地文件、网络或 data URL，也不借用宿主加载器绕过插件权限。这一能力本身不提供链接导航、图片访问或预览写入。授权图片使用独立 Image 节点，缺少该能力时插件以替代文字表示图片。任务框通过普通原生 `Checkbox` 节点表达；只读任务应设置 `disabled=true`，不能依赖 HTML `<input>` 自动变成可交互控件。
+
+需要链接交互时另行协商 `ui.links`，显式开启 `Document.link_events`，并用 `Node.links` 提供图片外层链接与文字键盘目标。声明不会获得浏览器或文件授权；版本化事件、原生焦点与共享配额见 [NAVIGATION.md](NAVIGATION.md)。
 
 `CodeBlock.text` 是无需转义的原始代码，空白与换行按原样显示；可选 `language` 是 1–100 个 ASCII 字母、数字或 `._+-#` 的标识，允许 `c++`、`c#` 等名称。它不启动工具，不授予高亮能力；当前基础呈现是等宽文字，后续高亮只能复用已启用的语言提供者。
 

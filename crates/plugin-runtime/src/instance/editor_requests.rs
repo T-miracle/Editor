@@ -24,6 +24,29 @@ impl State {
             ));
         }
         let (capability, permission) = match &operation {
+            EditorOperation::NavigateDocument { target, .. } => {
+                target.validate()?;
+                if !self.permissions.contains("editor.read") {
+                    return Err(Failure::new(
+                        ErrorCode::PermissionDenied,
+                        "Navigation requires editor.read",
+                    ));
+                }
+                let permission = match target {
+                    api::NavigationTarget::PreviewNode { panel, .. } => {
+                        if !self.declared_editor_panels.contains(panel) {
+                            return Err(Failure::new(
+                                ErrorCode::PermissionDenied,
+                                "Navigation panel is not owned by this instance",
+                            ));
+                        }
+                        "editor.read"
+                    }
+                    api::NavigationTarget::RelativeDocument { .. } => "workspace.read",
+                    api::NavigationTarget::ExternalUrl { .. } => "navigation.external",
+                };
+                ("editor.navigation", permission)
+            }
             EditorOperation::SaveImageInput { .. } => ("editor.images", "workspace.write"),
             EditorOperation::ReadDocumentSelection { .. } => ("editor.edit", "editor.read"),
             EditorOperation::ReplaceDocumentRange { .. } => ("editor.edit", "editor.write"),

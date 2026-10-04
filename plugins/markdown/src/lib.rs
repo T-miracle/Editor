@@ -10,6 +10,7 @@ use std::cell::RefCell;
 mod format;
 mod formatting;
 mod imports;
+mod navigation;
 mod preview;
 mod tasks;
 mod toolbar;
@@ -30,6 +31,9 @@ struct State {
     formatting: formatting::Formatting,
     /// Image imports preserve complete-file receipts independently of the current source snapshot.
     imports: imports::Imports,
+    /// Links keep separate task correlation and feedback without changing document text or undo history.
+    navigation: navigation::Navigation,
+    navigation_index: navigation::Index,
     revision: u64,
 }
 
@@ -57,6 +61,7 @@ impl Guest for MarkdownPlugin {
                         }
                         state.formatting.source_changed();
                         state.imports.superseded();
+                        state.navigation.reset();
                         *state = State {
                             environment,
                             ..Default::default()
@@ -104,6 +109,7 @@ impl State {
                 if changed {
                     self.formatting.source_changed();
                     self.imports.source_changed();
+                    self.navigation.source_changed(document.as_ref());
                 }
                 self.source = document.map(|version| Source { version, text });
                 self.refresh();
@@ -143,9 +149,16 @@ impl State {
                 let formatting_changed =
                     self.formatting
                         .request(&event, self.source.as_ref(), english);
-                // Both owners inspect correlation; short-circuiting would strand an import's file receipt.
+                // Each owner inspects correlation; short-circuiting would strand an import's file receipt.
                 let imports_changed = self.imports.request(&event, self.source.as_ref(), english);
-                if formatting_changed || imports_changed {
+                let navigation_changed = self.navigation.request(
+                    &event,
+                    self.source.as_ref(),
+                    &self.navigation_index,
+                    &self.blocks,
+                    self.revision,
+                );
+                if formatting_changed || imports_changed || navigation_changed {
                     self.revision = self.revision.saturating_add(1);
                 }
             }
@@ -154,7 +167,7 @@ impl State {
         }
     }
 
-    /// File-scoped actions bind to the current UI revision before resolving a parsed task or toolbar intent.
+    /// File-scoped actions bind to the current UI revision before resolving a parsed task, link or toolbar intent.
     /// A valid new text intent stops later image insertion while accepted image saves retain their receipts.
     fn ui_event(&mut self, event: ui::UiEvent) {
         if event.revision != self.revision {
@@ -179,6 +192,14 @@ impl State {
                 let imports_changed = self.imports.superseded();
                 self.formatting.start_task(change, Some(source)) || imports_changed
             }
+            ui::Action::Link { uri } => self.navigation.start(
+                &self.navigation_index,
+                &self.blocks,
+                self.source.as_ref(),
+                &event.node,
+                &uri,
+                self.revision,
+            ),
             _ => false,
         };
         // Acceptance alone keeps the revision stable so a newer fast action can replace the pending intent.
@@ -192,27 +213,58 @@ impl State {
         self.blocks = self.source.as_ref().map_or_else(Vec::new, |source| {
             preview::blocks(&source.text, &self.environment.locale)
         });
+        self.navigation_index = self
+            .source
+            .as_ref()
+            .map_or_else(navigation::Index::default, |source| {
+                navigation::Index::parse(&source.text)
+            });
+        // Final source-mapped leaves supply both pointer and keyboard targets, including linked native images.
+        self.navigation_index.annotate(&mut self.blocks);
         self.revision = self.revision.saturating_add(1);
+        if self.navigation.preview(
+            self.source.as_ref(),
+            &self.navigation_index,
+            &self.blocks,
+            self.revision,
+        ) {
+            self.revision = self.revision.saturating_add(1);
+        }
     }
 
     /// Stable container IDs retain native scroll state while every content block carries its source range.
     fn view(&self) -> api::View {
+        let english = self.environment.locale.starts_with("en");
+        let navigation_message = self.navigation.message(self.source.as_ref(), english);
+        // Navigation failures remain visible when the source toolbar is hidden or the document is scrolled.
+        // Both ordinary content and the quota fallback keep this readonly, source-bound header outside the scroll.
+        let preview_root = |body| {
+            let mut children = Vec::new();
+            if let Some(message) = navigation_message {
+                children.push(ui::Node::text("preview-navigation-feedback", message).padding(12.));
+            }
+            children.push(ui::Node::scroll("preview-scroll", body).grow());
+            ui::Node::column("preview-root", children).grow()
+        };
         let body = ui::Node::column("preview-body", self.blocks.clone())
             .padding(12.)
             .gap(8.);
-        let mut document = ui::Document::new(ui::Node::scroll("preview-scroll", body).grow())
-            .revision(self.revision);
+        let mut document = ui::Document::new(preview_root(body)).revision(self.revision);
         document.source = self.source.as_ref().map(|source| source.version.clone());
         document.editor_image_input = self.source.is_some();
+        document.link_events = self.source.is_some();
         if self.source.is_some() {
-            let english = self.environment.locale.starts_with("en");
             let import_message = self.imports.message(self.source.as_ref(), english);
-            // A format failure and an external-file receipt are independent outcomes; show both when needed.
-            let messages = [self.formatting.message(english), import_message.as_deref()]
-                .into_iter()
-                .flatten()
-                .collect::<Vec<_>>()
-                .join("\n");
+            // Text failures, navigation failures and external-file receipts are independent outcomes.
+            let messages = [
+                self.formatting.message(english),
+                import_message.as_deref(),
+                navigation_message,
+            ]
+            .into_iter()
+            .flatten()
+            .collect::<Vec<_>>()
+            .join("\n");
             document.editor_toolbar = Some(toolbar::node(
                 english,
                 (!messages.is_empty()).then_some(messages.as_str()),
@@ -221,20 +273,18 @@ impl State {
         // A large or deeply nested document should leave the guest alive and preserve its source authority.
         // The same public quotas apply to this preview and every other native plugin view.
         if document.validate().is_err() {
-            let message = if self.environment.locale.starts_with("en") {
+            let message = if english {
                 "This document exceeds the native preview limits."
             } else {
                 "此文档超出原生预览限制。"
             };
-            document.root = ui::Node::scroll(
-                "preview-scroll",
+            document.root = preview_root(
                 ui::Node::column(
                     "preview-body",
                     vec![ui::Node::text("preview-limit", message)],
                 )
                 .padding(12.),
-            )
-            .grow();
+            );
         }
         api::View {
             panel: "preview".into(),
