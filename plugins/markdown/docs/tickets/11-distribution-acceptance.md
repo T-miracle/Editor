@@ -1,6 +1,6 @@
 # 11 — 随编辑器交付默认可用的完整 Markdown 插件
 
-**Status:** verified — 2026-10-04 实现与验收通过，最终正式 ZIP 完整原生组 62/62、0 ignored；Git 交付及 #37 关闭待读回。开工前直接前置 #32–#36 closed / completed；固定审查基线为 10 的 67331885717aa80a0366d029a56954a16ed5cc2b。
+**Status:** done — 2026-10-04 实现与验收通过，最终正式 ZIP 完整原生组 62/62、0 ignored；普通提交 `6819d221a7253a8755947784a42fcf82452f85e6` 已推送并读回，#37 closed / completed。最终独立 GET 读回 #27–#37 全部完成，父方案 #26 保持 open。固定审查基线为 10 的 67331885717aa80a0366d029a56954a16ed5cc2b。
 
 **GitHub:** [#37](https://github.com/T-miracle/Editor/issues/37)；父方案 [#26](https://github.com/T-miracle/Editor/issues/26)。
 

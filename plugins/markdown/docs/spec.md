@@ -2,7 +2,7 @@
 
 日期：2026-10-03。稳定标识：`markdown-plugin`。
 
-状态：全部 11 张工单实现与验收已通过；01–10 已交付关闭，11 的 Git 交付及关闭待读回。Markdown 0.11.0 的 M01–M16 完整正式包原生组为 62/62、0 ignored，详见[最终验收](verification/11-distribution-acceptance.md)。总方案 [#26](https://github.com/T-miracle/Editor/issues/26)，工单 #27–#37。验收更新日期：2026-10-04。
+状态：全部 11 张工单实现、验收、独立审查和 Git 交付已完成；2026-10-04 最终独立读回 #27–#37 全部 closed / completed。Markdown 0.11.0 的 M01–M16 完整正式包原生组为 62/62、0 ignored，提交、推送及关闭证据详见[最终验收](verification/11-distribution-acceptance.md)。总方案 [#26](https://github.com/T-miracle/Editor/issues/26) 保持 open。验收更新日期：2026-10-04。
 
 依据：本轮 grill-me / grilling 访谈，按 to-spec 模板整理。遵守[插件平台规格](../../../docs/specs/plugin-api-platform.md)与[项目需求基线](../../../docs/需求整理.md)。按用户明确要求，本插件总方案、工单与验收资料保存在插件目录内，中央插件文档仅维护入口。链接使用仓库实际跟踪的资料，不依赖其他任务的重归档副本。参见[工单目录](tickets/README.md)与[AI 执行入口](../AGENTS.md)。
 

@@ -1,6 +1,6 @@
 # 11 — 默认交付与完整组合验收
 
-状态：实现与验收通过，Git 交付及 tracker 关闭待读回。固定审查基线 `67331885717aa80a0366d029a56954a16ed5cc2b`；Markdown `0.11.0`、protocol 7、公开能力 1.x，独立 SDK 示例 `0.15.8`。2026-10-04 开工前独立 GET 读回 #27–#36 均为 `closed / completed`、#37 为 open；父方案 #26 保持 open。
+状态：已完成，实现、验收、独立审查、普通提交、推送及 tracker 关闭均已读回。固定审查基线 `67331885717aa80a0366d029a56954a16ed5cc2b`；Markdown `0.11.0`、protocol 7、公开能力 1.x，独立 SDK 示例 `0.15.8`。2026-10-04 最终独立 GET 读回 #27–#37 均为 `closed / completed`；父方案 #26 保持 open。交付提交与时间见下文。
 
 ## 本单行为
 
@@ -84,6 +84,14 @@ SDK 摘要为 `cc5c5f132b293e67927196f5fa7e12d062108ae96bd9addc0ad63abd76049dc8`
 2026-10-04，独立 Standards 与 Spec 代理分别从固定基线 `67331885717aa80a0366d029a56954a16ed5cc2b` 审查本单 30 个跟踪差异块与 14 个新增文件，并读取最终完整原生日志、测试前后产物绑定及 SDK／资源／仓库门禁证据。最终签收：硬规范 0 项未解决问题，Fowler 0 项发现；Spec 0 项未解决问题，无要求缺失、部分实现、范围蔓延或遗留错误实现。
 
 两条轴均确认正式包的 62 passed、0 failed、0 ignored 与完整哈希一致，末尾标题缩窗断言已按批准的内容块同步行为修正。审查代理只读检查，未运行 Cargo、执行 Git 或修改文件；Git 交付与 issue 关闭由主代理随后执行并单独读回。
+
+## Git 与 tracker 交付
+
+本单普通提交为 [`6819d221a7253a8755947784a42fcf82452f85e6`](https://github.com/T-miracle/Editor/commit/6819d221a7253a8755947784a42fcf82452f85e6)，提交信息 `feat(markdown): bundle support and verify the complete editing workflow`。`git push origin codex/markdown-plugin` 成功，随后 `git ls-remote --heads origin refs/heads/codex/markdown-plugin` 在 `2026-10-04T09:06:39Z` 独立读回同一完整 SHA；证据为 `target/11-feature-push-readback.json`。
+
+核对 [#37](https://github.com/T-miracle/Editor/issues/37) 的数据库 ID `5690699674` 后，仅将该工单设为 `closed / completed`，关闭时间 `2026-10-04T09:07:27Z`。随后对 #26–#37 分别发起独立 GET，最终读回时间 `09:07:35Z`：全部 11 张工单 #27–#37 均已完成；[父方案 #26](https://github.com/T-miracle/Editor/issues/26) 仍为 open，更新时间仍为 `2026-10-03T14:51:53Z`。证据为 `target/11-tracker-final-readback.json`。未修改父方案、强推、重写历史或发布 Release。
+
+该提交仅包含本单明确归属的 44 个文件；工作区既有 `docs/agents/` 改动、根 `AGENTS.md`、项目资料和其他归档副本均未提交。关闭读回后更新总方案、工单和验收索引，纯文档收尾再次检查链接与 diff。
 
 ## 平台与交付限制
 
