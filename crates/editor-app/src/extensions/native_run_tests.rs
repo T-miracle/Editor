@@ -263,6 +263,73 @@ fn native_run_control_starts_a_real_program_and_shows_its_session(cx: &mut TestA
     assert!(cx.debug_bounds("plugin-ui-output").is_none());
 }
 
+/// Leaving with a running program stops it through the provider before the host shuts down.
+#[gpui::test]
+#[ignore = "build terminal and capability-example through the public SDK first"]
+fn leaving_stops_every_run_session_before_shutdown(cx: &mut TestAppContext) {
+    let root = tempfile::tempdir().unwrap();
+    let (mut manager, app, cx) = fixture(
+        cx,
+        root.path(),
+        "powershell.exe",
+        vec![
+            "-NoProfile".into(),
+            "-Command".into(),
+            "Start-Sleep -Seconds 60".into(),
+        ],
+    );
+    let mut renderer = images::VectorRenderer::default();
+    cx.update(|window, cx| {
+        app.update(cx, |app, cx| app.start_selected_run(window, cx));
+    });
+    let mut launches = Vec::new();
+    let mut session = None;
+    for _ in 0..200 {
+        pump_recording(&mut manager, &app, cx, &mut launches);
+        manager.poll();
+        publish_with_launches(&mut manager, &mut renderer, &app, cx, &launches);
+        if let Some((id, _, _)) = launches.first()
+            && manager
+                .execution(*id)
+                .is_some_and(|session| session.snapshot().provider_session.is_some())
+        {
+            session = Some(*id);
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    let session = session.expect("the run control started one session");
+    assert_eq!(manager.live["terminal"].process_count(), 2);
+
+    // The close is refused while a decision is pending, then confirmed by the user.
+    let refused = cx.update(|_, cx| app.update(cx, |app, cx| app.should_close_window(cx)));
+    assert!(!refused);
+    cx.update(|_, cx| app.update(cx, |app, cx| app.confirm_leave(cx)));
+
+    // Every active session was asked to stop through its own provider, not terminated by the host.
+    let stops = cx.update(|_, cx| {
+        app.read(cx)
+            .extensions
+            .read(cx)
+            .worker
+            .recorded
+            .lock()
+            .unwrap()
+            .try_iter()
+            .filter_map(|work| match work {
+                Work::StopRun { session, .. } => Some(session),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+    });
+    assert_eq!(stops, vec![session]);
+    // The configuration this test stored host-locally is removed with it.
+    let stored = cx.update(|_, cx| {
+        editor_core::storage_path(&app.read(cx).workspace_key()).expect("host-local path")
+    });
+    let _ = std::fs::remove_file(stored);
+}
+
 /// A restricted workspace never starts a program, whatever the stored configuration says.
 #[gpui::test]
 fn a_restricted_workspace_refuses_to_launch_from_the_run_control(cx: &mut TestAppContext) {

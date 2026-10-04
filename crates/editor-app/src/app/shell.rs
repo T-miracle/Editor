@@ -505,6 +505,10 @@ impl Render for EditorApp {
                     ),
             )
             .child(self.render_plugin_popup_blocker(cx))
+            // A pending leave decision covers the shell until the user keeps or stops the sessions.
+            .when_some(self.render_leave_confirmation(cx), |shell, confirm| {
+                shell.child(confirm)
+            })
             .child(self.render_plugin_popup(window, cx))
             .child(self.render_explorer_menu(window, cx))
             .child(self.render_explorer_edit(cx))

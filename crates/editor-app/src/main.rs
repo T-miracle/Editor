@@ -201,6 +201,14 @@ struct EditorApp {
     /// Native configuration window handle and its close subscription.
     run_dialog: Option<(Entity<app_dialog::AppDialog>, WindowHandle<Root>)>,
     _run_dialog_closed: Option<Subscription>,
+    /// Editor window handle, used to continue a close the user has confirmed.
+    ///
+    /// The platform reports an untyped handle, which is downcast only where the close continues.
+    main_window: Option<gpui_kit::AnyWindowHandle>,
+    /// Set once the user has decided to leave with run sessions still active.
+    leave_confirmed: bool,
+    /// Sessions the leave confirmation is asking about; `None` while no decision is pending.
+    leave_confirm: Option<Vec<u64>>,
     _tree_subscription: Subscription,
     _dock_subscription: Subscription,
     _bounds_subscription: Option<Subscription>,
@@ -252,9 +260,16 @@ impl EditorApp {
     ) -> Self {
         let (file_watch, mut watch_updates) = FileWatch::start(workspace.clone());
         let closing = cx.entity().downgrade();
-        window.on_window_should_close(cx, move |_, cx| {
-            let _ = closing.update(cx, |app, cx| app.shutdown_plugins(cx));
-            false
+        window.on_window_should_close(cx, move |window, cx| {
+            // The gate answers the platform, where `false` keeps the window open. Closing with managed
+            // work in flight asks the user first instead of discarding a running program silently.
+            let handle = window.window_handle();
+            closing
+                .update(cx, |app, cx| {
+                    app.main_window = Some(handle);
+                    app.should_close_window(cx)
+                })
+                .unwrap_or(true)
         });
         let editor = cx.new(|cx| {
             EditorState::new(window, cx)
@@ -436,6 +451,9 @@ impl EditorApp {
             run_form: None,
             run_dialog: None,
             _run_dialog_closed: None,
+            main_window: None,
+            leave_confirmed: false,
+            leave_confirm: None,
             _tree_subscription: tree_subscription,
             _dock_subscription: dock_subscription,
             _bounds_subscription: None,

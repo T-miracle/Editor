@@ -138,7 +138,76 @@ fn the_run_configuration_dialog_owns_a_b1_draft(cx: &mut TestAppContext) {
     }));
 }
 
-/// Launch preparation saves modified documents first and refuses to run stale code.
+/// Leaving with a running program asks first, and cancelling keeps both the project and the program.
+#[gpui::test]
+fn closing_with_a_running_session_asks_before_leaving(cx: &mut TestAppContext) {
+    let root = tempfile::tempdir().unwrap();
+    let workspace = root.path().join("project");
+    std::fs::create_dir_all(&workspace).unwrap();
+    let key = std::fs::canonicalize(&workspace)
+        .unwrap()
+        .display()
+        .to_string();
+    let stored = store_configuration(&key, "本机程序");
+    let (app, cx) = open_editor(cx, &workspace);
+    // A running session is what makes leaving a decision rather than an accident.
+    let session = cx.update(|_, cx| {
+        let id = app.read(cx).run_controls.selected().unwrap().id.clone();
+        let request_id = app.update(cx, |app, cx| {
+            let request_id = app.run_controls.begin(&id);
+            cx.notify();
+            request_id
+        });
+        request_id
+    });
+    // The runtime answer is published the way the worker publishes it.
+    let config = cx.update(|_, cx| app.read(cx).run_controls.selected().unwrap().id.clone());
+    cx.update(|_, cx| {
+        app.update(cx, |app, cx| {
+            app.run_controls
+                .reconcile(&[crate::extensions::HostRunSnapshot {
+                    id: 41,
+                    config: config.clone(),
+                    request_id: session,
+                    plugin: "terminal".into(),
+                    state: plugin_runtime::ExecutionState::Running,
+                    provider_session: Some("7".into()),
+                    failure: None,
+                }]);
+            cx.notify();
+        });
+    });
+    assert_eq!(
+        cx.update(|_, cx| app.read(cx).run_controls.active_sessions().len()),
+        1
+    );
+
+    // The window's close request is refused while the decision is pending.
+    let first = cx.update(|_, cx| app.update(cx, |app, cx| app.should_close_window(cx)));
+    assert!(!first, "the window stays open until the user decides");
+    cx.run_until_parked();
+    let pending = cx.update(|_, cx| app.read(cx).leave_confirm.clone());
+    assert_eq!(pending.as_deref(), Some([41u64].as_slice()));
+    // The card is part of the shell, so the decision is visible rather than silent.
+    assert!(cx.debug_bounds("run-leave-confirm").is_some());
+
+    // Cancelling keeps the session running and the window open.
+    cx.update(|_, cx| app.update(cx, |app, cx| app.cancel_leave(cx)));
+    assert!(cx.update(|_, cx| app.read(cx).leave_confirm.is_none()));
+    assert_eq!(
+        cx.update(|_, cx| app.read(cx).run_controls.active_sessions().len()),
+        1,
+        "cancelling never stops a program"
+    );
+    let second = cx.update(|_, cx| app.update(cx, |app, cx| app.should_close_window(cx)));
+    assert!(
+        !second,
+        "a second close attempt asks again instead of leaving"
+    );
+
+    let _ = std::fs::remove_file(stored);
+}
+
 #[gpui::test]
 fn a_launch_saves_modified_documents_before_starting(cx: &mut TestAppContext) {
     let root = tempfile::tempdir().unwrap();

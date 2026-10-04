@@ -297,6 +297,25 @@ impl RunControls {
         self.stops.iter().any(|stop| stop.config == config)
     }
 
+    /// Whether leaving now would abandon managed work: a running session or an unanswered start.
+    ///
+    /// This is what the window asks before closing, so leaving with active programs is a decision the
+    /// user makes rather than something that happens while they are editing.
+    pub fn has_work_in_flight(&self) -> bool {
+        !self.pending.is_empty()
+            || !self.stops.is_empty()
+            || self.sessions.values().any(|session| session.is_active())
+    }
+
+    /// Every session that would be left behind, for the confirmation text.
+    pub fn active_session_ids(&self) -> Vec<u64> {
+        self.sessions
+            .values()
+            .filter(|session| session.is_active())
+            .map(|session| session.id)
+            .collect()
+    }
+
     /// Accept the answers to stop requests this editor made; each answer is reported once.
     ///
     /// An answer belonging to a stop this editor did not request is ignored, so one window never

@@ -11,7 +11,7 @@ use crate::ui::controls::{Button, DialogContent};
 // The crate root already selects the same widget and styling traits the rest of the shell uses.
 use crate::*;
 use gpui_base::input::{Input as BaseInput, InputEvent, InputState};
-use gpui_kit::{WeakEntity, Window, div, px};
+use gpui_kit::{AnyElement, WeakEntity, Window, div, px};
 use rust_i18n::t;
 use sha2::{Digest, Sha256};
 
@@ -243,6 +243,119 @@ impl EditorApp {
     /// Whether this workspace may start programs at all; a restricted workspace never launches.
     pub(crate) fn run_permitted(&self, cx: &Context<Self>) -> bool {
         self.extensions.read(cx).workspace_trusted()
+    }
+
+    /// Answer the window's close request.
+    ///
+    /// Returning `false` keeps the window open. With managed work in flight the user is asked first,
+    /// so an active program is never discarded by a stray close; a confirmed leave stops every
+    /// session through its own provider and then shuts the host down.
+    pub(crate) fn should_close_window(&mut self, cx: &mut Context<Self>) -> bool {
+        if self.leave_confirmed {
+            self.shutdown_plugins(cx);
+            return true;
+        }
+        if !self.run_controls.has_work_in_flight() {
+            self.shutdown_plugins(cx);
+            return true;
+        }
+        if self.leave_confirm.is_none() {
+            self.leave_confirm = Some(self.run_controls.active_session_ids());
+        }
+        cx.notify();
+        false
+    }
+
+    /// Leave after stopping every run session through the provider that owns it.
+    pub(crate) fn confirm_leave(&mut self, cx: &mut Context<Self>) {
+        // Stopping is requested per session; the window does not wait for each answer, because a
+        // provider that has already exited cannot answer and the host is leaving anyway.
+        for session in self.run_controls.active_sessions() {
+            let request_id = self.run_controls.begin_stop(&session.config, session.id);
+            let _ = self.extensions.read(cx).stage_host_run(Work::StopRun {
+                session: session.id,
+                config: session.config.clone(),
+                request_id,
+            });
+        }
+        self.leave_confirmed = true;
+        self.leave_confirm = None;
+        cx.notify();
+        // The close is attempted again now that the decision is recorded.
+        if let Some(window) = self.main_window {
+            let _ = window.update(cx, |_, window, _| window.remove_window());
+        }
+    }
+
+    /// Keep the current project open and the sessions running.
+    pub(crate) fn cancel_leave(&mut self, cx: &mut Context<Self>) {
+        // Sessions and plugins are untouched: cancelling means continuing exactly as before.
+        self.leave_confirm = None;
+        self.leave_confirmed = false;
+        cx.notify();
+    }
+
+    /// The leave confirmation card, shown above the shell while a decision is pending.
+    pub(crate) fn render_leave_confirmation(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let sessions = self.leave_confirm.as_ref()?;
+        let count = sessions.len();
+        Some(
+            div()
+                .debug_selector(|| "run-leave-confirm".into())
+                .absolute()
+                .left(px(0.))
+                .top(px(0.))
+                .size_full()
+                .flex()
+                .items_center()
+                .justify_center()
+                // The card blocks the shell until the user decides, but owns no modal window.
+                .bg(gpui_kit::Hsla {
+                    a: 0.35,
+                    ..cx.theme().background
+                })
+                .child(
+                    v_flex()
+                        .id("run-leave-confirm-card")
+                        .w(px(420.))
+                        .gap_3()
+                        .p_4()
+                        .rounded(px(8.))
+                        .border_1()
+                        .border_color(cx.theme().border)
+                        .bg(cx.theme().popover)
+                        .text_color(cx.theme().popover_foreground)
+                        .shadow_lg()
+                        .child(div().font_semibold().child("仍有正在运行的程序"))
+                        .child(div().child(format!(
+                            "关闭窗口会先停止 {count} 个运行会话。取消可保留它们继续运行。"
+                        )))
+                        .child(
+                            h_flex()
+                                .gap_2()
+                                .justify_end()
+                                .child(
+                                    div()
+                                        .id("run-leave-cancel")
+                                        .debug_selector(|| "run-leave-cancel".into())
+                                        .child("取消")
+                                        .on_click(
+                                            cx.listener(|this, _, _, cx| this.cancel_leave(cx)),
+                                        ),
+                                )
+                                .child(
+                                    div()
+                                        .id("run-leave-confirm-accept")
+                                        .debug_selector(|| "run-leave-confirm-accept".into())
+                                        .child("停止并关闭")
+                                        .on_click(
+                                            cx.listener(|this, _, _, cx| this.confirm_leave(cx)),
+                                        ),
+                                ),
+                        ),
+                )
+                .into_any_element(),
+        )
     }
 
     /// The workspace key used for host-local configuration storage.
