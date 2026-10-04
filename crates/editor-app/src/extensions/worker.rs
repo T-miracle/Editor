@@ -44,6 +44,12 @@ impl RunStatus {
             // A program that ended without a status of its own is still an end, but the caller must
             // not read a success into it.
             Some("ended") => Self::Ended { code: None },
+            // A program the caller stopped has no exit status of its own. The execution contract's
+            // providers report exactly this word — the terminal provider answers a stop with it — and
+            // without this arm a stop would arrive as `Unknown`, which is the same thing the editor
+            // says when a provider cannot answer at all. The two are different facts: one is a program
+            // that ended because it was told to, the other is one nobody can describe.
+            Some("stopped") => Self::Terminated,
             _ => Self::Unknown,
         }
     }

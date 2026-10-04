@@ -4,6 +4,45 @@ use serde_json::json;
 use sha2::{Digest, Sha256};
 use std::io::{Read, Write};
 
+/// A program the caller stopped is not the same fact as one nobody can describe.
+///
+/// The vocabulary here is the execution contract's, and the terminal provider answers a stop with
+/// `stopped`. Without an arm for that word the editor read it as `Unknown` — the same thing it says
+/// when a provider cannot answer at all — and the sequence's `Terminated` outcome was unreachable from
+/// any real answer, so a preparation stopped by the user reached it as an unexplained failure.
+#[test]
+fn a_stopped_program_is_terminated_rather_than_unknown() {
+    // The four states the terminal provider's status call can report, and what each means here.
+    assert_eq!(
+        RunStatus::from_value(&json!({"state": "running"})),
+        RunStatus::Running
+    );
+    assert_eq!(
+        RunStatus::from_value(&json!({"state": "exited", "code": 3})),
+        RunStatus::Ended { code: Some(3) }
+    );
+    assert_eq!(
+        RunStatus::from_value(&json!({"state": "ended"})),
+        RunStatus::Ended { code: None },
+        "an end with no status of its own is an end, never a success"
+    );
+    assert_eq!(
+        RunStatus::from_value(&json!({"state": "stopped"})),
+        RunStatus::Terminated,
+        "a stopped program is terminated, not unknown"
+    );
+    // Anything the contract does not define stays unknown rather than being read as an ending.
+    assert_eq!(
+        RunStatus::from_value(&json!({"state": "something-new"})),
+        RunStatus::Unknown
+    );
+    assert_eq!(
+        RunStatus::from_value(&json!({})),
+        RunStatus::Unknown,
+        "an answer with no state describes nothing"
+    );
+}
+
 /// Native batches cannot accumulate while the worker is busy, and dropping rejected work restores capacity.
 #[test]
 fn image_offer_queue_releases_capacity_on_rejection_and_shutdown() {
