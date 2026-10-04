@@ -9,6 +9,30 @@ use std::{
 
 pub const CONTRACT: &str = "interactive.execute";
 
+/// The same declaration with the provider's authority removed.
+///
+/// A method's `permissions` state what a *provider* must be granted, and admission requires them to
+/// be a subset of the package that declares them. A consumer stating what it requires is not asking
+/// for that authority — it is asking that the provider have it — so copying the field into a
+/// requirement compiles only while it happens to match, which is why this exists rather than a
+/// per-call edit.
+pub fn as_requirement(methods: Value) -> Value {
+    let Value::Object(methods) = methods else {
+        return methods;
+    };
+    Value::Object(
+        methods
+            .into_iter()
+            .map(|(name, mut method)| {
+                if let Value::Object(fields) = &mut method {
+                    fields.remove("permissions");
+                }
+                (name, method)
+            })
+            .collect(),
+    )
+}
+
 /// This fixture declaration is an independent consumer's expectation of execution service 1.3.
 ///
 /// `stop` and `status` are declared here too: a consumer that promises to end a program and to
@@ -250,6 +274,82 @@ pub fn debug_provider(id: &str, omit: &[&str]) -> Package {
     archive(files, manifest)
 }
 
+/// A consumer that requires the host's session contract as well as an execution provider.
+///
+/// The example guest already knows how to call a contract by name, so this only states what it is
+/// allowed to open; it is a real package built from the public SDK, not a stub.
+pub fn session_consumer(id: &str) -> Package {
+    let files = Package::read(
+        &Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../target/plugin-api-test/capability-example.zip"),
+    )
+    .unwrap()
+    .files;
+    let mut manifest: Value = serde_json::from_slice(&files["manifest.json"]).unwrap();
+    manifest["id"] = json!(id);
+    manifest["name"] = json!(id);
+    manifest["settings_hook"] = json!(false);
+    manifest["api"]["required"]["plugin.services"] = json!("^1");
+    manifest["api"]["required"]["process"] = json!(">=1.3, <2");
+    manifest["permissions"] = json!(["assets.read", "services.call", "ui.panels"]);
+    manifest["plugin_services"] = json!({
+        "requires": {
+            CONTRACT: {"version": ">=1.3, <2", "optional": true, "methods": as_requirement(methods())},
+            // The host's own session contract, required as stated so the consumer matches it.
+            "session.host": {
+                "version": "^1",
+                "optional": false,
+                "methods": session_methods()
+            }
+        }
+    });
+    archive(files, manifest)
+}
+
+/// The host's session contract as a consumer must state it to reach it.
+pub fn session_methods() -> Value {
+    json!({
+        "start": {
+            "parameters": {"type":"record","fields":{
+                "program":{"type":"string","max_bytes":4096},
+                "args":{"type":"array","max_items":128,"items":{"type":"string","max_bytes":4096}},
+                "cwd":{"type":"string","max_bytes":4096},
+                "name":{"type":"string","max_bytes":256},
+                "env":{"type":"array","max_items":64,"items":{"type":"record","fields":{
+                    "name":{"type":"string","max_bytes":128},
+                    "value":{"type":"string","max_bytes":32768}}}}},
+                "optional":["cwd","name","env"]},
+            "result":{"type":"record","fields":{
+                "session":{"type":"string","max_bytes":128},
+                "state":{"type":"string","max_bytes":32},
+                "located":{"type":"boolean"}}},
+            "permissions":[]
+        },
+        "list": {
+            "parameters":{"type":"record","fields":{}},
+            "result":{"type":"record","fields":{
+                "sessions":{"type":"array","max_items":64,"items":{"type":"record","fields":{
+                    "session":{"type":"string","max_bytes":128},
+                    "state":{"type":"string","max_bytes":32}}}}}},
+            "permissions":[]
+        },
+        "status": {
+            "parameters":{"type":"record","fields":{"session":{"type":"string","max_bytes":128}}},
+            "result":{"type":"record","fields":{
+                "session":{"type":"string","max_bytes":128},
+                "state":{"type":"string","max_bytes":32}}},
+            "permissions":[]
+        },
+        "stop": {
+            "parameters":{"type":"record","fields":{"session":{"type":"string","max_bytes":128}}},
+            "result":{"type":"record","fields":{
+                "session":{"type":"string","max_bytes":128},
+                "state":{"type":"string","max_bytes":32}}},
+            "permissions":[]
+        }
+    })
+}
+
 /// Repackage through admission so tests cannot silently mutate a validated manifest in memory.
 pub fn archive(files: BTreeMap<String, Vec<u8>>, manifest: Value) -> Package {
     let mut files = files;
@@ -296,7 +396,12 @@ pub fn fixture(id: &str, provider: bool, execution: bool) -> Package {
     if !execution {
         // A consumer cannot weaken authority and still match the real execution contract. It also
         // cannot end or observe a program it has no authority over, so both are dropped entirely.
-        methods["execute"]["permissions"] = json!(["ui.panels"]);
+        // What is left states no provider authority at all, which is what a consumer's requirement
+        // means: the shape it needs, not the grants the provider must hold.
+        methods["execute"]
+            .as_object_mut()
+            .unwrap()
+            .remove("permissions");
         methods.as_object_mut().unwrap().remove("stop");
         methods.as_object_mut().unwrap().remove("status");
     }

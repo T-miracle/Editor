@@ -2,9 +2,9 @@
 #![cfg(windows)]
 #[path = "support/interactive_packages.rs"]
 mod packages;
-use packages::{CONTRACT, fixture};
+use packages::{CONTRACT, fixture, session_consumer};
 use plugin_runtime::{
-    Manager, Package,
+    ExecutionState, Manager, Package,
     plugin_protocol::{Environment, api, ui::Kind},
 };
 use serde_json::{Value, json};
@@ -351,4 +351,112 @@ fn execution_authority_and_hot_update_never_replay_delegated_programs() {
         )
         .contains("InvalidHandle")
     );
+}
+
+/// An independent consumer's session, started through the host, is the session the title bar sees.
+///
+/// This is the end-to-end form of ticket 08's third criterion, and it enters where a user does: a
+/// real package built from the public SDK declares the host's session contract, opens it by name and
+/// starts a program through it. The assertion is not about a second table — it is that
+/// `Manager::executions`, which is what the title bar renders, knows the session the consumer
+/// created, and that repeating the same launch locates that session instead of adding another.
+#[test]
+#[ignore = "build terminal and capability-example through the public SDK first"]
+fn a_consumer_session_started_through_the_host_is_the_one_the_title_bar_sees() {
+    let root = tempfile::tempdir().unwrap();
+    let mut manager = Manager::open(
+        root.path().join("plugins"),
+        Environment {
+            workspace: root.path().display().to_string(),
+            os: "windows".into(),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    install(&mut manager, &terminal());
+    install(&mut manager, &session_consumer("session-client"));
+    let program = json!({
+        "program": "powershell.exe",
+        "args": ["-NoProfile", "-Command", "Start-Sleep -Seconds 60"],
+        "name": "consumer session",
+    });
+
+    // The consumer opens the host's own contract by name and starts a program through it.
+    let accepted = command(
+        &mut manager,
+        "session-client",
+        "service-call-contract",
+        json!({"contract":"session.host","method":"start","value":program}),
+    );
+    assert_eq!(accepted, "Accepted", "the consumer's call was accepted");
+    let answered = answered_sessions(&mut manager);
+    assert!(
+        answered.contains("\"located\":false"),
+        "the first start created a session: {answered}"
+    );
+    // The host's own table — what the title bar renders — has the session the consumer created.
+    let sessions = manager.executions();
+    assert_eq!(
+        sessions.len(),
+        1,
+        "the consumer's session is in the host's table: {sessions:?}"
+    );
+    assert_eq!(sessions[0].snapshot().plugin, "terminal");
+    let first = sessions[0].id();
+
+    // The same launch, asked again by the consumer, locates that session instead of starting another.
+    let accepted = command(
+        &mut manager,
+        "session-client",
+        "service-call-contract",
+        json!({"contract":"session.host","method":"start","value":program}),
+    );
+    assert_eq!(accepted, "Accepted");
+    let answered = answered_sessions(&mut manager);
+    assert!(
+        answered.contains("\"located\":true"),
+        "the repeat located the existing session: {answered}"
+    );
+    let sessions = manager.executions();
+    assert_eq!(
+        sessions.len(),
+        1,
+        "the consumer and the title bar are looking at one session, not two: {sessions:?}"
+    );
+    assert_eq!(sessions[0].id(), first);
+    // It really is the host's session, not a name that happens to agree: the host can act on it, and
+    // it is the provider's own session identity that makes it addressable.
+    let session = manager.execution(first).unwrap();
+    assert!(session.stoppable());
+    assert!(
+        session.snapshot().provider_session.is_some(),
+        "the provider's own identity is what the host would address a stop to"
+    );
+    manager.stop_execution(first).unwrap();
+}
+
+/// Read the consumer's own report of its session answer, waiting for one to arrive.
+///
+/// The answer is read from the consumer's panel because that is what it publishes, so the check sees
+/// the same text a user would; the result is parsed from the SDK guest's serialized update.
+fn answered_sessions(manager: &mut Manager) -> String {
+    let deadline = Instant::now() + Duration::from_secs(30);
+    let mut text = String::new();
+    while Instant::now() < deadline {
+        manager.poll();
+        text = text_of(manager, "session-client");
+        if text.contains("located") {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    text
+}
+
+/// The panel text of one plugin, without asserting it is a status document.
+fn text_of(manager: &Manager, id: &str) -> String {
+    let Kind::Text { text } = &manager.live[id].views["welcome"].as_ref().root.kind else {
+        return String::new();
+    };
+    text.clone()
 }
