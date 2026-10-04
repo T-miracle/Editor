@@ -432,6 +432,20 @@ if self.run_controls.is_stopping(config) { return; }
 
 **已排除的方向**：不在 `confirm_leave` 的去重（那里的去重是对的），也不在 `RunSequence::stopped` 的匹配。**根因是所有权问题**——用户、序列、离开路径三者都会为同一个准备步骤发起停止，而**目前没有单一权威**。下一步应当先决定「谁有权代表一次准备步骤发出停止请求」，再让其余路径只登记、不发送。
 
+**后续尝试（共四次，全部失败并已撤回）**：按「会话」守卫；让 `stop_selected_run` 把准备步骤的停止交给所属序列；在 `reconcile` 里把「会话已结束」也告知序列（补上这条缺失的连线）；在序列上以「请求是否真的发出」为键的守卫。**四次都未能让两个用例同时通过，第三次还让 `leaving_stops…` 也开始失败**，因此全部撤回，仓库回到本次会话开始时的已验证状态，仅保留本节记录。
+
+**本轮补做了应当更早建立的基线——`--ignored` 用例逐模块串行实测（`--test-threads=1`）：**
+
+| 模块 | 串行结果 |
+| --- | --- |
+| `extensions::native_build_tests` | **5 通过 / 1 失败**（失败者即本节这条例外） |
+| `extensions::native_run_tests` | 6 通过 / 0 失败 |
+| `extensions::native_discovery_tests` | 1 通过 / 0 失败 |
+
+**并行运行会互相干扰**：同一条用例在默认并行下时而失败时而通过（本轮一度据此误判「串行全绿」，随后被重复实测推翻），整模块一起跑还会以 `STATUS_STACK_OVERFLOW`（`0xc00000fd`）终止。**因此 `--ignored` 的结论必须以 `--test-threads=1` 逐模块取得。**
+
+**另一处更正**：本文件先前称「修复后测试全绿」的印象是**错的**——本条回归自 `7c5cfcd` 起一直存在，当时被并行噪声掩盖。**本批「已修」的五处实现缺失结论不受影响**，但**「全绿」这一表述作废**。
+
 ## 未覆盖与限制
 
 - **`editor-app` 整二进制全量运行不可作为判据**（本任务开始前即如此）：`cargo test -p editor-app --bin editor-app` 会让不同用例互相污染宿主内的共享注册表，出现一批失败。**实测对照**：在提交 `3a50511`（本轮工作之前）上单跑 `app::plugins` 已是 `18 passed; 2 failed`，当前为 `19 passed; 1 failed`；且每个失败用例单独运行时都通过（`app::plugins::tests::restricting_startup_withdraws_declarations_before_worker_publication` 单独跑 `ok`）。因此按仓库验证约定使用**按模块过滤**的针对性运行：`run::` 59 项、`extensions::worker` 11 项、`language::code_highlighting` 12 项、`extensions::markdown_tests` 1 项（其余为 ignored）在本轮全绿。这不是本任务引入的缺陷，也不据它宣称通过。
