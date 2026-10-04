@@ -1815,7 +1815,11 @@ dependencies = [
 name = "editor-core"
 version = "0.1.0"
 dependencies = [
+ "dirs 6.0.0",
  "ignore",
+ "plugin-schema",
+ "serde",
+ "serde_json",
  "tempfile",
  "thiserror 2.0.20",
 ]
