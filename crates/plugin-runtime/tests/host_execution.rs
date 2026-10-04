@@ -384,6 +384,81 @@ fn two_independent_providers_serve_one_consumer_the_same_way() {
     );
 }
 
+/// The text a provider painted into its own panel.
+fn panel_text(manager: &Manager, plugin: &str) -> String {
+    let Some(view) = manager
+        .live
+        .get(plugin)
+        .and_then(|instance| instance.views.get("terminal"))
+    else {
+        return String::new();
+    };
+    let mut text = String::new();
+    view.as_ref().root.visit(&mut |node| {
+        if let plugin_runtime::plugin_protocol::ui::Kind::Canvas(canvas) = &node.kind {
+            for paint in &canvas.paint {
+                if let plugin_runtime::plugin_protocol::Paint::Text { text: painted, .. } = paint {
+                    text.push_str(painted);
+                }
+            }
+        }
+    });
+    text
+}
+
+/// The environment a launch asks for reaches the program, and nothing else is substituted.
+///
+/// The host passes the caller's entries through the contract unchanged and the provider forwards
+/// them without reading them. A program that prints the value is the only honest evidence that the
+/// override arrived, so this checks the value the program itself reported.
+#[test]
+#[ignore = "build terminal and capability-example through the public SDK first"]
+fn the_environment_a_launch_asks_for_reaches_the_program() {
+    let root = tempfile::tempdir().unwrap();
+    let mut manager = manager(root.path());
+    let package = terminal();
+    let grants = package.manifest.permissions.clone();
+    manager.install(&package, grants).unwrap();
+    let request = RunRequest {
+        program: "powershell.exe".into(),
+        args: vec![
+            "-NoProfile".into(),
+            "-Command".into(),
+            "[Console]::Write('MARKER=' + $env:ME_RUN_MARKER); Start-Sleep -Seconds 60".into(),
+        ],
+        cwd: Some(root.path().display().to_string()),
+        name: None,
+        env: vec![plugin_runtime::RunEnvEntry {
+            name: "ME_RUN_MARKER".into(),
+            value: "carried-through".into(),
+        }],
+    };
+    let session = manager.start_execution(request).unwrap();
+    let state = wait_until(
+        &mut manager,
+        |manager| manager.execution(session.id()).unwrap().snapshot().state,
+        |state| *state != ExecutionState::Starting,
+    );
+    assert_eq!(state, ExecutionState::Running);
+    assert!(reveal_panel(&mut manager) >= 1);
+    // The program's own output carries the value the launch asked for.
+    let shown = wait_until(
+        &mut manager,
+        |manager| panel_text(manager, "terminal"),
+        |shown| shown.contains("carried-through"),
+    );
+    assert!(
+        shown.contains("carried-through"),
+        "the requested environment reached the program: {shown}"
+    );
+    // The provider is never asked to invent a value it was not given.
+    assert!(
+        !shown.contains("value-not-requested"),
+        "nothing substitutes an environment the launch did not ask for"
+    );
+    manager.stop_execution(session.id()).unwrap();
+}
+
 /// A session's end is observed through its provider, never predicted from elapsed time.
 #[test]
 #[ignore = "build terminal and capability-example through the public SDK first"]
