@@ -13,7 +13,9 @@ pub(crate) use ui::RunMenu;
 #[cfg(test)]
 pub(crate) use ui::{RunField, StepEdit};
 mod sequence;
-pub use sequence::{RunSequence, SequenceAction, SequenceStep, StepOutcome, StepState};
+#[cfg(test)]
+pub use sequence::StepState;
+pub use sequence::{RunSequence, SequenceAction, StepOutcome};
 #[cfg(test)]
 mod run_ui_tests;
 #[cfg(test)]
@@ -66,6 +68,10 @@ pub struct RunPlan {
 
 impl RunPlan {
     /// Whether this plan starts a program at the end of its sequence.
+    ///
+    /// Kept as a question about the last step rather than a stored flag: the sequence used to keep a
+    /// copy, and removing the copy is what showed the flag was never read.
+    #[cfg(test)]
     pub fn launches_program(&self) -> bool {
         self.steps
             .last()
@@ -95,9 +101,6 @@ pub enum LaunchPlan {
 pub struct PendingRun {
     pub config: String,
     pub request_id: u64,
-    /// The preparation step this request starts, when it starts one rather than being an editor
-    /// request for something else.
-    pub step: Option<usize>,
 }
 
 /// A stop this editor requested, identified so only its own answer is reported.
@@ -380,6 +383,7 @@ impl Default for RunControls {
 
 impl RunControls {
     /// Load the configurations stored for one workspace, reporting an unreadable file.
+    #[cfg(test)]
     pub fn load(workspace: &str, root: Option<std::path::PathBuf>) -> Self {
         Self::load_with_project(workspace, root, None)
     }
@@ -423,16 +427,6 @@ impl RunControls {
             Err(error) => controls.error = Some(error.to_string()),
         }
         controls
-    }
-
-    /// The shared file this workspace reads and writes, when it has one.
-    pub fn project_file(&self) -> Option<&std::path::Path> {
-        self.project.as_deref()
-    }
-
-    /// Whether this workspace shares any configuration with the project.
-    pub fn shares_with_project(&self) -> bool {
-        !self.shared.configurations.is_empty()
     }
 
     /// Whether one session is still active, so a preparation can tell a live step from one the
@@ -903,7 +897,6 @@ impl RunControls {
         self.pending.push(PendingRun {
             config: config.to_owned(),
             request_id: self.next_request,
-            step: None,
         });
         self.next_request
     }
@@ -1024,6 +1017,7 @@ impl RunControls {
     ///
     /// This is what the native acceptance waits on, so readiness is read from the sequence's own
     /// state rather than inferred from how many sessions happen to exist.
+    #[cfg(test)]
     pub fn preparation_complete(&self, config: &str) -> bool {
         let Some(sequence) = self.sequences.get(config) else {
             return true;
@@ -1041,6 +1035,7 @@ impl RunControls {
     }
 
     /// Whether a preparation has stopped for good, with the reason it stopped.
+    #[cfg(test)]
     pub fn preparation_blocked(&self, config: &str) -> Option<String> {
         self.sequences.get(config).and_then(|sequence| {
             (!sequence.is_active())
@@ -1096,13 +1091,12 @@ impl RunControls {
     pub fn begin_sequence(&mut self, config: &str, plan: RunPlan, request_id: u64) {
         self.sequences
             .insert(config.to_owned(), RunSequence::new(config, &plan));
-        // The program step's session joins the launch this request identity belongs to, so the
-        // published session is adopted as this editor's own rather than ignored.
-        let program_index = plan.steps.len().saturating_sub(1);
+        // The launch this request identity belongs to is what a published session is adopted by, so
+        // the session joins the request rather than being ignored as another window's. Which step it
+        // is comes from the sequence, which already holds the plan.
         self.pending.push(PendingRun {
             config: config.to_owned(),
             request_id,
-            step: Some(program_index),
         });
     }
 
@@ -1136,7 +1130,6 @@ impl RunControls {
         self.pending.push(PendingRun {
             config: config.to_owned(),
             request_id,
-            step: None,
         });
     }
 

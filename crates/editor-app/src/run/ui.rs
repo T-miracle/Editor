@@ -787,10 +787,12 @@ impl EditorApp {
     pub(crate) fn confirm_leave(&mut self, cx: &mut Context<Self>) {
         // A preparation is asked to stop as a sequence, not as a program: its step may not have a
         // session yet, and one asked to stop must not be followed by the program it was preparing.
+        let mut already_stopped = Vec::new();
         for (config, session) in self.run_controls.stop_preparations() {
             let Some(session) = session else {
                 continue;
             };
+            already_stopped.push(session);
             let request_id = self.run_controls.begin_stop(&config, session);
             let _ = self.extensions.read(cx).stage_host_run(Work::StopRun {
                 session,
@@ -799,8 +801,16 @@ impl EditorApp {
             });
         }
         // Stopping is requested per session; the window does not wait for each answer, because a
-        // provider that has already exited cannot answer and the host is leaving anyway.
+        // provider that has already exited cannot answer and the host is leaving anyway. A session
+        // already asked to stop is not asked again — by a preparation above, or by an earlier Stop —
+        // because two requests for one program are two answers for one stop, and the provider was
+        // told once.
         for session in self.run_controls.active_sessions() {
+            if already_stopped.contains(&session.id)
+                || self.run_controls.is_stopping(&session.config)
+            {
+                continue;
+            }
             let request_id = self.run_controls.begin_stop(&session.config, session.id);
             let _ = self.extensions.read(cx).stage_host_run(Work::StopRun {
                 session: session.id,
@@ -1629,6 +1639,12 @@ impl EditorApp {
 
     /// Stop the program one preparation step owns.
     fn stop_preparation_step(&mut self, config: &str, session: u64, cx: &mut Context<Self>) {
+        // The sequence keeps asking for this stop until its provider answers, so without this guard
+        // every frame asks again: one program would be told to stop repeatedly, and leaving would
+        // count several stops for one session. A stop already in flight is the answer being waited for.
+        if self.run_controls.is_stopping(config) {
+            return;
+        }
         let request_id = self.run_controls.begin_stop(config, session);
         let queued = self.extensions.read(cx).stage_host_run(Work::StopRun {
             session,

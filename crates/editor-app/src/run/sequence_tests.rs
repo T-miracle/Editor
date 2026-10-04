@@ -201,7 +201,14 @@ fn a_running_program_keeps_its_launch_owned_by_the_sequence() {
 fn a_build_only_sequence_never_reaches_a_program() {
     let build = vec![step(StepKind::Build, "构建"), step(StepKind::Build, "测试")];
     let mut sequence = RunSequence::build_only("run-1", &build);
-    assert!(!sequence.launches_program);
+    // Whether a sequence launches is a question about its last step, not a stored flag: the flag this
+    // test used to read was never consulted by the application, which is why removing it changed
+    // nothing here.
+    assert_eq!(
+        sequence.steps().last().map(|step| step.kind),
+        Some(StepKind::Build),
+        "a build-only sequence ends in a build step"
+    );
     sequence.started(0, 7, Some("1".into()));
     sequence.observe(0, StepOutcome::Exited { code: 0 });
     sequence.started(1, 8, Some("2".into()));

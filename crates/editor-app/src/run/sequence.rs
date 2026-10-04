@@ -51,27 +51,18 @@ pub enum StepOutcome {
     Unknown,
 }
 
-impl StepState {
-    /// Whether the sequence has to wait for this step before it may continue.
-    pub fn is_pending(&self) -> bool {
-        matches!(
-            self,
-            Self::Waiting | Self::Starting { .. } | Self::Running { .. }
-        )
-    }
-
-    /// Whether this step blocks every later step.
-    pub fn is_blocking(&self) -> bool {
-        matches!(self, Self::Failed { .. } | Self::Stopped)
-    }
-}
-
 /// One step's identity plus its state, so output and status can name the step it belongs to.
 #[derive(Clone, Debug)]
 pub struct SequenceStep {
     pub kind: StepKind,
     pub name: String,
     /// The configuration whose stored definition produced this step.
+    ///
+    /// A step can reference a build owned by another configuration, so this is what says whose
+    /// definition a step came from. Nothing reads it today — the step is always reached through the
+    /// sequence that holds it — and it is kept because a step without its origin cannot be explained
+    /// when a launch is assembled from more than one configuration.
+    #[allow(dead_code)]
     pub config: String,
     pub state: StepState,
 }
@@ -80,9 +71,12 @@ pub struct SequenceStep {
 #[derive(Clone, Debug)]
 pub struct RunSequence {
     /// The configuration the user acted on; the program step belongs to it.
+    ///
+    /// Like a step's own `config`, this is identity rather than state: a sequence is reached through
+    /// the map keyed by the configuration, so the field is not consulted. It is kept for the same
+    /// reason — diagnostics about a launch should be able to say which configuration it was.
+    #[allow(dead_code)]
     pub config: String,
-    /// Whether the program step runs after the preparation steps.
-    pub launches_program: bool,
     steps: Vec<SequenceStep>,
     /// The requests behind each step, fixed when the sequence began so a later edit cannot change
     /// what a launch already started doing.
@@ -118,7 +112,6 @@ impl RunSequence {
     pub fn new(config: &str, plan: &RunPlan) -> Self {
         Self {
             config: config.to_owned(),
-            launches_program: plan.launches_program(),
             steps: plan
                 .steps
                 .iter()
@@ -141,7 +134,6 @@ impl RunSequence {
     pub fn build_only(config: &str, steps: &[super::PreparedStep]) -> Self {
         Self {
             config: config.to_owned(),
-            launches_program: false,
             steps: steps
                 .iter()
                 .map(|step| SequenceStep {
@@ -182,23 +174,6 @@ impl RunSequence {
         }
     }
 
-    /// Remember which launch request produced the step now running.
-    pub fn note_request(&mut self, index: usize, request_id: u64) {
-        if let Some(slot) = self.requested.get_mut(index) {
-            *slot = Some(request_id);
-        }
-    }
-
-    /// The launch identity of one step's request, when it has been requested.
-    pub fn request_id(&self, index: usize) -> Option<u64> {
-        self.requested.get(index).copied().flatten()
-    }
-
-    /// Whether any step is still waiting to be requested.
-    pub fn has_unrequested_step(&self) -> bool {
-        self.requested.iter().any(Option::is_none)
-    }
-
     /// Every step with its state, for status text and tests.
     pub fn steps(&self) -> &[SequenceStep] {
         &self.steps
@@ -227,11 +202,21 @@ impl RunSequence {
     }
 
     /// Whether a stop has been requested but the sequence has not yet accepted one.
+    ///
+    /// Only the checks ask this, through `RunControls::is_stopping`, which is itself only asked by a
+    /// check: the application reads the sequence's state through `is_active`, which already counts a
+    /// stop in progress as working. Compiled for tests so the library does not carry an accessor
+    /// nothing consults.
+    #[cfg(test)]
     pub fn is_stopping(&self) -> bool {
         self.stopping
     }
 
     /// The step that blocked this sequence, once it has stopped for good.
+    ///
+    /// Like `is_stopping`, this is reached only from the checks' own entry points; the application
+    /// reads a blocked preparation through `preparation_blocked`, which is itself a check's question.
+    #[cfg(test)]
     pub fn blocked_by(&self) -> Option<&str> {
         self.blocked.as_deref()
     }
