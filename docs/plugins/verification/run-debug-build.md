@@ -357,6 +357,16 @@ Run and debug startup smoke passed: no program was left behind by shutdown.
 
 **另一处核对结果**：`sessions_follow_their_own_request_and_later_state` 里 `active_sessions().is_empty()` 看似可疑，但它**紧跟在 `sessions().len() == 1` 与 `!sessions[0].is_active()` 之后**，并由「同一配置可再次启动」交叉约束，因此不是空转。
 
+### 一处真实缺陷：承诺停止程序的调用从未接上（本轮修复）
+
+做变异抽查时发现 `stop_owned_programs` **是死代码**（编译器一直报 `never used`）。溯源到引入它的提交 `996d870`：那次提交在 `scopes.rs::shutdown` 里加了**说明「先请求停止、再退休会话」的整段注释**，也在 `host_services.rs` 里加了函数本体，**但从未加上那句调用**。因此：**注释声称的行为不存在，程序从未被请求停止**。
+
+**已修复**：在 `retire()` 之前接上 `self.stop_owned_programs();`，与注释和当时的提交说明一致；死代码警告随之消失。
+
+**但这个修复不改变可观察行为，我也不声称它改变了**：把调用再次去掉，`closing_the_window_leaves_no_program_running` 与 `closing_while_a_launch_is_still_preparing_...` **仍然通过**。原因正是当时那次提交已经如实记录过的——**提供者的实例拥有它启动的东西，实例拆除本身就会结束那些进程**。所以这是**顺序**：让提供者在窗口关闭前观察到终止、并能凭该观察回答状态查询，而不是让窗口在一个没人通知过的会话上关闭。
+
+**结论**：修复的是**代码与它自己的注释不一致**（以及一处死代码），**不是**一个可观察的缺陷；**没有测试能区分有无这次调用**，这一点如实记录，不把它算作「修好了一个 bug」。
+
 ## 未覆盖与限制
 
 - **`editor-app` 整二进制全量运行不可作为判据**（本任务开始前即如此）：`cargo test -p editor-app --bin editor-app` 会让不同用例互相污染宿主内的共享注册表，出现一批失败。**实测对照**：在提交 `3a50511`（本轮工作之前）上单跑 `app::plugins` 已是 `18 passed; 2 failed`，当前为 `19 passed; 1 failed`；且每个失败用例单独运行时都通过（`app::plugins::tests::restricting_startup_withdraws_declarations_before_worker_publication` 单独跑 `ok`）。因此按仓库验证约定使用**按模块过滤**的针对性运行：`run::` 59 项、`extensions::worker` 11 项、`language::code_highlighting` 12 项、`extensions::markdown_tests` 1 项（其余为 ignored）在本轮全绿。这不是本任务引入的缺陷，也不据它宣称通过。

@@ -285,6 +285,7 @@ impl Manager {
         // owns what it started, so its teardown below releases those processes too. Asking first is
         // still right — the provider gets to observe the termination and answer a status query from
         // that observation rather than the window closing on a session nobody told it about.
+        self.stop_owned_programs();
         // Host execution sessions end with the window that owns them; no start is left queued.
         self.host_sessions.retire();
         let _ = self.checkpoint();
