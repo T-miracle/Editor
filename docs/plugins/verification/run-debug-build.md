@@ -460,6 +460,22 @@ probe blocked=None  session_known=true  active=true
 
 **下一步应当从这里入手**：先查清 `stop_execution` 之后宿主发布了什么（`Work::PollRun` 的 `RunStatus`、以及 `reconcile` 如何把它映射进 `RunSession`），再决定「已结束」应当由哪个观察（`status` 的 `ended`/`exited`，还是会话从 `published` 列表消失）驱动。**本轮的代码尝试已全部撤回**，仓库保持在已验证状态。
 
+**机制已查清（本轮实测三个分支）**：
+
+```
+probe A step=0 current=Some(1)      // 步骤在跑，测试调用 stop_preparations()
+probe B step=1 requested=Some(1)    // 序列确实发出了停止请求，测试随后直接调 manager.stop_execution(1)
+probe C step=2..9 blocked=None      // 之后序列永远不阻塞，循环耗尽 300 次
+```
+
+**因此失败点精确定位为：`stop_execution` 之后，编辑器侧的 `RunSession.state` 从未变为非活动**，而 `preparation_blocked` 要求 `!is_active()`。
+
+**真实路径本来是通的，问题在这条用例绕过了它**：真实流程走 `Work::StopRun` → `manager.stop_execution` → **提供者的 `stop_call`**，而 `stop_call` 会设 `tab.exited = true` 并交还句柄，于是**之后任何一次 `status` 都会回 `ended`/`exited`**，编辑器据此把会话判为结束。**这条用例不驱动提供者**，所以那个状态从未产生——它假设「停止请求被发出」必然导致「序列阻塞」，而**代码里这两件事之间的联系是经由提供者应答的**。
+
+**这解释了为什么它是 `7c5cfcd` 引入的**：那一轮加的守卫让 `stop_preparation_step` 在「配置已在停止」时直接返回，于是**这条用例里唯一能把 `stopped` 送达序列的途径（它的 StopRun 触发链）被截断**。
+
+**尚未做出的决定**：修**用例**（让它驱动提供者，或经 UI 的停止应答路径送达结果）还是修**代码**（让序列在停止请求发出后、即使没有应答也能凭观察判定结束）。**两者都可能，且都改变被测语义**，因此本轮**不动任何一边**，只留下这条机制说明与三行实测证据。
+
 ## 未覆盖与限制
 
 - **`editor-app` 整二进制全量运行不可作为判据**（本任务开始前即如此）：`cargo test -p editor-app --bin editor-app` 会让不同用例互相污染宿主内的共享注册表，出现一批失败。**实测对照**：在提交 `3a50511`（本轮工作之前）上单跑 `app::plugins` 已是 `18 passed; 2 failed`，当前为 `19 passed; 1 failed`；且每个失败用例单独运行时都通过（`app::plugins::tests::restricting_startup_withdraws_declarations_before_worker_publication` 单独跑 `ok`）。因此按仓库验证约定使用**按模块过滤**的针对性运行：`run::` 59 项、`extensions::worker` 11 项、`language::code_highlighting` 12 项、`extensions::markdown_tests` 1 项（其余为 ignored）在本轮全绿。这不是本任务引入的缺陷，也不据它宣称通过。
