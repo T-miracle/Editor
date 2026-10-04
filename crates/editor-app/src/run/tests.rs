@@ -1032,6 +1032,22 @@ fn debug_controls_follow_the_session_state() {
     assert!(!controls.debug_controls().can_stop());
 
     controls.note_debug_availability(Ok("adapter".into()));
+    // A provider that has not said what it can do offers no ability-dependent control.
+    assert!(controls.debug_controls().pause.is_err());
+    assert!(
+        controls.debug_controls().step[0]
+            .1
+            .as_ref()
+            .unwrap_err()
+            .contains("单步"),
+        "an undeclared ability is reported rather than assumed"
+    );
+    // With the provider's own declaration, the abilities follow it.
+    controls.note_debug_capabilities(editor_core::DebugCapabilities {
+        breakpoints: true,
+        resume_pause: true,
+        step: true,
+    });
     // Confirmed and idle: starting is offered and stopping is not.
     assert!(controls.debug_controls().can_start());
     assert!(!controls.debug_controls().can_stop());

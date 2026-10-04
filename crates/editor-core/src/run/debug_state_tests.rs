@@ -1,6 +1,20 @@
 //! Which debug control is offered when, and why the others are not.
 use super::*;
 
+/// What a fully capable provider offers, so a state check is not confused with an ability check.
+fn all_abilities() -> DebugCapabilities {
+    DebugCapabilities {
+        breakpoints: true,
+        resume_pause: true,
+        step: true,
+    }
+}
+
+/// What a provider that declares nothing offers.
+fn no_abilities() -> DebugCapabilities {
+    DebugCapabilities::default()
+}
+
 fn paused() -> DebugSessionState {
     DebugSessionState::Paused {
         source: "src/main.rs".into(),
@@ -24,7 +38,7 @@ fn an_unavailable_control_always_carries_its_reason() {
     ];
     for availability in [Ok("adapter"), Err("没有安装提供调试能力的插件")] {
         for state in &states {
-            let controls = DebugControls::derive(availability, state);
+            let controls = DebugControls::derive(availability, state, all_abilities());
             for (name, outcome) in [
                 ("start", &controls.start),
                 ("resume", &controls.resume),
@@ -46,12 +60,16 @@ fn an_unavailable_control_always_carries_its_reason() {
 #[test]
 fn starting_requires_a_confirmed_provider() {
     let disconnected = DebugSessionState::Disconnected;
-    let confirmed = DebugControls::derive(Ok("adapter"), &disconnected);
+    let confirmed = DebugControls::derive(Ok("adapter"), &disconnected, all_abilities());
     assert!(confirmed.can_start());
     assert!(!confirmed.can_stop(), "there is no session to stop");
     assert!(confirmed.resume.is_err() && confirmed.pause.is_err());
 
-    let missing = DebugControls::derive(Err("没有安装提供调试能力的插件"), &disconnected);
+    let missing = DebugControls::derive(
+        Err("没有安装提供调试能力的插件"),
+        &disconnected,
+        all_abilities(),
+    );
     assert!(!missing.can_start());
     assert!(missing.start.unwrap_err().contains("没有安装"));
 }
@@ -59,7 +77,8 @@ fn starting_requires_a_confirmed_provider() {
 /// Resume and pause follow the target's own state, and neither substitutes for the other.
 #[test]
 fn resume_and_pause_follow_the_target() {
-    let running = DebugControls::derive(Ok("adapter"), &DebugSessionState::Running);
+    let running =
+        DebugControls::derive(Ok("adapter"), &DebugSessionState::Running, all_abilities());
     assert!(
         running.pause.is_ok(),
         "a running target can be asked to stop"
@@ -67,7 +86,7 @@ fn resume_and_pause_follow_the_target() {
     assert!(running.resume.is_err(), "a running target is not resumed");
     assert!(running.can_stop());
 
-    let stopped = DebugControls::derive(Ok("adapter"), &paused());
+    let stopped = DebugControls::derive(Ok("adapter"), &paused(), all_abilities());
     assert!(stopped.resume.is_ok(), "a paused target is continued");
     assert!(
         stopped.pause.is_err(),
@@ -80,7 +99,8 @@ fn resume_and_pause_follow_the_target() {
     );
 
     // Connecting is a state a user needs a way out of, so stopping is offered there.
-    let starting = DebugControls::derive(Ok("adapter"), &DebugSessionState::Starting);
+    let starting =
+        DebugControls::derive(Ok("adapter"), &DebugSessionState::Starting, all_abilities());
     assert!(starting.can_stop());
     assert!(starting.resume.is_err() && starting.pause.is_err());
 }
@@ -94,7 +114,7 @@ fn a_finished_session_offers_starting_again() {
             reason: "适配器退出".into(),
         },
     ] {
-        let controls = DebugControls::derive(Ok("adapter"), &state);
+        let controls = DebugControls::derive(Ok("adapter"), &state, all_abilities());
         assert!(
             controls.can_start(),
             "a new session is offered in {state:?}"
@@ -108,8 +128,68 @@ fn a_finished_session_offers_starting_again() {
         &DebugSessionState::Failed {
             reason: "适配器退出".into(),
         },
+        all_abilities(),
     );
     assert!(failed.stop.unwrap_err().contains("适配器退出"));
+}
+
+/// A capability the provider never declared disables its control, with that reason and not another.
+#[test]
+fn a_missing_ability_disables_its_control_with_that_reason() {
+    // A provider that declares nothing: every affected control names the missing ability. Starting is
+    // checked while idle, because a session already being served is stopped rather than started again,
+    // which is a state reason and not an ability one.
+    let bare = DebugControls::derive(Ok("adapter"), &paused(), no_abilities());
+    assert!(
+        !bare.can_start(),
+        "a served session is stopped, not started again"
+    );
+    assert!(
+        DebugControls::derive(
+            Ok("adapter"),
+            &DebugSessionState::Disconnected,
+            no_abilities()
+        )
+        .can_start(),
+        "a session can exist without stepping or pausing"
+    );
+    assert!(bare.resume.as_ref().unwrap_err().contains("继续与暂停"));
+    assert!(bare.pause.as_ref().unwrap_err().contains("继续与暂停"));
+    for kind in [DebugStep::Into, DebugStep::Over, DebugStep::Out] {
+        assert!(!bare.can_step(kind), "{kind:?} is not offered");
+    }
+    assert!(
+        bare.step[0].1.as_ref().unwrap_err().contains("单步"),
+        "the reason names the ability that is missing"
+    );
+
+    // The same state with a capable provider offers them: the difference is the declaration, not the
+    // session, which is why the two kinds of reason are kept apart.
+    let capable = DebugControls::derive(Ok("adapter"), &paused(), all_abilities());
+    assert!(capable.resume.is_ok());
+    for kind in [DebugStep::Into, DebugStep::Over, DebugStep::Out] {
+        assert!(capable.can_step(kind), "{kind:?} is offered");
+    }
+    // The three directions are distinct words, so a provider is never asked for an ambiguous step.
+    assert_eq!(
+        [
+            DebugStep::Into.as_str(),
+            DebugStep::Over.as_str(),
+            DebugStep::Out.as_str()
+        ],
+        ["into", "over", "out"]
+    );
+
+    // Stepping is only offered while the target is stopped somewhere.
+    let running =
+        DebugControls::derive(Ok("adapter"), &DebugSessionState::Running, all_abilities());
+    for kind in [DebugStep::Into, DebugStep::Over, DebugStep::Out] {
+        assert!(!running.can_step(kind));
+    }
+    assert!(
+        running.step[0].1.as_ref().unwrap_err().contains("先暂停"),
+        "a running target is paused before it is stepped"
+    );
 }
 
 /// Where a session is stopped is carried, so the panel can show the location.

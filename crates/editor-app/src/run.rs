@@ -190,6 +190,11 @@ pub struct RunControls {
     debug_availability: Option<Result<String, String>>,
     /// What the debug session currently is, as its provider last reported it.
     debug_state: editor_core::DebugSessionState,
+    /// What the selected debug provider declared it can do.
+    ///
+    /// Defaulting to nothing is deliberate: an ability the host has not been told about is not one it
+    /// may offer, so a provider that has not been asked leaves its controls disabled with a reason.
+    debug_capabilities: editor_core::DebugCapabilities,
     /// Set when the stored file could not be read or written; shown instead of silently defaulting.
     pub error: Option<String>,
 }
@@ -234,6 +239,7 @@ impl Default for RunControls {
             discovery_ran: false,
             debug_availability: None,
             debug_state: editor_core::DebugSessionState::Disconnected,
+            debug_capabilities: editor_core::DebugCapabilities::default(),
             error: None,
         }
     }
@@ -1200,7 +1206,16 @@ impl RunControls {
     /// Both facts are assembled here so the panel and the launch path cannot disagree: availability
     /// decides starting, the session state decides the rest.
     pub fn debug_controls(&self) -> editor_core::DebugControls {
-        editor_core::DebugControls::derive(self.debug_availability(), &self.debug_state)
+        editor_core::DebugControls::derive(
+            self.debug_availability(),
+            &self.debug_state,
+            self.debug_capabilities,
+        )
+    }
+
+    /// Record what the selected debug provider declared it can do.
+    pub fn note_debug_capabilities(&mut self, capabilities: editor_core::DebugCapabilities) {
+        self.debug_capabilities = capabilities;
     }
 
     /// Whether this configuration may be debugged, and the reason it may not.

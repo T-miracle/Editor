@@ -49,10 +49,45 @@ impl DebugSessionState {
     }
 }
 
+/// How one step is asked for, in the provider's own vocabulary.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DebugStep {
+    /// Enter the call at the current location.
+    Into,
+    /// Run to the next line of this frame.
+    Over,
+    /// Run until this frame returns.
+    Out,
+}
+
+impl DebugStep {
+    /// The word the provider is sent for this step.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Into => "into",
+            Self::Over => "over",
+            Self::Out => "out",
+        }
+    }
+}
+
+/// What the selected provider offers, as its own declaration says.
+///
+/// Defaulting to nothing is deliberate: a capability the host has not been told about is not a
+/// capability it may offer, so an unknown provider leaves every ability disabled with a reason.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct DebugCapabilities {
+    pub breakpoints: bool,
+    pub resume_pause: bool,
+    pub step: bool,
+}
+
 /// The debug actions a panel may offer right now, each with the reason it is unavailable.
 ///
 /// A control that is unavailable always has a reason: "disabled" without one is the state this
-/// module exists to prevent, because a user cannot tell a bug from an unmet precondition.
+/// module exists to prevent, because a user cannot tell a bug from an unmet precondition. Two kinds
+/// of reason are kept distinct — the provider does not offer the ability, or the session is in a
+/// state where it means nothing — because they call for different actions from the user.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct DebugControls {
     /// Begin debugging the selected configuration.
@@ -63,15 +98,22 @@ pub struct DebugControls {
     pub pause: Result<(), String>,
     /// End the session and the target it owns.
     pub stop: Result<(), String>,
+    /// Step the paused target, in the direction the caller asks for.
+    pub step: Vec<(DebugStep, Result<(), String>)>,
 }
 
 impl DebugControls {
     /// Derive the controls from the two facts that decide them.
     ///
     /// `availability` is the host's answer about whether a debug session could start at all;
-    /// `state` is what the current session is. Availability decides starting, the session state
-    /// decides the rest, and neither is inferred from the other.
-    pub fn derive(availability: Result<&str, &str>, state: &DebugSessionState) -> Self {
+    /// `state` is what the current session is, and `capabilities` is what the provider said it can
+    /// do. Availability decides starting, the session state decides the rest, and a capability the
+    /// provider never declared disables the control that needs it rather than being assumed.
+    pub fn derive(
+        availability: Result<&str, &str>,
+        state: &DebugSessionState,
+        capabilities: DebugCapabilities,
+    ) -> Self {
         let start = match (availability, state) {
             // A session already being served is not started again: the panel stops it instead.
             (_, state) if state.is_connected() => {
@@ -80,23 +122,31 @@ impl DebugControls {
             (Ok(_), _) => Ok(()),
             (Err(reason), _) => Err(reason.to_owned()),
         };
-        // Resuming means continuing a target that is stopped; it is not a way to begin one.
-        let resume = match state {
-            DebugSessionState::Paused { .. } => Ok(()),
-            DebugSessionState::Starting => Err("调试会话正在连接".into()),
-            DebugSessionState::Running => Err("目标正在运行".into()),
-            DebugSessionState::Disconnected => Err("没有调试会话".into()),
-            DebugSessionState::Exited => Err("目标已退出".into()),
-            DebugSessionState::Failed { reason } => Err(format!("调试会话失败：{reason}")),
+        // A control is unavailable for one of two reasons, and they are reported in that order: the
+        // provider never offered the ability, or the session is in a state where it means nothing.
+        // Offering a control the provider cannot serve would only move the failure to the click.
+        let state_reason = |state: &DebugSessionState, meaning: &str| match state {
+            DebugSessionState::Starting => "调试会话正在连接".to_owned(),
+            DebugSessionState::Disconnected => "没有调试会话".to_owned(),
+            DebugSessionState::Exited => "目标已退出".to_owned(),
+            DebugSessionState::Failed { reason } => format!("调试会话失败：{reason}"),
+            _ => meaning.to_owned(),
         };
-        // Pausing means asking a target that is running to stop where it is.
-        let pause = match state {
-            DebugSessionState::Running => Ok(()),
-            DebugSessionState::Starting => Err("调试会话正在连接".into()),
-            DebugSessionState::Paused { .. } => Err("目标已暂停".into()),
-            DebugSessionState::Disconnected => Err("没有调试会话".into()),
-            DebugSessionState::Exited => Err("目标已退出".into()),
-            DebugSessionState::Failed { reason } => Err(format!("调试会话失败：{reason}")),
+        let resume = if !capabilities.resume_pause {
+            Err("该调试提供者未声明继续与暂停能力".into())
+        } else {
+            match state {
+                DebugSessionState::Paused { .. } => Ok(()),
+                other => Err(state_reason(other, "目标正在运行")),
+            }
+        };
+        let pause = if !capabilities.resume_pause {
+            Err("该调试提供者未声明继续与暂停能力".into())
+        } else {
+            match state {
+                DebugSessionState::Running => Ok(()),
+                other => Err(state_reason(other, "目标已暂停")),
+            }
         };
         // Stopping is offered whenever a provider is serving the session, including while it is
         // connecting: that is exactly when a user needs a way out of a session that will not answer.
@@ -109,12 +159,36 @@ impl DebugControls {
                 _ => Err("没有调试会话".into()),
             }
         };
+        // Stepping means moving a target that is already stopped at a location. It is offered only
+        // while paused, and only when the provider said it can step at all.
+        let step = [DebugStep::Into, DebugStep::Over, DebugStep::Out]
+            .into_iter()
+            .map(|kind| {
+                let outcome = if !capabilities.step {
+                    Err("该调试提供者未声明单步能力".into())
+                } else {
+                    match state {
+                        DebugSessionState::Paused { .. } => Ok(()),
+                        other => Err(state_reason(other, "目标正在运行；请先暂停再单步")),
+                    }
+                };
+                (kind, outcome)
+            })
+            .collect();
         Self {
             start,
             resume,
             pause,
             stop,
+            step,
         }
+    }
+
+    /// Whether stepping in one direction is offered.
+    pub fn can_step(&self, kind: DebugStep) -> bool {
+        self.step
+            .iter()
+            .any(|(candidate, outcome)| *candidate == kind && outcome.is_ok())
     }
 
     /// Whether starting is offered.
