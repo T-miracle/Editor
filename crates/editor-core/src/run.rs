@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
 mod store;
-pub use store::{RunStoreError, default_root, load, save};
+pub use store::{RunStoreError, default_root, load, save, storage_path};
 #[cfg(test)]
 mod tests;
 

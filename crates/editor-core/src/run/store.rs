@@ -44,6 +44,14 @@ pub fn file_for(base: &Path, workspace: &str) -> PathBuf {
     base.join(format!("{}.json", short_digest(workspace)))
 }
 
+/// File the editor reads and writes for one workspace, under the platform configuration directory.
+///
+/// Callers outside this crate address configurations by workspace rather than by path, so the
+/// storage layout stays one decision in one place.
+pub fn storage_path(workspace: &str) -> Option<PathBuf> {
+    default_root().map(|base| file_for(&base, workspace))
+}
+
 /// Read the stored set, treating a missing file as an empty set.
 ///
 /// A malformed or newer file is reported instead of being replaced: the user's previous
