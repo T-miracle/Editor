@@ -21,6 +21,19 @@ function Get-SdkHashes([string]$Directory) {
     return $hashes
 }
 
+function Invoke-HostTool {
+    # A native program writes its progress to stderr, and with $ErrorActionPreference = 'Stop' that
+    # output becomes a terminating error before the exit code can be read. Run it as a native command
+    # so the same failure is reported by the check below instead of by PowerShell's own handling.
+    param([Parameter(Mandatory)][string]$Exe, [Parameter(ValueFromRemainingArguments)][string[]]$Arguments)
+    $previous = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    try {
+        & $Exe @Arguments
+    } finally {
+        $ErrorActionPreference = $previous
+    }
+}
 $previousTarget = $env:CARGO_TARGET_DIR
 New-Item -ItemType Directory -Path $workRoot | Out-Null
 Push-Location $workRoot
@@ -32,13 +45,16 @@ try {
     foreach ($name in @('src', 'Cargo.toml', 'Cargo.lock', 'manifest.json', 'README.md', 'welcome.txt', 'composed-ui.json')) {
         Copy-Item -LiteralPath (Join-Path $source $name) -Destination $guest -Recurse
     }
-    $manifest = Get-Content -LiteralPath (Join-Path $guest 'manifest.json') -Raw | ConvertFrom-Json
+    # Windows PowerShell decodes a file as ANSI unless told otherwise, which turns this manifest's
+    # non-ASCII titles into bytes that are not valid JSON. Read it as the UTF-8 it is on disk.
+    $manifest = Get-Content -LiteralPath (Join-Path $guest 'manifest.json') -Raw -Encoding UTF8 |
+        ConvertFrom-Json
     if ($manifest.protocol -ne 7 -or $manifest.component -ne 'capability-example.wasm') {
         throw 'The SDK fixture must declare the current protocol and its packaged component.'
     }
 
     $sdk = Join-Path $workRoot 'exported-sdk'
-    & $hostPath --export-plugin-sdk $sdk
+    Invoke-HostTool -Exe $hostPath --export-plugin-sdk $sdk
     if ($LASTEXITCODE -ne 0) { throw 'Public SDK export failed.' }
     foreach ($name in @('Cargo.toml', 'README.md', 'src/lib.rs', 'src/api.rs', 'src/api/guest.rs', 'wit/plugin.wit')) {
         if (-not (Test-Path -LiteralPath (Join-Path $sdk $name) -PathType Leaf)) {
@@ -49,7 +65,7 @@ try {
     # Repair uses the same public export entry point and touches only this disposable export.
     [IO.File]::WriteAllText((Join-Path $sdk 'src/api.rs'), 'damaged SDK source')
     Remove-Item -LiteralPath (Join-Path $sdk 'wit/plugin.wit')
-    & $hostPath --export-plugin-sdk $sdk
+    Invoke-HostTool -Exe $hostPath --export-plugin-sdk $sdk
     if ($LASTEXITCODE -ne 0) { throw 'Public SDK repair export failed.' }
     $after = Get-SdkHashes $sdk
     if ($before.Count -ne $after.Count) { throw 'SDK repair changed the exported file set.' }
@@ -61,7 +77,7 @@ try {
     $env:CARGO_TARGET_DIR = Join-Path $workRoot 'target'
     Push-Location $guest
     try {
-        & $hostPath --plugin-cargo 'Cargo.toml' build --locked --target wasm32-wasip2 --release
+        Invoke-HostTool -Exe $hostPath --plugin-cargo 'Cargo.toml' build --locked --target wasm32-wasip2 --release
         if ($LASTEXITCODE -ne 0) { throw 'Public SDK build outside the repository failed.' }
     } finally { Pop-Location }
     $component = Join-Path $env:CARGO_TARGET_DIR 'wasm32-wasip2/release/capability_example_guest.wasm'
