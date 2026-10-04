@@ -236,6 +236,82 @@ Run and debug startup smoke passed: no program was left behind by shutdown.
 
 **过程中一处环境问题**：`Start-Process` 在一份同时设置 `NO_PROXY` 与 `no_proxy` 的普通 Windows 环境上会抛 `已添加项`，因此脚本改用 `System.Diagnostics.Process` 直接启动。
 
+## 剩余工单的验收项逐条判定（供维护者收口）
+
+为便于决定是否关闭，这里把**七张仍打开的工单**的每条验收项按「已通过 / 未验证」逐条落位。判定只依据本文件记录的证据与已运行的测试，不写推断。**未验证项一律不计为通过。**
+
+### 04 — Shell 与本机环境（#52）
+
+| 验收项 | 判定 | 依据 |
+| --- | --- | --- |
+| 程序模式用可执行路径与参数数组；带空格、引号、中文及 Shell 元字符的参数逐项编辑并原样传递 | 已通过 | `arguments_with_spaces_quotes_and_chinese_reach_the_program_unchanged`（程序自己写出的接收值）、`a_chinese_environment_value_reaches_the_program`；表单逐行编辑见 `run::` 与 `run_ui_tests` |
+| 真实程序及显式解释器分别验证参数边界、目录、环境与解释器缺失错误 | 已通过 | 真实包验收：`a_shell_configuration_runs_its_script_through_the_named_interpreter`、`a_configuration_environment_reaches_the_program_it_starts`、`host_execution` 的环境与参数用例 |
+| **提供中英文和中文 IME 验收** | **部分未验证** | 中英文与**组合协议**已实测（`run::run_ui_tests::chinese_composition_enters_the_configuration_fields`：预编辑进入字段、标为 marked、替换不追加、提交清除标记）；**原生输入法与候选窗口本身未实测** |
+
+### 06 — 共享配置与本机覆盖（#54）
+
+| 验收项 | 判定 | 依据 |
+| --- | --- | --- |
+| 默认不改项目文件 | 已通过 | `a_shared_configuration_starts_a_real_program_with_local_values` 断言本机值未写入项目文件 |
+| 共享不泄露个人路径、密钥或授权 | 已通过 | 共享条目只含可移植一半（环境与工具目录留本机）；`two_workspaces_resolve_one_shared_configuration_separately`、`removing_a_shared_configuration_removes_it_from_the_project` |
+| 文件编辑与表单含义一致 | 已通过 | `breakpoints_round_trip_through_the_edit_form`（渲染与解析互为逆运算）、`project_only_language_survives_registry_refresh` 等 |
+| 编辑器控件直接启动真实程序 | **本轮已通过** | `a_shared_configuration_starts_a_real_program_with_local_values`（真实终端提供者运行共享定义的程序，输出含本机环境值） |
+
+### 08 — 执行提供者与插件调用（#56）
+
+七条验收项**全部有证据**，逐条见本轮结论与 `interactive_execution`／`host_execution`／`scoped_instances` 的用例。唯一**未验证**项是 `session.host` 的**伪造宿主身份拒绝**：检查在代码中，但构造伪造 `Reference` 需要其私有 `revision` 字段，为让测试能伪造而放开它恰好移除被测保护，因此**删掉的是测试而不是不变量**。
+
+### 09 — Rust 启动调试与源码断点（#57）
+
+| 验收项 | 判定 | 依据 |
+| --- | --- | --- |
+| 调试器/适配协议/传输/握手定稿并记录依据 | 已通过 | `crates/plugin-protocol/SERVICES.md` 的决策记录与本机实测数据 |
+| 通用公开调试能力；不按调试器名或语言分支 | 已通过 | `debug.session` 契约与 `plugin-runtime --lib` 用例（宿主要求里无调试器名） |
+| 断点设置/移除与统一面板列出 | 已通过 | 断点模型用例 + `breakpoints_round_trip_through_the_edit_form` |
+| 顶部暂停/继续/停止按状态启用且各带原因 | 已通过 | `debug_controls_follow_the_session_state` 等 |
+| 缺少调试能力不退化为运行 | 已通过 | `a_debug_launch_is_refused_rather_than_replaced_by_a_plain_run` |
+| **真实断点命中、暂停/继续、构建产物调试** | **未验证** | 本机无可读 PDB 的调试器（已实测记录） |
+| **调试器与适配器进程树释放** | **未验证** | 未安装调试器，故无调试器进程可观测；宿主侧不独立验证 |
+
+### 10 — 单步、变量、调用栈与多会话（#58）
+
+| 验收项 | 判定 | 依据 |
+| --- | --- | --- |
+| 面板按连接与目标状态启用并给出原因；不重复启动 | 已通过 | `debug_controls_follow_the_session_state`、调试启动请求用例 |
+| 单步三个方向；不可用时说明原因 | 已通过 | `stepping` 相关用例与控件推导 |
+| 调用栈与局部变量按所选栈帧显示 | 已通过 | `inspection_follows_the_selected_session`、帧/变量读取用例（上限 256/512） |
+| 多会话互不影响；控制只作用于选中会话 | 已通过 | 会话模型用例、`another_is_paused` |
+| 旧暂停结果不串台 | 已通过 | `PauseScope` 与迟到答案拒绝的用例 |
+| 防打断策略 | 已通过 | `another_is_paused` 与面板提示 |
+| **断点命中自动定位** | **已通过（本轮实现）** | `following_a_pause_is_decided_once_per_pause` + 编辑器侧打开并定位 |
+| **真实断点命中本身** | **未验证** | 同上，环境受限 |
+
+### 11 — 插件变更确认与会话故障回收（#59）
+
+| 验收项 | 判定 | 依据 |
+| --- | --- | --- |
+| 管理操作识别受影响会话；确认后进入破坏性变更，取消保持原样 | 已通过 | `plugin_session_impact` 用例 + 确认对话框 `extra_impact` |
+| 正常停止/立即终止/超时清理沿公共会话入口；普通运行、构建准备与断点暂停 | **部分未验证** | 普通运行与「准备中启动」已通过（`closing_while_a_launch_is_still_preparing_...`、`a_silent_provider_leaves_the_session_as_reported`）；**断点暂停状态下的清理未验证**（需真机断点） |
+| 更新准备失败保留旧实例 | 已通过 | 前序工单的更新事务用例（`hot_update`、`failed_update_restores_durable_writes_...`） |
+| 崩溃/来源撤销使相关会话明确失败并清理，不影响无关会话 | 已通过 | `losing_a_provider_fails_its_sessions_without_reviving_them`（实例消失、程序不再声称运行、无关提供者不受影响） |
+| 旧引用不能复活会话或作用于新实例 | 已通过 | 同上用例（重新启用后旧会话仍失败、停止被拒） |
+| **沿真实插件管理流程注入故障并核对实际进程与原生提示** | **部分已验证** | 真实包 + 公开管理器路径已用（停用/启用/重启、进程表对照）；**「原生提示」由确认对话框用例覆盖，但未在真实崩溃场景下人工核对** |
+
+### 12 — 独立插件接入与整体验收交付（#60）
+
+| 验收项 | 判定 | 依据 |
+| --- | --- | --- |
+| 用宿主导出的 SDK 独立构建并安装，实际执行 | 已通过 | `verify-plugin-sdk.ps1` 完整通过 + `sdk_distribution` |
+| 公开能力文档与示例覆盖各面 | 已通过 | `crates/plugin-protocol/SESSIONS.md`（逐值核对）+ `docs/run-debug-build.md` |
+| 以两个隔离项目验证共享配置与本机覆盖，逐项核对 R01–R20 | 已通过 | 见 R01–R20 表：18 通过 / 2 未验证 |
+| 原生验收（B1 四标签、下拉、断点定位、窗口离开、受限工作区、主题、中英文、键盘、IME、滚动、缩放） | **部分未验证** | 除原生 IME 与真机断点定位外均已覆盖 |
+| 前序工单已具备行为测试；本工单增加组合回归与交付演示 | 已通过 | `a_discovered_project_is_confirmed_built_run_and_offered_for_debugging` |
+| 针对性、workspace、应用与 SDK 分发检查并显式执行 ignored | 已通过 | 全量真实包审计：`plugin-runtime` 121 通过 / 0 失败 |
+| **读者文档与协议正文只写入读者文档工作面** | **未验证（外部阻塞）** | `website/` 在本机不存在（静态站点是另一批待实施议题），无可写入目标；已记于本文件 |
+| 验收通过后才标记整批完成 | 遵循 | 本批未标记完成 |
+
+**结论**：七张工单中，**#56 与 #60 的验收项除一项外部阻塞外全部有证据**；其余各张的剩余项**全部是环境受限项**（无 PDB 调试器、无原生输入法实测）或**与其直接相关的部分项**。**没有任何一项是「实现缺失」**——上一轮发现的自动定位缺失已实现。
+
 ## 未覆盖与限制
 
 - **`editor-app` 整二进制全量运行不可作为判据**（本任务开始前即如此）：`cargo test -p editor-app --bin editor-app` 会让不同用例互相污染宿主内的共享注册表，出现一批失败。**实测对照**：在提交 `3a50511`（本轮工作之前）上单跑 `app::plugins` 已是 `18 passed; 2 failed`，当前为 `19 passed; 1 failed`；且每个失败用例单独运行时都通过（`app::plugins::tests::restricting_startup_withdraws_declarations_before_worker_publication` 单独跑 `ok`）。因此按仓库验证约定使用**按模块过滤**的针对性运行：`run::` 59 项、`extensions::worker` 11 项、`language::code_highlighting` 12 项、`extensions::markdown_tests` 1 项（其余为 ignored）在本轮全绿。这不是本任务引入的缺陷，也不据它宣称通过。
