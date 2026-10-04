@@ -618,6 +618,107 @@ fn a_debug_package_offers_exactly_what_it_declares() {
     assert!(refusal.contains("请先选择"), "{refusal}");
 }
 
+/// Losing a provider fails the sessions it was serving, and cannot revive or replace them.
+///
+/// The failure half of the lifecycle ticket: every session that lost its provider is visibly failed,
+/// the programs are no longer claimed to be running, the retired identity cannot stop anything, and
+/// the provider that replaced it is a new instance that does not inherit the old sessions.
+#[test]
+#[ignore = "build terminal and capability-example through the public SDK first"]
+fn losing_a_provider_fails_its_sessions_without_reviving_them() {
+    let root = tempfile::tempdir().unwrap();
+    let mut manager = manager(root.path());
+    let package = terminal();
+    let grants = package.manifest.permissions.clone();
+    manager.install(&package, grants).unwrap();
+    let program = |marker: &str| RunRequest {
+        program: "powershell.exe".into(),
+        args: vec![
+            "-NoProfile".into(),
+            "-Command".into(),
+            format!("[Console]::Write('{marker}'); Start-Sleep -Seconds 120"),
+        ],
+        cwd: Some(root.path().display().to_string()),
+        name: Some(marker.into()),
+        env: Vec::new(),
+    };
+
+    // Two sessions the one provider is serving, both really running.
+    let first = manager.start_execution(program("FIRST")).unwrap();
+    let second = manager.start_execution(program("SECOND")).unwrap();
+    for session in [first.id(), second.id()] {
+        let state = wait_until(
+            &mut manager,
+            |manager| manager.execution(session).unwrap().snapshot().state,
+            |state| *state == ExecutionState::Running,
+        );
+        assert_eq!(state, ExecutionState::Running, "session {session}");
+        assert!(manager.execution(session).unwrap().stoppable());
+    }
+    let processes = manager.live["terminal"].process_count();
+    assert!(processes >= 3, "two programs and the provider's own shell");
+
+    // The provider goes away: every session it served is failed, and none of them is claimed to be
+    // stoppable through a provider that is no longer there.
+    manager.disable("terminal").unwrap();
+    for session in [first.id(), second.id()] {
+        let failed = wait_until(
+            &mut manager,
+            |manager| manager.execution(session).unwrap().snapshot().state,
+            |state| *state == ExecutionState::Failed,
+        );
+        assert_eq!(failed, ExecutionState::Failed, "session {session}");
+        let snapshot = manager.execution(session).unwrap().snapshot();
+        assert_eq!(
+            snapshot.plugin, "terminal",
+            "the failure names the provider that went away"
+        );
+        assert!(
+            !manager.execution(session).unwrap().stoppable(),
+            "a session whose provider is gone cannot be stopped through it"
+        );
+    }
+    assert!(manager.live.is_empty(), "the instance is gone, not idle");
+
+    // The retired identity cannot be reused: bringing the provider back gives a new instance that
+    // does not inherit the old sessions, and the old sessions are not revived.
+    manager.enable("terminal").unwrap();
+    for session in [first.id(), second.id()] {
+        assert_eq!(
+            manager.execution(session).unwrap().snapshot().state,
+            ExecutionState::Failed,
+            "session {session} is not revived by the provider's return"
+        );
+        let refusal = manager
+            .stop_execution(session)
+            .expect_err("a lost session is not stoppable by the new instance");
+        assert!(
+            !refusal.to_string().is_empty(),
+            "the refusal explains itself: {refusal}"
+        );
+    }
+    // A new session through the new instance works, which is what shows the provider recovered while
+    // the old sessions did not.
+    let replacement = manager.start_execution(program("AGAIN")).unwrap();
+    let state = wait_until(
+        &mut manager,
+        |manager| {
+            manager
+                .execution(replacement.id())
+                .unwrap()
+                .snapshot()
+                .state
+        },
+        |state| *state == ExecutionState::Running,
+    );
+    assert_eq!(state, ExecutionState::Running);
+    assert_ne!(
+        replacement.id(),
+        first.id(),
+        "a new session is a new session"
+    );
+    manager.stop_execution(replacement.id()).unwrap();
+}
 /// A session's end is observed through its provider, never predicted from elapsed time.
 #[test]
 #[ignore = "build terminal and capability-example through the public SDK first"]
