@@ -1,7 +1,12 @@
 //! Validate the real WASM drawing output with the same native vector renderer as the editor.
 
+// The standalone diagnostic preserves the production renderer's sibling modules and allocation guards.
+#[path = "../src/ui/plugin/bitmap.rs"]
+mod bitmap;
 #[path = "../src/ui/plugin/images.rs"]
 mod images;
+#[path = "../src/ui/plugin/svg.rs"]
+mod svg;
 
 use plugin_runtime::{
     Manager, Package,

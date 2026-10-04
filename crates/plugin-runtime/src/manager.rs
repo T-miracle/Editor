@@ -8,6 +8,7 @@ use std::{
     path::{Path, PathBuf},
 };
 mod artwork;
+mod bundles;
 mod data_updates;
 mod dependencies;
 mod image_input;
@@ -514,6 +515,8 @@ impl Manager {
     }
     /// Uninstall keeps state unless the user explicitly chose deletion in the manager UI.
     pub fn uninstall(&mut self, id: &str, delete_data: bool) -> anyhow::Result<()> {
+        // A durable host choice must outlive the registry entry and either plugin-data retention option.
+        self.record_bundle_uninstall(id)?;
         self.disable(id)?;
         self.installed.remove(id);
         self.save_registry()?;

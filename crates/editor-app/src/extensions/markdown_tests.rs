@@ -4,6 +4,8 @@ use super::*;
 use gpui_kit::{TestAppContext, gpui};
 
 mod code_highlighting;
+mod combination;
+mod distribution;
 mod format_toolbar;
 mod harness;
 mod image_import;
@@ -330,6 +332,12 @@ fn delivered_markdown_preview_tracks_unsaved_native_edits_and_reclaims_split(
             .unwrap()
             .id
     );
+    let reopened_source = manager.live["markdown"].views["preview"]
+        .source
+        .clone()
+        .unwrap();
+    assert!(cx.debug_bounds("plugin-ui-b-0-heading").is_some());
+    assert!(cx.debug_bounds("editor-source-toolbar").is_some());
     // Delayed worker output still carries the retired identity: it cannot mount native event targets.
     cx.update(|_, cx| {
         let owner = app.read(cx).extensions.clone();
@@ -354,13 +362,24 @@ fn delivered_markdown_preview_tracks_unsaved_native_edits_and_reclaims_split(
         );
     });
     cx.update(|window, cx| window.draw(cx).clear(cx));
+    // A same-source cache may retain focus metadata, but a retired publication must not paint
+    // its preview or toolbar. This checks the visible ownership boundary rather than allocation.
+    assert!(cx.debug_bounds("plugin-ui-b-0-heading").is_none());
+    assert!(cx.debug_bounds("editor-source-toolbar").is_none());
     assert!(cx.update(|_, cx| {
         app.read(cx).plugin_panels["markdown/preview"]
             .read(cx)
             .native_ui
-            .is_none()
+            .as_ref()
+            .is_none_or(|view| view.read(cx).same_source_document(&reopened_source))
     }));
+    assert_eq!(
+        cx.update(|_, cx| app.read(cx).editor.read(cx).text().to_string()),
+        replacement
+    );
     publish(&mut manager, &mut renderer, &app, cx);
+    assert!(cx.debug_bounds("plugin-ui-b-0-heading").is_some());
+    assert!(cx.debug_bounds("editor-source-toolbar").is_some());
     assert!(cx.update(|_, cx| {
         app.read(cx).plugin_panels["markdown/preview"]
             .read(cx)

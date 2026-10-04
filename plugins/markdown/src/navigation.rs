@@ -15,6 +15,9 @@ pub(super) struct Navigation {
     pending: Option<Pending>,
     waiting: Option<Waiting>,
     issue: Option<Issue>,
+    /// Preview priority outlives a Unit receipt: native reveal is queued before its actual paint.
+    /// This identity contains no geometry or mutable text and is retired by source input or invalidation.
+    viewport: Option<api::DocumentVersion>,
 }
 
 struct Pending {
@@ -56,6 +59,27 @@ enum Reason {
 }
 
 impl Navigation {
+    /// Only an exact current source version may retain the navigation's preview-first scroll policy.
+    /// A successful queued reveal keeps this policy even after its EditorTask has completed.
+    pub(super) fn controls_viewport(&self, document: Option<&api::DocumentVersion>) -> bool {
+        self.viewport.is_some() && self.viewport.as_ref() == document
+    }
+
+    /// A real source translation supersedes the link intent and returns ordinary bidirectional ownership.
+    pub(super) fn source_drives(&mut self) {
+        if self.viewport.is_some() {
+            self.cancel_pending();
+        }
+    }
+
+    /// A preview translation supersedes a still-pending link while retaining preview-first reflow.
+    /// The translation can also be the native reveal itself; neither case needs a guessed completion frame.
+    pub(super) fn preview_drives(&mut self) {
+        if self.viewport.is_some() {
+            self.retire_task();
+        }
+    }
+
     /// Only an actual parsed link in this native node can start a user-initiated navigation request.
     /// A successful reveal uses the revision of the view being returned after old feedback is cleared.
     pub(super) fn start(
@@ -123,6 +147,9 @@ impl Navigation {
         };
         if !retain {
             self.cancel_pending();
+        } else if self.viewport.is_some() {
+            // The actual Preview transition, never a filename-derived guess, moves scroll ownership.
+            self.viewport = next.cloned();
         }
         self.issue = None;
     }
@@ -145,12 +172,14 @@ impl Navigation {
             return false;
         }
         if current != Some(&waiting.document) {
+            self.viewport = None;
             return false;
         }
         let previous = self.issue.clone();
         if let Err(reason) =
             self.reveal(&waiting.document, index, nodes, &waiting.fragment, revision)
         {
+            self.viewport = None;
             self.issue = Some(Issue {
                 document: waiting.document,
                 reason,
@@ -190,10 +219,12 @@ impl Navigation {
                         self.complete(pending, value, source, index, nodes, revision)
                     });
                 if let Err(issue) = result {
+                    self.viewport = None;
                     self.issue = Some(issue);
                 }
             }
             api::RequestUpdate::Cancelled { reason, .. } => {
+                self.viewport = None;
                 self.issue = Some(Issue {
                     document: pending.document,
                     reason: Reason::Host(reason),
@@ -317,6 +348,7 @@ impl Navigation {
             }
             (Phase::Revealing | Phase::External, api::EditorValue::Unit) => {
                 if source.is_some_and(|source| source.version == pending.document) {
+                    // Unit acknowledges a queued native effect, not its geometry. Preview priority survives it.
                     Ok(())
                 } else {
                     Err(failed(Reason::SourceChanged))
@@ -364,6 +396,15 @@ impl Navigation {
             30_000,
         )
         .map_err(|error| Reason::Host(error.code))?;
+        if matches!(
+            &phase,
+            Phase::Opening {
+                fragment: Some(_),
+                ..
+            } | Phase::Revealing
+        ) {
+            self.viewport = Some(document.clone());
+        }
         self.pending = Some(Pending {
             task,
             document: document.clone(),
@@ -374,6 +415,12 @@ impl Navigation {
 
     /// Cancellation retires request and receipt correlation even when an already-started open cannot be rolled back.
     fn cancel_pending(&mut self) {
+        self.viewport = None;
+        self.retire_task();
+    }
+
+    /// Scroll input can replace receipt correlation while keeping the current preview as the reflow driver.
+    fn retire_task(&mut self) {
         self.waiting = None;
         if let Some(pending) = self.pending.take() {
             let _ = pending.task.cancel(api::CancelMode::TryTerminate);
@@ -383,5 +430,7 @@ impl Navigation {
 
 #[cfg(test)]
 mod link_targets_tests;
+#[cfg(test)]
+mod scrolling_tests;
 #[cfg(test)]
 mod tests;

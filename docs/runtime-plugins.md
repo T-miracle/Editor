@@ -83,6 +83,8 @@ $testExe = $artifacts | ForEach-Object { $_ | ConvertFrom-Json } |
 & $testExe --ignored --test-threads=1
 ```
 
-发行包为 terminal、example、svg、rust、toml、html、javascript；每包包含 README。Rust 包附带公开 LSP 钩子，其余语言资源包无需空生命周期组件。终端直接使用上游 term-wm-vt100，许可随包分发；基础主题内置。
+发行包为 terminal、example、svg、rust、toml、html、javascript、markdown；每包包含 README。Rust 包附带公开 LSP 钩子，Markdown 包附带原生文件预览访客，纯语言资源包无需空生命周期组件。终端直接使用上游 term-wm-vt100，许可随包分发；基础主题内置。
+
+正式脚本同时生成 `plugins/bundle-defaults.json`，按实际 ZIP 的哈希与文件扩展名声明首次提供候选。宿主检查索引、包和已有提供者，在受信任工作区的当前文件首次使用时复用正常权限确认；拒绝、禁用、卸载及替代提供者选择不会被默认包覆盖。索引不授予权限，也不使受限工作区运行插件。Markdown 的范围、命名规则及验收见[插件说明](../plugins/markdown/README.md)和[完整验收](../plugins/markdown/docs/verification/11-distribution-acceptance.md)。
 
 Windows 上执行实际 WASM、GPUI、ConPTY、进程树和语言服务验收。macOS/Linux 未在本次环境实测或交叉构建，不以 Windows 结果替代其他平台验证。完整矩阵及日志见 [最终契约验收](specs/plugin-api-contract-verification.md)。

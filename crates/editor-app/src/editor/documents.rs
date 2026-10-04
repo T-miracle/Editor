@@ -92,6 +92,8 @@ impl EditorApp {
                     self.tabs[index].capability_revision.saturating_add(1);
                 renamed_editors.push((self.tabs[index].editor.clone(), target.clone()));
                 if self.active_path.as_ref() == Some(&previous) {
+                    // The actor can finish before a shell repaint; renaming immediately revokes old consent paths.
+                    self.withdraw_bundled_request(cx);
                     self.active_path = Some(target);
                 }
                 renamed = true;
@@ -516,6 +518,11 @@ impl EditorApp {
             .map(str::to_owned)
             .unwrap_or_else(|_| t!("editor.untitled").to_string());
 
+        if self.editor != tab.editor || self.active_path.as_deref() != Some(path.as_path()) {
+            // Revoke queued first-use installation before a different native document becomes active.
+            // Re-activating this same document preserves a permission dialog that is already on screen.
+            self.withdraw_bundled_request(cx);
+        }
         self.active_path = Some(path.clone());
         self.editor = tab.editor.clone();
         // A completion index belongs to one document and must not cross tabs.
@@ -562,6 +569,10 @@ impl EditorApp {
         }
 
         let was_active = self.active_path.as_ref() == Some(&path);
+        if was_active {
+            // Closing a clean active tab cancels its ownership before any background cutover can race it.
+            self.withdraw_bundled_request(cx);
+        }
         self.close_language_document(&path, cx);
         self.tabs.remove(index);
         self.sync_watched_documents();

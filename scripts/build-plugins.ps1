@@ -4,7 +4,7 @@ param(
     [string]$HostExe = '',
     # Restrict verification to named packages without rebuilding unrelated components.
     [ValidateSet('terminal', 'example', 'svg', 'rust', 'toml', 'html', 'javascript', 'markdown')]
-    [string[]]$Packages = @('terminal', 'example', 'svg', 'rust', 'toml', 'html', 'javascript')
+    [string[]]$Packages = @('terminal', 'example', 'svg', 'rust', 'toml', 'html', 'javascript', 'markdown')
 )
 $ErrorActionPreference = 'Stop'
 $projectRoot = (Resolve-Path "$PSScriptRoot/..").Path
@@ -46,7 +46,7 @@ try {
     New-Item -ItemType Directory -Force $Output | Out-Null
     Add-Type -AssemblyName System.IO.Compression
     # Remove legacy package filenames, including the theme now built into the editor.
-    foreach ($name in @('terminal', 'example', 'svg', 'rust', 'toml', 'html', 'javascript')) {
+    foreach ($name in @('terminal', 'example', 'svg', 'rust', 'toml', 'html', 'javascript', 'markdown')) {
         Remove-Item -LiteralPath (Join-Path $Output "me.$name.zip") -Force -ErrorAction SilentlyContinue
     }
     Remove-Item -LiteralPath (Join-Path $Output 'me.default-light-theme.zip') -Force -ErrorAction SilentlyContinue
@@ -127,4 +127,30 @@ try {
         } finally { $archive.Dispose(); $stream.Dispose() }
         Write-Output $destination
     }
+    # This release policy is data consumed by the generic first-use host flow, never a host ID branch.
+    # Hash only ZIPs present in this output: partial builds must not point to missing packages.
+    $bundlePackages = @()
+    foreach ($defaultPackage in @(@{ file = 'markdown.zip'; file_extensions = @('md', 'markdown') })) {
+        $packagePath = Join-Path $Output $defaultPackage.file
+        if (Test-Path -LiteralPath $packagePath -PathType Leaf) {
+            $bundlePackages += @{
+                file = $defaultPackage.file
+                sha256 = (Get-FileHash -LiteralPath $packagePath -Algorithm SHA256).Hash.ToLowerInvariant()
+                file_extensions = $defaultPackage.file_extensions
+            }
+        }
+    }
+    $catalog = @{ version = 1; packages = @($bundlePackages) } | ConvertTo-Json -Depth 5
+    $catalogPath = [IO.Path]::GetFullPath((Join-Path $Output 'bundle-defaults.json'))
+    $catalogTemporary = Join-Path (Split-Path -Parent $catalogPath) ('.bundle-defaults-' + [guid]::NewGuid().ToString('N') + '.tmp')
+    try {
+        # Atomic replacement prevents a reader from observing a half-written catalog after a package build.
+        [IO.File]::WriteAllText($catalogTemporary, $catalog, [Text.UTF8Encoding]::new($false))
+        [IO.File]::Move($catalogTemporary, $catalogPath, $true)
+    } finally {
+        if (Test-Path -LiteralPath $catalogTemporary -PathType Leaf) {
+            Remove-Item -LiteralPath $catalogTemporary
+        }
+    }
+    Write-Output $catalogPath
 } finally { Pop-Location }

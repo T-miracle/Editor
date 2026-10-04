@@ -1,6 +1,6 @@
 # Markdown 插件实施工单
 
-状态：用户已要求连续执行全部工单，拆分与测试接缝已批准；已发布总方案 [#26](https://github.com/T-miracle/Editor/issues/26) 及工单 #27–#37，开始实施。日期：2026-10-03。真实映射见 [publication.json](publication.json)。
+状态：全部 11 张工单实现与验收已通过；01–10 已交付关闭，11 的 Git 交付及 tracker 关闭待读回。总方案 [#26](https://github.com/T-miracle/Editor/issues/26) 及工单 #27–#37 的真实映射见 [publication.json](publication.json)。更新日期：2026-10-04。
 
 阅读[总方案](../spec.md)与[AI 执行入口](../../AGENTS.md)。目录位置按用户明确要求设在插件包内，中央插件文档仅维护链接。
 
@@ -22,7 +22,7 @@
 | 10 | [按内容块双向同步滚动并记住开关](10-synchronized-scroll.md) | 03、05 | M07、M05（同步偏好）、M06、M14、M15、M16 |
 | 11 | [随编辑器交付默认可用的完整 Markdown 插件](11-distribution-acceptance.md) | 06、07、08、09、10 | M01–M16 全部最终回归 |
 
-依赖只表达真实技术门槛，不授权并行启动代理。01–10 已通过[验收](../verification/README.md)，10 的 Git 交付及关闭读回后下一实施前沿为 11。每次执行一张前沿工单，完成后重新核对真实状态。编号不是 GitHub issue 编号。2026-10-03 已读回 #26–#37 的正文、ready-for-agent 标签及全部 17 条原生阻塞关系，映射与本目录一致。
+依赖只表达真实技术门槛，不授权并行启动代理。01–11 已通过[验收](../verification/README.md)，最终 Markdown 0.11.0 正式包完整原生组 62/62、0 ignored；11 只剩 Git 交付与关闭读回。编号不是 GitHub issue 编号。2026-10-03 已读回 #26–#37 的正文、ready-for-agent 标签及全部 17 条原生阻塞关系，映射与本目录一致。
 
 ## 交付与状态
 

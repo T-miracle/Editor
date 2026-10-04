@@ -1,4 +1,5 @@
 //! Generic runtime-plugin dock and manager. Feature behavior arrives from installed packages.
+mod bundled;
 #[cfg(test)]
 mod capability_tests;
 mod commands;
@@ -118,6 +119,8 @@ pub struct ExtensionPanel {
     pending: Option<Package>,
     /// Prevent repainting from opening the same installation dialog repeatedly.
     pending_dialog_open: bool,
+    /// First-use candidates belong to the active source, independently of the manager's manual ZIP flow.
+    bundled: bundled::State,
     installation: Option<worker::InstallationProgress>,
     installation_dialog_open: bool,
     /// Search and selection belong to the manager window, not a plugin surface.
@@ -283,6 +286,7 @@ impl ExtensionPanel {
             command_popup: None,
             pending: None,
             pending_dialog_open: false,
+            bundled: Default::default(),
             installation: None,
             installation_dialog_open: false,
             manager_search: None,
@@ -382,6 +386,7 @@ impl ExtensionPanel {
             command_popup: None,
             pending: None,
             pending_dialog_open: false,
+            bundled: Default::default(),
             installation: None,
             installation_dialog_open: false,
             manager_search: None,
@@ -410,6 +415,7 @@ impl ExtensionPanel {
     /// Apply host-local authority before accepting further worker views or contributions.
     pub(crate) fn set_workspace_trusted(&mut self, trusted: bool, cx: &mut Context<Self>) {
         if !trusted {
+            self.bundled.cancel_request();
             self.worker.cancel_installation();
             // Startup declarations can exist before the worker publishes any installed entries.
             contributions::refresh_entries(&self.root, &[]);
@@ -426,6 +432,20 @@ impl ExtensionPanel {
         let mut contributions_changed = false;
         let editor_requests = {
             let mut state = self.worker.state.lock().unwrap();
+            if self.surface_id.is_none() {
+                changed |= self.bundled.ready != state.ready;
+                self.bundled.ready = state.ready;
+                if let Some(reply) = state.bundle_reply.take() {
+                    if let Some(message) = self.bundled.accept(reply) {
+                        // Integrity/recovery errors use the existing manager status; stale replies cannot set it.
+                        state.status = Some(worker::OperationStatus {
+                            plugin: None,
+                            message,
+                        });
+                    }
+                    changed = true;
+                }
+            }
             if self.configuration_revision != state.configuration_revision {
                 self.configuration_revision = state.configuration_revision;
                 changed = true;
@@ -649,7 +669,7 @@ impl ExtensionPanel {
     }
     /// Queue a plugin lifecycle operation and expose its waiting state on this frame.
     fn queue_lifecycle(&mut self, work: Work) -> bool {
-        let installing = matches!(&work, Work::Install(_));
+        let installing = matches!(&work, Work::Install(_) | Work::InstallBundle(_));
         if self.worker.queue_lifecycle(work) {
             if installing {
                 self.installation_dialog_open = false;

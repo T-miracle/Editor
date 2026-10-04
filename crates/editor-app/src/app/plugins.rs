@@ -41,11 +41,16 @@ impl EditorApp {
             + self.language_service_details(kind).len()
             + match kind {
                 PluginPopupKind::Loading => runtime.startup.len(),
-                PluginPopupKind::Error => runtime
-                    .entries
-                    .iter()
-                    .filter(|entry| entry.error.is_some())
-                    .count(),
+                PluginPopupKind::Error => {
+                    // Recovery and first preparation can fail before a package has a registry entry.
+                    // Current operation errors are included unless that exact failure is already in a row.
+                    runtime
+                        .entries
+                        .iter()
+                        .filter(|entry| entry.error.is_some())
+                        .count()
+                        + usize::from(runtime.manager_error().is_some())
+                }
             }
     }
 
@@ -161,6 +166,24 @@ impl EditorApp {
         // GPUI measures the card before placing it above the clicked window point.
         runtime_details.extend(self.dynamic_language_status(kind));
         runtime_details.extend(self.language_service_details(kind));
+        let operation_error = (kind == PluginPopupKind::Error)
+            .then(|| runtime.manager_error())
+            .flatten()
+            .map(|message| {
+                v_flex()
+                    .debug_selector(|| "plugin-manager-status-detail".into())
+                    .gap_1()
+                    .child(
+                        div()
+                            .font_semibold()
+                            .child(t!("plugins.manager_title").to_string()),
+                    )
+                    .child(
+                        div()
+                            .text_xs()
+                            .child(t!("plugins.manager_error", error = message).to_string()),
+                    )
+            });
         gpui_base::Positioner::side(Bounds::new(position, size(px(1.), px(1.))))
             .placement(gpui_base::Placement::Top)
             .align(gpui_base::Align::End)
@@ -184,6 +207,7 @@ impl EditorApp {
                     .shadow_md()
                     .on_any_mouse_down(|_, _, cx| cx.stop_propagation())
                     .child(div().font_semibold().child(title.to_string()))
+                    .children(operation_error)
                     .children(runtime_details.into_iter().map(|(name, detail)| {
                         v_flex()
                             .gap_1()

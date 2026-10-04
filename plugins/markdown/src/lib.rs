@@ -105,8 +105,12 @@ impl State {
         match event {
             api::Notification::SourceViewport(position) if panel == Some("preview") => {
                 if let Some(source) = &self.source {
-                    self.scrolling
-                        .source(position, source, &self.blocks, self.revision);
+                    if self
+                        .scrolling
+                        .source(position, source, &self.blocks, self.revision)
+                    {
+                        self.navigation.source_drives();
+                    }
                 }
                 true
             }
@@ -116,8 +120,12 @@ impl State {
                         && event.node == "preview-scroll"
                         && let Some(source) = &self.source
                     {
-                        self.scrolling
-                            .preview(position, source, &self.blocks, self.revision);
+                        if self
+                            .scrolling
+                            .preview(position, source, &self.blocks, self.revision)
+                        {
+                            self.navigation.preview_drives();
+                        }
                     }
                     true
                 } else {
@@ -195,6 +203,14 @@ impl State {
                     &self.blocks,
                     self.revision,
                 );
+                if navigation_changed
+                    && !self
+                        .navigation
+                        .controls_viewport(self.source.as_ref().map(|source| &source.version))
+                {
+                    // A failed/cancelled heading intent releases its hold; Unit alone never reaches this branch.
+                    self.scrolling.reset();
+                }
                 if formatting_changed || imports_changed || navigation_changed {
                     self.revision = self.revision.saturating_add(1);
                 }
@@ -229,14 +245,25 @@ impl State {
                 let imports_changed = self.imports.superseded();
                 self.formatting.start_task(change, Some(source)) || imports_changed
             }
-            ui::Action::Link { uri } => self.navigation.start(
-                &self.navigation_index,
-                &self.blocks,
-                self.source.as_ref(),
-                &event.node,
-                &uri,
-                self.revision,
-            ),
+            ui::Action::Link { uri } => {
+                let document = self.source.as_ref().map(|source| &source.version);
+                let previous = self.navigation.controls_viewport(document);
+                let changed = self.navigation.start(
+                    &self.navigation_index,
+                    &self.blocks,
+                    self.source.as_ref(),
+                    &event.node,
+                    &uri,
+                    self.revision,
+                );
+                if self.navigation.controls_viewport(document) {
+                    // An accepted internal link cancels older automatic locates before native dispatch can apply them.
+                    self.scrolling.navigate();
+                } else if previous {
+                    self.scrolling.reset();
+                }
+                changed
+            }
             _ => false,
         };
         // Acceptance alone keeps the revision stable so a newer fast action can replace the pending intent.
@@ -247,7 +274,10 @@ impl State {
 
     /// Rebuild only derived nodes; offsets remain UTF-8 bytes in exactly the echoed source version.
     fn refresh(&mut self) {
-        self.scrolling.reset();
+        self.scrolling.refresh(
+            self.navigation
+                .controls_viewport(self.source.as_ref().map(|source| &source.version)),
+        );
         self.blocks = self.source.as_ref().map_or_else(Vec::new, |source| {
             preview::blocks(&source.text, &self.environment.locale)
         });
@@ -266,6 +296,8 @@ impl State {
             &self.blocks,
             self.revision,
         ) {
+            // A missing target or failed follow-up cannot indefinitely suppress ordinary initial source alignment.
+            self.scrolling.reset();
             self.revision = self.revision.saturating_add(1);
         }
     }

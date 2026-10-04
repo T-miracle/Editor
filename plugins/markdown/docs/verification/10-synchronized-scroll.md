@@ -57,3 +57,7 @@ Windows 原生 GPUI 测试；`CARGO_BUILD_JOBS=1`，UI 测试 `RUST_MIN_STACK=33
 ## Spec
 
 独立审查的同源主题重排与 hide／release 边界已补真实 RED → GREEN；最终复审 0 项未解决问题、未发现缺项或范围蔓延，已独立核对实际原生 6/6 与门禁。
+
+## Git 与 tracker 交付
+
+已普通提交并推送 `67331885717aa80a0366d029a56954a16ed5cc2b` 到 `origin/codex/markdown-plugin`，`ls-remote` 核对完整 SHA 相同。随后 PATCH #36，再以独立 GET 读回 `closed / completed`。#32–#36 直接前置均读回 `closed / completed`，#37 `open / ready-for-agent`；未修改父方案 #26。下一前沿为工单 11。

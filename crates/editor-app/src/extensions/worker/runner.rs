@@ -13,6 +13,8 @@ impl Worker {
             trusted,
         )));
         let output = state.clone();
+        let trust = Arc::new(std::sync::atomic::AtomicBool::new(trusted));
+        let authority = trust.clone();
         std::thread::spawn(move || {
             // Prepare the public SDK off the UI thread. A failure is delivered only to guests that request it.
             let resources = plugin_runtime::HostResources {
@@ -34,6 +36,8 @@ impl Worker {
             let mut last_save = Instant::now();
             let mut vectors = super::super::images::VectorRenderer::default();
             let mut preparation: Option<BackgroundPreparation> = None;
+            // First-use preparation retains its native cancellation token until the serialized cutover.
+            let mut bundled_install: Option<super::super::bundled::Candidate> = None;
             let mut deferred = VecDeque::new();
             let mut instance_ids = BTreeMap::<String, String>::new();
             loop {
@@ -58,6 +62,12 @@ impl Worker {
                     }
                 };
                 if let Some(pending) = &preparation {
+                    if bundled_install.as_ref().is_some_and(|candidate| {
+                        !candidate.request.is_active()
+                            || !authority.load(std::sync::atomic::Ordering::Acquire)
+                    }) {
+                        pending.control.cancel();
+                    }
                     match work.as_ref() {
                         Some(Work::Shutdown(_)) => {
                             pending.control.cancel();
@@ -86,7 +96,10 @@ impl Worker {
                             | Work::SetProjectEnabled(_, _)
                             | Work::SetTrust(true)
                             | Work::Uninstall(_, _)
-                            | Work::Install(_),
+                            | Work::Install(_)
+                            | Work::InspectBundle(_)
+                            | Work::InstallBundle(_)
+                            | Work::DeclineBundle(_),
                         ) => {
                             // Persistent choices cannot write through the transaction lock. Old commands and
                             // typed requests continue normally until the candidate returns for cutover.
@@ -137,7 +150,19 @@ impl Worker {
                     }
                 }
                 let result = if let Some((_, control, prepared)) = completed {
-                    prepared.and_then(|prepared| manager.commit_installation(prepared, &control))
+                    // Taking before inspecting Result releases retained package bytes on preparation failure too.
+                    let candidate = bundled_install.take();
+                    prepared.and_then(|prepared| {
+                        if let Some(candidate) = candidate {
+                            // A preparation result cannot restore a withdrawn file or supersede a provider choice.
+                            anyhow::ensure!(
+                                authority.load(std::sync::atomic::Ordering::Acquire),
+                                "Workspace restricted"
+                            );
+                            super::super::bundled::validate_candidate(&manager, &candidate)?;
+                        }
+                        manager.commit_installation(prepared, &control)
+                    })
                 } else {
                     match work {
                         Some(Work::SetServiceProvider {
@@ -192,43 +217,91 @@ impl Worker {
                         }
                         Some(Work::Inspect(path)) => Package::read(&path)
                             .map(|package| output.lock().unwrap().pending = Some(package)),
-                        Some(Work::Install(package)) => {
-                            let control = output
-                                .lock()
-                                .unwrap()
-                                .install_control
-                                .clone()
-                                .unwrap_or_default();
-                            if package.manifest.component.is_some() {
-                                let started = manager
-                                    .begin_installation(
+                        Some(Work::InspectBundle(request)) => {
+                            let result = if authority.load(std::sync::atomic::Ordering::Acquire) {
+                                super::super::bundled::prepare_offer(&mut manager, &request)
+                            } else {
+                                Ok(None)
+                            }
+                            .map_err(|error| format!("{error:#}"));
+                            output.lock().unwrap().bundle_reply =
+                                Some(super::super::bundled::Reply {
+                                    token: request.token,
+                                    result,
+                                });
+                            Ok(())
+                        }
+                        Some(Work::DeclineBundle(candidate)) => {
+                            manager.record_bundle_decline(&candidate.package.manifest.id)
+                        }
+                        Some(work @ (Work::Install(_) | Work::InstallBundle(_))) => {
+                            let package = match work {
+                                Work::Install(package) => Ok((Arc::new(package), None)),
+                                Work::InstallBundle(candidate) => {
+                                    let trusted =
+                                        authority.load(std::sync::atomic::Ordering::Acquire);
+                                    if !trusted {
+                                        candidate
+                                            .request
+                                            .active
+                                            .store(false, std::sync::atomic::Ordering::Release);
+                                    }
+                                    super::super::bundled::validate_candidate(&manager, &candidate)
+                                        .map(|()| (candidate.package.clone(), Some(candidate)))
+                                }
+                                _ => unreachable!("only installation work reaches this branch"),
+                            };
+                            package.and_then(|(package, candidate)| {
+                                let control = output
+                                    .lock()
+                                    .unwrap()
+                                    .install_control
+                                    .clone()
+                                    .unwrap_or_default();
+                                let control = if let Some(candidate) = &candidate {
+                                    let active = candidate.request.active.clone();
+                                    let trusted = authority.clone();
+                                    // Resource-only installs are synchronous; every runtime check must see native
+                                    // withdrawal directly rather than wait for the actor's next message turn.
+                                    control.with_guard(move || {
+                                        active.load(std::sync::atomic::Ordering::Acquire)
+                                            && trusted.load(std::sync::atomic::Ordering::Acquire)
+                                    })
+                                } else {
+                                    control
+                                };
+                                if package.manifest.component.is_some() {
+                                    let started = manager
+                                        .begin_installation(
+                                            &package,
+                                            package.manifest.permissions.clone(),
+                                            &control,
+                                        )
+                                        .and_then(|job| {
+                                            BackgroundPreparation::start(
+                                                package.manifest.id.clone(),
+                                                job,
+                                                control,
+                                            )
+                                        });
+                                    match started {
+                                        Ok(job) => {
+                                            preparation = Some(job);
+                                            bundled_install = candidate;
+                                            // Starting preparation is not installation completion; retain the loading state.
+                                            lifecycle = None;
+                                            Ok(())
+                                        }
+                                        Err(error) => Err(error),
+                                    }
+                                } else {
+                                    manager.install_with_control(
                                         &package,
                                         package.manifest.permissions.clone(),
                                         &control,
                                     )
-                                    .and_then(|job| {
-                                        BackgroundPreparation::start(
-                                            package.manifest.id.clone(),
-                                            job,
-                                            control,
-                                        )
-                                    });
-                                match started {
-                                    Ok(job) => {
-                                        preparation = Some(job);
-                                        // Starting preparation is not installation completion; retain the loading state.
-                                        lifecycle = None;
-                                        Ok(())
-                                    }
-                                    Err(error) => Err(error),
                                 }
-                            } else {
-                                manager.install_with_control(
-                                    &package,
-                                    package.manifest.permissions.clone(),
-                                    &control,
-                                )
-                            }
+                            })
                         }
                         Some(Work::Enable(id)) => manager.enable(&id),
                         Some(Work::Restart(id)) => manager.restart_plugin(&id),
@@ -289,6 +362,10 @@ impl Worker {
                         None => Ok(()),
                     }
                 };
+                if preparation.is_none() {
+                    // Failed preparation and resource-only installs release the immutable candidate promptly.
+                    bundled_install = None;
+                }
                 match output.lock().unwrap().document_events.take_batch(64) {
                     Ok(changes) => {
                         for change in changes {
@@ -466,6 +543,7 @@ impl Worker {
                 }
                 instance_ids = next_instances;
                 published.entries = manager.published_entries();
+                published.ready = true;
                 published.diagnostics = manager
                     .installed
                     .keys()
@@ -481,7 +559,7 @@ impl Worker {
         Self {
             tx,
             state,
-            trusted: std::sync::atomic::AtomicBool::new(trusted),
+            trusted: trust,
             image_offers: Default::default(),
             #[cfg(test)]
             recorded: Mutex::new(mpsc::channel().1),

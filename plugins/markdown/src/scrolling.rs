@@ -12,7 +12,9 @@ pub(super) struct Scrolling {
 
 enum Driver {
     Source(api::SourceViewport),
-    Preview(api::PreviewViewport),
+    /// Explicit navigation owns the preview before its next complete native geometry is available.
+    /// A missing position suppresses source reflow without guessing a frame count or heading alignment.
+    Preview(Option<api::PreviewViewport>),
 }
 
 #[derive(Clone, PartialEq)]
@@ -27,68 +29,87 @@ struct Pending {
     intent: Intent,
 }
 
+/// One validated position supplies both a possible native location and whether translation may replace navigation.
+struct Projection {
+    intent: Option<Intent>,
+    translated: bool,
+    /// Switching manual sides retires an older queued location that could otherwise move the new driver.
+    takeover: bool,
+}
+
 impl Scrolling {
     /// A new source or UI projection cancels work instead of carrying old offsets into another scene.
     pub(super) fn reset(&mut self) {
+        self.cancel_pending();
+        self.driver = None;
+    }
+
+    /// An explicit heading intent retires earlier automatic locations before native navigation runs.
+    /// Its first actual preview position, including an EOF-clamped position, will drive only the source.
+    pub(super) fn navigate(&mut self) {
+        self.cancel_pending();
+        self.driver = Some(Driver::Preview(None));
+    }
+
+    /// Rebuilding the same navigation-owned scene retains its measured preview anchor, not old requests.
+    /// Ordinary initial split/restoration keeps the existing first-measurement behavior when no link owns it.
+    pub(super) fn refresh(&mut self, navigation: bool) {
+        if navigation {
+            self.cancel_pending();
+            if !matches!(self.driver, Some(Driver::Preview(_))) {
+                self.driver = Some(Driver::Preview(None));
+            }
+        } else {
+            self.reset();
+        }
+    }
+
+    /// Cancellation prevents queued host work where possible; already-applied Base offsets are not rolled back.
+    fn cancel_pending(&mut self) {
         if let Some(pending) = self.pending.take() {
             let _ = pending.task.cancel(api::CancelMode::StopWaiting);
         }
         self.latest = None;
-        self.driver = None;
     }
 
-    /// Only manual source positions become drivers; reflow on the following side preserves its last driver.
+    /// Source translation may become the driver; reflow on the following side preserves preview priority.
+    /// Return true only for a validated, nonprogram source translation so navigation can retire its old intent.
     pub(super) fn source(
         &mut self,
         position: &api::SourceViewport,
         source: &Source,
         blocks: &[ui::Node],
         revision: u64,
-    ) {
-        if position.origin.is_some()
-            || position.document != source.version
-            || position.ui_revision != revision
-            || position.validate().is_err()
-        {
-            return;
-        }
-        let intent = if position.layout && matches!(self.driver, Some(Driver::Preview(_))) {
-            let Some(Driver::Preview(previous)) = &self.driver else {
-                unreachable!()
-            };
-            preview_intent(previous, source, revision)
-        } else {
-            self.driver = Some(Driver::Source(position.clone()));
-            source_intent(position, source, blocks, revision)
-        };
-        if let Some(intent) = intent {
-            self.queue(intent);
-        }
+    ) -> bool {
+        let projection = project_source(&mut self.driver, position, source, blocks, revision);
+        self.apply(projection)
     }
 
     /// Actual preview geometry identifies its deepest rendered block, including images and wrapped tables.
+    /// Return true for nonprogram translation; layout can still establish a navigation's first preview anchor.
     pub(super) fn preview(
         &mut self,
         position: &api::PreviewViewport,
         source: &Source,
         blocks: &[ui::Node],
         revision: u64,
-    ) {
-        if position.origin.is_some() || position.validate().is_err() {
-            return;
-        }
-        let intent = if position.layout && matches!(self.driver, Some(Driver::Source(_))) {
-            let Some(Driver::Source(previous)) = &self.driver else {
-                unreachable!()
-            };
-            source_intent(previous, source, blocks, revision)
-        } else {
-            self.driver = Some(Driver::Preview(position.clone()));
-            preview_intent(position, source, revision)
+    ) -> bool {
+        let projection = project_preview(&mut self.driver, position, source, blocks, revision);
+        self.apply(projection)
+    }
+
+    /// Geometry decisions are pure; only this boundary turns a validated projection into a bounded host request.
+    fn apply(&mut self, projection: Option<Projection>) -> bool {
+        let Some(projection) = projection else {
+            return false;
         };
-        if let Some(intent) = intent {
+        if projection.takeover {
+            self.cancel_pending();
+        }
+        if let Some(intent) = projection.intent {
             self.queue(intent);
         }
+        projection.translated
     }
 
     /// A single accepted request and one replaceable latest intent coalesce fast wheel/frame notifications.
@@ -132,6 +153,66 @@ impl Scrolling {
         }
         true
     }
+}
+
+/// Initial source measurement cannot override a navigation waiting for its first native preview geometry.
+/// Later source reflow follows that measured preview, while genuine translation returns source ownership.
+fn project_source(
+    driver: &mut Option<Driver>,
+    position: &api::SourceViewport,
+    source: &Source,
+    blocks: &[ui::Node],
+    revision: u64,
+) -> Option<Projection> {
+    if position.origin.is_some()
+        || position.document != source.version
+        || position.ui_revision != revision
+        || position.validate().is_err()
+    {
+        return None;
+    }
+    let takeover = !position.layout && matches!(driver, Some(Driver::Preview(_)));
+    let intent =
+        if let Some(Driver::Preview(previous)) = driver.as_ref().filter(|_| position.layout) {
+            previous
+                .as_ref()
+                .and_then(|previous| preview_intent(previous, source, revision))
+        } else {
+            *driver = Some(Driver::Source(position.clone()));
+            source_intent(position, source, blocks, revision)
+        };
+    Some(Projection {
+        intent,
+        translated: !position.layout,
+        takeover,
+    })
+}
+
+/// The preview can drive before or after a reveal receipt; its actual top block also handles EOF clamping.
+/// Source ownership wins preview reflow only after a genuine source translation has replaced navigation.
+fn project_preview(
+    driver: &mut Option<Driver>,
+    position: &api::PreviewViewport,
+    source: &Source,
+    blocks: &[ui::Node],
+    revision: u64,
+) -> Option<Projection> {
+    if position.origin.is_some() || position.validate().is_err() {
+        return None;
+    }
+    let takeover = !position.layout && matches!(driver, Some(Driver::Source(_)));
+    let intent = if let Some(Driver::Source(previous)) = driver.as_ref().filter(|_| position.layout)
+    {
+        source_intent(previous, source, blocks, revision)
+    } else {
+        *driver = Some(Driver::Preview(Some(position.clone())));
+        preview_intent(position, source, revision)
+    };
+    Some(Projection {
+        intent,
+        translated: !position.layout,
+        takeover,
+    })
 }
 
 /// One deferred intent must describe the latest manual position even when it returns to the in-flight one.
@@ -201,77 +282,4 @@ fn preview_intent(
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    /// Returning to A while A is pending must discard B rather than scroll to it after A completes.
-    #[test]
-    fn scrolling_latest_manual_position_cancels_an_obsolete_deferred_intent() {
-        let first = Intent {
-            document: api::DocumentVersion {
-                id: "native".into(),
-                path: "notes.md".into(),
-                revision: 7,
-            },
-            ui_revision: 4,
-            target: api::ViewportTarget::Preview {
-                node: "a".into(),
-                fraction: 0.0,
-            },
-        };
-        let mut second = first.clone();
-        second.target = api::ViewportTarget::Preview {
-            node: "b".into(),
-            fraction: 0.5,
-        };
-        let mut latest = None;
-        coalesce(&first, &mut latest, second.clone());
-        assert!(latest.as_ref() == Some(&second));
-        coalesce(&first, &mut latest, first.clone());
-        assert!(latest.is_none(), "A→B→A retains A, not the obsolete B");
-    }
-
-    /// Unicode endpoints and blank gaps remain tied to the closest semantic block.
-    #[test]
-    fn scrolling_maps_blocks_and_unicode_boundaries_without_document_percentages() {
-        let source = Source {
-            version: api::DocumentVersion {
-                id: "native".into(),
-                path: "notes.md".into(),
-                revision: 7,
-            },
-            text: "前段\n\n目标中文段落\n\n末段\n".into(),
-        };
-        let start = source.text.find("目标").unwrap();
-        let end = source.text.find("\n\n末段").unwrap() + 1;
-        let range = ui::SourceRange { start, end };
-        let blocks = vec![ui::Node::text("target", "目标中文段落").source_range(start..end)];
-        let anchor = api::SourceViewport {
-            document: source.version.clone(),
-            ui_revision: 4,
-            offset: start,
-            line_fraction: 0.0,
-            origin: None,
-            layout: false,
-        };
-        assert!(
-            matches!(source_intent(&anchor, &source, &blocks, 4).unwrap().target,
-            api::ViewportTarget::Preview { node, fraction } if node == "target" && fraction == 0.0)
-        );
-        for fraction in [0.0, 0.13, 0.5, 0.87, 1.0] {
-            let preview = api::PreviewViewport {
-                block: "target".into(),
-                source_range: range,
-                fraction,
-                origin: None,
-                layout: false,
-            };
-            let api::ViewportTarget::Source { offset, .. } =
-                preview_intent(&preview, &source, 4).unwrap().target
-            else {
-                panic!("source target")
-            };
-            assert!((start..=end).contains(&offset) && source.text.is_char_boundary(offset));
-        }
-    }
-}
+mod tests;

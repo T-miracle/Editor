@@ -38,6 +38,8 @@ pub enum InstallStage {
 pub struct InstallControl {
     cancelled: Arc<AtomicBool>,
     report: Arc<dyn Fn(InstallStage) + Send + Sync>,
+    /// Host-owned lifetime checks grant no permissions and run only at existing cancellation barriers.
+    guard: Option<Arc<dyn Fn() -> bool + Send + Sync>>,
     prompts: bool,
     approval: Arc<std::sync::Mutex<installer::Approval>>,
 }
@@ -51,6 +53,7 @@ impl InstallControl {
         Self {
             cancelled: Arc::new(AtomicBool::new(false)),
             report: Arc::new(report),
+            guard: None,
             prompts: false,
             approval: Default::default(),
         }
@@ -58,10 +61,25 @@ impl InstallControl {
     pub fn cancel(&self) {
         self.cancelled.store(true, Ordering::Release);
     }
+    /// Add a host lifetime gate to preparation, dependency I/O and the final controlled commit.
+    /// Returning false cancels continuation. The predicate must be cheap, thread safe and read no UI,
+    /// guest state or files; repeated gates are combined so later callers cannot weaken an earlier gate.
+    /// Ordinary manual installs retain their existing behavior when no gate is supplied.
+    pub fn with_guard(mut self, guard: impl Fn() -> bool + Send + Sync + 'static) -> Self {
+        self.guard = Some(match self.guard.take() {
+            Some(previous) => Arc::new(move || previous() && guard()),
+            None => Arc::new(guard),
+        });
+        self
+    }
     pub(crate) fn check(&self) -> anyhow::Result<()> {
         anyhow::ensure!(
             !self.cancelled.load(Ordering::Acquire),
             "Dependency preparation cancelled"
+        );
+        anyhow::ensure!(
+            self.guard.as_ref().is_none_or(|guard| guard()),
+            "Installation authority was withdrawn"
         );
         Ok(())
     }

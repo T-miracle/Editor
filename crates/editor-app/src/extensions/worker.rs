@@ -1,5 +1,7 @@
 //! A single worker owns plugin stores; the UI thread never compiles or executes WASM.
 use plugin_runtime::{Installed, Manager, Package, plugin_protocol::*};
+#[cfg(test)]
+mod bundled_tests;
 mod preparation;
 mod runner;
 #[cfg(test)]
@@ -30,6 +32,12 @@ pub(super) enum Work {
     },
     Inspect(PathBuf),
     Install(Package),
+    /// Shipped discovery never starts guests or forces the manager window open.
+    InspectBundle(super::bundled::Request),
+    /// Only the matching native confirmation can submit the retained immutable package.
+    InstallBundle(super::bundled::Candidate),
+    /// Refusal is a host-owned identity choice, independent of version digest or removable plugin data.
+    DeclineBundle(super::bundled::Candidate),
     Enable(String),
     Restart(String),
     Disable(String),
@@ -68,6 +76,9 @@ impl Work {
             | Self::Invoke { plugin, .. }
             | Self::ImageInput { plugin, .. } => Some(plugin),
             Self::Install(package) => Some(&package.manifest.id),
+            Self::InstallBundle(candidate) | Self::DeclineBundle(candidate) => {
+                Some(&candidate.package.manifest.id)
+            }
             Self::Enable(id)
             | Self::Restart(id)
             | Self::Disable(id)
@@ -92,6 +103,11 @@ impl Work {
             }),
             Self::Install(package) => Some(OperationProgress {
                 id: package.manifest.id.clone(),
+                action: LifecycleAction::Install,
+                delete_data: None,
+            }),
+            Self::InstallBundle(candidate) => Some(OperationProgress {
+                id: candidate.package.manifest.id.clone(),
                 action: LifecycleAction::Install,
                 delete_data: None,
             }),
@@ -142,6 +158,10 @@ pub(super) struct InstallationProgress {
 }
 #[derive(Default)]
 pub(super) struct Published {
+    /// True only after successful private-store recovery and the actor's first complete entry publication.
+    pub ready: bool,
+    /// A single first-use reply is consumed only by the main editor owner; it grants no installation rights.
+    pub bundle_reply: Option<super::bundled::Reply>,
     pub diagnostics: BTreeMap<String, Vec<plugin_runtime::faults::Diagnostic>>,
     pub plugin_service_choices: Vec<service::Choice>,
     pub installation: Option<InstallationProgress>,
@@ -179,7 +199,7 @@ pub(super) struct Worker {
     pub tx: mpsc::Sender<Work>,
     pub state: Arc<Mutex<Published>>,
     /// UI publication is masked immediately, including results queued before revocation.
-    pub trusted: std::sync::atomic::AtomicBool,
+    pub trusted: Arc<std::sync::atomic::AtomicBool>,
     /// Two native batches bound preparation and the otherwise unbounded command channel to 64 MiB.
     image_offers: Arc<std::sync::atomic::AtomicUsize>,
     #[cfg(test)]
@@ -242,7 +262,12 @@ impl Worker {
         if state.progress.is_some() {
             return false;
         }
-        if let Work::Install(package) = &work {
+        let installation = match &work {
+            Work::Install(package) => Some(package),
+            Work::InstallBundle(candidate) => Some(candidate.package.as_ref()),
+            _ => None,
+        };
+        if let Some(package) = installation {
             state.installation = Some(InstallationProgress {
                 id: package.manifest.id.clone(),
                 message: "准备安装…".into(),
@@ -301,7 +326,7 @@ impl Worker {
                 &environment,
                 trusted,
             ))),
-            trusted: std::sync::atomic::AtomicBool::new(trusted),
+            trusted: Arc::new(std::sync::atomic::AtomicBool::new(trusted)),
             image_offers: Default::default(),
             recorded: Mutex::new(rx),
         }

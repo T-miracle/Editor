@@ -337,6 +337,8 @@ impl Render for EditorApp {
         if let Some(path) = self.pending_plugin_file.take() {
             self.open_file(path, window, cx);
         }
+        // Discovery waits for healthy runtime restoration, then reuses native permission consent for this file.
+        self.sync_bundled_first_use(window, cx);
         let cursor = self.editor.read(cx).cursor_position();
         let project_initial = self
             .workspace

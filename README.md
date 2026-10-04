@@ -18,6 +18,7 @@ Me Editor 是一个 Rust + GPUI Kit 编写的原生桌面代码编辑器初版�
 - LSP 语义诊断：编辑停顿 180 ms 后同步未保存内容，支持标准诊断请求和服务器推送，显示类型错误、未定义函数和警告，并在悬浮卡片中保留来源、错误码和完整说明。Rust 使用已安装的 rust-analyzer，开启原生及实验性诊断以支持输入时检查（实验性检查可能误报）；原生分析尚未覆盖的问题（例如部分未定义类型）由保存后的编译检查补充。`F8`／`Shift+F8` 同样可以跳转这些问题。
 - 编辑脏状态、保存按钮与 `Ctrl+S`。
 - SVG 插件：左侧编辑源码、右侧实时预览，支持拖动分割线、透明棋盘底座及始终居中的滚轮缩放；详见 [SVG 插件说明](plugins/svg/README.md)。
+- Markdown 插件随发行包交付，提供源码高亮、顶部格式工具栏、三种视图模式和双向内容块同步滚动；粘贴或拖入图片保存到文件同级目录。受信任工作区首次使用需确认权限，并保留拒绝、禁用、卸载及替代提供者选择；详见 [Markdown 使用说明](plugins/markdown/README.md)。
 - 保存前在用户本地数据目录创建历史快照，不污染项目目录。
 - 声明式插件清单解析和校验骨架。
 - 统一命令注册表骨架。
@@ -28,7 +29,7 @@ Me Editor 是一个 Rust + GPUI Kit 编写的原生桌面代码编辑器初版�
 已构建的 Windows 可执行文件可直接运行：
 
 ```powershell
-.\dist\me-editor.exe
+.\dist\editor\editor-app.exe
 ```
 
 从源码以 Debug 开发模式运行（不打包），`cargo run` 默认生成未优化的 Debug 程序，窗口拖动可能明显卡顿。：
@@ -48,8 +49,11 @@ cargo run -p editor-app -- C:\path\to\project\src\main.rs
 打包为正式包：
 
 ```powershell
-cargo run --release -p editor-app
+# 构建正式编辑器、八个独立插件包及首次提供索引。
+.\scripts\package-editor.ps1
 ```
+
+产物位于 `dist/editor/`，插件位于其 `plugins/` 子目录。Markdown 方案、工单与逐单验收见[插件文档入口](docs/plugins/README.md)。
 
 ## 验证
 

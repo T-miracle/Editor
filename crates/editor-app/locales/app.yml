@@ -53,6 +53,78 @@ plugins.permission_workspace_write:
 plugins.permission_external_navigation:
   en: "Open clicked HTTP(S) links through the system browser"
   zh-CN: "通过系统浏览器打开用户点击的 HTTP(S) 链接"
+plugins.permission_editor_read:
+  en: "Read open documents and their selection and viewport"
+  zh-CN: "读取已打开文档及其选区和视口"
+plugins.permission_editor_write:
+  en: "Make undoable changes to open documents after checking their version"
+  zh-CN: "核对文档版本后，对已打开文档执行可撤销编辑"
+plugins.permission_workspace_read:
+  en: "Read files within the current workspace"
+  zh-CN: "读取当前工作区内的文件"
+plugins.permission_clipboard:
+  en: "Read and write the system clipboard"
+  zh-CN: "读写系统剪贴板"
+plugins.permission_assets:
+  en: "Read resources included in this plugin package"
+  zh-CN: "读取此插件安装包内的资源文件"
+plugins.permission_storage:
+  en: "Save private plugin configuration and session data"
+  zh-CN: "保存插件私有配置与会话数据"
+plugins.permission_process:
+  en: "Run local programs as the current user with file and network access; these programs are outside the WASM sandbox"
+  zh-CN: "以当前用户权限执行本机程序并访问文件与网络；这些程序不受 WASM 沙箱限制"
+plugins.permission_service:
+  en: "Run fixed local services declared by this package as the current user with file and network access"
+  zh-CN: "以当前用户权限启动此包声明的固定本机服务，可访问本机文件与网络"
+plugins.permission_dependencies_prepare:
+  en: "Download, verify and unpack declared service dependencies into editor-private directories without running installers or changing global PATH"
+  zh-CN: "下载、校验并解包声明的服务依赖到编辑器私有目录，不运行安装脚本、不修改全局 PATH"
+plugins.permission_dependencies_install:
+  en: "Native installation steps require separate confirmation of the program, arguments, destination and purpose; large SDKs also require an explicit opt-in"
+  zh-CN: "原生安装步骤另行确认程序、参数、目标和用途；大型 SDK 还需主动勾选"
+plugins.consent_unsigned:
+  en: "This local plugin is unsigned. Review its source and requested permissions."
+  zh-CN: "本机未签名插件，请确认安装来源和所需能力。"
+plugins.consent_source:
+  en: "Source: %{source}"
+  zh-CN: "来源：%{source}"
+plugins.consent_capabilities:
+  en: "%{action} permits the following capabilities:"
+  zh-CN: "%{action}后将允许以下能力："
+plugins.consent_resources:
+  en: "This plugin provides declarative resources only and needs no execution permissions."
+  zh-CN: "此插件仅提供声明式资源，无需额外运行权限。"
+plugins.consent_after_install:
+  en: "After installation the plugin can use the listed permissions and start its declared programs."
+  zh-CN: "安装后插件可以使用所列权限并启动其声明的程序。"
+plugins.consent_after_update:
+  en: "Current plugin programs will stop before the new version starts. Sessions are saved; previous commands do not run again automatically."
+  zh-CN: "保存会话并停止当前程序后启动新版本；原有命令不会自动重跑。"
+plugins.consent_resource_install:
+  en: "%{action} loads syntax, theme or icon resources."
+  zh-CN: "%{action}后会加载语法、主题或图标资源。"
+plugins.consent_program:
+  en: "Program: %{program} · Arguments: %{args}"
+  zh-CN: "程序：%{program} · 参数：%{args}"
+plugins.consent_dependency:
+  en: "Dependency: %{id} %{version} · %{platform} · %{source} · SHA-256 %{sha256}"
+  zh-CN: "依赖：%{id} %{version} · %{platform} · %{source} · SHA-256 %{sha256}"
+plugins.consent_title:
+  en: "%{action} plugin · %{name} v%{version}"
+  zh-CN: "%{action}插件 · %{name} v%{version}"
+plugins.consent_confirm:
+  en: "Confirm %{action}"
+  zh-CN: "确认%{action}"
+plugins.cancel:
+  en: "Cancel"
+  zh-CN: "取消"
+plugins.reinstall:
+  en: "Reinstall"
+  zh-CN: "重新安装"
+plugins.downgrade:
+  en: "Install older version"
+  zh-CN: "降级安装"
 preview.open_link:
   en: "Open link"
   zh-CN: "打开链接"

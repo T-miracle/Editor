@@ -2,6 +2,8 @@
 use super::*;
 use harness::NativeMarkdown;
 
+mod synchronized;
+
 /// Exercise the actual Base press/release contract; dispatch_keystroke alone omits native KeyUp.
 fn activate_key(ui: &mut gpui_kit::VisualTestContext, key: &str) {
     let keystroke = gpui_kit::Keystroke::parse(key).unwrap();
