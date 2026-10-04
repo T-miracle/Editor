@@ -134,6 +134,27 @@ impl DebugBreakpoint {
     }
 }
 
+/// One stack frame a provider reported, kept as the provider described it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DebugFrame {
+    pub id: u32,
+    pub name: String,
+    pub source: String,
+    pub line: u32,
+}
+
+/// One variable a provider reported, with the provider's own rendering of its value.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DebugVariable {
+    pub name: String,
+    pub value: String,
+}
+
+/// Bound on frames one report may carry; a stack is not an unbounded download.
+pub const MAX_DEBUG_FRAMES: usize = 256;
+/// Bound on variables one frame's report may carry.
+pub const MAX_DEBUG_VARIABLES: usize = 512;
+
 /// A breakpoint the host asks for: a source and a one-based line.
 ///
 /// The request shape is the provider's own vocabulary, so a source is a path or a name the provider
@@ -150,6 +171,78 @@ impl DebugBreakpointRequest {
     }
 }
 
+/// Read a provider's frame report, refusing a list the host could not show whole.
+///
+/// A frame without a source or a line is not a location, and a list over the bound is a shape the
+/// contract does not allow: both are refusals rather than a view with pieces quietly missing.
+pub fn frames_from_value(value: &Value) -> Result<Vec<DebugFrame>, Failure> {
+    let entries = value
+        .get("frames")
+        .and_then(Value::as_array)
+        .ok_or_else(|| Failure::new(ErrorCode::InvalidRequest, "Missing frame list"))?;
+    if entries.len() > MAX_DEBUG_FRAMES {
+        return Err(Failure::new(
+            ErrorCode::InvalidRequest,
+            "Frame list exceeds the declared bound",
+        ));
+    }
+    entries
+        .iter()
+        .map(|entry| {
+            Ok(DebugFrame {
+                id: entry
+                    .get("id")
+                    .and_then(Value::as_u64)
+                    .map(|id| id as u32)
+                    .ok_or_else(|| {
+                        Failure::new(ErrorCode::InvalidRequest, "Frame has no identity")
+                    })?,
+                name: text(entry, "name")
+                    .ok_or_else(|| Failure::new(ErrorCode::InvalidRequest, "Frame has no name"))?,
+                source: text(entry, "source").ok_or_else(|| {
+                    Failure::new(ErrorCode::InvalidRequest, "Frame has no source")
+                })?,
+                line: entry
+                    .get("line")
+                    .and_then(Value::as_u64)
+                    .map(|line| line as u32)
+                    .filter(|line| *line > 0)
+                    .ok_or_else(|| Failure::new(ErrorCode::InvalidRequest, "Frame has no line"))?,
+            })
+        })
+        .collect()
+}
+
+/// Read a provider's variable report for one frame.
+pub fn variables_from_value(value: &Value) -> Result<Vec<DebugVariable>, Failure> {
+    let entries = value
+        .get("variables")
+        .and_then(Value::as_array)
+        .ok_or_else(|| Failure::new(ErrorCode::InvalidRequest, "Missing variable list"))?;
+    if entries.len() > MAX_DEBUG_VARIABLES {
+        return Err(Failure::new(
+            ErrorCode::InvalidRequest,
+            "Variable list exceeds the declared bound",
+        ));
+    }
+    entries
+        .iter()
+        .map(|entry| {
+            Ok(DebugVariable {
+                name: text(entry, "name").ok_or_else(|| {
+                    Failure::new(ErrorCode::InvalidRequest, "Variable has no name")
+                })?,
+                // A value is the provider's rendering and is shown as given, including empty text.
+                value: entry
+                    .get("value")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .to_owned(),
+            })
+        })
+        .collect()
+}
+
 fn text(value: &Value, key: &str) -> Option<String> {
     value
         .get(key)
@@ -161,7 +254,7 @@ fn text(value: &Value, key: &str) -> Option<String> {
 /// The methods every debug provider must declare, whatever else it offers.
 ///
 /// These are the ones a session cannot exist without: beginning it, asking what it is, and ending it.
-pub(super) const DEBUG_REQUIRED_METHODS: [&str; 3] = ["start", "status", "stop"];
+pub const DEBUG_REQUIRED_METHODS: [&str; 3] = ["start", "status", "stop"];
 
 /// The methods a provider may declare to offer more, and what each one enables.
 ///
@@ -169,7 +262,14 @@ pub(super) const DEBUG_REQUIRED_METHODS: [&str; 3] = ["start", "status", "stop"]
 /// simply never declares it, and a control that needs it is disabled with that reason instead of
 /// failing when pressed. Requiring them outright would make a capable provider unusable for lacking
 /// an unrelated ability.
-pub(super) const DEBUG_OPTIONAL_METHODS: [&str; 4] = ["set_breakpoints", "resume", "pause", "step"];
+pub const DEBUG_OPTIONAL_METHODS: [&str; 6] = [
+    "set_breakpoints",
+    "resume",
+    "pause",
+    "step",
+    "frames",
+    "variables",
+];
 
 /// A debug provider's declaration, read as the methods it actually offers.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -180,6 +280,11 @@ pub struct DebugAbilities {
     pub resume_pause: bool,
     /// Whether it can step a paused target.
     pub step: bool,
+    /// Whether it can report a paused target's frames and their variables.
+    ///
+    /// One ability rather than two: a frame list without variables is not an inspection view, and a
+    /// provider that offers one without the other has not offered what the panel needs.
+    pub inspect: bool,
 }
 
 /// What the host requires of a debug provider, method for method.
@@ -213,6 +318,7 @@ pub(super) fn debug_abilities(declaration: &plugin_protocol::service::Contract) 
         breakpoints: offers("set_breakpoints"),
         resume_pause: offers("resume") && offers("pause"),
         step: offers("step"),
+        inspect: offers("frames") && offers("variables"),
     }
 }
 
@@ -272,6 +378,25 @@ fn debug_declaration() -> Value {
                     "session":{"type":"string","max_bytes":128},
                     "state":{"type":"string","max_bytes":32}}},
                 "permissions":["process.exec"]},
+            "frames":{
+                "parameters":{"type":"record","fields":{
+                    "session":{"type":"string","max_bytes":128}}},
+                "result":{"type":"record","fields":{
+                    "frames":{"type":"array","max_items":256,"items":{"type":"record","fields":{
+                        "id":{"type":"integer","min":0,"max":2147483647},
+                        "name":{"type":"string","max_bytes":512},
+                        "source":{"type":"string","max_bytes":4096},
+                        "line":{"type":"integer","min":1,"max":2147483647}}}}}},
+                "permissions":["process.exec"]},
+            "variables":{
+                "parameters":{"type":"record","fields":{
+                    "session":{"type":"string","max_bytes":128},
+                    "frame":{"type":"integer","min":0,"max":2147483647}}},
+                "result":{"type":"record","fields":{
+                    "variables":{"type":"array","max_items":512,"items":{"type":"record","fields":{
+                        "name":{"type":"string","max_bytes":512},
+                        "value":{"type":"string","max_bytes":4096}}}}}},
+                "permissions":["process.exec"]},
             "status":{
                 "parameters":{"type":"record","fields":{
                     "session":{"type":"string","max_bytes":128}}},
@@ -303,7 +428,9 @@ pub(super) fn debug_timeout_ms(method: &str) -> Option<u32> {
     match method {
         "start" => Some(DEBUG_START_TIMEOUT_MS),
         "set_breakpoints" => Some(DEBUG_BREAKPOINT_TIMEOUT_MS),
-        "resume" | "pause" | "step" | "stop" | "status" => Some(DEBUG_CONTROL_TIMEOUT_MS),
+        "resume" | "pause" | "step" | "stop" | "status" | "frames" | "variables" => {
+            Some(DEBUG_CONTROL_TIMEOUT_MS)
+        }
         _ => None,
     }
 }

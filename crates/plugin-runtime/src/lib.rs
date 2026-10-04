@@ -33,8 +33,9 @@ mod process;
 mod toolchains;
 pub use instance::Instance;
 pub use manager::{
-    EXECUTION_CONTRACT, EXECUTION_START_TIMEOUT_MS, ExecutionFailure, ExecutionSnapshot,
-    ExecutionState, HostExecution, InstallationPreparation, Installed, Manager,
+    DEBUG_CONTRACT, DebugAbilities, DebugBreakpoint, DebugFrame, DebugSession, DebugState,
+    DebugVariable, EXECUTION_CONTRACT, EXECUTION_START_TIMEOUT_MS, ExecutionFailure,
+    ExecutionSnapshot, ExecutionState, HostExecution, InstallationPreparation, Installed, Manager,
     PreparedInstallation, ProviderCandidate, RunEnvEntry, RunRequest,
 };
 pub use package::Package;

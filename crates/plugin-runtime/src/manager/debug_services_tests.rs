@@ -3,6 +3,7 @@
 //! These are unit checks of the shapes a provider must declare and of how the host reads what one
 //! reports. They name no debugger: a provider that declares this contract is interchangeable.
 use super::*;
+use crate::manager::debug_services::{DEBUG_OPTIONAL_METHODS, DEBUG_REQUIRED_METHODS};
 
 /// The host asks for exactly the methods a debug session needs, and nothing language specific.
 #[test]
@@ -32,7 +33,7 @@ fn the_debug_requirement_names_no_debugger() {
             "{method} has no window, so it could be called without a bound"
         );
     }
-    assert_eq!(debug_timeout_ms("variables"), None);
+    assert_eq!(debug_timeout_ms("evaluate"), None);
     // Starting includes building and attaching; the control exchanges are much shorter.
     assert!(debug_timeout_ms("start").unwrap() > debug_timeout_ms("resume").unwrap());
     // The declaration is the host's, so a debugger name or an adapter protocol cannot appear in it.
@@ -112,6 +113,7 @@ fn a_missing_optional_ability_does_not_withdraw_the_provider() {
             breakpoints: true,
             resume_pause: true,
             step: true,
+            inspect: true,
         }
     );
 
@@ -148,6 +150,98 @@ fn a_missing_optional_ability_does_not_withdraw_the_provider() {
         serde_json::from_value(serde_json::json!({"version": "1.0.0", "methods": {}}))
             .expect("an empty declaration parses");
     assert_eq!(debug_abilities(&foreign), DebugAbilities::default());
+}
+
+/// A frame report is believed exactly as given, and one that is not a location is refused.
+#[test]
+fn a_frame_report_is_read_or_refused() {
+    let frames = frames_from_value(&serde_json::json!({
+        "frames": [
+            {"id": 0, "name": "probe::add", "source": "src/main.rs", "line": 2},
+            {"id": 1, "name": "probe::main", "source": "src/main.rs", "line": 7}
+        ]
+    }))
+    .expect("a real frame list reads");
+    assert_eq!(frames.len(), 2);
+    assert_eq!(frames[0].id, 0);
+    assert_eq!(frames[0].name, "probe::add");
+    assert_eq!(
+        (frames[0].source.as_str(), frames[0].line),
+        ("src/main.rs", 2)
+    );
+
+    // A frame without a location is not a location: each missing piece is refused by name rather than
+    // producing a frame the panel would have to display with a blank.
+    for (report, expected) in [
+        (
+            serde_json::json!({"frames": [{"id": 0, "name": "f", "line": 2}]}),
+            "source",
+        ),
+        (
+            serde_json::json!({"frames": [{"id": 0, "name": "f", "source": "s"}]}),
+            "line",
+        ),
+        (
+            serde_json::json!({"frames": [{"id": 0, "source": "s", "line": 2}]}),
+            "name",
+        ),
+        (
+            serde_json::json!({"frames": [{"name": "f", "source": "s", "line": 2}]}),
+            "identity",
+        ),
+        // Line numbers are one-based, so a reported zero is a mistake rather than a location.
+        (
+            serde_json::json!({"frames": [{"id": 0, "name": "f", "source": "s", "line": 0}]}),
+            "line",
+        ),
+        // A report with no list at all is not an empty stack.
+        (serde_json::json!({}), "frame list"),
+    ] {
+        let error = frames_from_value(&report).expect_err("the report is refused");
+        assert!(
+            error.message.contains(expected),
+            "{expected} was not named: {error:?}"
+        );
+    }
+
+    // A list over the declared bound is refused rather than shown in part.
+    let oversized = serde_json::json!({
+        "frames": (0..=MAX_DEBUG_FRAMES)
+            .map(|id| serde_json::json!({
+                "id": id as u32, "name": "f", "source": "s", "line": 1
+            }))
+            .collect::<Vec<_>>()
+    });
+    assert!(frames_from_value(&oversized).is_err());
+    // An empty list is a real answer: a stopped target with no frames to report.
+    assert!(
+        frames_from_value(&serde_json::json!({"frames": []}))
+            .expect("an empty stack is valid")
+            .is_empty()
+    );
+}
+
+/// A variable is the provider's own rendering, shown as given and never reinterpreted.
+#[test]
+fn a_variable_report_is_shown_as_given() {
+    let variables = variables_from_value(&serde_json::json!({
+        "variables": [
+            {"name": "left", "value": "2"},
+            {"name": "text", "value": "\"a b\""},
+            // An empty rendering is a value, not a missing one.
+            {"name": "nothing", "value": ""}
+        ]
+    }))
+    .expect("a real variable list reads");
+    assert_eq!(variables.len(), 3);
+    assert_eq!(variables[1].value, "\"a b\"", "quoting is the provider's");
+    assert_eq!(variables[2].value, "");
+    // A variable without a name cannot be shown, and no name is invented for it.
+    let error = variables_from_value(&serde_json::json!({"variables": [{"value": "1"}]}))
+        .expect_err("a nameless variable is refused");
+    assert!(error.message.contains("name"), "{error:?}");
+    assert!(variables_from_value(&serde_json::json!({})).is_err());
+    assert!(variables_from_value(&serde_json::json!({"variables": []})).is_ok());
 }
 
 /// Breakpoints are grouped by source, because one request per source is what a provider is asked for.
