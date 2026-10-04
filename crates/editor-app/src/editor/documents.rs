@@ -369,6 +369,67 @@ impl EditorApp {
         self.tabs.iter().position(|tab| tab.session.path() == path)
     }
 
+    /// Opens a debugger's source location and places the caret on the line it stopped at.
+    ///
+    /// A debug provider reports a source and a one-based line, not an LSP position, so this follows
+    /// the same reveal and centering path a definition jump uses without inventing a URI for it. A
+    /// source that does not name an existing local file is reported as not located: the provider's
+    /// word for a path is not evidence that the file is here, and guessing one would put the caret
+    /// somewhere the target never stopped.
+    pub(crate) fn open_debug_location(
+        &mut self,
+        source: &str,
+        line: u32,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let path = std::path::PathBuf::from(source);
+        // A provider may report a path relative to the workspace it launched in.
+        let path = if path.is_absolute() {
+            path
+        } else {
+            self.workspace.root().join(path)
+        };
+        if !path.is_file() || line == 0 {
+            return false;
+        }
+        let path = path.canonicalize().unwrap_or(path);
+        self.open_file(path.clone(), window, cx);
+        if self.active_path.as_deref() != Some(path.as_path()) {
+            return false;
+        }
+        let Some(index) = self.active_tab_index() else {
+            return false;
+        };
+        let editor = self.tabs[index].editor.clone();
+        let position = editor.update(cx, |editor, cx| {
+            let row = (line - 1) as usize;
+            // A line beyond the file the provider named is refused rather than clamped: the target
+            // did not stop there, and putting the caret at the end would claim it did.
+            let offset = editor.text().line_start_offset(row);
+            let position = editor.text().offset_to_position(offset);
+            // A line inside a fold must be exposed before the caret can be shown at it.
+            editor.unfold_at(position, cx);
+            editor.set_cursor_position(position, window, cx);
+            let _ = center_editor_cursor(editor, cx);
+            position
+        });
+        // A newly opened tab has no layout yet, so its centering is revisited until it has painted.
+        let revision = self.tabs[index].session.revision();
+        let app = cx.entity().downgrade();
+        reveal_definition_after_layout(
+            app,
+            editor,
+            position,
+            revision,
+            self.tabs[index].definition_highlight_generation,
+            false,
+            2,
+            window,
+        );
+        true
+    }
+
     /// Opens local LSP targets, including sources in the Cargo registry and sysroot.
     pub(crate) fn open_definition_uri(
         &mut self,

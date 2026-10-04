@@ -506,7 +506,7 @@ pub(super) fn publish_frame(
         app.update(cx, |app, cx| {
             app.sync_plugin_panels(window, cx);
             // A frame reconciles published sessions before painting, which is what this mirrors.
-            app.sync_run_controls(cx);
+            app.sync_run_controls(window, cx);
         });
         for panel in app
             .read(cx)

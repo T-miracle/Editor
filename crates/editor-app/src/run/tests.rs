@@ -1937,6 +1937,68 @@ fn a_start_request_carries_what_the_configuration_says() {
     );
 }
 
+/// The editor follows a pause nobody asked for, and stays put for one the user asked for.
+///
+/// This is the half of breakpoint auto-location that can be stated without a debugger: which pause
+/// moves the caret. A breakpoint hit is the case where being shown the source is the point; after the
+/// user resumes or steps, moving the caret would fight the user for control of the file they are
+/// reading. Each pause is decided once, so a repeated state report cannot move the caret again.
+#[test]
+fn following_a_pause_is_decided_once_per_pause() {
+    use editor_core::DebugSessionState;
+    let mut controls = controls();
+    let workspace = "C:/work".to_owned();
+    controls
+        .upsert(config("run-1", "第一个"), &workspace)
+        .unwrap();
+
+    // Nothing has been followed yet, so the first question about a pause is answered yes: a stop with
+    // no session behind it cannot happen, and arming on construction means no pause is ever missed
+    // because a note arrived in an unexpected order.
+    assert!(controls.take_debug_position_to_follow());
+    // Answering one pause consumes the decision: a later report about the same pause is not a new one.
+    assert!(
+        !controls.take_debug_position_to_follow(),
+        "each pause is followed once"
+    );
+
+    // A breakpoint hit while the target ran on its own is followed.
+    controls.note_debug_state(
+        "run-1",
+        DebugSessionState::Paused {
+            source: "src/main.rs".into(),
+            line: 7,
+            reason: Some("断点".into()),
+        },
+    );
+    controls.note_debug_session_begun();
+    assert!(controls.take_debug_position_to_follow());
+
+    // Stepping is the user driving: the pause it produces is not chased.
+    controls.note_debug_state(
+        "run-1",
+        DebugSessionState::Paused {
+            source: "src/main.rs".into(),
+            line: 8,
+            reason: None,
+        },
+    );
+    controls.note_debug_moved_by_user();
+    assert!(
+        !controls.take_debug_position_to_follow(),
+        "a step does not move the caret the user just placed"
+    );
+    // Resuming is the same: the user is driving, so nothing moves until a stop arrives that they did
+    // not ask for.
+    controls.note_debug_state("run-1", DebugSessionState::Running);
+    controls.note_debug_moved_by_user();
+    assert!(!controls.take_debug_position_to_follow());
+    // A pause reported without the user driving to it is followed again, which is what an independent
+    // breakpoint hit looks like from here.
+    controls.note_debug_session_begun();
+    assert!(controls.take_debug_position_to_follow());
+}
+
 fn snapshot(
     id: u64,
     config: &str,

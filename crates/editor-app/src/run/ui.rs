@@ -420,7 +420,7 @@ impl RunConfigForm {
 
 impl EditorApp {
     /// Read published host sessions into the run controls before the frame is painted.
-    pub(crate) fn sync_run_controls(&mut self, cx: &mut Context<Self>) {
+    pub(crate) fn sync_run_controls(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let (executions, errors, stops, statuses) = self.extensions.read(cx).take_host_runs();
         // The host's own answer about debugging is carried into the controls, so a control that
         // offers a debug launch and the launch itself cannot disagree about whether there is one.
@@ -483,12 +483,26 @@ impl EditorApp {
                     };
                     // A start and a step are both answered by a state, and the request says which one
                     // it was: a start establishes the session, a step moves it.
-                    if self.run_controls.debug_request_is_start(request) {
+                    let outcome = if self.run_controls.debug_request_is_start(request) {
                         self.run_controls
                             .apply_debug_start(request, &session.session, state)
                     } else {
                         self.run_controls.apply_debug_step(request, state)
+                    };
+                    // A pause nobody asked for is where the user wants the source; one they asked for
+                    // by stepping is not, so the controls decide whether this pause is followed.
+                    if let editor_core::DebugSessionState::Paused { source, line, .. } =
+                        self.run_controls.debug_state()
+                        && self.run_controls.take_debug_position_to_follow()
+                    {
+                        let (source, line) = (source.clone(), line);
+                        if !self.open_debug_location(&source, line, window, cx) {
+                            // Reported rather than guessed at: a provider's path is not evidence that
+                            // the file is here.
+                            self.status = format!("无法定位到 {source}:{line}");
+                        }
                     }
+                    outcome
                 }
                 // A failed call is released and reported; it is never shown as an empty stack.
                 DebugAnswerMessage::Failed(message) => self
@@ -1154,6 +1168,11 @@ impl EditorApp {
             cx.notify();
             return;
         }
+        // Resuming is the user driving the target: the next stop is not one to move the caret to.
+        // Pausing is not — the target stops where it happens to be and the user wants to see it.
+        if method == "resume" {
+            self.run_controls.note_debug_moved_by_user();
+        }
         let Some(session) = self
             .run_controls
             .debug_session()
@@ -1201,6 +1220,8 @@ impl EditorApp {
             cx.notify();
             return;
         }
+        // The user is driving the target, so the pause this produces is not one to chase.
+        self.run_controls.note_debug_moved_by_user();
         let Some(request) = self
             .run_controls
             .begin_debug_request(crate::run::DebugMethod::Step(kind), None)
@@ -1255,6 +1276,9 @@ impl EditorApp {
         configuration: &editor_core::RunConfig,
         cx: &mut Context<Self>,
     ) {
+        // A session begins with the first pause worth following: a program that stops on entry, or at
+        // a breakpoint, is exactly the pause the user wants to be shown.
+        self.run_controls.note_debug_session_begun();
         let root = self.workspace_key();
         let Some(details) = self
             .run_controls

@@ -195,6 +195,12 @@ pub struct RunControls {
     /// While one is outstanding the session's state is about to change, so the controls are withheld
     /// rather than letting a second click race the answer that has not arrived.
     debug_action_in_flight: bool,
+    /// Whether the editor should move to where the target next stops.
+    ///
+    /// True from the start of a session, because a breakpoint hit is a pause the user did not ask
+    /// for and wants to be shown; false after the user resumes or steps, because then they are
+    /// driving and the caret should stay where they put it.
+    debug_position_followed: bool,
     /// Debug requests this editor has sent and not yet answered, oldest first.
     ///
     /// A debug call is asynchronous, so the scope a request belongs to is recorded with it: an answer
@@ -353,6 +359,7 @@ impl Default for RunControls {
             debug_availability: None,
             debug_sessions: editor_core::DebugSessions::default(),
             debug_action_in_flight: false,
+            debug_position_followed: true,
             debug_requests: Vec::new(),
             debug_capabilities: editor_core::DebugCapabilities::default(),
             error: None,
@@ -1318,6 +1325,28 @@ impl RunControls {
             .unwrap_or_default();
         session.note_state(state.clone());
         self.debug_sessions.insert(config, session);
+    }
+
+    /// Note that the next pause is one the user asked for by moving the target themselves.
+    ///
+    /// Resume and the three step directions are the user driving the target, so the editor does not
+    /// chase them around the file: the caret stays where they put it. A pause nobody asked for — a
+    /// breakpoint hit — is where following the target is what the user wants.
+    pub fn note_debug_moved_by_user(&mut self) {
+        self.debug_position_followed = false;
+    }
+
+    /// Whether the editor should move to the location of the pause that has just arrived.
+    ///
+    /// Reading this clears it, so a later state report about an already located pause cannot move the
+    /// caret a second time.
+    pub fn take_debug_position_to_follow(&mut self) -> bool {
+        std::mem::take(&mut self.debug_position_followed)
+    }
+
+    /// Note that a session has begun, which is the first pause worth following.
+    pub fn note_debug_session_begun(&mut self) {
+        self.debug_position_followed = true;
     }
 
     /// End one configuration's debug session, handing the panel to another if there is one.
