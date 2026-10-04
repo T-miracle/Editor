@@ -13,6 +13,42 @@ use std::{
     time::{Duration, Instant},
 };
 
+/// What one provider reported about the program it started.
+///
+/// This mirrors the provider's own words rather than the host's interpretation: `Running` is an
+/// observation with no exit seen, and `Unknown` means the provider could not answer at all.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum RunStatus {
+    Running,
+    /// The program ended, with the status the provider observed when it has one.
+    Ended {
+        code: Option<u32>,
+    },
+    /// The provider terminated the program rather than the program ending on its own.
+    Terminated,
+    /// The provider could not report, or the session is gone without a status.
+    Unknown,
+}
+
+impl RunStatus {
+    /// Read the provider's answer, accepting only the states the contract defines.
+    pub fn from_value(value: &serde_json::Value) -> Self {
+        match value.get("state").and_then(serde_json::Value::as_str) {
+            Some("running") => Self::Running,
+            Some("exited") => Self::Ended {
+                code: value
+                    .get("code")
+                    .and_then(serde_json::Value::as_u64)
+                    .map(|code| code as u32),
+            },
+            // A program that ended without a status of its own is still an end, but the caller must
+            // not read a success into it.
+            Some("ended") => Self::Ended { code: None },
+            _ => Self::Unknown,
+        }
+    }
+}
+
 pub enum Work {
     /// Provider choices are explicit host actions, never executable project configuration.
     SetServiceProvider {
@@ -86,6 +122,16 @@ pub enum Work {
         /// Identity of the stop that requested this, so its answer reaches the requester that asked.
         request_id: u64,
     },
+    /// Ask a session's own provider whether its program is still running.
+    ///
+    /// A preparation step's completion condition is an observed exit, so the host asks the provider
+    /// that owns the program rather than inferring an end from elapsed time or from output.
+    PollRun {
+        session: u64,
+        config: String,
+        /// Identity of the request that is waiting on this answer.
+        request_id: u64,
+    },
     Shutdown(Option<futures::channel::oneshot::Sender<()>>),
 }
 impl Work {
@@ -99,6 +145,8 @@ impl Work {
             Self::InstallBundle(candidate) | Self::DeclineBundle(candidate) => {
                 Some(&candidate.package.manifest.id)
             }
+            // A status query observes a program another owner already has, so it claims no plugin.
+            Self::PollRun { .. } => None,
             Self::Enable(id)
             | Self::Restart(id)
             | Self::Disable(id)
@@ -131,6 +179,8 @@ impl Work {
                 action: LifecycleAction::Install,
                 delete_data: None,
             }),
+            // A status query observes a program another owner already has, so it claims no plugin.
+            Self::PollRun { .. } => None,
             Self::Enable(id) => Some(OperationProgress {
                 id: id.clone(),
                 action: LifecycleAction::Enable,
@@ -207,6 +257,11 @@ pub(super) struct Published {
     pub run_errors: Vec<(String, u64, String)>,
     /// Answers to stop requests this editor made, keyed by stop identity.
     pub stop_results: Vec<(String, u64, Result<(), String>)>,
+    /// What a provider reported about one session's program, keyed by the request that asked.
+    ///
+    /// The answer is an observation, so a state of `Running` here means the program exists and its
+    /// exit has not been seen — never that it is expected to end.
+    pub run_status: Vec<(String, u64, RunStatus)>,
     pub startup: BTreeMap<String, String>,
     pub views: BTreeMap<String, Arc<ui::Document>>,
     /// Each scene's full-color image operations are ready before the UI observes that scene.

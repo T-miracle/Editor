@@ -4,7 +4,9 @@
 //! used. The group's position, separation and disabled states follow the approved B1 layout, and a
 //! control whose capability is not implemented yet is disabled with a visible reason rather than
 //! behaving like the control next to it.
-use super::{LaunchPlan, RunConfigDraft, RunControls, RunMenuEntry};
+use super::{
+    LaunchPlan, MAX_PREPARED_STEPS, RunConfigDraft, RunControls, RunMenuEntry, SequenceAction,
+};
 use crate::app::dialog as app_dialog;
 use crate::extensions::HostWork as Work;
 use crate::ui::controls::menu::MenuStyle;
@@ -272,8 +274,23 @@ impl RunConfigForm {
 impl EditorApp {
     /// Read published host sessions into the run controls before the frame is painted.
     pub(crate) fn sync_run_controls(&mut self, cx: &mut Context<Self>) {
-        let (executions, errors, stops) = self.extensions.read(cx).take_host_runs();
+        let (executions, errors, stops, statuses) = self.extensions.read(cx).take_host_runs();
         self.run_controls.reconcile(&executions);
+        // A step's session belongs to its preparation, so the sequence learns about it before the
+        // next step can be requested.
+        for execution in &executions {
+            if let Some(step) = self.run_controls.step_of(execution.id) {
+                let (config, index) = (step.0.to_owned(), step.1);
+                if execution.state == plugin_runtime::ExecutionState::Running {
+                    self.run_controls.sequence_started(
+                        &config,
+                        index,
+                        execution.id,
+                        execution.provider_session.clone(),
+                    );
+                }
+            }
+        }
         if let Some((_, _, message)) = errors.first() {
             // A refused start is reported where the launch was requested instead of failing silently.
             self.status = message.clone();
@@ -286,6 +303,18 @@ impl EditorApp {
                 Err(message) => format!("停止会话 {session} 失败：{message}"),
             };
         }
+        // An observed end advances its sequence; a program still running is not progress.
+        for (config, _, _) in self.run_controls.reconcile_run_status(&statuses) {
+            self.drive_preparation(cx);
+            if let Some(sequence) = self.run_controls.preparation(&config)
+                && !sequence.is_active()
+            {
+                let finished = config.clone();
+                self.finish_preparation(&finished, cx);
+            }
+            break;
+        }
+        self.drive_preparation(cx);
     }
 
     /// Whether this workspace may start programs at all; a restricted workspace never launches.
@@ -550,10 +579,28 @@ impl EditorApp {
             .is_some_and(|config| self.run_controls.is_pending(&config.id));
         let permitted = self.run_permitted(cx);
         let running = active.is_some() || pending;
+        // Build is about this configuration's own build actions, so its control reports the reason it
+        // cannot run rather than being permanently unavailable.
+        let build_blocker = selected.as_ref().and_then(|config| {
+            if !permitted {
+                return Some("受限工作区不能启动程序".to_owned());
+            }
+            if self.run_controls.is_preparing(&config.id) {
+                return Some("该配置正在准备".to_owned());
+            }
+            self.run_controls
+                .preparation_error(&config.id)
+                .filter(|_| config.build.is_empty())
+        });
+        let preparing = selected
+            .as_ref()
+            .and_then(|config| self.run_controls.preparing_step(&config.id));
         let label = selected
             .as_ref()
             .map(|config| {
-                if pending {
+                if let Some(step) = &preparing {
+                    format!("{} · {}", config.name, step)
+                } else if pending {
                     format!("{} · 启动中", config.name)
                 } else if active.is_some() {
                     format!("{} · 运行中", config.name)
@@ -594,11 +641,18 @@ impl EditorApp {
                         .small()
                         .compact()
                         .ghost()
-                        // No build action exists yet, so Build stays disabled with a visible
-                        // reason instead of silently running the program.
-                        .disabled(true)
-                        .tooltip("此配置尚未设置构建操作")
-                        .on_click(|_, _, _| {}),
+                        // Build runs the configuration's own build actions and nothing else: no
+                        // pre-launch step, no program. A configuration without build actions keeps
+                        // the control disabled with the reason it is disabled.
+                        .disabled(!permitted || build_blocker.is_some())
+                        .tooltip(
+                            build_blocker
+                                .clone()
+                                .unwrap_or_else(|| "只执行构建操作".into()),
+                        )
+                        .on_click(cx.listener(|this, _, window, cx| {
+                            this.build_selected(window, cx);
+                        })),
                 ),
             )
             .child(
@@ -736,24 +790,31 @@ impl EditorApp {
                 cx.notify();
             }
             LaunchPlan::Start { .. } => {
+                let plan = match self.run_controls.launch_plan(&config.id, &root) {
+                    Ok(plan) => plan,
+                    Err(message) => {
+                        self.status = message;
+                        cx.notify();
+                        return;
+                    }
+                };
+                // Only a preparation that was already accepted may save and start, so a refused plan
+                // never prompts for a save it cannot use.
                 if !self.save_dirty_documents(cx) {
                     // A failed or unconfirmed save must not be followed by a launch of stale code.
                     return;
                 }
-                let plan = self.run_controls.plan_launch(&config.id, &root);
-                let Some(mut request) = RunControls::request_for(&plan) else {
-                    return;
-                };
-                // The configuration's own entries, including its tool directories, are what the
-                // program must receive; extra entries are added for this launch only, and one of
-                // them replaces the configuration's entry of the same name.
+                let request_id = self.run_controls.begin(&config.id);
+                self.run_controls
+                    .begin_sequence(&config.id, plan, request_id);
+                // Extra entries belong to this launch only. The plan already carries the
+                // configuration's own entries, and one of these replaces its entry of the same name.
                 for entry in env {
-                    request
-                        .env
-                        .retain(|existing| !existing.name.eq_ignore_ascii_case(&entry.name));
-                    request.env.push(entry);
+                    self.run_controls
+                        .override_program_environment(&config.id, &entry);
                 }
-                self.stage_run_request(&config, request, cx);
+                self.status = format!("正在准备 {}", config.name);
+                self.drive_preparation(cx);
             }
         }
     }
@@ -776,6 +837,206 @@ impl EditorApp {
         } else {
             "插件后台服务不可用，无法启动".into()
         };
+        cx.notify();
+    }
+
+    /// Build the selected configuration: its own build actions, then nothing else.
+    ///
+    /// A build never runs a pre-launch step and never starts the program, so it is safe to run while
+    /// deciding whether to launch.
+    pub(crate) fn build_selected(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let _ = window;
+        let Some(config) = self.run_controls.selected().cloned() else {
+            return;
+        };
+        if !self.run_permitted(cx) {
+            self.status = "受限工作区不能启动程序".into();
+            cx.notify();
+            return;
+        }
+        if let Some(reason) = self.run_controls.preparation_error(&config.id) {
+            self.status = reason;
+            cx.notify();
+            return;
+        }
+        let root = self.workspace_key();
+        let plan = match self
+            .run_controls
+            .prepare(&config.id, &root, MAX_PREPARED_STEPS)
+        {
+            Ok(plan) => plan,
+            Err(message) => {
+                self.status = message;
+                cx.notify();
+                return;
+            }
+        };
+        if !self.save_dirty_documents(cx) {
+            // A build of stale code is worse than no build: the same confirmation the run path uses.
+            return;
+        }
+        let request_id = self.run_controls.begin(&config.id);
+        self.run_controls.begin_build(&config.id, &plan, request_id);
+        self.status = format!("正在构建 {}", config.name);
+        self.drive_preparation(cx);
+    }
+
+    /// Advance every configuration whose preparation has something to do next.
+    ///
+    /// This is the only place a preparation step is requested or observed, so the order a user sees
+    /// is the order the sequence decides rather than the order events happen to arrive.
+    pub(crate) fn drive_preparation(&mut self, cx: &mut Context<Self>) {
+        let configs = self
+            .run_controls
+            .configurations()
+            .iter()
+            .map(|config| config.id.clone())
+            .collect::<Vec<_>>();
+        for config in configs {
+            loop {
+                let action = self.run_controls.preparation(&config).map(|sequence| {
+                    let controls = &self.run_controls;
+                    sequence.next_action(
+                        |session| controls.session_known(session),
+                        |session| controls.session_is_active(session),
+                    )
+                });
+                match action {
+                    Some(SequenceAction::Start { index }) => {
+                        // A requested step is not progress yet: the sequence waits for its exit.
+                        self.request_preparation_step(&config, index, cx);
+                        break;
+                    }
+                    Some(SequenceAction::Stop { session }) => {
+                        self.stop_preparation_step(&config, session, cx);
+                        break;
+                    }
+                    Some(SequenceAction::Wait) => {
+                        self.observe_preparation(&config, cx);
+                        break;
+                    }
+                    Some(SequenceAction::Blocked { reason }) => {
+                        self.status = reason;
+                        self.run_controls.forget_step_sessions(&config);
+                        cx.notify();
+                        break;
+                    }
+                    Some(SequenceAction::Done) => {
+                        self.finish_preparation(&config, cx);
+                        break;
+                    }
+                    None => break,
+                }
+            }
+        }
+    }
+
+    /// Request the step at one index.
+    ///
+    /// Returns whether this attempt produced a request. A step that could not even be queued blocks
+    /// the sequence here, so the caller stops looking for more work either way.
+    fn request_preparation_step(
+        &mut self,
+        config: &str,
+        index: usize,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let Some(step) = self
+            .run_controls
+            .preparation(config)
+            .and_then(|sequence| sequence.current_step())
+            .map(|step| (step.name.clone(), step.kind))
+        else {
+            return false;
+        };
+        let Some(request) = self
+            .run_controls
+            .preparation(config)
+            .and_then(|sequence| sequence.planned_request(index).cloned())
+        else {
+            self.run_controls
+                .sequence_start_failed(config, index, "步骤缺少可执行的命令");
+            self.status = "准备步骤缺少可执行的命令".into();
+            cx.notify();
+            return false;
+        };
+        let request_id = self.run_controls.begin(config);
+        // The step is owned before the request is staged, so nothing can request it twice.
+        self.run_controls
+            .note_step_request(config, index, request_id);
+        let queued = self.extensions.read(cx).stage_host_run(Work::StartRun {
+            request,
+            config: config.to_owned(),
+            request_id,
+        });
+        if !queued {
+            self.run_controls
+                .sequence_start_failed(config, index, "插件后台服务不可用");
+            self.status = "插件后台服务不可用，无法继续准备".into();
+            cx.notify();
+            return false;
+        }
+
+        self.status = format!("{} {}", step.1.label(), step.0);
+        cx.notify();
+        true
+    }
+
+    /// Stop the program one preparation step owns.
+    fn stop_preparation_step(&mut self, config: &str, session: u64, cx: &mut Context<Self>) {
+        let request_id = self.run_controls.begin_stop(config, session);
+        let queued = self.extensions.read(cx).stage_host_run(Work::StopRun {
+            session,
+            config: config.to_owned(),
+            request_id,
+        });
+        if !queued {
+            // The provider is unreachable, so the sequence cannot be told the program ended; it stays
+            // owned rather than reporting a stop that did not happen.
+            self.status = "插件后台服务不可用，无法停止准备步骤".into();
+        }
+        cx.notify();
+    }
+
+    /// Ask this preparation's provider what became of the program it started.
+    fn observe_preparation(&mut self, config: &str, cx: &mut Context<Self>) {
+        let Some((index, session)) = self.run_controls.preparation(config).and_then(|sequence| {
+            sequence
+                .current_session()
+                .map(|session| (sequence.current_index(), session))
+        }) else {
+            return;
+        };
+        if self.run_controls.has_poll(config, index) {
+            // One outstanding query per step: polling faster would not learn anything sooner.
+            return;
+        }
+        let request_id = self.run_controls.begin_poll(config, index, session);
+        let queued = self.extensions.read(cx).stage_host_run(Work::PollRun {
+            session,
+            config: config.to_owned(),
+            request_id,
+        });
+        if !queued {
+            self.run_controls.reconcile_run_status(&[(
+                config.to_owned(),
+                request_id,
+                crate::extensions::RunStatus::Unknown,
+            )]);
+            self.status = "插件后台服务不可用，无法确认步骤状态".into();
+            cx.notify();
+        }
+    }
+
+    /// Report a preparation that finished, whether it ended in a launch or a completed build.
+    fn finish_preparation(&mut self, config: &str, cx: &mut Context<Self>) {
+        let name = self
+            .run_controls
+            .configuration(config)
+            .map(|stored| stored.name.clone())
+            .unwrap_or_else(|| config.to_owned());
+        self.run_controls.forget_step_sessions(config);
+        self.status = format!("{name} 构建完成");
         cx.notify();
     }
 

@@ -66,7 +66,7 @@ use plugin_runtime::{
 #[cfg(test)]
 use std::cell::RefCell;
 use std::collections::BTreeMap;
-pub use worker::{HostRunSnapshot, Work as HostWork};
+pub use worker::{HostRunSnapshot, RunStatus, Work as HostWork};
 use worker::{LifecycleAction, OperationProgress, Work, Worker};
 
 actions!(extensions, [ToggleExtensions, QuitEditor]);
@@ -1005,12 +1005,14 @@ impl ExtensionPanel {
         Vec<HostRunSnapshot>,
         Vec<(String, u64, String)>,
         Vec<(String, u64, Result<(), String>)>,
+        Vec<(String, u64, RunStatus)>,
     ) {
         let mut state = self.worker.state.lock().unwrap();
         (
             state.host_executions.clone(),
             std::mem::take(&mut state.run_errors),
             std::mem::take(&mut state.stop_results),
+            std::mem::take(&mut state.run_status),
         )
     }
 }

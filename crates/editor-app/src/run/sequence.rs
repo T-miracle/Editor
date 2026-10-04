@@ -5,8 +5,7 @@
 //! A step's completion condition is the provider's observation of an exit, never elapsed time and
 //! never text the host happens to have seen.
 
-use super::{RunPlan, RunSession, StepKind};
-use std::collections::BTreeMap;
+use super::{RunPlan, StepKind};
 
 #[cfg(test)]
 #[path = "sequence_tests.rs"]
@@ -17,8 +16,14 @@ mod tests;
 pub enum StepState {
     /// Queued but not yet requested from the runtime.
     Waiting,
-    /// Requested; the runtime has not published a session identity yet.
-    Starting,
+    /// Requested, but the runtime has not published this step's session identity yet.
+    ///
+    /// This is what stops a second click from requesting the same preparation twice: the step is
+    /// owned from the moment it is asked for, not from the moment its session appears.
+    Starting {
+        /// The launch identity of the request that is preparing this step.
+        request: u64,
+    },
     /// The provider confirmed the program exists; its exit has not been observed.
     Running {
         session: u64,
@@ -49,7 +54,10 @@ pub enum StepOutcome {
 impl StepState {
     /// Whether the sequence has to wait for this step before it may continue.
     pub fn is_pending(&self) -> bool {
-        matches!(self, Self::Waiting | Self::Starting | Self::Running { .. })
+        matches!(
+            self,
+            Self::Waiting | Self::Starting { .. } | Self::Running { .. }
+        )
     }
 
     /// Whether this step blocks every later step.
@@ -76,6 +84,11 @@ pub struct RunSequence {
     /// Whether the program step runs after the preparation steps.
     pub launches_program: bool,
     steps: Vec<SequenceStep>,
+    /// The requests behind each step, fixed when the sequence began so a later edit cannot change
+    /// what a launch already started doing.
+    requests: Vec<plugin_runtime::RunRequest>,
+    /// The launch identity of each step's start request, once it has been requested.
+    requested: Vec<Option<u64>>,
     current: usize,
     /// Names the blocking step once the sequence has stopped for good.
     blocked: Option<String>,
@@ -116,6 +129,8 @@ impl RunSequence {
                     state: StepState::Waiting,
                 })
                 .collect(),
+            requests: plan.steps.iter().map(|step| step.request.clone()).collect(),
+            requested: vec![None; plan.steps.len()],
             current: 0,
             blocked: None,
             stopping: false,
@@ -136,10 +151,52 @@ impl RunSequence {
                     state: StepState::Waiting,
                 })
                 .collect(),
+            requests: steps.iter().map(|step| step.request.clone()).collect(),
+            requested: vec![None; steps.len()],
             current: 0,
             blocked: None,
             stopping: false,
         }
+    }
+
+    /// The request for one step, so a caller stages exactly what the plan computed.
+    pub fn planned_request(&self, index: usize) -> Option<&plugin_runtime::RunRequest> {
+        self.requests.get(index)
+    }
+
+    /// The position of the step now being prepared.
+    pub fn current_index(&self) -> usize {
+        self.current
+    }
+
+    /// Replace one entry of a step's request for this launch only.
+    ///
+    /// A launch-time entry never discards the configuration's own entries: it replaces the entry of
+    /// the same name, so a tool directory or a stored variable cannot be lost by an override.
+    pub fn override_environment(&mut self, index: usize, entry: &plugin_runtime::RunEnvEntry) {
+        if let Some(request) = self.requests.get_mut(index) {
+            request
+                .env
+                .retain(|existing| !existing.name.eq_ignore_ascii_case(&entry.name));
+            request.env.push(entry.clone());
+        }
+    }
+
+    /// Remember which launch request produced the step now running.
+    pub fn note_request(&mut self, index: usize, request_id: u64) {
+        if let Some(slot) = self.requested.get_mut(index) {
+            *slot = Some(request_id);
+        }
+    }
+
+    /// The launch identity of one step's request, when it has been requested.
+    pub fn request_id(&self, index: usize) -> Option<u64> {
+        self.requested.get(index).copied().flatten()
+    }
+
+    /// Whether any step is still waiting to be requested.
+    pub fn has_unrequested_step(&self) -> bool {
+        self.requested.iter().any(Option::is_none)
     }
 
     /// Every step with its state, for status text and tests.
@@ -154,10 +211,19 @@ impl RunSequence {
 
     /// Whether the sequence is still working rather than finished or blocked.
     ///
-    /// A stop in progress counts as working: the window must not close while a preparation program
-    /// is still being terminated.
+    /// A stop in progress counts as working, so the window cannot close while a preparation program
+    /// is still being terminated. The program step counts as working while it runs: the launch is
+    /// owned by this sequence, so a repeated click locates that session instead of starting another.
     pub fn is_active(&self) -> bool {
-        self.blocked.is_none() && (self.stopping || self.current < self.steps.len())
+        if self.blocked.is_some() {
+            return false;
+        }
+        if self.stopping || self.current < self.steps.len() {
+            return true;
+        }
+        self.steps
+            .last()
+            .is_some_and(|step| matches!(step.state, StepState::Running { .. }))
     }
 
     /// Whether a stop has been requested but the sequence has not yet accepted one.
@@ -175,6 +241,18 @@ impl RunSequence {
         match self.current_step().map(|step| &step.state) {
             Some(StepState::Running { session, .. }) => Some(*session),
             _ => None,
+        }
+    }
+
+    /// Record that a step has been asked for, before its session exists.
+    ///
+    /// A step that has been requested is no longer waiting, so no second request can be made for it.
+    pub fn requested(&mut self, index: usize, request: u64) {
+        if let Some(step) = self.steps.get_mut(index) {
+            step.state = StepState::Starting { request };
+        }
+        if let Some(slot) = self.requested.get_mut(index) {
+            *slot = Some(request);
         }
     }
 
@@ -297,11 +375,16 @@ impl RunSequence {
         }
     }
 
-    /// What the host should do next, given the sessions the runtime has published.
+    /// What the host should do next, given how the runtime currently sees a session.
     ///
     /// This is the single decision point, so the order of preparation is checked in one place rather
-    /// than spread across the UI and the worker.
-    pub fn next_action(&self, sessions: &BTreeMap<u64, RunSession>) -> SequenceAction {
+    /// than spread across the UI and the worker. `known` and `active` are asked separately because a
+    /// session the runtime has not published yet is not the same as one it has already dropped.
+    pub fn next_action(
+        &self,
+        known: impl Fn(u64) -> bool,
+        active: impl Fn(u64) -> bool,
+    ) -> SequenceAction {
         if let Some(reason) = &self.blocked {
             return SequenceAction::Blocked {
                 reason: reason.clone(),
@@ -314,16 +397,14 @@ impl RunSequence {
             StepState::Waiting => SequenceAction::Start {
                 index: self.current,
             },
-            StepState::Starting => SequenceAction::Wait,
+            StepState::Starting { .. } => SequenceAction::Wait,
             StepState::Running { session, .. } => {
                 if self.stopping {
                     return SequenceAction::Stop { session: *session };
                 }
-                // A session the runtime no longer reports cannot complete this step.
-                if sessions
-                    .get(session)
-                    .is_some_and(|known| !known.is_active())
-                {
+                // A session the runtime reports as finished cannot complete this step: the sequence
+                // waits for a provider's observation, not for a session to disappear.
+                if known(*session) && !active(*session) {
                     return SequenceAction::Blocked {
                         reason: format!("步骤 {} 的会话已结束但未报告结果", step.name),
                     };

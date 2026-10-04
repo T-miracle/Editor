@@ -670,6 +670,29 @@ impl Manager {
         Ok(())
     }
 
+    /// Poll until the given request is answered, or until its own timeout expires.
+    ///
+    /// A caller that must act on one specific answer — whether a preparation step ended, for example
+    /// — should not have to guess how many poll rounds another guest needs. This drives the same
+    /// polling a normal frame does, and never waits past the request's own bound.
+    pub fn poll_request<T: Clone>(&mut self, completion: &Completion<T>) {
+        let deadline = std::time::Instant::now()
+            + std::time::Duration::from_millis(EXECUTION_STATUS_TIMEOUT_MS as u64);
+        loop {
+            self.poll();
+            if !matches!(
+                completion.status(),
+                RequestUpdate::Accepted | RequestUpdate::Progress { .. }
+            ) {
+                return;
+            }
+            if std::time::Instant::now() >= deadline {
+                return;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(2));
+        }
+    }
+
     /// Ask a session's own provider what became of the program it started.
     ///
     /// Returns the request whose answer carries the observation, so a caller can wait for it and

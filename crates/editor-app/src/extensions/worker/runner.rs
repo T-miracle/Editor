@@ -234,6 +234,32 @@ impl Worker {
                             }
                             result.map_err(|error| anyhow::anyhow!("{error:#}"))
                         }
+                        Some(Work::PollRun {
+                            session,
+                            config,
+                            request_id,
+                        }) => {
+                            // The session's own provider answers; a provider that cannot be asked is
+                            // reported as unknown rather than assumed to have finished.
+                            let status = match manager.query_execution(session) {
+                                Ok(completion) => {
+                                    manager.poll_request(&completion);
+                                    match completion.status() {
+                                        api::RequestUpdate::Completed { result: Ok(value) } => {
+                                            super::RunStatus::from_value(&value)
+                                        }
+                                        _ => super::RunStatus::Unknown,
+                                    }
+                                }
+                                Err(_) => super::RunStatus::Unknown,
+                            };
+                            let mut published = output.lock().unwrap();
+                            published
+                                .run_status
+                                .push((config.clone(), request_id, status));
+                            published.configuration_revision += 1;
+                            Ok(())
+                        }
                         Some(Work::StopRun {
                             session,
                             config,

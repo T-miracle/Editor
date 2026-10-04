@@ -98,6 +98,9 @@ pub enum LaunchPlan {
 pub struct PendingRun {
     pub config: String,
     pub request_id: u64,
+    /// The preparation step this request starts, when it starts one rather than being an editor
+    /// request for something else.
+    pub step: Option<usize>,
 }
 
 /// A stop this editor requested, identified so only its own answer is reported.
@@ -135,6 +138,12 @@ impl RunSession {
     }
 }
 
+/// Most actions one launch prepares, including the program itself.
+///
+/// This is the bound a sequence is refused past, so a mistaken reference chain cannot turn one click
+/// into an unbounded number of programs.
+pub const MAX_PREPARED_STEPS: usize = editor_core::MAX_RUN_STEPS + 1;
+
 /// Saved configurations plus everything this editor has launched from them.
 #[derive(Debug)]
 pub struct RunControls {
@@ -145,10 +154,31 @@ pub struct RunControls {
     /// Stop requests awaiting their provider's answer, keyed by the configuration they stop.
     stops: Vec<PendingStop>,
     sessions: BTreeMap<u64, RunSession>,
+    /// Preparation in progress, keyed by the configuration whose launch or build owns it.
+    ///
+    /// One configuration prepares once at a time: a second click while its own build is running must
+    /// not start a parallel preparation of the same code.
+    sequences: BTreeMap<String, RunSequence>,
+    /// Session identities that belong to a preparation step, keyed by session.
+    ///
+    /// A step's program is an ordinary session, but it is preparation rather than something the user
+    /// started, so this is what tells the two apart when the runtime publishes state.
+    step_sessions: BTreeMap<u64, (String, usize)>,
+    /// Status queries awaiting their provider's answer, keyed by the request identity.
+    polls: Vec<PendingPoll>,
     /// Storage directory used for host-local configuration files.
     root: Option<std::path::PathBuf>,
     /// Set when the stored file could not be read or written; shown instead of silently defaulting.
     pub error: Option<String>,
+}
+
+/// A status query this editor made about one preparation step.
+#[derive(Clone, Debug)]
+pub struct PendingPoll {
+    pub config: String,
+    pub index: usize,
+    pub session: u64,
+    pub request_id: u64,
 }
 
 /// Controls without a storage directory, used while a workspace has no host-local state yet.
@@ -160,6 +190,9 @@ impl Default for RunControls {
             pending: Vec::new(),
             stops: Vec::new(),
             sessions: BTreeMap::new(),
+            sequences: BTreeMap::new(),
+            step_sessions: BTreeMap::new(),
+            polls: Vec::new(),
             root: None,
             error: None,
         }
@@ -183,6 +216,36 @@ impl RunControls {
             Err(error) => controls.error = Some(error.to_string()),
         }
         controls
+    }
+
+    /// Whether one session is still active, so a preparation can tell a live step from one the
+    /// runtime has already dropped.
+    pub fn session_is_active(&self, session: u64) -> bool {
+        self.sessions
+            .get(&session)
+            .is_some_and(RunSession::is_active)
+    }
+
+    /// Whether a session is known at all, so a preparation can tell "not yet published" from "gone".
+    pub fn session_known(&self, session: u64) -> bool {
+        self.sessions.contains_key(&session)
+    }
+
+    /// Remember that one preparation step has been asked for, and under which launch identity.
+    ///
+    /// This happens as the request is staged, so a step is owned from the moment it is requested
+    /// rather than from the moment its session appears.
+    pub fn note_step_request(&mut self, config: &str, index: usize, request_id: u64) {
+        if let Some(sequence) = self.sequences.get_mut(config) {
+            sequence.requested(index, request_id);
+        }
+    }
+
+    /// Whether a status query for this step is already outstanding.
+    pub fn has_poll(&self, config: &str, index: usize) -> bool {
+        self.polls
+            .iter()
+            .any(|poll| poll.config == config && poll.index == index)
     }
 
     /// A stored configuration by identity, used when the form reopens an existing entry.
@@ -422,7 +485,9 @@ impl RunControls {
         workspace_root: &str,
         limit: usize,
     ) -> Result<RunPlan, String> {
-        let mut plan = self.prepare(id, workspace_root, limit - 1)?;
+        // The program is one of the bounded actions, so preparation may use one fewer. A plan that is
+        // only the program is always allowed, which is what a configuration without steps produces.
+        let mut plan = self.prepare(id, workspace_root, limit.saturating_sub(1).max(1))?;
         let config = self
             .configs
             .configurations
@@ -492,6 +557,7 @@ impl RunControls {
         self.pending.push(PendingRun {
             config: config.to_owned(),
             request_id: self.next_request,
+            step: None,
         });
         self.next_request
     }
@@ -610,6 +676,220 @@ impl RunControls {
     /// Whether a launch request for this configuration is still awaiting its session identity.
     pub fn is_pending(&self, config: &str) -> bool {
         self.pending.iter().any(|pending| pending.config == config)
+    }
+
+    /// Whether this configuration is preparing: running its own build or a pre-launch step.
+    ///
+    /// A configuration prepares once at a time, and the Build control is disabled while its own
+    /// sequence runs, so two clicks cannot build the same code in parallel.
+    pub fn is_preparing(&self, config: &str) -> bool {
+        self.sequences
+            .get(config)
+            .is_some_and(RunSequence::is_active)
+    }
+
+    /// The preparation now running for a configuration, for status text.
+    pub fn preparation(&self, config: &str) -> Option<&RunSequence> {
+        self.sequences.get(config)
+    }
+
+    /// The step now running for a configuration, as `阶段 名称`, for status text.
+    pub fn preparing_step(&self, config: &str) -> Option<String> {
+        self.sequences.get(config).and_then(|sequence| {
+            sequence
+                .current_step()
+                .map(|step| format!("{} {}", step.kind.label(), step.name))
+        })
+    }
+
+    /// Why preparing this configuration would not work, or `None` when it would.
+    ///
+    /// The Build control asks this before it is enabled, so a disabled button always has a reason a
+    /// user can read rather than a control that silently does nothing.
+    pub fn preparation_error(&self, config: &str) -> Option<String> {
+        let Some(stored) = self.configs.find(config) else {
+            return Some("运行配置不存在，请重新选择".into());
+        };
+        if stored.build.is_empty() {
+            return Some("该配置没有构建操作".into());
+        }
+        self.prepare(config, "", MAX_PREPARED_STEPS).err()
+    }
+
+    /// Begin preparing a configuration, using the launch identity the caller already reserved.
+    ///
+    /// The plan is stored with the sequence, so nothing about a running preparation changes when the
+    /// configuration is edited during it.
+    pub fn begin_sequence(&mut self, config: &str, plan: RunPlan, request_id: u64) {
+        self.sequences
+            .insert(config.to_owned(), RunSequence::new(config, &plan));
+        // The program step's session joins the launch this request identity belongs to, so the
+        // published session is adopted as this editor's own rather than ignored.
+        let program_index = plan.steps.len().saturating_sub(1);
+        self.pending.push(PendingRun {
+            config: config.to_owned(),
+            request_id,
+            step: Some(program_index),
+        });
+    }
+
+    /// Replace one entry of a configuration's program step for this launch only.
+    ///
+    /// The configuration's own entries stay authoritative for everything else, so a launch-time
+    /// override cannot silently drop a tool directory or a variable the user stored.
+    pub fn override_program_environment(
+        &mut self,
+        config: &str,
+        entry: &plugin_runtime::RunEnvEntry,
+    ) {
+        let Some(sequence) = self.sequences.get_mut(config) else {
+            return;
+        };
+        let Some(index) = sequence.steps().len().checked_sub(1) else {
+            return;
+        };
+        sequence.override_environment(index, entry);
+    }
+
+    /// Begin a build-only sequence for a configuration, using an identity the caller reserved.
+    ///
+    /// A build is its own session: it is visible, stoppable and locatable in the run controls exactly
+    /// like a launch, but its sequence never contains a program step.
+    pub fn begin_build(&mut self, config: &str, plan: &RunPlan, request_id: u64) {
+        self.sequences.insert(
+            config.to_owned(),
+            RunSequence::build_only(config, &plan.steps),
+        );
+        self.pending.push(PendingRun {
+            config: config.to_owned(),
+            request_id,
+            step: None,
+        });
+    }
+
+    /// Record the session the runtime published for one step of a configuration's preparation.
+    pub fn sequence_started(
+        &mut self,
+        config: &str,
+        index: usize,
+        session: u64,
+        provider_session: Option<String>,
+    ) {
+        if let Some(sequence) = self.sequences.get_mut(config) {
+            sequence.started(index, session, provider_session);
+        }
+        self.step_sessions
+            .insert(session, (config.to_owned(), index));
+    }
+
+    /// The preparation step a session belongs to, when it is preparation rather than a program.
+    pub fn step_of(&self, session: u64) -> Option<(&str, usize)> {
+        self.step_sessions
+            .get(&session)
+            .map(|(config, index)| (config.as_str(), *index))
+    }
+
+    /// Forget the sessions of a finished preparation, so a later launch cannot adopt them.
+    pub fn forget_step_sessions(&mut self, config: &str) {
+        let finished = self
+            .sequences
+            .get(config)
+            .is_none_or(|sequence| !sequence.is_active());
+        if finished {
+            self.step_sessions.retain(|_, (owner, _)| owner != config);
+            self.polls.retain(|poll| poll.config != config);
+        }
+    }
+
+    /// Record a status query this editor is about to make for one preparation step.
+    pub fn begin_poll(&mut self, config: &str, index: usize, session: u64) -> u64 {
+        self.next_request += 1;
+        self.polls.push(PendingPoll {
+            config: config.to_owned(),
+            index,
+            session,
+            request_id: self.next_request,
+        });
+        self.next_request
+    }
+
+    /// Accept one provider answer about a preparation step, feeding it into the sequence waiting.
+    ///
+    /// An answer belonging to a query this editor did not make is ignored, so one window never
+    /// advances another window's preparation.
+    pub fn reconcile_run_status(
+        &mut self,
+        published: &[(String, u64, crate::extensions::RunStatus)],
+    ) -> Vec<(String, usize, StepOutcome)> {
+        let mut applied = Vec::new();
+        for (config, request_id, status) in published {
+            let Some(position) = self
+                .polls
+                .iter()
+                .position(|poll| poll.config == *config && poll.request_id == *request_id)
+            else {
+                continue;
+            };
+            let poll = self.polls.remove(position);
+            // A program still running is not progress: the sequence keeps waiting for its end.
+            let outcome = match status {
+                crate::extensions::RunStatus::Running => continue,
+                crate::extensions::RunStatus::Ended { code: Some(code) } => {
+                    StepOutcome::Exited { code: *code }
+                }
+                crate::extensions::RunStatus::Ended { code: None } => StepOutcome::Unknown,
+                crate::extensions::RunStatus::Terminated => StepOutcome::Terminated,
+                crate::extensions::RunStatus::Unknown => StepOutcome::Unknown,
+            };
+            let advanced = self
+                .sequences
+                .get_mut(config)
+                .is_some_and(|sequence| sequence.observe(poll.index, outcome.clone()));
+            if advanced {
+                applied.push((config.clone(), poll.index, outcome));
+            }
+        }
+        applied
+    }
+
+    /// Record that one step of a configuration's preparation could not start at all.
+    pub fn sequence_start_failed(&mut self, config: &str, index: usize, reason: &str) {
+        if let Some(sequence) = self.sequences.get_mut(config) {
+            sequence.start_failed(index, reason);
+        }
+    }
+
+    /// Feed one observed program end into the sequence waiting on it.
+    ///
+    /// Returns whether the observation advanced or blocked a sequence, so a late answer for a step
+    /// the sequence already left is not reported as progress.
+    pub fn observe_step(&mut self, config: &str, index: usize, outcome: StepOutcome) -> bool {
+        self.sequences
+            .get_mut(config)
+            .is_some_and(|sequence| sequence.observe(index, outcome))
+    }
+
+    /// Ask every preparing configuration to stop, blocking its launch.
+    pub fn stop_preparations(&mut self) -> Vec<(String, Option<u64>)> {
+        let mut stopped = Vec::new();
+        for (config, sequence) in &mut self.sequences {
+            if !sequence.is_active() {
+                continue;
+            }
+            sequence.request_stop();
+            stopped.push((config.clone(), sequence.current_session()));
+        }
+        stopped
+    }
+
+    /// Drop finished preparations, keeping only what is still running.
+    pub fn prune_sequences(&mut self) {
+        self.sequences.retain(|_, sequence| sequence.is_active());
+    }
+
+    /// The plan a launch of this configuration performs, or why it cannot be launched.
+    pub fn launch_plan(&self, config: &str, workspace_root: &str) -> Result<RunPlan, String> {
+        self.prepare_launch(config, workspace_root, MAX_PREPARED_STEPS)
     }
 }
 
