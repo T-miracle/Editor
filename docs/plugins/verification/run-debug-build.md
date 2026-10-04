@@ -205,6 +205,16 @@
 
 **我为什么漏了它**：这个文件从本批早期就被我当作「已知无关的脏改动」一直带在工作区里，而那个判断是错的。**它之所以长期是脏的，正是因为我从未去核对「需要它的那份清单是否已提交」。** 修正后 `cargo check --locked --workspace` 通过（修正前失败），`cargo test --locked --workspace --exclude editor-app` 通过。
 
+### 全量真实包测试审计（本轮）
+
+对**每一个** ignored（真实 WASM 包）用例做了一次完整执行，以便交接时有确定的账目，而不是抽样：
+
+- **`plugin-runtime`：121 项通过、0 项失败**（逐 suite 运行；包含 `host_execution` 14、`interactive_execution` 4、`scoped_instances` 5、`process_capabilities` 5、`sdk_distribution` 1 等）。
+- **`editor-app`：并行整跑会有若干用例互相干扰而失败**（`markdown_tests::distribution` 2 项、`lsp_tests` 1 项等）；**逐一运行全部通过**（如 `installed_hook_starts_unknown_lsp_...` 单独跑 195 秒通过）。这与本文件前面记录的是**同一个既有的共享状态污染**，不是本批引入的缺陷。
+- **`ui_images` 2 项**（`ui_images_worker_pool_is_global_and_queued_nodes_resume`、`lifecycle::ui_images_http_deadline_is_terminal_for_late_bodies`）在 suite 内并行时失败、**单独运行均通过**；两者共用全局 worker 池与本地 HTTP 服务器，因此同属这一类。
+
+**结论与判据**：本批的证据一律取自**按模块/按用例过滤**的运行，**不取自整二进制运行**；整跑失败是环境与共享状态的产物，已在前面以 `3a50511` 的基线实测证明其先于本批存在。`cargo check --locked --workspace` 为本批新增的判据（此前提交的锁文件是坏的，已修）。
+
 ## 未覆盖与限制
 
 - **`editor-app` 整二进制全量运行不可作为判据**（本任务开始前即如此）：`cargo test -p editor-app --bin editor-app` 会让不同用例互相污染宿主内的共享注册表，出现一批失败。**实测对照**：在提交 `3a50511`（本轮工作之前）上单跑 `app::plugins` 已是 `18 passed; 2 failed`，当前为 `19 passed; 1 failed`；且每个失败用例单独运行时都通过（`app::plugins::tests::restricting_startup_withdraws_declarations_before_worker_publication` 单独跑 `ok`）。因此按仓库验证约定使用**按模块过滤**的针对性运行：`run::` 59 项、`extensions::worker` 11 项、`language::code_highlighting` 12 项、`extensions::markdown_tests` 1 项（其余为 ignored）在本轮全绿。这不是本任务引入的缺陷，也不据它宣称通过。
