@@ -644,6 +644,30 @@ pub(crate) fn start_failure(error: Failure) -> anyhow::Error {
 /// The four operations the host answers on its session contract, as method names.
 pub(crate) const SESSION_METHODS: [&str; 4] = ["start", "list", "status", "stop"];
 
+/// What a consumer requires of the host's session contract.
+///
+/// A consumer states this to open the contract, and resolution compares it against what the host
+/// advertises, so asking for an operation the host does not offer is refused at open time rather
+/// than at the moment it is called.
+pub(crate) fn session_dependency() -> Result<Dependency, Failure> {
+    let provider = session_provider(
+        "dependency",
+        Arc::new(std::sync::atomic::AtomicBool::new(true)),
+    );
+    let contract = provider
+        .contracts
+        .get(SESSION_CONTRACT)
+        .cloned()
+        .ok_or_else(|| Failure::new(ErrorCode::UnsupportedOperation, "Unknown session contract"))?;
+    Ok(Dependency {
+        version: SESSION_CONTRACT_VERSION
+            .parse()
+            .expect("session contract version is valid"),
+        optional: false,
+        methods: contract.methods,
+    })
+}
+
 /// Answer one call on the host's session contract from the table the title bar reads.
 ///
 /// A consumer and the title bar therefore see one session, not two: `start` locates an existing
