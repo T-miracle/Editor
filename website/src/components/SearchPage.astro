@@ -1,0 +1,74 @@
+---
+/**
+ * Site search, backed by the static index Pagefind builds after `astro build`.
+ *
+ * Rendered by one page per locale so the interface language and the indexed
+ * language tree agree: English readers search the English pages, Chinese readers
+ * the Chinese ones. Pagefind's own UI is loaded from the build output at runtime,
+ * so no index data is bundled into the page itself.
+ */
+import BaseLayout from '../layouts/BaseLayout.astro';
+import type { Locale } from '../lib/nav';
+
+interface Props {
+  locale: Locale;
+}
+
+const { locale } = Astro.props;
+
+// Recover the configured base the same way the layout does.
+const [base] = Astro.url.pathname.split(`/${locale}/`);
+const basePrefix = base!.endsWith('/') ? base! : `${base!}/`;
+
+const labels = {
+  en: {
+    title: 'Search',
+    description: 'Search the editor guide and the plugin contract.',
+    placeholder: 'Search the documentation',
+    clear: 'Clear',
+  },
+  'zh-cn': {
+    title: '搜索',
+    description: '在编辑器使用说明与插件契约中检索。',
+    placeholder: '搜索文档',
+    clear: '清空',
+  },
+}[locale];
+---
+
+<BaseLayout
+  title={labels.title}
+  description={labels.description}
+  locale={locale}
+  alternate={locale === 'en' ? '/zh-cn/search/' : '/en/search/'}
+  currentPath={`${basePrefix}${locale}/search/`}
+>
+  <h1>{labels.title}</h1>
+  <p>{labels.description}</p>
+  <div id="search"></div>
+</BaseLayout>
+
+<script is:inline define:vars={{ basePrefix, locale, labels }}>
+  // Pagefind ships its own UI; it is loaded from the generated index at runtime so
+  // the page stays static and the index is fetched only when search is used.
+  const stylesheet = document.createElement('link');
+  stylesheet.rel = 'stylesheet';
+  stylesheet.href = `${basePrefix}pagefind/pagefind-ui.css`;
+  document.head.append(stylesheet);
+
+  const script = document.createElement('script');
+  script.src = `${basePrefix}pagefind/pagefind-ui.js`;
+  script.addEventListener('load', () => {
+    // No language filter: the index is built once with a forced language because
+    // Pagefind needs a CJK segmenter extension to detect and index Chinese text,
+    // and without it every Chinese query returns nothing. One index over both
+    // trees answers Chinese and English queries; the per-locale pages keep the
+    // interface language right. See website/AGENTS.md for the trade-off.
+    new window.PagefindUI({
+      element: '#search',
+      showSubResults: true,
+      translations: { placeholder: labels.placeholder, clear_search: labels.clear },
+    });
+  });
+  document.head.append(script);
+</script>

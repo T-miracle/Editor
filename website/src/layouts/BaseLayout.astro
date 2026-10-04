@@ -62,6 +62,9 @@ const groups = await Promise.all(
     <header class="site-header">
       <a class="site-title" href={localeBase(basePrefix, locale)}>Me Editor</a>
       <nav>
+        <a class="header-link" href={`${basePrefix}${locale}/search/`}>
+          {locale === 'en' ? 'Search' : '搜索'}
+        </a>
         <span class="locale-switch">
           {
             LOCALES.map((candidate, index) => (
@@ -105,7 +108,11 @@ const groups = await Promise.all(
         }
       </aside>
 
-      <main class="article">
+      <!--
+        Search indexes only the article body: including the navigation and footer would
+        make every page match the sidebar's page titles.
+      -->
+      <main class="article" data-pagefind-body data-pagefind-meta={`locale:${locale}`}>
         <slot />
       </main>
     </div>

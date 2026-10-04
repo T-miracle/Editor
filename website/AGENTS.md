@@ -38,6 +38,16 @@
   `src/lib/remark-base-links.mjs` 在构建时注入 `base`，本地开发与线上因此一致。
 - `astro.config.mjs` 的 `site` 与 `base` 由同一个仓库名变量推导；仓库改名时两处一起变，
   否则线上所有内部链接 404。
+- **搜索索引强制单一语言**：`npm run search:index` 使用 `pagefind --force-language zh`。Pagefind
+  能识别 `<html lang="zh-cn">`，但索引中文正文需要 CJK 分词扩展，而该扩展不在 npm 上
+  （`@pagefind/zh` 不存在）。不加该参数时索引会生成 `en` 与 `zh-cn` 两个语言，而中文分片对任何
+  中文词都返回 0 条——读者看到的是一个永远搜不到东西的搜索框。强制语言后中文可检索、英文照常
+  命中；代价是没有按语言分片与词干还原。`tests/search.test.mjs` 断言两种语言都能命中，改回
+  自动检测会让该测试失败。
+- **frontmatter 的值不能含 `: `**：YAML 普通标量不允许，js-yaml 会拒绝并中断构建；测试里有
+  对应断言，报错会指出页面与字段。
+- 搜索只索引 `data-pagefind-body` 容器内的内容（见 `BaseLayout.astro`）；移走该属性会把导航与
+  页脚也纳入索引，导致每个页面都能命中侧栏标题。
 - **站点目录位置被 Rust 侧引用**：编辑器通过 `include_bytes!` 把英文 SDK 文档编进
   可执行文件并导出给插件项目。移动或改名 `src/content/docs/en/sdk/` 会直接导致宿主
   编译失败，这不是意外而是有意的耦合；确需移动时同步修改宿主侧引用并重跑 SDK 验证。
@@ -46,11 +56,12 @@
 
 ```powershell
 cd website
-pnpm install          # 首次
-pnpm test             # 文档源与链接门禁
-pnpm build            # 构建静态站点后再次运行同一组测试
-pnpm dev              # 本地预览，逐页核对中英两版
+npm install           # 首次（CI 使用 npm ci）
+npm test              # 文档源、链接与搜索门禁
+npm run build         # 构建站点、生成搜索索引，并再次运行同一组测试
+npm run dev           # 本地预览，逐页核对中英两版
 ```
 
-改动页面后至少运行 `pnpm test`；改版式或链接生成逻辑后运行 `pnpm build` 并核对产物。
+改动页面后至少运行 `npm test`；改版式、链接生成或索引参数后运行 `npm run build` 并核对产物。
+搜索相关改动必须跑完 `npm run build`（索引由构建产生，`npm test` 单独运行会看到上一次的索引）。
 纯内容改动不要求运行 Rust 侧检查，但触及站点目录位置或 SDK 文档时按上方陷阱一节处理。

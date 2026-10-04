@@ -9,7 +9,8 @@
   },
   "scripts": {
     "dev": "astro dev",
-    "build": "astro build && node --test tests/*.test.mjs",
+    "build": "astro build && npm run search:index && node --test tests/*.test.mjs",
+    "search:index": "pagefind --site dist --force-language zh",
     "preview": "astro preview",
     "test": "node --test tests/*.test.mjs"
   },
@@ -18,6 +19,8 @@
   },
   "devDependencies": {
     "@astrojs/markdown-remark": "^7.3.1",
+    "@pagefind/default-ui": "^1.5.2",
+    "pagefind": "^1.5.2",
     "typescript": "5.9.3"
   }
 }

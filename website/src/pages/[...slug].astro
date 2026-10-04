@@ -27,16 +27,14 @@ const { entry } = Astro.props;
 const { Content } = await render(entry);
 
 const locale = entry.id.split('/')[0] as Locale;
-const trail = entry.id.split('/').slice(1).join('/');
 const currentPath = `${Astro.url.pathname}${Astro.url.pathname.endsWith('/') ? '' : '/'}`;
-const alternate = entry.data.alternate;
 ---
 
 <BaseLayout
   title={entry.data.title}
   description={entry.data.description}
   locale={locale}
-  alternate={alternate}
+  alternate={entry.data.alternate}
   currentPath={currentPath}
 >
   <h1>{entry.data.title}</h1>
