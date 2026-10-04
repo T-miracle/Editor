@@ -493,6 +493,10 @@ probe C step=2..9 blocked=None      // 之后序列永远不阻塞，循环耗�
 
 **仓库状态**：所有尝试已撤回，`native_run_tests` 7/7 通过、`native_build_tests` 5/6（失败者即本条）、`native_discovery_tests` 1/1。
 
+**第八次尝试（已撤回）**：按上一条结论把守卫改为「序列是否已为**这个会话**发过停止」、并在离开路径跳过由序列拥有的会话。**结果：`leaving_stops…` 仍报出两次停止（`[1, 1]`）。** 说明**「离开」与「序列驱动」这两条路径在同一帧里各自发出了一次停止**，而**本轮没有找到让两者互斥的落点**——`confirm_leave` 先调 `stop_preparations()`、序列的驱动随后发送，两者之间的时序在本轮观察到的两种运行里并不一致。
+
+**另一处不确定性（如实记录）**：`extensions::native_build_tests` 的**用例总数在两次串行运行之间不同**——一次报 `5 passed; 1 failed`，另一次报 `4 passed; 1 failed`（过滤数 400 与 423）。**因此该模块的「通过数」本身不是稳定判据**，只有那一条失败用例的**失败是稳定的**。后续若要动这一块，**必须先弄清这 1 条用例的差异从何而来**，否则任何「修好了」的判断都可能是运行差异而非改动效果。
+
 ## 未覆盖与限制
 
 - **`editor-app` 整二进制全量运行不可作为判据**（本任务开始前即如此）：`cargo test -p editor-app --bin editor-app` 会让不同用例互相污染宿主内的共享注册表，出现一批失败。**实测对照**：在提交 `3a50511`（本轮工作之前）上单跑 `app::plugins` 已是 `18 passed; 2 failed`，当前为 `19 passed; 1 failed`；且每个失败用例单独运行时都通过（`app::plugins::tests::restricting_startup_withdraws_declarations_before_worker_publication` 单独跑 `ok`）。因此按仓库验证约定使用**按模块过滤**的针对性运行：`run::` 59 项、`extensions::worker` 11 项、`language::code_highlighting` 12 项、`extensions::markdown_tests` 1 项（其余为 ignored）在本轮全绿。这不是本任务引入的缺陷，也不据它宣称通过。
