@@ -405,6 +405,33 @@ Run and debug startup smoke passed: no program was left behind by shutdown.
 
 **尚未接线**：**编辑器侧还没有在会话开始或断点变更时发送它**，worker 也还不接受 `"set_breakpoints"`。这条与检查视图那条一样，是**下一步**，不声称端到端可用。
 
+### 本批引入的一处回归（未修复，如实记录）
+
+排查可达性时用测试二分定位到**本批提交 `7c5cfcd` 引入的回归**：
+
+**`stopping_during_preparation_never_starts_the_program` 在 `d475b89` 与 `f5574ae` 通过，自 `7c5cfcd` 起失败。**
+
+原因是那一轮为「同一次停止被反复重发」加的守卫**以「配置」为键**：
+
+```
+if self.run_controls.is_stopping(config) { return; }
+```
+
+而**一次准备步骤与它随后启动的程序可以属于同一个配置**。因此当**用户先点「停止」**（登记了该配置的停止）之后，**准备序列自己那次真正关键的停止请求被守卫吞掉**——**序列于是永远等一个从未发出的请求的答复**，`preparation_blocked` 保持 `None`，用例超时。
+
+**我尝试了两次收窄，都失败**：
+
+| 尝试 | 结果 |
+| --- | --- |
+| 按「会话」守卫 | `leaving_stops…` 通过，`stopping_during_preparation…` 仍失败 |
+| 按会话 + 让 `stop_selected_run` 把停止登记到所属序列 | 同上，仍失败 |
+
+**两次都未能让两个用例同时通过，因此我撤回了全部相关改动**，而不是把一个会让准备无法停止的守卫留在交付里。**当前 HEAD：`leaving_stops…` 通过，`stopping_during_preparation…` 失败。**
+
+**这是一个已知的、本批引入的回归**，位置明确，但**修法尚未找到**，**不应算作通过**，相关工单**保持打开**。
+
+**已排除的方向**：不在 `confirm_leave` 的去重（那里的去重是对的），也不在 `RunSequence::stopped` 的匹配。**根因是所有权问题**——用户、序列、离开路径三者都会为同一个准备步骤发起停止，而**目前没有单一权威**。下一步应当先决定「谁有权代表一次准备步骤发出停止请求」，再让其余路径只登记、不发送。
+
 ## 未覆盖与限制
 
 - **`editor-app` 整二进制全量运行不可作为判据**（本任务开始前即如此）：`cargo test -p editor-app --bin editor-app` 会让不同用例互相污染宿主内的共享注册表，出现一批失败。**实测对照**：在提交 `3a50511`（本轮工作之前）上单跑 `app::plugins` 已是 `18 passed; 2 failed`，当前为 `19 passed; 1 failed`；且每个失败用例单独运行时都通过（`app::plugins::tests::restricting_startup_withdraws_declarations_before_worker_publication` 单独跑 `ok`）。因此按仓库验证约定使用**按模块过滤**的针对性运行：`run::` 59 项、`extensions::worker` 11 项、`language::code_highlighting` 12 项、`extensions::markdown_tests` 1 项（其余为 ignored）在本轮全绿。这不是本任务引入的缺陷，也不据它宣称通过。
