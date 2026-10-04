@@ -24,6 +24,17 @@ use std::{
 
 /// The only execution contract the host consumes directly; its version family is negotiated.
 pub const EXECUTION_CONTRACT: &str = "interactive.execute";
+/// The only debug contract the host consumes directly.
+///
+/// Debugging is a provider contract like execution, so the host never learns which debugger answers,
+/// how it is driven, or over what transport.
+pub const DEBUG_CONTRACT: &str = "debug.session";
+/// A debug start includes building and attaching, so it is allowed the longest window here.
+pub const DEBUG_START_TIMEOUT_MS: u32 = 60_000;
+/// Setting breakpoints is a state change the provider answers from its own model.
+pub const DEBUG_BREAKPOINT_TIMEOUT_MS: u32 = 15_000;
+/// Resume, pause, stop and status are short control exchanges.
+pub const DEBUG_CONTROL_TIMEOUT_MS: u32 = 15_000;
 /// A start request that a provider neither accepts nor rejects within this window is abandoned.
 pub const EXECUTION_START_TIMEOUT_MS: u32 = 30_000;
 /// A stop request is a short control exchange; waiting longer hides an unreachable provider.
@@ -428,6 +439,32 @@ fn provider_session_of(value: &Value) -> Option<String> {
 /// this declaration, decides what authority a start delegates to the provider. `stop` is required
 /// rather than optional: the run controls promise a stop, so a provider that cannot stop is
 /// incompatible instead of appearing available and then failing to end a program.
+/// Turn a host-written declaration into the requirement a provider has to match, method for method.
+///
+/// The host declares what it calls rather than deriving it from a provider, so the requirement is the
+/// contract; `required` names the methods whose absence makes a declaration unusable, and everything
+/// else in the declaration keeps its exact shape.
+pub(crate) fn dependency_from_declaration(
+    declaration: Value,
+    required: &[&str],
+    version: &str,
+    incomplete: &str,
+) -> Result<Dependency, Failure> {
+    let contract: plugin_protocol::service::Contract = serde_json::from_value(declaration)
+        .map_err(|error| Failure::new(ErrorCode::OperationFailed, error.to_string()))?;
+    let methods = contract.methods;
+    if required.iter().any(|method| !methods.contains_key(*method)) {
+        return Err(Failure::new(ErrorCode::OperationFailed, incomplete));
+    }
+    Ok(Dependency {
+        version: version
+            .parse()
+            .expect("the host's own version requirement is valid"),
+        optional: false,
+        methods,
+    })
+}
+
 pub(crate) fn execution_dependency() -> Result<Dependency, Failure> {
     let declaration: Value = serde_json::from_str(
         r#"{"version":"1.3.0","methods":{
@@ -706,29 +743,32 @@ impl Manager {
 
     /// Every installed plugin that declares a run execution contract, with its availability.
     ///
-    /// This is descriptive: it never changes which provider is selected and holds no session. A
-    /// provider that is installed but unusable is still listed, because its reason is what a user
-    /// needs to act on and hiding it would make an incomplete choice look like the only one.
+    /// This is descriptive: it never changes which provider is selected and holds no session.
     pub fn execution_providers(&self) -> Vec<ProviderCandidate> {
-        let dependency = execution_dependency().ok();
-        // The selection is asked about the same logical scope a launch would use, so the answer is
-        // what would actually happen rather than what some other scope's preference says.
+        self.contract_providers(EXECUTION_CONTRACT, execution_dependency().ok().as_ref())
+    }
+
+    /// Every installed plugin that declares one contract, with its availability and the selected one.
+    ///
+    /// A provider that is installed but unusable is still listed, because its reason is what a user
+    /// needs to act on: hiding it would make an incomplete choice look like the only one. The
+    /// selection is asked about the same logical scope a session would use, so the answer describes
+    /// what would actually happen rather than what some other scope's preference says.
+    pub(super) fn contract_providers(
+        &self,
+        contract: &str,
+        dependency: Option<&Dependency>,
+    ) -> Vec<ProviderCandidate> {
         let scope = self.host_scope();
         let selected = self
             .plugin_services
             .lock()
-            .map(|broker| broker.selected_provider(&scope, EXECUTION_CONTRACT))
+            .map(|broker| broker.selected_provider(&scope, contract))
             .ok()
             .flatten();
         let mut candidates = Vec::new();
-        // The installed registry is what a user's choice names, and it also holds the packages that
-        // are installed but not usable, whose reasons are what the user needs to act on.
         for installed in self.installed.values() {
-            let Some(declaration) = installed
-                .manifest
-                .plugin_services
-                .provides
-                .get(EXECUTION_CONTRACT)
+            let Some(declaration) = installed.manifest.plugin_services.provides.get(contract)
             else {
                 continue;
             };
@@ -738,10 +778,10 @@ impl Manager {
                 Some(format!("与当前宿主不兼容：{error}"))
             } else if let Some(error) = &installed.error {
                 Some(format!("插件运行出错：{error}"))
-            } else if let Some(dependency) = &dependency
+            } else if let Some(dependency) = dependency
                 && !dependency.matches(declaration)
             {
-                Some("声明的执行契约与方法不完整".to_owned())
+                Some(format!("声明的 {contract} 契约与方法不完整"))
             } else {
                 None
             };
@@ -755,7 +795,6 @@ impl Manager {
         candidates.sort_by(|left, right| left.plugin.cmp(&right.plugin));
         candidates
     }
-
     /// Ask a session's own provider what became of the program it started.
     ///
     /// Returns the request whose answer carries the observation, so a caller can wait for it and

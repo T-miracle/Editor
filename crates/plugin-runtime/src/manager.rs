@@ -10,6 +10,7 @@ use std::{
 mod artwork;
 mod bundles;
 mod data_updates;
+mod debug_services;
 mod dependencies;
 mod host_services;
 mod image_input;

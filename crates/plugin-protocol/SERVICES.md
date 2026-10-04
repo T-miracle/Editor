@@ -92,14 +92,23 @@ editor.write、ui.panels 和 process.exec；没有声明的委托权限一律拒
 
 本机实测（决定所依据的事实，不是承诺）：
 
-- `rust-lldb` 是一个包装脚本，而 `lldb` 本体未随本机 Rust 工具链安装；`rust-gdb` 同理。
-- 本机 PATH 上存在 `gdb.exe`（MinGW-W64 x86_64，r7，GDB 17.1），支持 `--interpreter=mi2`。
+- `rust-gdb.exe` 与 `rust-lldb.exe` 都是 rustup 的工具链代理，各约 12 MB，**不是调试器本体**；
+  三套已装工具链（1.95、1.98.1、stable，均为 `x86_64-pc-windows-msvc`）的
+  `lib\rustlib\x86_64-pc-windows-msvc\bin\lldb.exe` **都不存在**。
+- 本机 PATH 上唯一的调试器是 `gdb.exe`（MinGW-W64 x86_64，r7，GDB 17.1），支持
+  `--interpreter=mi2`。
 - 两者都**不说 DAP**：本机现有调试器只能经各自的命令行/机器接口驱动。因此「调试适配器即
   提供者」不是备选方案之一，而是本机唯一能落地的接入方式；DAP 是某类适配器内部的实现细节，
   接口层面**不预留 DAP 假设**。
-- 该 GDB 是 GCC 发行版，对 MSVC 目标构建产物的调试信息支持弱于 LLDB；因此本机上的真实
-  断点验收可能需要按环境记为受限，而不是声称已通过。
+- 实测该 GDB 读不了本机 Rust 构建产物：`cargo build`（默认 MSVC 目标、`debug = 2`）
+  产出 `probe_debug.pdb`（约 1.3 MB），而 `gdb --batch -ex "info sources"` 报
+  `No symbol table is loaded`，正常加载时也说 `(No debugging symbols found)`——GDB 读
+  DWARF，MSVC 目标写 PDB。因此**本机没有能读取这些调试信息的调试器**。
+- 由此，工单 09 的「真实断点」验收在本机**无法诚实完成**；已确认的处理方式是：先交付与
+  调试器无关的通用能力（缺能力时入口禁用并给出原因，不回退为普通运行），把真机断点验收
+  记为**环境受限、未验证**，不安装也不捆绑任何调试器。
 
 据此，`debug.session` 的接口形状、传输方式与握手细节由工单 09 在实现前按上面的事实定稿；
 本文件只记录**不可协商的部分**：调试是提供者契约、宿主不做调试器专属分支、缺能力不回退。
+
 
