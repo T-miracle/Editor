@@ -150,6 +150,14 @@
 
 **判定汇总**：20 项中 **18 项已通过**、**2 项未验证**（R16、R20）、**0 项未通过**。两项未验证都源自本机环境或原生交互框架的限制，已在下方「未覆盖与限制」中逐条给出具体原因；它们**不计为通过**。
 
+**本表的证据补注（逐条核实后补写）**：此表最初是按当时的印象写的，因此下列条目在后续轮次被逐条核实并点出具体用例，而不是停留在「已通过」三个字上。
+
+- **R06 的「终端退出码与会话结果对应」**：`host_execution::host_observes_a_program_exit_through_its_provider` 让程序 `exit 7`，断言提供者报告 `state = "exited"` 且 `code = 7`——**是程序自己的退出状态，不是猜测**（本轮核实并运行通过）。
+- **R06 的排序语义**：`run::sequence` 的 9 项（含 `a_sequence_starts_each_step_only_after_the_previous_one_succeeded`、`a_failing_step_blocks_every_later_step_and_keeps_the_first_cause`、`a_step_with_no_confirmable_end_blocks_instead_of_passing`、`a_terminated_step_blocks_even_though_nobody_asked_to_stop`）。
+- **R11**：`run::tests::a_plugin_lifecycle_change_names_the_sessions_it_affects`（本轮确认存在并已随 `run::` 60 项通过）。
+- **R10**：`host_execution` 的 `host_controls_stop_the_program_a_session_owns`、`closing_the_window_leaves_no_program_running`、`closing_while_a_launch_is_still_preparing_leaves_no_program_running`、`shutdown_with_no_sessions_is_immediate`。
+- **R09 的「停止只影响所选项」**：`run::` 的会话选择与停止边界用例；**输出落在提供者自己面板**由 `interactive_execution::consumer_executes_argv_in_a_visible_terminal_session` 与真实二进制冒烟共同覆盖。
+
 ### 工单 12 逐条进度
 
 - **第 1 条（用宿主导出的 SDK 独立构建并安装）已通过**：`scripts/verify-plugin-sdk.ps1` 完整跑完导出 → 损坏 → 修复 → 逐文件哈希比对 → **在仓库之外独立构建访客组件**，并以 `Verified public SDK export, repair and independent component build.` 结束；`sdk_distribution -- --ignored` 通过。访客在系统临时目录里对着**已安装的公开 SDK 缓存**编译，未引用仓库 `crates/`（六份插件 `Cargo.toml` 均无仓库相对依赖）。
