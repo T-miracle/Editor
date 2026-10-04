@@ -169,6 +169,35 @@ impl Worker {
                     })
                 } else {
                     match work {
+                        // Reading the provider list holds no session and changes no selection, so it
+                        // is safe to ask whenever the page that shows providers is opened.
+                        Some(Work::ListRunProviders) => {
+                            let providers = manager.execution_providers();
+                            output.lock().unwrap().run_providers = Some(providers);
+                            Ok(())
+                        }
+                        Some(Work::SetRunProvider { provider }) => {
+                            // The runtime keeps this in its own versioned store, so the choice
+                            // outlives the session and every launch path reads the same answer.
+                            let scope = settings::Scope::Project;
+                            match provider {
+                                Some(_) => manager.set_service_provider(
+                                    api::InstanceScope::Workspace,
+                                    scope,
+                                    plugin_runtime::EXECUTION_CONTRACT,
+                                    provider.as_deref(),
+                                ),
+                                // Following the default again means removing the explicit choice,
+                                // not picking whichever provider happens to be first.
+                                None => manager.set_service_provider(
+                                    api::InstanceScope::Workspace,
+                                    scope,
+                                    plugin_runtime::EXECUTION_CONTRACT,
+                                    None,
+                                ),
+                            }
+                            .map_err(|error| anyhow::anyhow!("{error:#}"))
+                        }
                         Some(Work::SetServiceProvider {
                             request,
                             owner,

@@ -1151,6 +1151,43 @@ impl RunControls {
         self.polls.retain(|poll| poll.config != config);
     }
 
+    /// Stage the choice of execution provider for one configuration.
+    ///
+    /// The choice is recorded on the configuration, so a later switch of the scope's default cannot
+    /// silently retarget it, and the same choice is applied to the scope so every other launch path
+    /// agrees with what the dialog shows.
+    pub fn choose_provider(
+        &mut self,
+        id: &str,
+        provider: Option<&str>,
+        workspace: &str,
+    ) -> Result<(), String> {
+        let Some(mut configuration) = self.configs.find(id).cloned() else {
+            return Err(format!("未知的配置：{id}"));
+        };
+        configuration.provider = provider.map(str::to_owned);
+        self.upsert(configuration, workspace)
+    }
+
+    /// Why this configuration's chosen provider cannot run, or `None` when it can.
+    ///
+    /// A configuration that follows the default is never in this state: no explicit request was
+    /// made, so there is nothing to be missing.
+    pub fn provider_unavailable(
+        &self,
+        id: &str,
+        providers: &[plugin_runtime::ProviderCandidate],
+    ) -> Option<String> {
+        let chosen = self.configs.find(id)?.provider.as_deref()?;
+        match providers
+            .iter()
+            .find(|candidate| candidate.plugin == chosen)
+        {
+            None => Some(format!("配置指定的执行提供者 {chosen} 未安装")),
+            Some(candidate) => candidate.unavailable.clone(),
+        }
+    }
+
     /// Drop finished preparations, keeping only what is still running.
     pub fn prune_sequences(&mut self) {
         self.sequences.retain(|_, sequence| sequence.is_active());
@@ -1416,6 +1453,11 @@ pub struct RunConfigDraft {
     pub source: editor_core::RunConfigSource,
     /// The discovered target this configuration came from, when a plugin offered it.
     pub from_target: Option<String>,
+    /// The execution provider this configuration asks for, or `None` to follow the default.
+    ///
+    /// The choice belongs to the configuration, so a later switch of the default does not silently
+    /// retarget a configuration that asked for a specific provider.
+    pub provider: Option<String>,
     /// Whether the user chose to share this configuration with the project.
     pub share: bool,
     /// Build actions as `名称 = 程序或解释器 | 参数 | 脚本`, one per line.
@@ -1447,6 +1489,7 @@ impl RunConfigDraft {
                 tool_paths: config.tool_paths.join("\n"),
                 source: config.source,
                 from_target: config.from_target.clone(),
+                provider: config.provider.clone(),
                 share: !config.local,
                 build: render_steps(&config.build),
                 prelaunch: render_steps(&config.prelaunch),
@@ -1463,6 +1506,7 @@ impl RunConfigDraft {
                 tool_paths: String::new(),
                 source: editor_core::RunConfigSource::Local,
                 from_target: None,
+                provider: None,
                 // Sharing is an explicit choice; a new configuration starts on this machine only.
                 share: false,
                 build: String::new(),
@@ -1515,6 +1559,7 @@ impl RunConfigDraft {
             // Editing a configuration by hand keeps the target it came from, so a later discovery
             // still recognizes it as its own rather than offering to add a second copy.
             from_target: self.from_target.clone(),
+            provider: self.provider.clone(),
             local: !self.share,
         })
     }

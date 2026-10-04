@@ -20,6 +20,7 @@ fn program_config(id: &str, name: &str) -> RunConfig {
         prelaunch: Default::default(),
         source: RunConfigSource::Local,
         from_target: None,
+        provider: None,
         local: true,
     }
 }
@@ -178,6 +179,7 @@ fn program_arguments_are_never_reinterpreted_as_a_shell_command() {
         prelaunch: Default::default(),
         source: RunConfigSource::Local,
         from_target: None,
+        provider: None,
         local: true,
     };
     configuration.validate().unwrap();

@@ -163,6 +163,9 @@ impl SharedConfig {
             // A shared entry is a definition, not a pointer at a discovered target: that link belongs
             // to the machine whose discovery offered it.
             from_target: overrides.and_then(|local| local.from_target.clone()),
+            // Which provider runs a program is this machine's fact, not the project's: another
+            // machine may have a different provider installed.
+            provider: overrides.and_then(|local| local.provider.clone()),
             local: false,
         }
     }

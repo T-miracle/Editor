@@ -51,6 +51,18 @@ impl RunStatus {
 
 pub enum Work {
     /// Provider choices are explicit host actions, never executable project configuration.
+    /// Ask the runtime which providers it has for the run execution contract.
+    ///
+    /// A plain read: it opens no session and changes no selection, so it is safe to ask whenever a
+    /// page that shows providers becomes visible.
+    ListRunProviders,
+    /// Record the execution provider a workspace's launches should use.
+    ///
+    /// Applying a choice never touches a session that is already running: a launch that has started
+    /// keeps the provider that started it.
+    SetRunProvider {
+        provider: Option<String>,
+    },
     SetServiceProvider {
         request: u64,
         owner: api::InstanceScope,
@@ -262,6 +274,11 @@ pub(super) struct Published {
     /// The answer is an observation, so a state of `Running` here means the program exists and its
     /// exit has not been seen — never that it is expected to end.
     pub run_status: Vec<(String, u64, RunStatus)>,
+    /// The execution providers the runtime has, and which one a launch here would use.
+    ///
+    /// Descriptive only: publishing this never changes a selection, and a launch is not delayed by
+    /// waiting for it. `None` means no listing has been asked for since the last lifecycle change.
+    pub run_providers: Option<Vec<plugin_runtime::ProviderCandidate>>,
     pub startup: BTreeMap<String, String>,
     pub views: BTreeMap<String, Arc<ui::Document>>,
     /// Each scene's full-color image operations are ready before the UI observes that scene.

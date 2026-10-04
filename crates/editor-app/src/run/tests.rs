@@ -22,6 +22,7 @@ fn config(id: &str, name: &str) -> RunConfig {
         prelaunch: Default::default(),
         source: editor_core::RunConfigSource::Local,
         from_target: None,
+        provider: None,
         local: true,
     }
 }
@@ -40,6 +41,7 @@ fn with_steps(id: &str, name: &str, build: &str, prelaunch: &str) -> RunConfig {
         tool_paths: String::new(),
         source: editor_core::RunConfigSource::Local,
         from_target: None,
+        provider: None,
         share: false,
         build: build.into(),
         prelaunch: prelaunch.into(),
@@ -831,6 +833,75 @@ fn confirming_a_candidate_stores_it_once() {
     assert!(error.contains("nobody:missing"), "{error}");
 }
 
+/// A configuration can follow the default or ask for a provider, and says when its own is unusable.
+#[test]
+fn a_configuration_can_ask_for_one_provider() {
+    use plugin_runtime::ProviderCandidate;
+    let candidate = |plugin: &str, unavailable: Option<&str>, selected: bool| ProviderCandidate {
+        plugin: plugin.to_owned(),
+        unavailable: unavailable.map(str::to_owned),
+        selected,
+    };
+    let mut controls = controls();
+    let workspace = "C:/work".to_owned();
+    controls
+        .upsert(config("run-1", "第一个"), &workspace)
+        .unwrap();
+
+    // A stored configuration follows the default until it is told otherwise.
+    assert_eq!(
+        controls.configuration("run-1").unwrap().provider,
+        None,
+        "a new configuration follows the default"
+    );
+    let providers = vec![
+        candidate("terminal", None, true),
+        candidate("broken", Some("与当前宿主不兼容"), false),
+    ];
+    assert!(
+        controls.provider_unavailable("run-1", &providers).is_none(),
+        "following the default is never invalid"
+    );
+
+    // Asking for a provider records it on the configuration, so it persists with the configuration.
+    controls
+        .choose_provider("run-1", Some("terminal"), &workspace)
+        .unwrap();
+    assert_eq!(
+        controls.configuration("run-1").unwrap().provider.as_deref(),
+        Some("terminal")
+    );
+    assert!(controls.provider_unavailable("run-1", &providers).is_none());
+
+    // A provider that cannot run is named with its reason instead of being used anyway.
+    controls
+        .choose_provider("run-1", Some("broken"), &workspace)
+        .unwrap();
+    let reason = controls
+        .provider_unavailable("run-1", &providers)
+        .expect("an unusable provider is reported");
+    assert!(reason.contains("不兼容"), "{reason}");
+
+    // A provider that is not installed at all is reported as missing, never substituted.
+    controls
+        .choose_provider("run-1", Some("gone"), &workspace)
+        .unwrap();
+    let reason = controls
+        .provider_unavailable("run-1", &providers)
+        .expect("a missing provider is reported");
+    assert!(reason.contains("gone"), "{reason}");
+
+    // Asking for the default again clears the request rather than picking a provider.
+    controls.choose_provider("run-1", None, &workspace).unwrap();
+    assert_eq!(controls.configuration("run-1").unwrap().provider, None);
+    assert!(controls.provider_unavailable("run-1", &providers).is_none());
+    // An unknown configuration is refused by name.
+    let error = controls
+        .choose_provider("nobody", Some("terminal"), &workspace)
+        .expect_err("an unknown configuration is refused");
+    assert!(error.contains("nobody"), "{error}");
+}
+
 fn snapshot(
     id: u64,
     config: &str,
@@ -1092,6 +1163,7 @@ fn drafts_preserve_argument_boundaries() {
         tool_paths: String::new(),
         source: editor_core::RunConfigSource::Local,
         from_target: None,
+        provider: None,
         share: false,
         // One prepared action per line: a name, then the program, then its literal arguments.
         build: "构建 = cargo.exe | build".into(),
@@ -1152,6 +1224,7 @@ fn prepared_actions_round_trip_through_the_edited_form() {
         tool_paths: String::new(),
         source: editor_core::RunConfigSource::Local,
         from_target: None,
+        provider: None,
         share: false,
         build: "构建 = cargo.exe | build | --release".into(),
         // A value containing spaces stays one argument, because the separator is the only split.
@@ -1202,6 +1275,7 @@ fn a_prelaunch_step_references_a_build_without_copying_it() {
         tool_paths: String::new(),
         source: editor_core::RunConfigSource::Local,
         from_target: None,
+        provider: None,
         share: false,
         build: String::new(),
         prelaunch: "先构建 = @库配置\n后生成 = tool.exe | gen".into(),
@@ -1310,6 +1384,7 @@ fn malformed_prepared_actions_are_refused() {
         tool_paths: String::new(),
         source: editor_core::RunConfigSource::Local,
         from_target: None,
+        provider: None,
         share: false,
         build: "没有等号".into(),
         prelaunch: String::new(),
@@ -1348,6 +1423,7 @@ fn a_malformed_environment_line_is_refused() {
         tool_paths: String::new(),
         source: editor_core::RunConfigSource::Local,
         from_target: None,
+        provider: None,
         share: false,
         build: String::new(),
         prelaunch: String::new(),
@@ -1378,6 +1454,7 @@ fn shell_mode_names_an_interpreter_and_passes_the_script_verbatim() {
         tool_paths: String::new(),
         source: editor_core::RunConfigSource::Local,
         from_target: None,
+        provider: None,
         share: false,
         build: String::new(),
         prelaunch: String::new(),

@@ -7,12 +7,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
 mod discovery;
-mod providers;
 mod shared;
-pub use providers::{
-    RUN_PROVIDER_VERSION, RunProviderChoices, RunProviderError, load_providers, providers_path,
-    save_providers,
-};
 mod store;
 pub use discovery::{DiscoveryOutcome, configuration_for, reconcile, repair};
 pub use shared::{
@@ -128,6 +123,12 @@ pub struct RunConfig {
     /// only thing an update is allowed to change.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub from_target: Option<String>,
+    /// The execution provider this configuration asks for, or `None` to follow the scope's choice.
+    ///
+    /// Recorded per configuration so a later change of the default cannot silently retarget a
+    /// configuration that asked for a specific provider.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider: Option<String>,
     /// Local-only configurations never modify project files; sharing is an explicit user action.
     #[serde(default = "crate::run::default_local")]
     pub local: bool,

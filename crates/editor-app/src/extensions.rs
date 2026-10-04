@@ -1000,6 +1000,19 @@ impl ExtensionPanel {
         self.worker.tx.send(work).is_ok()
     }
 
+    /// Ask the runtime which run execution providers it has; the answer arrives with the next pump.
+    pub(crate) fn ask_run_providers(&self) {
+        let _ = self
+            .worker
+            .tx
+            .send(crate::extensions::worker::Work::ListRunProviders);
+    }
+
+    /// The provider listing the runtime last published, if one has been asked for.
+    pub(crate) fn run_providers(&self) -> Option<Vec<plugin_runtime::ProviderCandidate>> {
+        self.worker.state.lock().unwrap().run_providers.clone()
+    }
+
     /// Published host sessions, start refusals and stop answers reported by the worker.
     ///
     /// Reading drains the answer lists, so each outcome is explained exactly once.

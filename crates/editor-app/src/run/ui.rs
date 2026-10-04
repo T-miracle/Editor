@@ -64,15 +64,18 @@ impl RunConfigTab {
         match self {
             Self::Basic => "名称、程序、参数与工作目录",
             Self::Build => "构建操作与启动前步骤：前者可只构建，后者在启动前按顺序执行",
-            Self::Debug => "调试提供者与断点设置随后续工单提供",
+            Self::Debug => "执行提供者：跟随默认，或为这个配置指定一个",
             Self::Environment => "本配置的环境变量，每行一个 名称=值",
         }
     }
 
-    /// Tabs whose settings are not implemented yet are shown disabled instead of pretending.
+    /// Whether this page edits a stored configuration today.
     fn available(self) -> bool {
-        // Basic, environment and build all edit one stored configuration; only debug is still to come.
-        matches!(self, Self::Basic | Self::Environment | Self::Build)
+        // Every page now edits something: the debug page chooses the execution provider.
+        matches!(
+            self,
+            Self::Basic | Self::Environment | Self::Build | Self::Debug
+        )
     }
 }
 
@@ -995,6 +998,33 @@ impl EditorApp {
         }
     }
 
+    /// Apply the dialog's provider choice, so every launch path agrees with what the page shows.
+    ///
+    /// The runtime keeps its own versioned record of this choice, so this is the only place that has
+    /// to write it. Nothing here touches a session that is already running.
+    pub(crate) fn apply_provider_choice(&mut self, cx: &mut Context<Self>) {
+        let Some(form) = self.run_form.as_ref() else {
+            return;
+        };
+        let (id, provider) = {
+            let form = form.read(cx);
+            (form.draft.id.clone(), form.draft.provider.clone())
+        };
+        let workspace = self.workspace_key();
+        if let Err(message) =
+            self.run_controls
+                .choose_provider(&id, provider.as_deref(), &workspace)
+        {
+            self.status = message;
+            cx.notify();
+            return;
+        }
+        let _ = self
+            .extensions
+            .read(cx)
+            .stage_host_run(crate::extensions::HostWork::SetRunProvider { provider });
+    }
+
     /// Ask the installed plugins what this workspace offers, and report what changed.
     ///
     /// Discovery is a read: it starts nothing, and it never adds, renames or deletes a configuration.
@@ -1667,7 +1697,7 @@ fn render_run_config_form(
     let Some(app) = app.upgrade() else {
         return content;
     };
-    let (tab, error, shell, share, texts, inputs, saved) = {
+    let (tab, error, shell, share, texts, inputs, saved, providers, chosen_provider) = {
         let state = app.read(cx);
         let saved = state.run_controls.configurations().to_vec();
         let Some(form) = state.run_form.as_ref() else {
@@ -1690,6 +1720,14 @@ fn render_run_config_form(
                     .map(|(_, input)| input.clone())
             }),
             saved,
+            // The provider list is the runtime's answer, read through the app rather than copied into
+            // the form: a listing that changed since the dialog opened is the one that is shown.
+            state
+                .extensions
+                .read(cx)
+                .run_providers()
+                .unwrap_or_default(),
+            form.draft.provider.clone(),
         )
     };
     let danger = cx.theme().danger;
@@ -1732,6 +1770,9 @@ fn render_run_config_form(
         &[RunField::Build, RunField::Prelaunch]
     } else if tab == RunConfigTab::Environment {
         &[RunField::Environment, RunField::ToolPaths]
+    } else if tab == RunConfigTab::Debug {
+        // The debug page edits the provider choice, which is not one of the text fields.
+        &[]
     } else {
         // Shell mode replaces the program field's meaning and adds the script body.
         if shell {
@@ -1896,6 +1937,75 @@ fn render_run_config_form(
                         .debug_selector(|| "run-config-tab-hint".into())
                         .child(tab.hint()),
                 )
+            })
+            .when(tab == RunConfigTab::Debug, |form| {
+                // The provider choice belongs to this page. Following the default and asking for a
+                // named provider are two different things, and a provider that cannot run is shown
+                // with its reason rather than hidden or silently replaced.
+                let mut page = form.child(
+                    div()
+                        .debug_selector(|| "run-provider-rows".into())
+                        .child(format!(
+                            "当前生效：{}",
+                            providers
+                                .iter()
+                                .find(|candidate| candidate.selected)
+                                .map(|candidate| candidate.plugin.as_str())
+                                .unwrap_or("无可用提供者")
+                        )),
+                );
+                let mut rows = vec![(None, "跟随默认".to_owned(), None)];
+                for candidate in &providers {
+                    rows.push((
+                        Some(candidate.plugin.clone()),
+                        candidate.plugin.clone(),
+                        candidate.unavailable.clone(),
+                    ));
+                }
+                for (plugin, label, unavailable) in rows {
+                    let owner = app.clone();
+                    let requested = plugin.clone();
+                    let mut row = div()
+                        .id(format!(
+                            "run-provider-{}",
+                            plugin.clone().unwrap_or_else(|| "default".into())
+                        ))
+                        .debug_selector({
+                            let plugin = plugin.clone();
+                            move || {
+                                format!(
+                                    "run-provider-{}",
+                                    plugin.clone().unwrap_or_else(|| "default".into())
+                                )
+                            }
+                        })
+                        .when(chosen_provider == plugin, |row| row.font_semibold());
+                    let text = match &unavailable {
+                        Some(reason) => format!("{label}（{reason}）"),
+                        None => label.clone(),
+                    };
+                    // A provider that cannot run is not selectable: offering it would only produce a
+                    // failure the user already has the explanation for.
+                    if unavailable.is_none() {
+                        row = row.on_click(move |_, _, cx| {
+                            owner.update(cx, |state, cx| {
+                                if let Some(form) = state.run_form.as_ref() {
+                                    form.update(cx, |form, cx| {
+                                        form.draft.provider = requested.clone();
+                                        cx.notify();
+                                    });
+                                }
+                                // The choice is applied to the scope immediately, so every launch
+                                // path agrees with what this page shows, and only launches that
+                                // start later are affected.
+                                state.apply_provider_choice(cx);
+                                cx.notify();
+                            });
+                        });
+                    }
+                    page = page.child(row.child(text));
+                }
+                page
             })
             .when_some(error, |form, message| {
                 form.child(
