@@ -6,7 +6,14 @@
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
+mod shared;
 mod store;
+pub use shared::{
+    SHARED_CONFIG_VERSION, SharedConfig, SharedSet, SharedStoreError, WORKSPACE_TOKEN, merge,
+    project_path,
+};
+/// Reading and writing the project's shared file, named so it cannot be confused with the local one.
+pub use shared::{load as load_shared, save as save_shared};
 pub use store::{RunStoreError, default_root, load, save, storage_path};
 #[cfg(test)]
 mod tests;
@@ -101,9 +108,33 @@ pub struct RunConfig {
     /// Steps that run in order before the program starts, each of which must succeed.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub prelaunch: Vec<RunStep>,
+    /// Where this configuration came from, which decides what an edit writes back.
+    ///
+    /// A shared configuration lives in the project, so editing it changes a file other people read;
+    /// the provenance is what lets the store save it back there instead of copying it locally.
+    #[serde(default, skip_serializing_if = "RunConfigSource::is_local")]
+    pub source: RunConfigSource,
     /// Local-only configurations never modify project files; sharing is an explicit user action.
     #[serde(default = "crate::run::default_local")]
     pub local: bool,
+}
+
+/// Whether a configuration was read from this machine or from the project.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RunConfigSource {
+    /// Created and stored on this machine; project files are untouched.
+    #[default]
+    Local,
+    /// Read from the project's shared file, so an edit belongs back in that file.
+    Project,
+}
+
+impl RunConfigSource {
+    /// The default source is left out of a stored file rather than written as a redundant field.
+    fn is_local(&self) -> bool {
+        matches!(self, Self::Local)
+    }
 }
 
 /// One prepared action: a program, or an explicitly chosen interpreter running a script.
@@ -180,7 +211,10 @@ impl RunStep {
 }
 
 /// The program or interpreter a target starts, with its bounded literal arguments.
-fn validate_target(target: &RunTarget) -> Result<(), RunConfigError> {
+///
+/// This is public to the crate because the project's shared file holds the same targets without the
+/// machine-specific parts of a configuration, and both files must be refused for the same reasons.
+pub(crate) fn validate_target(target: &RunTarget) -> Result<(), RunConfigError> {
     let executable = target.executable();
     if executable.trim().is_empty() {
         return Err(RunConfigError::EmptyProgram);

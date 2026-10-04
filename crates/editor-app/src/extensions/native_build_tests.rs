@@ -35,6 +35,7 @@ fn configuration(
         // the form's own rules rather than a hand-built structure.
         build: crate::run::parse_steps(build).expect("the build actions are well formed"),
         prelaunch: crate::run::parse_steps(prelaunch).expect("the steps are well formed"),
+        source: editor_core::RunConfigSource::Local,
         local: true,
     }
 }
@@ -690,6 +691,8 @@ fn build_reports_why_it_is_unavailable() {
             directory: String::new(),
             environment: String::new(),
             tool_paths: String::new(),
+            source: editor_core::RunConfigSource::Local,
+            share: false,
             build: String::new(),
             prelaunch: String::new(),
         }

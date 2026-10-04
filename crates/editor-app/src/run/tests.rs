@@ -20,6 +20,7 @@ fn config(id: &str, name: &str) -> RunConfig {
         tool_paths: Default::default(),
         build: Default::default(),
         prelaunch: Default::default(),
+        source: editor_core::RunConfigSource::Local,
         local: true,
     }
 }
@@ -36,6 +37,8 @@ fn with_steps(id: &str, name: &str, build: &str, prelaunch: &str) -> RunConfig {
         directory: None.or(Some(String::new())).unwrap_or_default(),
         environment: String::new(),
         tool_paths: String::new(),
+        source: editor_core::RunConfigSource::Local,
+        share: false,
         build: build.into(),
         prelaunch: prelaunch.into(),
     };
@@ -522,6 +525,8 @@ fn drafts_preserve_argument_boundaries() {
         arguments: "--flag\nC:/path with spaces/file.txt\n".into(),
         directory: " C:/work ".into(),
         tool_paths: String::new(),
+        source: editor_core::RunConfigSource::Local,
+        share: false,
         // One prepared action per line: a name, then the program, then its literal arguments.
         build: "构建 = cargo.exe | build".into(),
         prelaunch: "生成代码 = tool.exe | gen | --out dir with spaces".into(),
@@ -579,6 +584,8 @@ fn prepared_actions_round_trip_through_the_edited_form() {
         directory: String::new(),
         environment: String::new(),
         tool_paths: String::new(),
+        source: editor_core::RunConfigSource::Local,
+        share: false,
         build: "构建 = cargo.exe | build | --release".into(),
         // A value containing spaces stays one argument, because the separator is the only split.
         prelaunch: "生成 = tool.exe | gen | --out dir with spaces\n复制 = copy.exe | a b".into(),
@@ -626,6 +633,8 @@ fn a_prelaunch_step_references_a_build_without_copying_it() {
         directory: String::new(),
         environment: String::new(),
         tool_paths: String::new(),
+        source: editor_core::RunConfigSource::Local,
+        share: false,
         build: String::new(),
         prelaunch: "先构建 = @库配置\n后生成 = tool.exe | gen".into(),
     };
@@ -731,6 +740,8 @@ fn malformed_prepared_actions_are_refused() {
         directory: String::new(),
         environment: String::new(),
         tool_paths: String::new(),
+        source: editor_core::RunConfigSource::Local,
+        share: false,
         build: "没有等号".into(),
         prelaunch: String::new(),
     };
@@ -766,6 +777,8 @@ fn a_malformed_environment_line_is_refused() {
         directory: String::new(),
         environment: "没有等号".into(),
         tool_paths: String::new(),
+        source: editor_core::RunConfigSource::Local,
+        share: false,
         build: String::new(),
         prelaunch: String::new(),
     };
@@ -793,6 +806,8 @@ fn shell_mode_names_an_interpreter_and_passes_the_script_verbatim() {
         directory: String::new(),
         environment: String::new(),
         tool_paths: String::new(),
+        source: editor_core::RunConfigSource::Local,
+        share: false,
         build: String::new(),
         prelaunch: String::new(),
     };

@@ -18,6 +18,7 @@ fn program_config(id: &str, name: &str) -> RunConfig {
         tool_paths: Default::default(),
         build: Default::default(),
         prelaunch: Default::default(),
+        source: RunConfigSource::Local,
         local: true,
     }
 }
@@ -174,6 +175,7 @@ fn program_arguments_are_never_reinterpreted_as_a_shell_command() {
         tool_paths: Default::default(),
         build: Default::default(),
         prelaunch: Default::default(),
+        source: RunConfigSource::Local,
         local: true,
     };
     configuration.validate().unwrap();

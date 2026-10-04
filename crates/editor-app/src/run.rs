@@ -1125,6 +1125,10 @@ pub struct RunConfigDraft {
     pub environment: String,
     /// Tool directories searched before the inherited path, one per line.
     pub tool_paths: String,
+    /// Where the configuration being edited came from, so an edit writes back to that place.
+    pub source: editor_core::RunConfigSource,
+    /// Whether the user chose to share this configuration with the project.
+    pub share: bool,
     /// Build actions as `名称 = 程序或解释器 | 参数 | 脚本`, one per line.
     pub build: String,
     /// Steps that run in order before the program, in the same line form as the build actions.
@@ -1152,6 +1156,8 @@ impl RunConfigDraft {
                 directory: config.directory.clone().unwrap_or_default(),
                 environment: render_environment(&config.env),
                 tool_paths: config.tool_paths.join("\n"),
+                source: config.source,
+                share: !config.local,
                 build: render_steps(&config.build),
                 prelaunch: render_steps(&config.prelaunch),
             },
@@ -1165,6 +1171,9 @@ impl RunConfigDraft {
                 directory: String::new(),
                 environment: String::new(),
                 tool_paths: String::new(),
+                source: editor_core::RunConfigSource::Local,
+                // Sharing is an explicit choice; a new configuration starts on this machine only.
+                share: false,
                 build: String::new(),
                 prelaunch: String::new(),
             },
@@ -1211,7 +1220,8 @@ impl RunConfigDraft {
                 .collect(),
             build: parse_steps(&self.build)?,
             prelaunch: parse_steps(&self.prelaunch)?,
-            local: true,
+            source: self.source,
+            local: !self.share,
         })
     }
 }
