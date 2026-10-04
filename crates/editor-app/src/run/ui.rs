@@ -2119,7 +2119,56 @@ fn render_run_config_form(
                     }
                     session = session.child(button);
                 }
-                page.child(session)
+                // The frames and variables come from the same description the panel is checked
+                // against, so what is presented cannot drift from what was verified.
+                let rows = app.read(cx).run_controls.debug_panel_rows();
+                let mut inspection = div()
+                    .debug_selector(|| "run-debug-inspection".into())
+                    .child(match &rows.location {
+                        Some(location) => format!("停止位置 {location}"),
+                        None => "本次暂停没有可显示的位置".to_owned(),
+                    });
+                for frame in rows.frames {
+                    let owner = app.clone();
+                    let frame_id = frame.frame;
+                    let mut row = div()
+                        .id(frame.selector.clone())
+                        .debug_selector({
+                            let selector = frame.selector.clone();
+                            move || selector.clone()
+                        })
+                        .when(frame.selected, |row| row.font_semibold())
+                        .child(frame.label);
+                    row = row.on_click(move |_, _, cx| {
+                        owner.update(cx, |state, cx| {
+                            // Selecting a frame is what shows its scope and locates its source.
+                            if let Err(error) = state.run_controls.select_debug_frame(frame_id) {
+                                state.status = error.to_string();
+                            }
+                            cx.notify();
+                        });
+                    });
+                    inspection = inspection.child(row);
+                }
+                if rows.variables.is_empty() {
+                    inspection = inspection.child(div().child("该帧没有变量可显示"));
+                }
+                for variable in rows.variables {
+                    inspection = inspection.child(
+                        div()
+                            .debug_selector({
+                                let selector = variable.selector.clone();
+                                move || selector.clone()
+                            })
+                            .child(variable.label),
+                    );
+                }
+                if rows.another_paused {
+                    // Another session is stopped, so this panel says so instead of moving the view.
+                    inspection =
+                        inspection.child(div().child("另一个调试会话已暂停，视图未自动跳转"));
+                }
+                page.child(session).child(inspection)
             })
             .when_some(error, |form, message| {
                 form.child(

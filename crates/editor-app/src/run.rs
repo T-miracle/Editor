@@ -199,6 +199,38 @@ pub struct RunControls {
     pub error: Option<String>,
 }
 
+/// One frame row of the debug panel.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DebugFrameRow {
+    /// Identity the view attaches to the row, so a click can be traced back to this frame.
+    pub selector: String,
+    /// What the row reads: the frame's name and the location it would take the user to.
+    pub label: String,
+    pub frame: u32,
+    /// Whether this is the frame whose variables are shown.
+    pub selected: bool,
+}
+
+/// One variable row of the debug panel.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DebugVariableRow {
+    pub selector: String,
+    /// The provider's own rendering of the value, shown as given.
+    pub label: String,
+}
+
+/// Everything the debug panel shows about the selected session.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct DebugPanelRows {
+    pub frames: Vec<DebugFrameRow>,
+    /// The variables of the selected frame, empty when no frame is selected or none were read.
+    pub variables: Vec<DebugVariableRow>,
+    /// Where the selected frame is, as the location a user would be taken to.
+    pub location: Option<String>,
+    /// Whether another session is stopped, which is what keeps the view from being moved.
+    pub another_paused: bool,
+}
+
 /// What one discovery run did to the stored configurations.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct DiscoveryReport {
@@ -1330,6 +1362,63 @@ impl RunControls {
             .current()
             .and_then(|(_, session)| session.pause().scope())
     }
+    /// The inspection rows the panel shows for the selected session.
+    ///
+    /// Described here rather than inside the view, so what the panel presents can be checked without a
+    /// window: a frame row carries the location a user would be taken to, and a variable row carries
+    /// the provider's own rendering of the value. Only the selected session's data is described, so a
+    /// row can never belong to a session the user is not looking at.
+    pub fn debug_panel_rows(&self) -> DebugPanelRows {
+        /// Bound on rows one panel shows; the view scrolls rather than growing without limit.
+        const MAX_ROWS: usize = 64;
+        let frames = self
+            .debug_frames()
+            .iter()
+            .take(MAX_ROWS)
+            .map(|frame| DebugFrameRow {
+                selector: format!("run-debug-frame-{}", frame.id),
+                label: format!("{}  {}:{}", frame.name, frame.source, frame.line),
+                frame: frame.id,
+                selected: Some(frame.id) == self.selected_debug_frame(),
+            })
+            .collect::<Vec<_>>();
+        let variables = self
+            .selected_debug_frame()
+            .map(|frame| {
+                self.debug_variables(frame)
+                    .iter()
+                    .take(MAX_ROWS)
+                    .map(|variable| DebugVariableRow {
+                        selector: format!("run-debug-variable-{frame}-{}", variable.name),
+                        // The value is the provider's rendering and is shown as given.
+                        label: format!("{} = {}", variable.name, variable.value),
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+        DebugPanelRows {
+            frames,
+            variables,
+            location: self
+                .debug_location()
+                .map(|(source, line)| format!("{source}:{line}")),
+            // A panel that is about to move the view asks this first: another session being stopped
+            // means the user is reading something else.
+            another_paused: self
+                .debug_sessions
+                .current()
+                .map(|(config, _)| self.debug_sessions.another_is_paused(config))
+                .unwrap_or(false),
+        }
+    }
+
+    /// The frame the selected session's panel shows as selected.
+    pub fn selected_debug_frame(&self) -> Option<u32> {
+        self.debug_sessions
+            .current()
+            .and_then(|(_, session)| session.pause().selected_frame())
+    }
+
     /// Which debug actions the panel may offer, each with the reason it may not.
     ///
     /// Both facts are assembled here so the panel and the launch path cannot disagree: availability

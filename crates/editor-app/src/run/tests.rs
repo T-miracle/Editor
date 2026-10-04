@@ -1248,6 +1248,105 @@ fn inspection_follows_the_selected_session() {
     );
 }
 
+/// The panel describes the selected session's frames and variables, and says where they are.
+#[test]
+fn the_panel_describes_the_selected_sessions_pause() {
+    use editor_core::{DebugSessionState, DebugVariable, StackFrame};
+    let mut controls = controls();
+    let workspace = "C:/work".to_owned();
+    controls
+        .upsert(config("run-1", "第一个"), &workspace)
+        .unwrap();
+    controls
+        .upsert(config("run-2", "第二个"), &workspace)
+        .unwrap();
+    controls.note_debug_state(
+        "run-1",
+        DebugSessionState::Paused {
+            source: "src/main.rs".into(),
+            line: 2,
+            reason: Some("breakpoint".into()),
+        },
+    );
+    controls.note_debug_state("run-2", DebugSessionState::Running);
+
+    // Nothing is described before any frame arrives, and there is no location to reveal.
+    assert!(controls.debug_panel_rows().frames.is_empty());
+    assert_eq!(controls.debug_panel_rows().location, None);
+    let scope = controls.begin_debug_pause().expect("a selected session");
+    controls
+        .apply_debug_frames(
+            scope,
+            vec![
+                StackFrame {
+                    id: 0,
+                    name: "probe::add".into(),
+                    source: "src/main.rs".into(),
+                    line: 2,
+                },
+                StackFrame {
+                    id: 1,
+                    name: "probe::main".into(),
+                    source: "src/main.rs".into(),
+                    line: 7,
+                },
+            ],
+        )
+        .expect("the pause is described");
+    controls
+        .apply_debug_variables(
+            scope,
+            0,
+            vec![
+                DebugVariable {
+                    name: "left".into(),
+                    value: "2".into(),
+                },
+                DebugVariable {
+                    name: "text".into(),
+                    value: "\"a b\"".into(),
+                },
+            ],
+        )
+        .expect("frame 0's variables");
+
+    let rows = controls.debug_panel_rows();
+    assert_eq!(rows.frames.len(), 2);
+    assert_eq!(rows.frames[0].selector, "run-debug-frame-0");
+    assert_eq!(rows.frames[0].label, "probe::add  src/main.rs:2");
+    assert!(
+        rows.frames[0].selected,
+        "the stopping frame is selected first"
+    );
+    assert!(!rows.frames[1].selected);
+    assert_eq!(rows.location.as_deref(), Some("src/main.rs:2"));
+    // Values are the provider's rendering, including its own quoting.
+    assert_eq!(rows.variables.len(), 2);
+    assert_eq!(rows.variables[1].label, "text = \"a b\"");
+    assert_eq!(rows.variables[1].selector, "run-debug-variable-0-text");
+    assert!(
+        !rows.another_paused,
+        "the selected session is the one stopped; the other is running"
+    );
+
+    // Selecting the second frame moves the location and shows that frame's own variables.
+    controls.select_debug_frame(1).expect("the frame exists");
+    let rows = controls.debug_panel_rows();
+    assert_eq!(rows.location.as_deref(), Some("src/main.rs:7"));
+    assert!(rows.frames[1].selected && !rows.frames[0].selected);
+    assert!(rows.variables.is_empty(), "frame 1 was never read");
+
+    // Selecting the running session describes nothing of it, and notices the other is stopped.
+    assert!(controls.select_debug_session("run-2"));
+    let rows = controls.debug_panel_rows();
+    assert!(rows.frames.is_empty());
+    assert_eq!(rows.location, None);
+    assert!(
+        rows.another_paused,
+        "a breakpoint in run-1 must not move the view while run-2 is being read"
+    );
+}
+
 fn snapshot(
     id: u64,
     config: &str,
