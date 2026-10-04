@@ -115,7 +115,38 @@ pub struct RunConfig {
 pub struct RunStep {
     /// Shown while the step runs, and in the failure that stops the sequence.
     pub name: String,
-    pub target: RunTarget,
+    pub target: StepTarget,
+}
+
+/// What one prepared action does: run something, or build a configuration by identity.
+///
+/// A build step that names another configuration is a reference, not a copy: editing that
+/// configuration's build actions changes what this step does, and no command is duplicated.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum StepTarget {
+    /// A program, or an explicitly chosen interpreter running a script.
+    Action { target: RunTarget },
+    /// The build actions of the configuration with this identity.
+    Build { config: String },
+}
+
+impl StepTarget {
+    /// The program this action starts, for a step that starts one directly.
+    pub fn executable(&self) -> Option<&str> {
+        match self {
+            Self::Action { target } => Some(target.executable()),
+            Self::Build { .. } => None,
+        }
+    }
+
+    /// The literal argument vector this action passes, empty for a reference.
+    pub fn arguments(&self) -> Vec<&str> {
+        match self {
+            Self::Action { target } => target.arguments(),
+            Self::Build { .. } => Vec::new(),
+        }
+    }
 }
 
 /// Bound on prepared actions per list; the build page is a short sequence, not a task system.
@@ -124,6 +155,9 @@ const MAX_STEP_NAME_BYTES: usize = 128;
 
 impl RunStep {
     /// Validate a prepared action by the same rules the launch target obeys.
+    ///
+    /// A reference is checked for shape only: whether it resolves is a property of the whole set,
+    /// which one configuration cannot answer about itself.
     fn validate(&self) -> Result<(), RunConfigError> {
         if self.name.trim().is_empty() {
             return Err(RunConfigError::EmptyStepName);
@@ -131,7 +165,17 @@ impl RunStep {
         if self.name.len() > MAX_STEP_NAME_BYTES {
             return Err(RunConfigError::StepNameTooLong);
         }
-        validate_target(&self.target)
+        match &self.target {
+            StepTarget::Action { target } => validate_target(target),
+            StepTarget::Build { config } => {
+                if config.trim().is_empty() || config.len() > 128 {
+                    return Err(RunConfigError::InvalidBuildReference {
+                        config: config.clone(),
+                    });
+                }
+                Ok(())
+            }
+        }
     }
 }
 
@@ -230,6 +274,10 @@ pub enum RunConfigError {
     /// A prepared action without a name to show while it runs.
     EmptyStepName,
     StepNameTooLong,
+    /// A build reference that names no configuration, or could not be one.
+    InvalidBuildReference {
+        config: String,
+    },
     /// The identifier is empty or duplicated inside one set.
     InvalidIdentity {
         id: String,
@@ -272,6 +320,9 @@ impl std::fmt::Display for RunConfigError {
             Self::TooManySteps => write!(formatter, "Too many build or pre-launch steps"),
             Self::EmptyStepName => write!(formatter, "A build or pre-launch step needs a name"),
             Self::StepNameTooLong => write!(formatter, "A step name is too long"),
+            Self::InvalidBuildReference { config } => {
+                write!(formatter, "Invalid build reference: {config}")
+            }
             Self::InvalidIdentity { id } => write!(formatter, "Invalid run configuration id: {id}"),
         }
     }

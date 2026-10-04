@@ -636,16 +636,30 @@ pub fn parse_steps(text: &str) -> Result<Vec<editor_core::RunStep>, String> {
         if executable.is_empty() {
             return Err(format!("步骤缺少要运行的程序：{line}"));
         }
+        if executable.starts_with('@') && executable.trim().len() == 1 {
+            return Err(format!("构建引用缺少配置名称：{line}"));
+        }
         let arguments = parts
             .map(str::to_owned)
             .filter(|argument| !argument.is_empty())
             .collect::<Vec<_>>();
+        // `@名称` runs the build actions of the configuration with that name; anything else starts
+        // what it names. A reference is stored as an identity, never as the commands it stands for.
+        let target = if let Some(reference) = executable.strip_prefix('@') {
+            editor_core::StepTarget::Build {
+                config: reference.trim().to_owned(),
+            }
+        } else {
+            editor_core::StepTarget::Action {
+                target: RunTarget::Program {
+                    program: executable.to_owned(),
+                    args: arguments,
+                },
+            }
+        };
         steps.push(editor_core::RunStep {
             name: name.to_owned(),
-            target: RunTarget::Program {
-                program: executable.to_owned(),
-                args: arguments,
-            },
+            target,
         });
     }
     Ok(steps)
@@ -655,13 +669,16 @@ pub fn parse_steps(text: &str) -> Result<Vec<editor_core::RunStep>, String> {
 pub fn render_steps(steps: &[editor_core::RunStep]) -> String {
     steps
         .iter()
-        .map(|step| {
-            let mut line = format!("{} = {}", step.name, step.target.executable());
-            for argument in step.target.arguments() {
-                line.push_str(" | ");
-                line.push_str(argument);
+        .map(|step| match &step.target {
+            editor_core::StepTarget::Action { target } => {
+                let mut line = format!("{} = {}", step.name, target.executable());
+                for argument in target.arguments() {
+                    line.push_str(" | ");
+                    line.push_str(argument);
+                }
+                line
             }
-            line
+            editor_core::StepTarget::Build { config } => format!("{} = @{}", step.name, config),
         })
         .collect::<Vec<_>>()
         .join("\n")

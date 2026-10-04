@@ -374,6 +374,60 @@ fn prepared_actions_round_trip_through_the_edited_form() {
     );
 }
 
+/// A pre-launch step can require another configuration's build by identity, never by copy.
+#[test]
+fn a_prelaunch_step_references_a_build_without_copying_it() {
+    let draft = RunConfigDraft {
+        id: "run-1".into(),
+        name: "运行".into(),
+        shell: false,
+        program: "app.exe".into(),
+        arguments: String::new(),
+        script: String::new(),
+        directory: String::new(),
+        environment: String::new(),
+        tool_paths: String::new(),
+        build: String::new(),
+        prelaunch: "先构建 = @库配置\n后生成 = tool.exe | gen".into(),
+    };
+    let configuration = draft.to_config().expect("the draft is usable");
+    assert_eq!(
+        configuration.prelaunch[0].target,
+        editor_core::StepTarget::Build {
+            config: "库配置".into()
+        }
+    );
+    // A reference carries no command of its own, so nothing can drift from the referenced build.
+    assert_eq!(configuration.prelaunch[0].target.executable(), None);
+    assert!(configuration.prelaunch[0].target.arguments().is_empty());
+    configuration
+        .validate()
+        .expect("a reference is a valid step");
+
+    // The reference survives an edit round-trip, including its own name.
+    let reopened = RunConfigDraft::from_config(Some(&configuration), "run-1".into());
+    assert_eq!(
+        reopened.prelaunch,
+        "先构建 = @库配置\n后生成 = tool.exe | gen"
+    );
+    assert_eq!(
+        reopened.to_config().unwrap().prelaunch,
+        configuration.prelaunch
+    );
+
+    // An empty reference is refused instead of becoming a step that can never resolve.
+    let empty = RunConfigDraft {
+        prelaunch: "先构建 = @".into(),
+        ..reopened
+    };
+    assert!(empty.to_config().is_err());
+    let blank = RunConfigDraft {
+        prelaunch: "先构建 = @  ".into(),
+        ..empty
+    };
+    assert!(blank.to_config().is_err());
+}
+
 /// A malformed prepared action is refused where the user can correct it.
 #[test]
 fn malformed_prepared_actions_are_refused() {
