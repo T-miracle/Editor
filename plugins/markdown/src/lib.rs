@@ -11,6 +11,7 @@ mod format;
 mod formatting;
 mod imports;
 mod preview;
+mod tasks;
 mod toolbar;
 
 /// A host-supplied source snapshot is replaced atomically and is never edited or persisted here.
@@ -114,17 +115,7 @@ impl State {
                     self.refresh();
                 }
             }
-            api::Notification::Ui(event) if panel == Some("preview") => {
-                if event.revision == self.revision && event.action == ui::Action::Click {
-                    if let Some(command) = toolbar::command(&event.node) {
-                        let imports_changed = self.imports.superseded();
-                        // Keeping the same revision for acceptance lets a later fast click replace this intent.
-                        if self.formatting.start(command, self.source.as_ref()) || imports_changed {
-                            self.revision = self.revision.saturating_add(1);
-                        }
-                    }
-                }
-            }
+            api::Notification::Ui(event) if panel == Some("preview") => self.ui_event(event),
             api::Notification::ImageInput {
                 document,
                 selection,
@@ -158,8 +149,41 @@ impl State {
                     self.revision = self.revision.saturating_add(1);
                 }
             }
-            // Other preview interactions remain readonly until separately scoped capabilities are implemented.
+            // Only parsed tasks and declared toolbar actions can edit; other preview content remains readonly.
             _ => {}
+        }
+    }
+
+    /// File-scoped actions bind to the current UI revision before resolving a parsed task or toolbar intent.
+    /// A valid new text intent stops later image insertion while accepted image saves retain their receipts.
+    fn ui_event(&mut self, event: ui::UiEvent) {
+        if event.revision != self.revision {
+            return;
+        }
+        let changed = match event.action {
+            ui::Action::Click => {
+                let Some(command) = toolbar::command(&event.node) else {
+                    return;
+                };
+                let imports_changed = self.imports.superseded();
+                self.formatting.start(command, self.source.as_ref()) || imports_changed
+            }
+            ui::Action::Toggle(checked) => {
+                let Some(source) = self.source.as_ref() else {
+                    return;
+                };
+                let Some(change) = tasks::change(&self.blocks, &source.text, &event.node, checked)
+                else {
+                    return;
+                };
+                let imports_changed = self.imports.superseded();
+                self.formatting.start_task(change, Some(source)) || imports_changed
+            }
+            _ => false,
+        };
+        // Acceptance alone keeps the revision stable so a newer fast action can replace the pending intent.
+        if changed {
+            self.revision = self.revision.saturating_add(1);
         }
     }
 

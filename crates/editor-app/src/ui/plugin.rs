@@ -47,6 +47,10 @@ pub(crate) struct PluginView {
     popup: Option<Entity<controls::CollectionView>>,
     origin: gpui_kit::Point<gpui_kit::Pixels>,
     dialog_focus: FocusHandle,
+    /// The surface identifies descendant control focus without adding a container tab stop.
+    view_focus: FocusHandle,
+    /// Control focus survives a source refresh; gesture identity is separately bound to its scene.
+    checkbox_focus: BTreeMap<String, FocusHandle>,
     previous_focus: Option<FocusHandle>,
     dismissed_dialog: Option<String>,
     /// Editor-local toolbar projections fit their wrapped content instead of consuming the full pane.
@@ -173,6 +177,8 @@ impl PluginView {
             popup: None,
             origin: Default::default(),
             dialog_focus: cx.focus_handle(),
+            view_focus: cx.focus_handle().tab_stop(false),
+            checkbox_focus: BTreeMap::new(),
             previous_focus: None,
             dismissed_dialog: None,
             content_sized: false,
@@ -190,6 +196,22 @@ impl PluginView {
     pub(crate) fn content_sized(mut self) -> Self {
         self.content_sized = true;
         self
+    }
+
+    /// Check document identity, excluding revision, before retaining hidden native state during refresh.
+    pub(crate) fn same_source_document(
+        &self,
+        version: &plugin_runtime::plugin_protocol::api::DocumentVersion,
+    ) -> bool {
+        self.document
+            .source
+            .as_ref()
+            .is_some_and(|source| source.id == version.id && source.path == version.path)
+    }
+
+    /// A preview edit preserves its originating native control; toolbar edits still focus source.
+    pub(crate) fn contains_focus(&self, window: &Window, cx: &App) -> bool {
+        self.view_focus.contains_focused(window, cx)
     }
 
     /// Reconcile keyed native state; ordinary guest renders must not recreate focused inputs.
@@ -281,6 +303,18 @@ impl PluginView {
             .map(|node| node.id.clone())
             .collect();
         self.canvases.retain(|id, _| canvas_ids.contains(id));
+        let checkbox_ids: BTreeSet<_> = nodes
+            .iter()
+            .filter(|node| matches!(node.kind, Kind::Checkbox { .. }))
+            .map(|node| node.id.clone())
+            .collect();
+        self.checkbox_focus
+            .retain(|id, _| checkbox_ids.contains(id));
+        for id in checkbox_ids {
+            self.checkbox_focus
+                .entry(id)
+                .or_insert_with(|| cx.focus_handle());
+        }
         for node in nodes {
             if let Kind::Canvas(drawing) = &node.kind {
                 if !self.canvases.contains_key(&node.id) {

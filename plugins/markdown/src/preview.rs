@@ -222,13 +222,24 @@ impl Renderer<'_> {
     }
 
     /// Ordered starts and recursive item bodies cannot depend on an HTML parser's list defaults.
+    /// Task state is always parsed from this source version; native toggles request an edit instead of changing it here.
     fn list(&self, element: &Element<'_>, start: Option<u64>) -> ui::Node {
         let mut items = Vec::new();
         for (index, part) in element.children.iter().enumerate() {
             let Part::Element(item) = part else { continue };
             let marker = if let Some((checked, range)) = task(&item.children) {
                 ui::Node::checkbox(identity(&range, "task"), "", checked)
-                    .disabled(true)
+                    .tooltip(if self.locale.starts_with("en") {
+                        if checked {
+                            "Mark task incomplete"
+                        } else {
+                            "Mark task complete"
+                        }
+                    } else if checked {
+                        "标记任务未完成"
+                    } else {
+                        "标记任务已完成"
+                    })
                     .source_range(range)
             } else {
                 let marker = start.map_or_else(

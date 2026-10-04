@@ -463,7 +463,7 @@ impl Render for ExtensionPanel {
                 .children(self.command_popup(window, cx))
                 .into_any_element();
         }
-        self.native_ui = None;
+        self.retire_unowned_native_view(cx);
         // An unpublished or retired document has no focusable guest controls.
         div()
             .size_full()

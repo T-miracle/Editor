@@ -10,6 +10,8 @@ mod image_preview;
 mod modes;
 mod range_edits;
 mod source_overlay;
+mod task_checkboxes;
+mod task_safety;
 
 /// Inspect the editable package resources without inventing a special host API for this plugin.
 fn language_package() -> Package {

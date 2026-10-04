@@ -39,3 +39,5 @@
 本单主验收是 Windows 原生自动交互与隔离文件夹。现行编辑器只打开已有路径文档，没有另建 Untitled 产品流程；保存提示验收采用已打开、磁盘文件随后缺失的文档，取消不落盘，确认经 DocumentSession 保存再导入。GIF／WebP 仅第一帧，与 05 一致。完整落盘文件不会随文本 Undo、插件停用或失败清理而删除。保留已有 linker 与未使用 API 警告。任务勾选、导航、代码块高亮与同步滚动继续由 07–10 实施。
 
 本单提交／推送／关闭读回将在交付后追加；#26 不修改。
+
+2026-10-04 交付：普通提交 `1a8e65fb4350e7cff6ff46de9dd823d28da690e4` 已推送 `origin/codex/markdown-plugin`，`git ls-remote` 核对远端 SHA 一致；GitHub #32 PATCH 后独立 GET 读回 `closed / completed`。此读回追加在后续工单文档中，未改写已推送历史。

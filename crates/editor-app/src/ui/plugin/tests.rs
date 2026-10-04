@@ -13,6 +13,69 @@ fn init(cx: &mut TestAppContext) {
     });
 }
 
+/// A pointer gesture belongs to the scene pressed, even when a replacement reuses its node ID.
+#[gpui::test]
+fn checkbox_press_cannot_activate_a_replacement_scene(cx: &mut TestAppContext) {
+    use gpui_kit::MouseButton;
+    init(cx);
+    let events = Rc::new(RefCell::new(Vec::new()));
+    let output = events.clone();
+    let slot = Rc::new(RefCell::new(None));
+    let capture = slot.clone();
+    let document = Document::new(Node::new(
+        "task",
+        Kind::Checkbox {
+            label: "旧任务".into(),
+            checked: false,
+        },
+    ));
+    let replacement = Document::new(Node::new(
+        "task",
+        Kind::Checkbox {
+            label: "新任务".into(),
+            checked: false,
+        },
+    ))
+    .revision(1);
+    let (_, cx) = cx.add_window_view(move |window, cx| {
+        let view = cx.new(|cx| {
+            PluginView::new(
+                "test".into(),
+                document,
+                Environment::default(),
+                move |event, _| output.borrow_mut().push(event),
+                window,
+                cx,
+            )
+        });
+        *capture.borrow_mut() = Some(view.clone());
+        Root::new(view, window, cx)
+    });
+    let view = slot.borrow_mut().take().unwrap();
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+    let position = cx
+        .debug_bounds("plugin-checkbox-marker-task")
+        .unwrap()
+        .center();
+    cx.simulate_mouse_down(position, MouseButton::Left, Default::default());
+    cx.update(|window, cx| {
+        view.update(cx, |view, cx| {
+            view.update_document(replacement, Environment::default(), window, cx);
+        })
+    });
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+    cx.simulate_mouse_up(position, MouseButton::Left, Default::default());
+    cx.run_until_parked();
+    assert!(
+        events.borrow().is_empty(),
+        "a stale press must not become a new scene's Toggle"
+    );
+    cx.simulate_click(position, Default::default());
+    cx.run_until_parked();
+    assert_eq!(events.borrow().len(), 1, "a fresh gesture remains usable");
+    assert_eq!(events.borrow()[0].revision, 1);
+}
+
 /// Reopening a native popup preserves canvas layout and allows one dismissal on every opening.
 #[gpui::test]
 fn popup_reopens_without_resizing_canvas_or_losing_escape(cx: &mut TestAppContext) {

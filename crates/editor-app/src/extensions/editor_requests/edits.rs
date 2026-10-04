@@ -103,10 +103,20 @@ impl EditorApp {
                 editor.set_selected_range(selection.start..selection.end, cx);
                 Ok(())
             })?;
-            let source_visible = self.active_editor_preview(cx).is_none_or(|preview| {
-                self.editor_preview_mode(&preview, cx) != protocol::PreviewMode::Preview
+            let preview = self.active_editor_preview(cx);
+            let source_visible = preview.as_ref().is_none_or(|preview| {
+                self.editor_preview_mode(preview, cx) != protocol::PreviewMode::Preview
             });
-            if source_visible {
+            let preview_focused = preview.as_ref().is_some_and(|preview| {
+                preview
+                    .read(cx)
+                    .native_ui
+                    .as_ref()
+                    .is_some_and(|view| view.read(cx).contains_focus(window, cx))
+            });
+            // A task or other preview control keeps its keyboard target. The separate source toolbar
+            // still hands focus back to the editor so placeholders can be typed immediately.
+            if source_visible && !preview_focused {
                 editor.update(cx, |editor, cx| editor.focus(window, cx));
             }
             let identity = editor.entity_id();

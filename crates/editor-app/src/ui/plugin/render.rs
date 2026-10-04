@@ -1,6 +1,6 @@
 //! Render portable trees through gpui-base behavior with editor-owned appearance.
 use super::*;
-use crate::ui::controls::{Button, ButtonCustomVariant, Input, vertical_scrollbar};
+use crate::ui::controls::{Button, ButtonCustomVariant, Input, Tooltip, vertical_scrollbar};
 use gpui_base::{Checkbox, CheckboxState, Dialog, Progress, Radio, RadioGroup, Tab, Tabs};
 use gpui_kit::{
     AnyElement, InteractiveElement, ParentElement, SharedString, StatefulInteractiveElement,
@@ -24,6 +24,7 @@ impl PluginView {
             .flex()
             .flex_col()
             .tab_group()
+            .track_focus(&self.view_focus)
             .relative()
             .overflow_hidden()
             .bg(self.colors("container", cx).background)
@@ -320,7 +321,21 @@ impl PluginView {
                 .into_any_element(),
             Kind::Checkbox { label, checked } => {
                 let owner = cx.entity().downgrade();
+                let revision = self.document.revision;
+                // Base retains a press by element ID. A fresh scene must not consume a prior press,
+                // while an explicit focus handle lets ordinary task edits keep keyboard activation.
+                let gesture_id = SharedString::from(format!("{native_id}-scene-{revision}"));
+                // Marker-only controls keep their prose outside the checkbox. The ordinary
+                // localized hint supplies an accessible name without duplicating visible text.
+                let accessible_label = if label.is_empty() {
+                    node.tooltip.as_deref().unwrap_or(label).to_owned()
+                } else {
+                    label.clone()
+                };
+                let marker_id = format!("plugin-checkbox-marker-{}", node.id);
                 let marker = div()
+                    // Expose the visible hit target separately from a stretched list-row wrapper.
+                    .debug_selector(move || marker_id.clone())
                     .size(px(16.))
                     .flex()
                     .items_center()
@@ -336,16 +351,32 @@ impl PluginView {
                     .text_color(colors.accent_foreground)
                     .when(*checked, |v| v.child("✓"));
                 self.font(
-                    Checkbox::new(native_id.clone())
+                    Checkbox::new(gesture_id)
+                        .track_focus(&self.checkbox_focus[&node.id])
                         .checked(*checked)
                         .disabled(disabled)
-                        .accessibility_label(label.clone())
+                        .accessibility_label(accessible_label)
+                        // Base owns traversal and activation; the editor supplies its focus appearance.
+                        .border_1()
+                        .border_color(colors.background)
+                        .rounded(px(4.))
+                        .focus_visible(|style| style.border_color(colors.accent))
+                        .when_some(node.tooltip.clone(), |checkbox, tooltip| {
+                            checkbox.tooltip(move |window, cx| {
+                                Tooltip::new(tooltip.clone()).build(window, cx)
+                            })
+                        })
                         .flex()
                         .items_center()
                         .gap_2()
                         .on_change(move |state, _, _, cx| {
                             let _ = owner.update(cx, |this, cx| {
-                                this.emit(&id, Action::Toggle(state == CheckboxState::Checked), cx)
+                                this.emit_version(
+                                    &id,
+                                    revision,
+                                    Action::Toggle(state == CheckboxState::Checked),
+                                    cx,
+                                )
                             });
                         })
                         .child(marker)

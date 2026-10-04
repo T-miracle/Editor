@@ -106,6 +106,22 @@ impl EditorApp {
                             cx.notify();
                             return;
                         }
+                        // Retain control focus only for this same source identity. The exact version
+                        // gate still hides old trees until the new guest publication has arrived.
+                        if panel
+                            .native_ui
+                            .as_ref()
+                            .is_some_and(|view| !view.read(cx).same_source_document(version))
+                        {
+                            panel.native_ui = None;
+                        }
+                        if panel
+                            .native_toolbar
+                            .as_ref()
+                            .is_some_and(|view| !view.read(cx).same_source_document(version))
+                        {
+                            panel.native_toolbar = None;
+                        }
                         panel.send(protocol::api::Notification::Preview {
                             document: Some(version.clone()),
                             text,
@@ -164,5 +180,20 @@ impl EditorApp {
                     ),
             )
             .into_any_element()
+    }
+}
+
+impl ExtensionPanel {
+    /// A temporary publication gap retains focus metadata, never displays or routes its stale tree.
+    pub(super) fn retire_unowned_native_view(&mut self, cx: &App) {
+        let retained = self.editor_preview
+            && self.preview_version.as_ref().is_some_and(|version| {
+                self.native_ui
+                    .as_ref()
+                    .is_some_and(|view| view.read(cx).same_source_document(version))
+            });
+        if !retained {
+            self.native_ui = None;
+        }
     }
 }

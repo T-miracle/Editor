@@ -2,7 +2,7 @@
 [plugin]
 id = "markdown"
 name = "Markdown"
-version = "0.6.0"
+version = "0.7.0"
 host_version = ">=0.1.0"
 
 [[language_definitions]]
