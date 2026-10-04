@@ -684,16 +684,16 @@ impl Manager {
     /// The whole set is sent every time rather than a difference, because that is what the contract's
     /// answer describes: the provider reports which of the positions it could bind, so a removed
     /// breakpoint has to be absent from the request for the answer to mean anything about it. The
-    /// requests are grouped by source, which is how a provider is asked.
+    /// positions travel as the flat list the contract declares — one entry per source and line — so a
+    /// provider binding several lines of one file is asked about each of them separately.
     pub fn debug_set_breakpoints(
         &mut self,
         session: &str,
         requests: &[DebugBreakpointRequest],
     ) -> anyhow::Result<Vec<DebugBreakpoint>> {
-        let grouped = breakpoints_by_source(requests);
-        let breakpoints = grouped
-            .into_iter()
-            .map(|(source, positions)| serde_json::json!({ "source": source, "lines": positions }))
+        let breakpoints = requests
+            .iter()
+            .map(DebugBreakpointRequest::to_value)
             .collect::<Vec<_>>();
         let answer = self.debug_call(
             "set_breakpoints",
@@ -702,18 +702,4 @@ impl Manager {
         DebugBreakpoint::list_from_value(&answer.result)
             .map_err(|error| anyhow::anyhow!("{error:?}"))
     }
-}
-
-/// Group breakpoints by source, which is how a provider is asked to set them.
-pub(super) fn breakpoints_by_source(
-    requests: &[DebugBreakpointRequest],
-) -> BTreeMap<&str, Vec<Value>> {
-    let mut grouped: BTreeMap<&str, Vec<Value>> = BTreeMap::new();
-    for request in requests {
-        grouped
-            .entry(request.source.as_str())
-            .or_default()
-            .push(request.to_value());
-    }
-    grouped
 }
