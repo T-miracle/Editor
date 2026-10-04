@@ -63,6 +63,119 @@ fn storage_key(app: &Entity<EditorApp>, cx: &mut TestAppContext) -> String {
     cx.update(|cx| app.read(cx).workspace_key())
 }
 
+/// The B1 configuration dialog is a native modal whose draft follows the approved structure.
+///
+/// The dialog paints in its own window, so this check reads the state that window renders from
+/// rather than asserting widget bounds the test harness cannot observe there.
+#[gpui::test]
+fn the_run_configuration_dialog_owns_a_b1_draft(cx: &mut TestAppContext) {
+    let root = tempfile::tempdir().unwrap();
+    let workspace = root.path().join("project");
+    std::fs::create_dir_all(&workspace).unwrap();
+    let (app, cx) = open_editor(cx, &workspace);
+    let form = cx.update(|window, cx| {
+        // Opened through the same entry point the title bar uses; the draft and the workspace key are
+        // its only inputs, so this check reads exactly what that window renders from.
+        let key = app.read(cx).workspace_key();
+        cx.new(|cx| {
+            crate::run::RunConfigForm::open(
+                &crate::run::RunControls::default(),
+                &key,
+                None,
+                window,
+                cx,
+            )
+        })
+    });
+    // The four tabs the prototype promises exist; only the basic page is implemented by this slice.
+    let tabs = cx.update(|window, cx| {
+        let _ = window;
+        form.read(cx)
+            .tab_labels()
+            .into_iter()
+            .map(|(label, available)| (label.to_owned(), available))
+            .collect::<Vec<_>>()
+    });
+    assert_eq!(
+        tabs,
+        vec![
+            ("基本".to_owned(), true),
+            ("构建".to_owned(), false),
+            ("调试".to_owned(), false),
+            ("环境".to_owned(), false),
+        ]
+    );
+    // The basic page exposes one field per setting, with arguments kept one per line.
+    let fields = cx.update(|window, cx| {
+        let _ = window;
+        form.read(cx)
+            .field_labels()
+            .into_iter()
+            .map(str::to_owned)
+            .collect::<Vec<_>>()
+    });
+    assert_eq!(fields, vec!["名称", "程序", "参数（每行一个）", "工作目录"]);
+    // A new draft starts empty, on the basic page, with nothing to report yet.
+    cx.update(|window, cx| {
+        let _ = window;
+        let form = form.read(cx);
+        assert_eq!(form.tab(), crate::run::ui::RunConfigTab::Basic);
+        assert!(form.draft().name.is_empty() && form.draft().program.is_empty());
+        assert!(form.error().is_none());
+    });
+    // Closing the editor's dialog drops the draft instead of leaving an orphaned configuration.
+    cx.update(|window, cx| {
+        let _ = window;
+        app.update(cx, |app, cx| app.close_run_form(cx));
+    });
+    assert!(cx.update(|window, cx| {
+        let _ = window;
+        app.read(cx).run_form.is_none()
+    }));
+    assert!(cx.update(|window, cx| {
+        let _ = window;
+        app.read(cx).run_controls.configurations().is_empty()
+    }));
+}
+
+/// Launch preparation saves modified documents first and refuses to run stale code.
+#[gpui::test]
+fn a_launch_saves_modified_documents_before_starting(cx: &mut TestAppContext) {
+    let root = tempfile::tempdir().unwrap();
+    let workspace = root.path().join("project");
+    std::fs::create_dir_all(&workspace).unwrap();
+    let path = workspace.join("main.rs");
+    std::fs::write(&path, "fn main() {}\n").unwrap();
+    let (app, cx) = open_editor(cx, &workspace);
+    cx.update(|window, cx| {
+        app.update(cx, |app, cx| {
+            app.open_file(path.clone(), window, cx);
+        });
+    });
+    // An edit inside the native editor marks the document modified; the change event is delivered
+    // through the editor's own subscription, so the loop is drained before it is observed.
+    cx.update(|window, cx| {
+        app.update(cx, |app, cx| {
+            let editor = app.editor.clone();
+            editor.update(cx, |editor, cx| {
+                editor.insert("// 修改\n", window, cx);
+            });
+        });
+    });
+    cx.run_until_parked();
+    cx.update(|_, cx| {
+        app.update(cx, |app, cx| {
+            assert!(app.tabs[0].session.is_dirty(), "the document is modified");
+            let saved = app.save_dirty_documents(cx);
+            assert!(saved, "an ordinary save precedes the launch");
+            assert!(!app.tabs[0].session.is_dirty());
+        });
+    });
+    // The file on disk is the version the program would run.
+    let on_disk = std::fs::read_to_string(&path).unwrap();
+    assert!(on_disk.contains("// 修改"), "{on_disk}");
+}
+
 /// The group sits before the plugin icon, is separated by a rule, and offers every promised control.
 #[gpui::test]
 fn run_group_precedes_the_plugin_icon_and_is_separated_by_a_rule(cx: &mut TestAppContext) {

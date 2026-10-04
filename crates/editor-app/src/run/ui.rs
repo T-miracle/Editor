@@ -184,6 +184,42 @@ impl RunConfigForm {
             field.apply(&mut self.draft, value);
         }
     }
+
+    }
+
+/// Structural accessors exist only for native checks, so production builds carry no unused surface.
+#[cfg(test)]
+impl RunConfigForm {
+    /// The tabs this dialog offers, with whether this build implements each one.
+    ///
+    /// Lets a native check confirm the approved structure without depending on how the strip is
+    /// painted in the dialog's own window.
+    pub(crate) fn tab_labels(&self) -> Vec<(&'static str, bool)> {
+        RunConfigTab::ALL
+            .into_iter()
+            .map(|tab| (tab.label(), tab.available()))
+            .collect()
+    }
+
+    /// The labelled fields of the basic page, in the order they are presented.
+    pub(crate) fn field_labels(&self) -> Vec<&'static str> {
+        RunField::ALL.into_iter().map(RunField::label).collect()
+    }
+
+    /// The draft currently being edited, for checks that read what the dialog would save.
+    pub(crate) fn draft(&self) -> &RunConfigDraft {
+        &self.draft
+    }
+
+    /// The validation or storage message shown above the dialog buttons, if any.
+    pub(crate) fn error(&self) -> Option<&str> {
+        self.error.as_deref()
+    }
+
+    /// The page the dialog currently shows.
+    pub(crate) fn tab(&self) -> RunConfigTab {
+        self.tab
+    }
 }
 
 impl EditorApp {
