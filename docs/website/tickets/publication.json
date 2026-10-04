@@ -1,0 +1,150 @@
+{
+  "status": "published",
+  "published_date": "2026-10-04",
+  "repository": "T-miracle/Editor",
+  "label": "ready-for-agent",
+  "published": true,
+  "publish_tooling": {
+    "path": "workspace-external; GitHub CLI was provisioned under the OS temporary directory",
+    "credential_source": "existing stored git credential (repo scope); the token is never written into this repository",
+    "note": "none of the publish scripts, tokens or staging files live in the repository"
+  },
+  "verification": {
+    "read_back": "issue list read back through the GraphQL API",
+    "labels_applied": 10,
+    "native_edges_expected": 14,
+    "native_edges_verified": 14,
+    "edge_shape": "E01 blockedBy=0 blocking=5; E02..E08 blockedBy=1 except E08 blockedBy=2; E09 blockedBy=6",
+    "unrelated_batches_untouched": ["#22", "#26", "#37"]
+  },
+  "native_edges": [
+    "E02<-E01",
+    "E03<-E02",
+    "E04<-E03",
+    "E05<-E01",
+    "E06<-E01",
+    "E07<-E01",
+    "E08<-E01",
+    "E08<-E07",
+    "E09<-E02",
+    "E09<-E03",
+    "E09<-E04",
+    "E09<-E05",
+    "E09<-E06",
+    "E09<-E08"
+  ],
+  "tickets": [
+    {
+      "ticket": "E01",
+      "stable_id": "docs-site-01",
+      "title": "建立双语文档站点骨架与链接测试",
+      "file": "E01-site-skeleton.md",
+      "blocked_by": [],
+      "number": 39,
+      "id": 5696971183,
+      "node_id": "I_kwDOUnHq-M8AAAABU5Dhrw",
+      "url": "https://github.com/T-miracle/Editor/issues/39"
+    },
+    {
+      "ticket": "E02",
+      "stable_id": "docs-site-02",
+      "title": "迁入能力协议文档并确定英文权威版",
+      "file": "E02-migrate-protocol-docs.md",
+      "blocked_by": ["E01"],
+      "number": 40,
+      "id": 5696971414,
+      "node_id": "I_kwDOUnHq-M8AAAABU5Dilg",
+      "url": "https://github.com/T-miracle/Editor/issues/40"
+    },
+    {
+      "ticket": "E03",
+      "stable_id": "docs-site-03",
+      "title": "补齐能力协议的中文译文",
+      "file": "E03-protocol-docs-zh.md",
+      "blocked_by": ["E02"],
+      "number": 41,
+      "id": 5696971644,
+      "node_id": "I_kwDOUnHq-M8AAAABU5DjfA",
+      "url": "https://github.com/T-miracle/Editor/issues/41"
+    },
+    {
+      "ticket": "E04",
+      "stable_id": "docs-site-04",
+      "title": "用站点源驱动 SDK 导出并回归分发验证",
+      "file": "E04-sdk-export-from-site.md",
+      "blocked_by": ["E03"],
+      "number": 42,
+      "id": 5696972037,
+      "node_id": "I_kwDOUnHq-M8AAAABU5DlBQ",
+      "url": "https://github.com/T-miracle/Editor/issues/42"
+    },
+    {
+      "ticket": "E05",
+      "stable_id": "docs-site-05",
+      "title": "撰写编辑器使用指南",
+      "file": "E05-editor-usage-guide.md",
+      "blocked_by": ["E01"],
+      "number": 43,
+      "id": 5696972277,
+      "node_id": "I_kwDOUnHq-M8AAAABU5Dl9Q",
+      "url": "https://github.com/T-miracle/Editor/issues/43"
+    },
+    {
+      "ticket": "E06",
+      "stable_id": "docs-site-06",
+      "title": "撰写插件安装与管理说明",
+      "file": "E06-plugin-management-guide.md",
+      "blocked_by": ["E01"],
+      "number": 44,
+      "id": 5696972520,
+      "node_id": "I_kwDOUnHq-M8AAAABU5Dm6A",
+      "url": "https://github.com/T-miracle/Editor/issues/44"
+    },
+    {
+      "ticket": "E07",
+      "stable_id": "docs-site-07",
+      "title": "用 GitHub Actions 部署到项目站并核验真实链接",
+      "file": "E07-deploy-github-pages.md",
+      "blocked_by": ["E01"],
+      "number": 45,
+      "id": 5696972942,
+      "node_id": "I_kwDOUnHq-M8AAAABU5Dojg",
+      "url": "https://github.com/T-miracle/Editor/issues/45"
+    },
+    {
+      "ticket": "E08",
+      "stable_id": "docs-site-08",
+      "title": "接入站内搜索与文档源测试",
+      "file": "E08-search-and-doc-tests.md",
+      "blocked_by": ["E01", "E07"],
+      "number": 46,
+      "id": 5696973207,
+      "node_id": "I_kwDOUnHq-M8AAAABU5Dplw",
+      "url": "https://github.com/T-miracle/Editor/issues/46"
+    },
+    {
+      "ticket": "E09",
+      "stable_id": "docs-site-09",
+      "title": "完成整站双语与链接终验并交付",
+      "file": "E09-final-acceptance.md",
+      "blocked_by": ["E02", "E03", "E04", "E05", "E06", "E08"],
+      "number": 47,
+      "id": 5696973672,
+      "node_id": "I_kwDOUnHq-M8AAAABU5DraA",
+      "url": "https://github.com/T-miracle/Editor/issues/47"
+    }
+  ],
+  "environment_findings": {
+    "node_toolchain": "not installed system-wide; a bundled Node runtime is available to the agent, but the site build needs a user-visible toolchain decision",
+    "github_pages": "has_pages=false; the user must switch the Pages source to GitHub Actions before E07 can deliver",
+    "ci": "no .github directory exists; the deployment workflow will be the repository's first CI pipeline"
+  },
+  "parent": {
+    "title": "[Spec] 编辑器文档站点",
+    "id": 5696970937,
+    "node_id": "I_kwDOUnHq-M8AAAABU5DguQ",
+    "url": "https://github.com/T-miracle/Editor/issues/38",
+    "number": 38
+  },
+  "complete": true
+}
