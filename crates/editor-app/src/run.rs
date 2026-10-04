@@ -1521,6 +1521,8 @@ pub struct RunConfigDraft {
     pub build: String,
     /// Steps that run in order before the program, in the same line form as the build actions.
     pub prelaunch: String,
+    /// Breakpoints as `源文件:行号`, one per line.
+    pub breakpoints: String,
 }
 
 impl RunConfigDraft {
@@ -1547,6 +1549,7 @@ impl RunConfigDraft {
                 source: config.source,
                 from_target: config.from_target.clone(),
                 provider: config.provider.clone(),
+                breakpoints: render_breakpoints(&config.breakpoints),
                 share: !config.local,
                 build: render_steps(&config.build),
                 prelaunch: render_steps(&config.prelaunch),
@@ -1564,6 +1567,7 @@ impl RunConfigDraft {
                 source: editor_core::RunConfigSource::Local,
                 from_target: None,
                 provider: None,
+                breakpoints: String::new(),
                 // Sharing is an explicit choice; a new configuration starts on this machine only.
                 share: false,
                 build: String::new(),
@@ -1617,6 +1621,9 @@ impl RunConfigDraft {
             // still recognizes it as its own rather than offering to add a second copy.
             from_target: self.from_target.clone(),
             provider: self.provider.clone(),
+            // A stop location the user wrote is theirs; a line that cannot be parsed is refused by
+            // the form before it reaches here, so this only converts the accepted text.
+            breakpoints: parse_breakpoints(&self.breakpoints)?,
             local: !self.share,
         })
     }
@@ -1797,6 +1804,44 @@ pub fn parse_environment(text: &str) -> Result<BTreeMap<String, String>, String>
 pub fn render_environment(env: &BTreeMap<String, String>) -> String {
     env.iter()
         .map(|(name, value)| format!("{name}={value}"))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// Parse breakpoints written as `源文件:行号`, one per line.
+///
+/// The colon form is used rather than two fields so a whole list can be pasted at once. A Windows
+/// drive letter is not confused with the separator, because the line number is what follows the last
+/// colon and has to be a number.
+pub fn parse_breakpoints(text: &str) -> Result<editor_core::RunBreakpoints, String> {
+    let mut breakpoints = editor_core::RunBreakpoints::default();
+    for line in text.lines() {
+        let line = line.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        let Some((source, number)) = line.rsplit_once(':') else {
+            return Err(format!("断点需要写成 源文件:行号：{line}"));
+        };
+        let Ok(number) = number.trim().parse::<u32>() else {
+            return Err(format!("断点行号必须是数字：{line}"));
+        };
+        match breakpoints.insert(source.trim(), number) {
+            Ok(()) => {}
+            // The same location twice is a correction the user already made, not a second breakpoint.
+            Err(editor_core::BreakpointError::AlreadySet) => {}
+            Err(error) => return Err(error.to_string()),
+        }
+    }
+    Ok(breakpoints)
+}
+
+/// Render breakpoints back into the one-per-line form the field edits.
+pub fn render_breakpoints(breakpoints: &editor_core::RunBreakpoints) -> String {
+    breakpoints
+        .entries()
+        .iter()
+        .map(|entry| format!("{}:{}", entry.source, entry.line))
         .collect::<Vec<_>>()
         .join("\n")
 }

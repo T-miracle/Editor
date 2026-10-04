@@ -1,7 +1,7 @@
 //! Run configuration rules and their host-local file contract.
 use super::*;
 
-fn program_config(id: &str, name: &str) -> RunConfig {
+pub(super) fn program_config(id: &str, name: &str) -> RunConfig {
     RunConfig {
         id: id.into(),
         name: name.into(),
@@ -21,6 +21,7 @@ fn program_config(id: &str, name: &str) -> RunConfig {
         source: RunConfigSource::Local,
         from_target: None,
         provider: None,
+        breakpoints: Default::default(),
         local: true,
     }
 }
@@ -180,6 +181,7 @@ fn program_arguments_are_never_reinterpreted_as_a_shell_command() {
         source: RunConfigSource::Local,
         from_target: None,
         provider: None,
+        breakpoints: Default::default(),
         local: true,
     };
     configuration.validate().unwrap();

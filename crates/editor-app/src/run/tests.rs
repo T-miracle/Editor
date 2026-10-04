@@ -23,6 +23,7 @@ fn config(id: &str, name: &str) -> RunConfig {
         source: editor_core::RunConfigSource::Local,
         from_target: None,
         provider: None,
+        breakpoints: Default::default(),
         local: true,
     }
 }
@@ -42,6 +43,7 @@ fn with_steps(id: &str, name: &str, build: &str, prelaunch: &str) -> RunConfig {
         source: editor_core::RunConfigSource::Local,
         from_target: None,
         provider: None,
+        breakpoints: String::new(),
         share: false,
         build: build.into(),
         prelaunch: prelaunch.into(),
@@ -599,6 +601,7 @@ fn a_loaded_shared_configuration_prepares_the_request_it_describes() {
         directory: Some(editor_core::WORKSPACE_TOKEN.to_owned()),
         build: crate::run::parse_steps("构建 = cargo.exe | build").unwrap(),
         prelaunch: crate::run::parse_steps("准备 = tool.exe | gen").unwrap(),
+        breakpoints: Default::default(),
     });
     editor_core::save_shared(&project, &set).unwrap();
     // This machine's own values for the same identity travel separately.
@@ -967,6 +970,58 @@ fn a_debug_launch_is_refused_rather_than_replaced_by_a_plain_run() {
     // An unknown configuration is refused by the same path rather than starting something else.
     assert!(broken_controls.debug_blocker("nobody").is_some());
 }
+
+/// Breakpoints survive the edit round trip, and an unusable line is refused with its reason.
+#[test]
+fn breakpoints_round_trip_through_the_edit_form() {
+    let mut controls = controls();
+    let workspace = "C:/work".to_owned();
+    controls
+        .upsert(config("run-1", "第一个"), &workspace)
+        .unwrap();
+
+    // A whole list can be pasted at once; the drive letter is not mistaken for the separator.
+    let parsed =
+        parse_breakpoints("C:\\work\\src\\main.rs:12\nsrc/lib.rs:4\n\n# 注释\nsrc/main.rs:9")
+            .expect("the list parses");
+    assert_eq!(parsed.len(), 3, "{parsed:?}");
+    assert!(parsed.contains("src/main.rs", 9));
+    // The same location twice is a correction, not a second breakpoint.
+    let repeated = parse_breakpoints("src/main.rs:9\nsrc/main.rs:9").expect("a repeat is accepted");
+    assert_eq!(repeated.len(), 1);
+
+    // A line that is not a location is refused by name rather than dropped silently.
+    let error = parse_breakpoints("src/main.rs").expect_err("a location needs a line");
+    assert!(error.contains("源文件:行号"), "{error}");
+    let error = parse_breakpoints("src/main.rs:abc").expect_err("a line is a number");
+    assert!(error.contains("数字"), "{error}");
+    let error = parse_breakpoints("src/main.rs:0").expect_err("line zero is not a location");
+    assert!(error.contains('1'), "{error}");
+
+    // The stored configuration keeps them, and the draft renders them back the way they were read.
+    let mut draft = RunConfigDraft::from_config(controls.configuration("run-1"), "run-1".into());
+    draft.breakpoints = "src/main.rs:9\nsrc/lib.rs:4\nC:\\work\\src\\main.rs:12".into();
+    controls
+        .upsert(draft.to_config().expect("the draft is valid"), &workspace)
+        .unwrap();
+    let stored = controls.configuration("run-1").expect("still stored");
+    assert_eq!(stored.breakpoints.len(), 3);
+    let rendered = render_breakpoints(&stored.breakpoints);
+    assert_eq!(
+        parse_breakpoints(&rendered).expect("the rendering parses back"),
+        stored.breakpoints,
+        "rendering and parsing agree, so the form does not change what is stored"
+    );
+    assert!(
+        rendered
+            .lines()
+            .next()
+            .unwrap()
+            .starts_with("C:\\work\\src"),
+        "the list reads in project order: {rendered}"
+    );
+}
+
 fn snapshot(
     id: u64,
     config: &str,
@@ -1229,6 +1284,7 @@ fn drafts_preserve_argument_boundaries() {
         source: editor_core::RunConfigSource::Local,
         from_target: None,
         provider: None,
+        breakpoints: String::new(),
         share: false,
         // One prepared action per line: a name, then the program, then its literal arguments.
         build: "构建 = cargo.exe | build".into(),
@@ -1290,6 +1346,7 @@ fn prepared_actions_round_trip_through_the_edited_form() {
         source: editor_core::RunConfigSource::Local,
         from_target: None,
         provider: None,
+        breakpoints: String::new(),
         share: false,
         build: "构建 = cargo.exe | build | --release".into(),
         // A value containing spaces stays one argument, because the separator is the only split.
@@ -1341,6 +1398,7 @@ fn a_prelaunch_step_references_a_build_without_copying_it() {
         source: editor_core::RunConfigSource::Local,
         from_target: None,
         provider: None,
+        breakpoints: String::new(),
         share: false,
         build: String::new(),
         prelaunch: "先构建 = @库配置\n后生成 = tool.exe | gen".into(),
@@ -1450,6 +1508,7 @@ fn malformed_prepared_actions_are_refused() {
         source: editor_core::RunConfigSource::Local,
         from_target: None,
         provider: None,
+        breakpoints: String::new(),
         share: false,
         build: "没有等号".into(),
         prelaunch: String::new(),
@@ -1489,6 +1548,7 @@ fn a_malformed_environment_line_is_refused() {
         source: editor_core::RunConfigSource::Local,
         from_target: None,
         provider: None,
+        breakpoints: String::new(),
         share: false,
         build: String::new(),
         prelaunch: String::new(),
@@ -1520,6 +1580,7 @@ fn shell_mode_names_an_interpreter_and_passes_the_script_verbatim() {
         source: editor_core::RunConfigSource::Local,
         from_target: None,
         provider: None,
+        breakpoints: String::new(),
         share: false,
         build: String::new(),
         prelaunch: String::new(),

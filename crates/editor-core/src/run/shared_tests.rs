@@ -19,6 +19,7 @@ fn program(id: &str, name: &str) -> RunConfig {
         source: RunConfigSource::Local,
         from_target: None,
         provider: None,
+        breakpoints: Default::default(),
         local: true,
     }
 }

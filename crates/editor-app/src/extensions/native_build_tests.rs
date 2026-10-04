@@ -38,6 +38,7 @@ fn configuration(
         source: editor_core::RunConfigSource::Local,
         from_target: None,
         provider: None,
+        breakpoints: Default::default(),
         local: true,
     }
 }
@@ -729,6 +730,7 @@ fn build_reports_why_it_is_unavailable() {
             source: editor_core::RunConfigSource::Local,
             from_target: None,
             provider: None,
+            breakpoints: String::new(),
             share: false,
             build: String::new(),
             prelaunch: String::new(),

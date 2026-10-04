@@ -6,8 +6,13 @@
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
+mod breakpoints;
 mod discovery;
 mod shared;
+pub use breakpoints::{
+    BreakpointError, MAX_BREAKPOINT_SOURCE_BYTES, MAX_RUN_BREAKPOINTS, RunBreakpoint,
+    RunBreakpoints,
+};
 mod store;
 pub use discovery::{DiscoveryOutcome, configuration_for, reconcile, repair};
 pub use shared::{
@@ -129,6 +134,12 @@ pub struct RunConfig {
     /// configuration that asked for a specific provider.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub provider: Option<String>,
+    /// Where this configuration's program should stop when it is debugged.
+    ///
+    /// A breakpoint is a source and a line, so it is portable and belongs with the configuration that
+    /// runs the program rather than with the machine that happens to set it.
+    #[serde(default, skip_serializing_if = "RunBreakpoints::is_empty")]
+    pub breakpoints: RunBreakpoints,
     /// Local-only configurations never modify project files; sharing is an explicit user action.
     #[serde(default = "crate::run::default_local")]
     pub local: bool,

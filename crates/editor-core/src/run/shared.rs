@@ -10,8 +10,8 @@
 //! same identity. Both the file and the form are validated by the same rules, so editing the file by
 //! hand cannot mean something different from editing the form.
 use super::{
-    MAX_RUN_CONFIGS, MAX_RUN_STEPS, RunConfig, RunConfigError, RunConfigSet, RunConfigSource,
-    RunStep, RunTarget,
+    MAX_RUN_CONFIGS, MAX_RUN_STEPS, RunBreakpoints, RunConfig, RunConfigError, RunConfigSet,
+    RunConfigSource, RunStep, RunTarget,
 };
 use serde::{Deserialize, Serialize};
 use std::{
@@ -86,6 +86,9 @@ pub struct SharedConfig {
     pub build: Vec<RunStep>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub prelaunch: Vec<RunStep>,
+    /// Where this configuration's program should stop, which is the same on every machine.
+    #[serde(default, skip_serializing_if = "RunBreakpoints::is_empty")]
+    pub breakpoints: RunBreakpoints,
 }
 
 /// The whole shared document, versioned so a later format can be read deliberately.
@@ -132,6 +135,8 @@ impl SharedConfig {
             }),
             build: config.build.clone(),
             prelaunch: config.prelaunch.clone(),
+            // A stop location means the same thing on another machine, so it travels with the entry.
+            breakpoints: config.breakpoints.clone(),
         }
     }
 
@@ -166,6 +171,9 @@ impl SharedConfig {
             // Which provider runs a program is this machine's fact, not the project's: another
             // machine may have a different provider installed.
             provider: overrides.and_then(|local| local.provider.clone()),
+            // Breakpoints are source and line, so they are the project's: someone else's program stops
+            // in the same place, while the environment and tool directories stay this machine's.
+            breakpoints: self.breakpoints,
             local: false,
         }
     }

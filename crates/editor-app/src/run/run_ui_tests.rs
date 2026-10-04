@@ -32,6 +32,7 @@ fn store_configuration(workspace_key: &str, name: &str) -> std::path::PathBuf {
         source: editor_core::RunConfigSource::Local,
         from_target: None,
         provider: None,
+        breakpoints: Default::default(),
         local: true,
     })
     .unwrap();
@@ -95,6 +96,7 @@ fn the_build_page_edits_prepared_actions_row_by_row(cx: &mut TestAppContext) {
             source: editor_core::RunConfigSource::Local,
             from_target: None,
             provider: None,
+            breakpoints: String::new(),
             share: false,
             build: "一 = cargo.exe | build\n二 = cargo.exe | test".into(),
             prelaunch: "三 = tool.exe | gen".into(),
@@ -319,7 +321,9 @@ fn the_run_configuration_dialog_owns_a_b1_draft(cx: &mut TestAppContext) {
             "环境变量（每行 名称=值）",
             "本机工具路径（每行一个目录，优先于继承的 PATH）",
             "构建操作（每行 名称 = 程序 | 参数）",
-            "启动前步骤（每行 名称 = 程序 | 参数，顺序执行）"
+            "启动前步骤（每行 名称 = 程序 | 参数，顺序执行）",
+            // The debug page edits the breakpoint list, one location per line.
+            "断点（每行 源文件:行号）"
         ]
     );
     // A new draft starts empty, on the basic page, with nothing to report yet.

@@ -91,10 +91,12 @@ pub enum RunField {
     ToolPaths,
     Build,
     Prelaunch,
+    /// Breakpoints as `源文件:行号`, one per line.
+    Breakpoints,
 }
 
 impl RunField {
-    const ALL: [Self; 9] = [
+    const ALL: [Self; 10] = [
         Self::Name,
         Self::Program,
         Self::Arguments,
@@ -104,6 +106,7 @@ impl RunField {
         Self::ToolPaths,
         Self::Build,
         Self::Prelaunch,
+        Self::Breakpoints,
     ];
 
     fn label(self) -> &'static str {
@@ -118,6 +121,7 @@ impl RunField {
             Self::ToolPaths => "本机工具路径（每行一个目录，优先于继承的 PATH）",
             Self::Build => "构建操作（每行 名称 = 程序 | 参数）",
             Self::Prelaunch => "启动前步骤（每行 名称 = 程序 | 参数，顺序执行）",
+            Self::Breakpoints => "断点（每行 源文件:行号）",
         }
     }
 
@@ -132,6 +136,7 @@ impl RunField {
             Self::ToolPaths => "run-config-tool-paths",
             Self::Build => "run-config-build",
             Self::Prelaunch => "run-config-prelaunch",
+            Self::Breakpoints => "run-config-breakpoints",
         }
     }
 
@@ -146,6 +151,7 @@ impl RunField {
             Self::ToolPaths => draft.tool_paths.clone(),
             Self::Build => draft.build.clone(),
             Self::Prelaunch => draft.prelaunch.clone(),
+            Self::Breakpoints => draft.breakpoints.clone(),
         }
     }
 
@@ -160,6 +166,7 @@ impl RunField {
             Self::ToolPaths => draft.tool_paths = value,
             Self::Build => draft.build = value,
             Self::Prelaunch => draft.prelaunch = value,
+            Self::Breakpoints => draft.breakpoints = value,
         }
     }
 }
@@ -1817,8 +1824,9 @@ fn render_run_config_form(
     } else if tab == RunConfigTab::Environment {
         &[RunField::Environment, RunField::ToolPaths]
     } else if tab == RunConfigTab::Debug {
-        // The debug page edits the provider choice, which is not one of the text fields.
-        &[]
+        // The debug page edits the provider choice and the breakpoint list, neither of which is one
+        // of the basic page's launch fields.
+        &[RunField::Breakpoints]
     } else {
         // Shell mode replaces the program field's meaning and adds the script body.
         if shell {

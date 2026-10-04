@@ -86,6 +86,7 @@ pub fn configuration_for(target: &DiscoveredTarget, id: String, name: String) ->
         from_target: Some(target.id.clone()),
         // A discovered configuration follows the scope's provider choice until the user changes it.
         provider: None,
+        breakpoints: Default::default(),
         local: true,
     }
 }
