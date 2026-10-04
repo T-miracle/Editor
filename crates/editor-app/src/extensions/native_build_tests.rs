@@ -61,10 +61,27 @@ fn runtime(root: &std::path::Path) -> plugin_runtime::Manager {
 }
 
 /// Open the editor on a workspace holding these configurations, the last one selected.
+///
+/// The editor's own run controls are replaced with a set loaded the way the application loads them:
+/// this machine's record plus whatever the project shares, so an acceptance can start from a project
+/// file rather than from configurations handed to it directly.
 fn editor_on<'a>(
     cx: &'a mut TestAppContext,
     root: &std::path::Path,
     configurations: Vec<editor_core::RunConfig>,
+) -> (Entity<EditorApp>, &'a mut gpui_kit::VisualTestContext) {
+    editor_loaded(cx, root, configurations, false)
+}
+
+/// Open the editor with its run controls loaded from the workspace's own storage.
+///
+/// `shared` selects the load path the application uses: reading this machine's record together with
+/// the project's shared file.
+fn editor_loaded<'a>(
+    cx: &'a mut TestAppContext,
+    root: &std::path::Path,
+    configurations: Vec<editor_core::RunConfig>,
+    from_storage: bool,
 ) -> (Entity<EditorApp>, &'a mut gpui_kit::VisualTestContext) {
     cx.update(|cx| {
         gpui_kit::init(cx);
@@ -73,15 +90,31 @@ fn editor_on<'a>(
         cx.set_reduce_motion(true);
     });
     let selected = configurations.last().map(|config| config.id.clone());
+    let root = root.to_path_buf();
     let slot = Rc::new(RefCell::new(None));
     let capture = slot.clone();
-    let workspace = Workspace::open(root).unwrap();
+    let opening = root.clone();
+    // The controls are loaded before the window opens, so the editor starts from the same state the
+    // application starts from rather than having them replaced while it is being built.
+    let loaded = from_storage.then(|| {
+        let local = tempfile::tempdir().unwrap().keep();
+        crate::run::RunControls::load_with_project(
+            &opening.display().to_string(),
+            Some(local),
+            Some(opening.clone()),
+        )
+    });
+    let workspace = Workspace::open(&root).unwrap();
     let (_, cx) = cx.add_window_view(move |window, cx| {
         let app = cx.new(|cx| EditorApp::new(workspace, None, window, cx));
         app.update(cx, |app, cx| {
             let key = app.workspace_key();
-            for configuration in configurations {
-                app.run_controls.upsert(configuration, &key).unwrap();
+            if let Some(loaded) = loaded {
+                app.run_controls = loaded;
+            } else {
+                for configuration in configurations {
+                    app.run_controls.upsert(configuration, &key).unwrap();
+                }
             }
             if let Some(selected) = &selected {
                 app.run_controls.select(selected, &key);

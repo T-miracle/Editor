@@ -575,6 +575,81 @@ fn a_running_session_keeps_the_snapshot_it_started_with() {
     );
 }
 
+/// A configuration loaded from a project file prepares the launch the file describes.
+///
+/// This is the whole host-side path a shared configuration travels: the project's file, this
+/// machine's overrides, the merged record, and the request the runtime would be asked to start.
+#[test]
+fn a_loaded_shared_configuration_prepares_the_request_it_describes() {
+    let project = tempfile::tempdir().unwrap().keep();
+    let local = tempfile::tempdir().unwrap().keep();
+    let workspace = project.display().to_string();
+    let mut set = editor_core::SharedSet::default();
+    set.upsert(editor_core::SharedConfig {
+        id: "shared-run".into(),
+        name: "共享运行".into(),
+        target: RunTarget::Program {
+            program: "shared.exe".into(),
+            args: vec!["--from-project".into(), "a b".into()],
+        },
+        directory: Some(editor_core::WORKSPACE_TOKEN.to_owned()),
+        build: crate::run::parse_steps("构建 = cargo.exe | build").unwrap(),
+        prelaunch: crate::run::parse_steps("准备 = tool.exe | gen").unwrap(),
+    });
+    editor_core::save_shared(&project, &set).unwrap();
+    // This machine's own values for the same identity travel separately.
+    let mut overrides = editor_core::RunConfigSet::default();
+    let mut mine = config("shared-run", "本机名字");
+    mine.env = [("SECRET".to_owned(), "s3cret".to_owned())].into();
+    mine.tool_paths = vec![project.join("tools").display().to_string()];
+    mine.source = editor_core::RunConfigSource::Project;
+    mine.local = false;
+    overrides.upsert(mine).unwrap();
+    editor_core::save(&local, &workspace, &overrides).unwrap();
+
+    let controls = RunControls::load_with_project(&workspace, Some(local), Some(project.clone()));
+    assert!(controls.error.is_none(), "{:?}", controls.error);
+    let plan = controls
+        .prepare_launch("shared-run", &workspace, MAX_PREPARED_STEPS)
+        .expect("the shared definition is launchable");
+    // The order is the project's: its build, its step, then the program it names.
+    assert_eq!(
+        plan.steps.iter().map(|step| step.kind).collect::<Vec<_>>(),
+        vec![StepKind::Build, StepKind::Prelaunch, StepKind::Program]
+    );
+    assert_eq!(plan.steps[0].request.program, "cargo.exe");
+    assert_eq!(plan.steps[2].request.program, "shared.exe");
+    assert_eq!(
+        plan.steps[2].request.args,
+        vec!["--from-project", "a b"],
+        "arguments stay literal items"
+    );
+    assert_eq!(
+        plan.steps[2].request.cwd.as_deref(),
+        Some(workspace.as_str()),
+        "the token resolved to this workspace"
+    );
+    // This machine's own environment and tool directories reach the program.
+    let environment = |name: &str| {
+        plan.steps[2]
+            .request
+            .env
+            .iter()
+            .find(|entry| entry.name.eq_ignore_ascii_case(name))
+            .map(|entry| entry.value.clone())
+    };
+    assert_eq!(environment("SECRET").as_deref(), Some("s3cret"));
+    assert!(
+        environment("PATH")
+            .is_some_and(|path| path.starts_with(&project.join("tools").display().to_string())),
+        "this machine's tool directory leads the program's search order"
+    );
+    // Nothing about this machine travelled with the shared definition.
+    let bytes = std::fs::read_to_string(editor_core::project_path(&project)).unwrap();
+    assert!(!bytes.contains("SECRET") && !bytes.contains("s3cret"));
+    assert!(!bytes.contains("tools"));
+}
+
 fn snapshot(
     id: u64,
     config: &str,
