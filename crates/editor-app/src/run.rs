@@ -182,8 +182,23 @@ pub struct RunControls {
     project: Option<std::path::PathBuf>,
     /// The project's shared entries as the file currently holds them.
     shared: editor_core::SharedSet,
+    /// The targets the installed plugins last offered for this workspace.
+    discovered: Vec<plugin_schema::DiscoveredTarget>,
+    /// Whether a discovery has run at all, so an empty list is not mistaken for "not yet asked".
+    discovery_ran: bool,
     /// Set when the stored file could not be read or written; shown instead of silently defaulting.
     pub error: Option<String>,
+}
+
+/// What one discovery run did to the stored configurations.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct DiscoveryReport {
+    /// Configurations whose target's program a discovery corrected, by name.
+    pub repaired: Vec<String>,
+    /// Targets no configuration claims, which the user may confirm.
+    pub offered: Vec<String>,
+    /// Configurations whose target is no longer offered, by identity and name.
+    pub missing: Vec<(String, String)>,
 }
 
 /// A status query this editor made about one preparation step.
@@ -211,6 +226,8 @@ impl Default for RunControls {
             root: None,
             project: None,
             shared: editor_core::SharedSet::default(),
+            discovered: Vec::new(),
+            discovery_ran: false,
             error: None,
         }
     }
@@ -1107,6 +1124,96 @@ impl RunControls {
         self.sequences.retain(|_, sequence| sequence.is_active());
     }
 
+    /// Reconcile stored configurations with the targets the installed plugins now offer.
+    ///
+    /// A target whose program changed is corrected in place; a target that is gone is remembered as
+    /// invalid so its configuration can say so; a target nobody claimed is offered for the user to
+    /// confirm. Nothing is added, removed or renamed without that confirmation.
+    pub fn reconcile_discovered(
+        &mut self,
+        targets: &[plugin_schema::DiscoveredTarget],
+    ) -> DiscoveryReport {
+        let outcome = editor_core::reconcile(&self.configs, targets);
+        let mut repaired = Vec::new();
+        for id in &outcome.updated {
+            let Some(stored) = self.configs.find(id).cloned() else {
+                continue;
+            };
+            let Some(target) = targets
+                .iter()
+                .find(|target| stored.from_target.as_deref() == Some(target.id.as_str()))
+            else {
+                continue;
+            };
+            let fixed = editor_core::repair(&stored, target);
+            if fixed != stored {
+                repaired.push(fixed.name.clone());
+                // A correction is applied to the stored definition; the user's own parts are the
+                // ones `repair` preserved.
+                let _ = self.configs.upsert(fixed);
+            }
+        }
+        self.discovered = targets.to_vec();
+        DiscoveryReport {
+            repaired,
+            offered: outcome.offered,
+            missing: outcome
+                .missing
+                .into_iter()
+                .filter_map(|id| {
+                    self.configs
+                        .find(&id)
+                        .map(|config| (id.clone(), config.name.clone()))
+                })
+                .collect(),
+        }
+    }
+
+    /// The targets the last discovery offered, for the entry point that lists them.
+    pub fn discovered_targets(&self) -> &[plugin_schema::DiscoveredTarget] {
+        &self.discovered
+    }
+
+    /// Whether this configuration's target is no longer offered by any installed plugin.
+    ///
+    /// A configuration with no target link is never invalid this way, and neither is anything before
+    /// a discovery has run: a target is only missing relative to a discovery that looked for it.
+    pub fn target_missing(&self, id: &str) -> bool {
+        if !self.discovery_ran {
+            return false;
+        }
+        let Some(stored) = self.configs.find(id) else {
+            return false;
+        };
+        let Some(from_target) = &stored.from_target else {
+            return false;
+        };
+        !self
+            .discovered
+            .iter()
+            .any(|target| target.id == *from_target)
+    }
+
+    /// Configurations whose discovered target is no longer offered, by identity and name.
+    pub fn invalid_targets(&self) -> Vec<(String, String)> {
+        self.configs
+            .configurations
+            .iter()
+            .filter(|config| self.target_missing(&config.id))
+            .map(|config| (config.id.clone(), config.name.clone()))
+            .collect()
+    }
+
+    /// Whether any discovery has run, so an empty list means "nothing found" rather than "not yet".
+    pub fn discovery_ran(&self) -> bool {
+        self.discovery_ran
+    }
+
+    /// Record that a discovery ran, so the entry point can tell the two empty states apart.
+    pub fn note_discovery(&mut self) {
+        self.discovery_ran = true;
+    }
+
     /// The plan a launch of this configuration performs, or why it cannot be launched.
     pub fn launch_plan(&self, config: &str, workspace_root: &str) -> Result<RunPlan, String> {
         self.prepare_launch(config, workspace_root, MAX_PREPARED_STEPS)
@@ -1170,13 +1277,19 @@ impl RunControls {
         } else {
             for config in &self.configs.configurations {
                 let selected = self.configs.selected.as_deref() == Some(config.id.as_str());
+                let mut label = if selected {
+                    format!("{} ✓", config.name)
+                } else {
+                    config.name.clone()
+                };
+                // A discovered configuration whose target disappeared is marked where it is chosen,
+                // not only when it is launched and fails.
+                if self.target_missing(&config.id) {
+                    label.push_str(" ⚠ 目标已失效");
+                }
                 entries.push(RunMenuEntry::Configuration {
                     id: config.id.clone(),
-                    label: if selected {
-                        format!("{} ✓", config.name)
-                    } else {
-                        config.name.clone()
-                    },
+                    label,
                 });
             }
         }
@@ -1191,11 +1304,25 @@ impl RunControls {
             label: "新建运行配置…".into(),
             enabled: true,
         });
+        // Discovery is always offered: a workspace with no provider says so when it is asked, which
+        // is more useful than a permanently unavailable entry that never explains itself.
         entries.push(RunMenuEntry::Action {
             id: "run-discover".into(),
-            label: "发现配置（待插件贡献）".into(),
-            enabled: false,
+            label: if self.discovered.is_empty() {
+                "发现运行目标…".to_owned()
+            } else {
+                format!("发现运行目标（{} 个候选）…", self.discovered.len())
+            },
+            enabled: true,
         });
+        // A configuration whose target is gone says so, so a failed launch is not the first hint.
+        for (config, name) in self.invalid_targets() {
+            entries.push(RunMenuEntry::Action {
+                id: format!("run-repair-{config}"),
+                label: format!("目标已失效：{name}（重新发现以修复）"),
+                enabled: true,
+            });
+        }
         entries
     }
 }

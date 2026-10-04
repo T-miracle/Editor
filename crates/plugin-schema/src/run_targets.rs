@@ -36,6 +36,11 @@ pub struct RunTargetDiscovery {
     pub name: String,
     /// The kind of configuration this provider produces, for grouping and for the form's wording.
     pub target_type: String,
+    /// Field whose value is the program to run.
+    ///
+    /// The host needs a real executable, and it will not invent one from a display label: a provider
+    /// that cannot say which of its fields names the program does not get to offer targets.
+    pub program_field: String,
     /// Where to look, and what makes a match a target.
     pub rules: Vec<DiscoveryRule>,
 }
@@ -103,6 +108,8 @@ pub struct DiscoveredTarget {
     pub provider: String,
     /// The provider's target type, so the form can word itself for this kind.
     pub target_type: String,
+    /// Program to run, taken from the field the provider named.
+    pub program: String,
     /// Shown in the discovery list.
     pub label: String,
     /// Values the provider asked to report, in the order it declared them.
@@ -164,9 +171,14 @@ impl RunTargetDiscovery {
     /// Every rule is checked before it is used, so a malformed one is reported rather than ignored.
     fn validate(&self) -> Result<(), DiscoveryError> {
         let bounded = |text: &str| !text.trim().is_empty() && text.len() <= MAX_TEXT_BYTES;
-        if !bounded(&self.id) || !bounded(&self.name) || !bounded(&self.target_type) {
+        if !bounded(&self.id)
+            || !bounded(&self.name)
+            || !bounded(&self.target_type)
+            || !bounded(&self.program_field)
+        {
             return Err(DiscoveryError::Invalid(
-                "provider id, name and target type must be non-empty and bounded".into(),
+                "provider id, name, target type and program field must be non-empty and bounded"
+                    .into(),
             ));
         }
         if self.rules.is_empty() {
@@ -363,6 +375,7 @@ impl RunTargetDiscovery {
             id: format!("{}:{}", self.id, name),
             provider: self.id.clone(),
             target_type: self.target_type.clone(),
+            program: values.get(&self.program_field).cloned().unwrap_or_default(),
             label: name.to_owned(),
             fields,
             found_in: path.to_owned(),

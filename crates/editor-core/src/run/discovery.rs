@@ -39,10 +39,10 @@ pub fn configuration_for(target: &DiscoveredTarget, id: String, name: String) ->
     RunConfig {
         id,
         name,
-        // The target's label names the program; a provider that needs arguments reports them as
-        // fields, and the user can add more once the configuration exists.
+        // The program is the one the provider named, never its display label: a configuration that
+        // ran a label would fail at launch with a message about a missing file.
         target: RunTarget::Program {
-            program: target.label.clone(),
+            program: target.program.clone(),
             args: target
                 .fields
                 .get("program_args")
@@ -119,7 +119,7 @@ pub fn reconcile(configs: &RunConfigSet, targets: &[DiscoveredTarget]) -> Discov
             Some(target) => {
                 // A discovery may correct the program a target names — that is what "the target is
                 // now this" means — while everything the user chose stays as they left it.
-                if program_of(config) != Some(target.label.as_str()) {
+                if program_of(config) != Some(target.program.as_str()) {
                     outcome.updated.push(config.id.clone());
                 }
             }
@@ -136,7 +136,7 @@ pub fn reconcile(configs: &RunConfigSet, targets: &[DiscoveredTarget]) -> Discov
 pub fn repair(config: &RunConfig, target: &DiscoveredTarget) -> RunConfig {
     let mut repaired = config.clone();
     repaired.target = RunTarget::Program {
-        program: target.label.clone(),
+        program: target.program.clone(),
         args: match &config.target {
             // The user's own arguments survive; only the program is the target's to name.
             RunTarget::Program { args, .. } => args.clone(),

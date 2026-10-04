@@ -462,6 +462,10 @@ mod tests {
         assert_eq!(target.id, "rust-binary:my-app");
         assert_eq!(target.provider, "rust-binary");
         assert_eq!(target.label, "my-app");
+        assert_eq!(
+            target.program, "my-app",
+            "the program comes from the field the provider named"
+        );
         assert_eq!(target.found_in, "Cargo.toml");
         assert_eq!(
             target.fields.get("package").map(String::as_str),

@@ -653,6 +653,98 @@ fn a_loaded_shared_configuration_prepares_the_request_it_describes() {
     assert!(!bytes.contains("tools"));
 }
 
+/// A discovery corrects a target that moved, offers new ones, and marks the ones that are gone.
+#[test]
+fn a_discovery_reports_what_changed_without_changing_the_users_work() {
+    use plugin_schema::DiscoveredTarget;
+    let target = |id: &str, program: &str| DiscoveredTarget {
+        id: id.to_owned(),
+        provider: "rust-binary".into(),
+        target_type: "rust-binary".into(),
+        program: program.to_owned(),
+        label: id.rsplit(':').next().unwrap_or(id).to_owned(),
+        fields: Default::default(),
+        found_in: "Cargo.toml".into(),
+    };
+    let mut controls = controls();
+    let workspace = "C:/work".to_owned();
+    // One configuration came from a target, one was written by hand.
+    let mut mine = editor_core::configuration_for(
+        &target("rust-binary:my-app", "my-app"),
+        "run-1".into(),
+        "我的程序".into(),
+    );
+    mine.target = RunTarget::Program {
+        program: "my-app".into(),
+        args: vec!["--verbose".into()],
+    };
+    controls.upsert(mine, &workspace).unwrap();
+    controls
+        .upsert(config("run-2", "手写"), &workspace)
+        .unwrap();
+
+    // Nothing has been discovered yet, so nothing is reported as invalid.
+    assert!(!controls.discovery_ran());
+    assert!(controls.invalid_targets().is_empty());
+
+    // A discovery that still offers the target and adds one more.
+    let report = controls.reconcile_discovered(&[
+        target("rust-binary:my-app", "my-app"),
+        target("rust-binary:other", "other"),
+    ]);
+    controls.note_discovery();
+    assert!(
+        report.repaired.is_empty(),
+        "nothing changed for the stored one"
+    );
+    assert_eq!(report.offered, vec!["rust-binary:other".to_owned()]);
+    assert!(report.missing.is_empty());
+    assert!(controls.discovery_ran());
+    assert!(
+        !controls.menu_entries().iter().any(|entry| {
+            matches!(entry, RunMenuEntry::Configuration { label, .. } if label.contains('⚠'))
+        }),
+        "a target that is still offered is not marked invalid"
+    );
+
+    // The same target now names another program: only the program changes.
+    let report = controls.reconcile_discovered(&[target("rust-binary:my-app", "renamed-app")]);
+    assert_eq!(report.repaired, vec!["我的程序".to_owned()]);
+    let repaired = controls.configuration("run-1").expect("still stored");
+    assert_eq!(repaired.target.executable(), "renamed-app");
+    assert_eq!(
+        repaired.literal_arguments(),
+        vec!["--verbose"],
+        "the user's arguments survive the correction"
+    );
+    assert_eq!(repaired.name, "我的程序");
+
+    // The target disappears: the configuration is marked where it is chosen, not deleted.
+    let report = controls.reconcile_discovered(&[]);
+    assert_eq!(
+        report.missing,
+        vec![("run-1".to_owned(), "我的程序".to_owned())]
+    );
+    assert!(controls.configuration("run-1").is_some());
+    assert!(controls.target_missing("run-1"));
+    assert!(
+        !controls.target_missing("run-2"),
+        "a hand-written configuration has no target to lose"
+    );
+    let labels = controls
+        .menu_entries()
+        .into_iter()
+        .filter_map(|entry| match entry {
+            RunMenuEntry::Configuration { label, .. } => Some(label),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert!(
+        labels.iter().any(|label| label.contains("目标已失效")),
+        "{labels:?}"
+    );
+}
+
 fn snapshot(
     id: u64,
     config: &str,
@@ -842,8 +934,8 @@ fn the_unified_dropdown_groups_sessions_before_configurations() {
             },
             RunMenuEntry::Action {
                 id: "run-discover".into(),
-                label: "发现配置（待插件贡献）".into(),
-                enabled: false
+                label: "发现运行目标…".into(),
+                enabled: true
             },
         ]
     );
@@ -893,8 +985,8 @@ fn the_unified_dropdown_groups_sessions_before_configurations() {
             },
             RunMenuEntry::Action {
                 id: "run-discover".into(),
-                label: "发现配置（待插件贡献）".into(),
-                enabled: false
+                label: "发现运行目标…".into(),
+                enabled: true
             },
         ]
     );

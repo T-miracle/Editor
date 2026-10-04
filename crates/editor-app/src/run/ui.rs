@@ -518,7 +518,24 @@ impl EditorApp {
                                         app.open_run_config_dialog(window, cx, editing);
                                     }
                                     "run-new" => app.open_run_config_dialog(window, cx, None),
-                                    _ => {}
+                                    // Discovery never runs a target; it only asks the installed
+                                    // plugins what this workspace offers and reports the answer.
+                                    "run-discover" => app.discover_run_targets(cx),
+                                    other => {
+                                        // A repair entry names the configuration whose target is gone.
+                                        if let Some(id) =
+                                            other.strip_prefix("run-repair-").map(str::to_owned)
+                                        {
+                                            app.discover_run_targets(cx);
+                                            app.status = if app.run_controls.target_missing(&id) {
+                                                "该目标仍未被发现；检查项目文件或工具是否可用"
+                                                    .into()
+                                            } else {
+                                                "已重新发现该目标，配置已修复".into()
+                                            };
+                                            cx.notify();
+                                        }
+                                    }
                                 });
                             }));
                     }
@@ -950,7 +967,33 @@ impl EditorApp {
         }
     }
 
-    /// Stage one already-composed launch request for a configuration and report it.
+    /// Ask the installed plugins what this workspace offers, and report what changed.
+    ///
+    /// Discovery is a read: it starts nothing, and it never adds, renames or deletes a configuration.
+    /// A target nobody claimed stays unclaimed until the user confirms it.
+    pub(crate) fn discover_run_targets(&mut self, cx: &mut Context<Self>) {
+        if !self.run_permitted(cx) {
+            self.status = "受限工作区不能启动程序".into();
+            cx.notify();
+            return;
+        }
+        let workspace = std::path::PathBuf::from(self.workspace_key());
+        let targets = crate::extensions::contributions::discover_run_targets(&workspace);
+        let report = self.run_controls.reconcile_discovered(&targets);
+        self.run_controls.note_discovery();
+        self.status = if targets.is_empty() {
+            "没有发现可运行目标：未安装提供者，或项目没有可识别的目标".into()
+        } else {
+            format!(
+                "发现 {} 个可运行目标：修复 {}，新增候选 {}，目标失效 {}",
+                targets.len(),
+                report.repaired.len(),
+                report.offered.len(),
+                report.missing.len()
+            )
+        };
+        cx.notify();
+    }
     fn stage_run_request(
         &mut self,
         config: &editor_core::RunConfig,

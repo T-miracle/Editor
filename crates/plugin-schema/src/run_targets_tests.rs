@@ -4,7 +4,7 @@ use super::*;
 /// A provider declaration as a plugin would ship it.
 fn declaration(id: &str, target_type: &str, rules: &str) -> RunTargetDiscovery {
     let document = format!(
-        r#"{{"version": 1, "id": "{id}", "name": "{id}", "target_type": "{target_type}",
+        r#"{{"version": 1, "id": "{id}", "name": "{id}", "target_type": "{target_type}", "program_field": "name",
             "rules": [{rules}]}}"#
     );
     RunTargetDiscovery::from_json(document.as_bytes())
@@ -176,7 +176,7 @@ fn files_that_do_not_match_the_declared_shape_offer_nothing() {
 fn an_unusable_declaration_is_refused() {
     // A target named from a field the rule never reads could never be identified.
     let error = RunTargetDiscovery::from_json(
-        br#"{"id":"x","name":"x","target_type":"t","rules":[
+        br#"{"id":"x","name":"x","target_type":"t","program_field":"name","rules":[
             {"file":"a.toml","fields":[{"name":"one","key":"one"}],
              "targets":[{"name_from":"two"}]}]}"#,
     )
@@ -185,7 +185,7 @@ fn an_unusable_declaration_is_refused() {
 
     // An absolute path would reach outside the workspace the provider was given.
     let error = RunTargetDiscovery::from_json(
-        br#"{"id":"x","name":"x","target_type":"t","rules":[
+        br#"{"id":"x","name":"x","target_type":"t","program_field":"name","rules":[
             {"file":"C:/elsewhere/a.toml","fields":[{"name":"one","key":"one"}]}]}"#,
     )
     .expect_err("an absolute rule file is refused");
@@ -193,7 +193,7 @@ fn an_unusable_declaration_is_refused() {
 
     // A newer declaration is refused rather than read with fields this build does not implement.
     let error = RunTargetDiscovery::from_json(
-        br#"{"version":99,"id":"x","name":"x","target_type":"t","rules":[
+        br#"{"version":99,"id":"x","name":"x","target_type":"t","program_field":"name","rules":[
             {"file":"a.toml","fields":[{"name":"one","key":"one"}]}]}"#,
     )
     .expect_err("a newer declaration is refused");
@@ -205,7 +205,7 @@ fn an_unusable_declaration_is_refused() {
     // A field this build does not define is not silently ignored.
     assert!(
         RunTargetDiscovery::from_json(
-            br#"{"id":"x","name":"x","target_type":"t","rules":[
+            br#"{"id":"x","name":"x","target_type":"t","program_field":"name","rules":[
                 {"file":"a.toml","fields":[{"name":"one","key":"one","transform":"upper"}]}]}"#,
         )
         .is_err()

@@ -8,6 +8,7 @@ fn target(id: &str, label: &str) -> DiscoveredTarget {
         id: id.to_owned(),
         provider: "rust-binary".into(),
         target_type: "rust-binary".into(),
+        program: label.to_owned(),
         label: label.to_owned(),
         fields: BTreeMap::new(),
         found_in: "Cargo.toml".into(),
