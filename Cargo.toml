@@ -29,6 +29,8 @@ notify = "8.2"
 # codepoint approximation. `plain` gives toneless ASCII syllables; the tone
 # spellings would sort "chang" and "cháng" apart for no benefit.
 pinyin = { version = "0.11", default-features = false, features = ["plain"] }
+# Shared declarative formats and the public protocol contracts live at the bottom of the graph.
+plugin-schema = { path = "crates/plugin-schema" }
 rust-i18n = "4.2.2"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"

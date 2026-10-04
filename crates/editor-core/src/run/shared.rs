@@ -160,6 +160,9 @@ impl SharedConfig {
             prelaunch: self.prelaunch,
             // A project entry stays a project entry: saving it writes back to the file it came from.
             source: RunConfigSource::Project,
+            // A shared entry is a definition, not a pointer at a discovered target: that link belongs
+            // to the machine whose discovery offered it.
+            from_target: overrides.and_then(|local| local.from_target.clone()),
             local: false,
         }
     }

@@ -9,6 +9,7 @@ license.workspace = true
 ignore.workspace = true
 thiserror.workspace = true
 # Run configurations are versioned host-local data with one validated serialized form.
+plugin-schema.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 dirs.workspace = true

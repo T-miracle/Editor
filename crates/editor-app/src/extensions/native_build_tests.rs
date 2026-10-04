@@ -36,6 +36,7 @@ fn configuration(
         build: crate::run::parse_steps(build).expect("the build actions are well formed"),
         prelaunch: crate::run::parse_steps(prelaunch).expect("the steps are well formed"),
         source: editor_core::RunConfigSource::Local,
+        from_target: None,
         local: true,
     }
 }
@@ -725,6 +726,7 @@ fn build_reports_why_it_is_unavailable() {
             environment: String::new(),
             tool_paths: String::new(),
             source: editor_core::RunConfigSource::Local,
+            from_target: None,
             share: false,
             build: String::new(),
             prelaunch: String::new(),

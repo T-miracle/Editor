@@ -58,6 +58,7 @@ fn fixture<'a>(
         build: Default::default(),
         prelaunch: Default::default(),
         source: editor_core::RunConfigSource::Local,
+        from_target: None,
         local: true,
     })
     .unwrap();
@@ -498,6 +499,7 @@ fn two_configurations_run_concurrently_with_their_own_sessions(cx: &mut TestAppC
                 build: Default::default(),
                 prelaunch: Default::default(),
                 source: editor_core::RunConfigSource::Local,
+                from_target: None,
                 local: true,
             };
             app.run_controls.upsert(configuration, &key).unwrap();
@@ -761,6 +763,7 @@ fn a_configuration_environment_reaches_the_program_it_starts(cx: &mut TestAppCon
                         build: Default::default(),
                         prelaunch: Default::default(),
                         source: editor_core::RunConfigSource::Local,
+                        from_target: None,
                         local: true,
                     },
                     &key,
@@ -836,6 +839,7 @@ fn a_shell_configuration_runs_its_script_through_the_named_interpreter(cx: &mut 
                 environment: String::new(),
                 tool_paths: String::new(),
                 source: editor_core::RunConfigSource::Local,
+                from_target: None,
                 share: false,
                 build: String::new(),
                 prelaunch: String::new(),

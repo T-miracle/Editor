@@ -6,8 +6,10 @@
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
+mod discovery;
 mod shared;
 mod store;
+pub use discovery::{DiscoveryOutcome, configuration_for, reconcile, repair};
 pub use shared::{
     SHARED_CONFIG_VERSION, SharedConfig, SharedSet, SharedStoreError, WORKSPACE_TOKEN, merge,
     project_path,
@@ -114,6 +116,13 @@ pub struct RunConfig {
     /// the provenance is what lets the store save it back there instead of copying it locally.
     #[serde(default, skip_serializing_if = "RunConfigSource::is_local")]
     pub source: RunConfigSource,
+    /// The discovered target this configuration came from, when a plugin offered it.
+    ///
+    /// This is what lets a later discovery recognize the configuration as its own: re-discovery
+    /// updates or repairs that configuration instead of saving a second copy of it, and it is the
+    /// only thing an update is allowed to change.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub from_target: Option<String>,
     /// Local-only configurations never modify project files; sharing is an explicit user action.
     #[serde(default = "crate::run::default_local")]
     pub local: bool,

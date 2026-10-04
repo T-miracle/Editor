@@ -30,6 +30,7 @@ fn store_configuration(workspace_key: &str, name: &str) -> std::path::PathBuf {
         build: Default::default(),
         prelaunch: Default::default(),
         source: editor_core::RunConfigSource::Local,
+        from_target: None,
         local: true,
     })
     .unwrap();
@@ -91,6 +92,7 @@ fn the_build_page_edits_prepared_actions_row_by_row(cx: &mut TestAppContext) {
             environment: String::new(),
             tool_paths: String::new(),
             source: editor_core::RunConfigSource::Local,
+            from_target: None,
             share: false,
             build: "一 = cargo.exe | build\n二 = cargo.exe | test".into(),
             prelaunch: "三 = tool.exe | gen".into(),

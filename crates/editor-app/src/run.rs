@@ -1231,6 +1231,8 @@ pub struct RunConfigDraft {
     pub tool_paths: String,
     /// Where the configuration being edited came from, so an edit writes back to that place.
     pub source: editor_core::RunConfigSource,
+    /// The discovered target this configuration came from, when a plugin offered it.
+    pub from_target: Option<String>,
     /// Whether the user chose to share this configuration with the project.
     pub share: bool,
     /// Build actions as `名称 = 程序或解释器 | 参数 | 脚本`, one per line.
@@ -1261,6 +1263,7 @@ impl RunConfigDraft {
                 environment: render_environment(&config.env),
                 tool_paths: config.tool_paths.join("\n"),
                 source: config.source,
+                from_target: config.from_target.clone(),
                 share: !config.local,
                 build: render_steps(&config.build),
                 prelaunch: render_steps(&config.prelaunch),
@@ -1276,6 +1279,7 @@ impl RunConfigDraft {
                 environment: String::new(),
                 tool_paths: String::new(),
                 source: editor_core::RunConfigSource::Local,
+                from_target: None,
                 // Sharing is an explicit choice; a new configuration starts on this machine only.
                 share: false,
                 build: String::new(),
@@ -1325,6 +1329,9 @@ impl RunConfigDraft {
             build: parse_steps(&self.build)?,
             prelaunch: parse_steps(&self.prelaunch)?,
             source: self.source,
+            // Editing a configuration by hand keeps the target it came from, so a later discovery
+            // still recognizes it as its own rather than offering to add a second copy.
+            from_target: self.from_target.clone(),
             local: !self.share,
         })
     }

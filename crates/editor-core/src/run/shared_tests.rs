@@ -17,6 +17,7 @@ fn program(id: &str, name: &str) -> RunConfig {
         build: Vec::new(),
         prelaunch: Vec::new(),
         source: RunConfigSource::Local,
+        from_target: None,
         local: true,
     }
 }

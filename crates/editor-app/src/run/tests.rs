@@ -21,6 +21,7 @@ fn config(id: &str, name: &str) -> RunConfig {
         build: Default::default(),
         prelaunch: Default::default(),
         source: editor_core::RunConfigSource::Local,
+        from_target: None,
         local: true,
     }
 }
@@ -38,6 +39,7 @@ fn with_steps(id: &str, name: &str, build: &str, prelaunch: &str) -> RunConfig {
         environment: String::new(),
         tool_paths: String::new(),
         source: editor_core::RunConfigSource::Local,
+        from_target: None,
         share: false,
         build: build.into(),
         prelaunch: prelaunch.into(),
@@ -603,6 +605,7 @@ fn a_loaded_shared_configuration_prepares_the_request_it_describes() {
     mine.env = [("SECRET".to_owned(), "s3cret".to_owned())].into();
     mine.tool_paths = vec![project.join("tools").display().to_string()];
     mine.source = editor_core::RunConfigSource::Project;
+    mine.from_target = None;
     mine.local = false;
     overrides.upsert(mine).unwrap();
     editor_core::save(&local, &workspace, &overrides).unwrap();
@@ -910,6 +913,7 @@ fn drafts_preserve_argument_boundaries() {
         directory: " C:/work ".into(),
         tool_paths: String::new(),
         source: editor_core::RunConfigSource::Local,
+        from_target: None,
         share: false,
         // One prepared action per line: a name, then the program, then its literal arguments.
         build: "构建 = cargo.exe | build".into(),
@@ -969,6 +973,7 @@ fn prepared_actions_round_trip_through_the_edited_form() {
         environment: String::new(),
         tool_paths: String::new(),
         source: editor_core::RunConfigSource::Local,
+        from_target: None,
         share: false,
         build: "构建 = cargo.exe | build | --release".into(),
         // A value containing spaces stays one argument, because the separator is the only split.
@@ -1018,6 +1023,7 @@ fn a_prelaunch_step_references_a_build_without_copying_it() {
         environment: String::new(),
         tool_paths: String::new(),
         source: editor_core::RunConfigSource::Local,
+        from_target: None,
         share: false,
         build: String::new(),
         prelaunch: "先构建 = @库配置\n后生成 = tool.exe | gen".into(),
@@ -1125,6 +1131,7 @@ fn malformed_prepared_actions_are_refused() {
         environment: String::new(),
         tool_paths: String::new(),
         source: editor_core::RunConfigSource::Local,
+        from_target: None,
         share: false,
         build: "没有等号".into(),
         prelaunch: String::new(),
@@ -1162,6 +1169,7 @@ fn a_malformed_environment_line_is_refused() {
         environment: "没有等号".into(),
         tool_paths: String::new(),
         source: editor_core::RunConfigSource::Local,
+        from_target: None,
         share: false,
         build: String::new(),
         prelaunch: String::new(),
@@ -1191,6 +1199,7 @@ fn shell_mode_names_an_interpreter_and_passes_the_script_verbatim() {
         environment: String::new(),
         tool_paths: String::new(),
         source: editor_core::RunConfigSource::Local,
+        from_target: None,
         share: false,
         build: String::new(),
         prelaunch: String::new(),
