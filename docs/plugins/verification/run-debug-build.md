@@ -199,6 +199,12 @@
 
 **未能同步的一处**：`docs/README.md`（文档总入口）**不在本工作区**——它属于主工作区，且在那里也**未被 git 跟踪**，因此无法在本分支登记新文档。该入口需在合并回主工作区后由维护者补一行；这是**已知缺口**，不是遗漏。
 
+### 分支卫生：提交的锁文件此前与清单不一致（本轮修复）
+
+`editor-core` 的清单在本批新增了 `plugin-schema`、`serde`、`serde_json`、`dirs`，该清单已随 `37b7c0f` 提交，**但对应的 `Cargo.lock` 更新一直未提交**。后果是**可复现**的：用提交里的锁文件执行 `cargo check --locked` 直接失败（`cannot update the lock file ... because --locked was passed`），因此**本分支的任何 locked 构建都是坏的**。
+
+**我为什么漏了它**：这个文件从本批早期就被我当作「已知无关的脏改动」一直带在工作区里，而那个判断是错的。**它之所以长期是脏的，正是因为我从未去核对「需要它的那份清单是否已提交」。** 修正后 `cargo check --locked --workspace` 通过（修正前失败），`cargo test --locked --workspace --exclude editor-app` 通过。
+
 ## 未覆盖与限制
 
 - **`editor-app` 整二进制全量运行不可作为判据**（本任务开始前即如此）：`cargo test -p editor-app --bin editor-app` 会让不同用例互相污染宿主内的共享注册表，出现一批失败。**实测对照**：在提交 `3a50511`（本轮工作之前）上单跑 `app::plugins` 已是 `18 passed; 2 failed`，当前为 `19 passed; 1 failed`；且每个失败用例单独运行时都通过（`app::plugins::tests::restricting_startup_withdraws_declarations_before_worker_publication` 单独跑 `ok`）。因此按仓库验证约定使用**按模块过滤**的针对性运行：`run::` 59 项、`extensions::worker` 11 项、`language::code_highlighting` 12 项、`extensions::markdown_tests` 1 项（其余为 ignored）在本轮全绿。这不是本任务引入的缺陷，也不据它宣称通过。
