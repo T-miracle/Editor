@@ -4,8 +4,10 @@
 //! separating rule, which controls are present, and that the configuration dialog exposes the
 //! approved B1 structure.
 #![cfg(windows)]
+use crate::ui::controls::DialogContent;
 use crate::*;
-use gpui_kit::{TestAppContext, gpui};
+use gpui_kit::test::TestWindowExt as _;
+use gpui_kit::{ElementInputHandler, InputHandler as _, TestAppContext, gpui};
 
 /// Write one stored configuration into the same host-local location the editor resolves.
 ///
@@ -64,6 +66,109 @@ fn open_editor<'a>(
     cx.run_until_parked();
     let app = slot.borrow_mut().take().unwrap();
     (app, cx)
+}
+
+/// Chinese composition reaches a dialog field, marks the preedit and commits it as the stored text.
+///
+/// Ticket 04 asks for Chinese IME to be accepted. The composition protocol is delivered to the
+/// field's retained editing state through the public input-handler bridge, the same entry point the
+/// platform handler uses, so what is exercised here is the protocol and not a native input method.
+///
+/// What this does not measure, and therefore does not claim: the window's own typing path. Typing
+/// through `Window::input` did not reach the field in this arrangement even with the field focused
+/// and a frame completed, so the composing text is the whole value here rather than a suffix of
+/// typed text. That path is not what this ticket asks about, and leaving it in would have made the
+/// check pass or fail for a reason unrelated to composition.
+#[gpui::test]
+fn chinese_composition_enters_the_configuration_fields(cx: &mut TestAppContext) {
+    let root = tempfile::tempdir().unwrap();
+    let workspace = root.path().join("project");
+    std::fs::create_dir_all(&workspace).unwrap();
+    let (app, cx) = open_editor(cx, &workspace);
+    // The dialog is built inside its own window and rendered through the same function the real
+    // dialog uses, so the fields under test are the fields a user types into. The form is handed back
+    // through a slot because a window's entities belong to that window.
+    let slot: std::rc::Rc<std::cell::RefCell<Option<Entity<FormHolder>>>> =
+        std::rc::Rc::new(std::cell::RefCell::new(None));
+    let capture = slot.clone();
+    let owner = app.clone();
+    let (_, cx) = cx.add_window_view(move |window, cx| {
+        let key = owner.read(cx).workspace_key();
+        let controls = crate::run::RunControls::default();
+        let form = cx.new(|cx| crate::run::RunConfigForm::open(&controls, &key, None, window, cx));
+        let content =
+            crate::run::ui::render_run_config_form(&owner.downgrade(), DialogContent::new(), cx);
+        let holder = cx.new(|_| FormHolder {
+            form,
+            content: Some(content),
+        });
+        *capture.borrow_mut() = Some(holder.clone());
+        Root::new(holder, window, cx)
+    });
+    let holder = slot.borrow_mut().take().expect("the dialog was built");
+    let name = holder
+        .read_with(cx, |holder, cx| {
+            holder.form.read(cx).field_input(crate::run::RunField::Name)
+        })
+        .expect("the name field exists");
+    cx.update(|window, cx| {
+        name.read(cx).focus_handle(cx).focus(window, cx);
+        // A fixed rectangle: the bridge reports selection geometry from these bounds, and this check
+        // is about the text it commits rather than about where the field was drawn.
+        let bounds = gpui::Bounds {
+            origin: gpui::point(gpui::px(0.), gpui::px(0.)),
+            size: gpui::size(gpui::px(240.), gpui::px(24.)),
+        };
+        let mut handler = ElementInputHandler::new(bounds, name.clone());
+        // Compose Chinese: marked while composing, replaced on the next keystroke, committed at the
+        // end. The marks are in UTF-16 units, which is the unit the protocol speaks in.
+        handler.replace_and_mark_text_in_range(None, "我的程序", Some(0..4), window, cx);
+        window.render_frame(cx);
+        assert_eq!(
+            name.read(cx).value().as_ref(),
+            "我的程序",
+            "the composing text reaches the field"
+        );
+        assert_eq!(
+            handler.marked_text_range(window, cx),
+            Some(0..4),
+            "the composing text is marked rather than committed"
+        );
+        // Replacing the preedit while composing must not accumulate the intermediate text.
+        handler.replace_and_mark_text_in_range(None, "我的程序集", Some(0..5), window, cx);
+        window.render_frame(cx);
+        assert_eq!(
+            name.read(cx).value().as_ref(),
+            "我的程序集",
+            "the previous preedit is replaced, not appended"
+        );
+        assert_eq!(handler.marked_text_range(window, cx), Some(0..5));
+        // Committing clears the mark, leaving exactly the text the user chose.
+        handler.replace_text_in_range(None, "我的程序集", window, cx);
+        window.render_frame(cx);
+        assert_eq!(name.read(cx).value().as_ref(), "我的程序集");
+        assert_eq!(
+            handler.marked_text_range(window, cx),
+            None,
+            "committing ends the composition"
+        );
+    });
+    // What the field holds is what a save would store, so composition reaches the configuration.
+    assert_eq!(
+        name.read_with(cx, |input, _| input.value().to_string()),
+        "我的程序集"
+    );
+}
+/// The dialog window's root: the form entity beside the content the real dialog renders.
+struct FormHolder {
+    form: Entity<crate::run::RunConfigForm>,
+    content: Option<DialogContent>,
+}
+
+impl Render for FormHolder {
+    fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+        self.content.take().unwrap_or_else(DialogContent::new)
+    }
 }
 
 /// The workspace key the editor itself uses, including whatever canonicalization the platform adds.

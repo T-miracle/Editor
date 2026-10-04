@@ -367,6 +367,17 @@ impl RunConfigForm {
         RunField::ALL.into_iter().map(RunField::label).collect()
     }
 
+    /// The editing state of one field, so a check can address the field a user types into.
+    ///
+    /// Composition is delivered to the retained control state rather than to the rendered element,
+    /// which is why this returns the state itself and not a node.
+    pub(crate) fn field_input(&self, field: RunField) -> Option<Entity<InputState>> {
+        self.inputs
+            .iter()
+            .find(|(candidate, _)| *candidate == field)
+            .map(|(_, input)| input.clone())
+    }
+
     /// How many rows one prepared-action list currently shows.
     pub(crate) fn step_row_count(&self, field: RunField) -> usize {
         self.rows_of(field).len()
@@ -1945,7 +1956,7 @@ fn save_destination(
         .into_any_element()
 }
 
-fn render_run_config_form(
+pub(crate) fn render_run_config_form(
     app: &WeakEntity<EditorApp>,
     content: DialogContent,
     cx: &mut gpui_kit::App,

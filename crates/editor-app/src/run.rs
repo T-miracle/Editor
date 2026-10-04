@@ -7,7 +7,7 @@ use crate::extensions::HostRunSnapshot;
 use editor_core::{RunConfig, RunConfigSet, RunTarget};
 use std::collections::BTreeMap;
 
-mod ui;
+pub(crate) mod ui;
 pub use ui::RunConfigForm;
 pub(crate) use ui::RunMenu;
 #[cfg(test)]
