@@ -76,6 +76,16 @@ pub enum Work {
         /// Identity of the launch that requested this start, so the answer joins its own request.
         request_id: u64,
     },
+    /// Stop the program one host session owns, through the provider that started it.
+    ///
+    /// The worker never touches a provider's private process handle; it asks the session's own
+    /// provider, which is the participant that owns the program.
+    StopRun {
+        session: u64,
+        config: String,
+        /// Identity of the stop that requested this, so its answer reaches the requester that asked.
+        request_id: u64,
+    },
     Shutdown(Option<futures::channel::oneshot::Sender<()>>),
 }
 impl Work {
@@ -195,6 +205,8 @@ pub(super) struct Published {
     pub host_executions: Vec<HostRunSnapshot>,
     /// Result of a start request the worker could not even queue, keyed by launch identity.
     pub run_errors: Vec<(String, u64, String)>,
+    /// Answers to stop requests this editor made, keyed by stop identity.
+    pub stop_results: Vec<(String, u64, Result<(), String>)>,
     pub startup: BTreeMap<String, String>,
     pub views: BTreeMap<String, Arc<ui::Document>>,
     /// Each scene's full-color image operations are ready before the UI observes that scene.

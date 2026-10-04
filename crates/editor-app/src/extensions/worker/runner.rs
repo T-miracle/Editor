@@ -234,6 +234,23 @@ impl Worker {
                             }
                             result.map_err(|error| anyhow::anyhow!("{error:#}"))
                         }
+                        Some(Work::StopRun {
+                            session,
+                            config,
+                            request_id,
+                        }) => {
+                            // The runtime asks the session's own provider; the worker never holds a
+                            // provider-private handle and never terminates a program directly.
+                            let result = manager
+                                .stop_execution(session)
+                                .map_err(|error| format!("{error:#}"));
+                            let mut published = output.lock().unwrap();
+                            published
+                                .stop_results
+                                .push((config, request_id, result.clone()));
+                            published.configuration_revision += 1;
+                            result.map_err(|error| anyhow::anyhow!("{error}"))
+                        }
                         Some(Work::Shutdown(ack)) => {
                             drop(manager);
                             if let Some(ack) = ack {

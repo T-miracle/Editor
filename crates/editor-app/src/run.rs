@@ -38,6 +38,14 @@ pub struct PendingRun {
     pub request_id: u64,
 }
 
+/// A stop this editor requested, identified so only its own answer is reported.
+#[derive(Clone, Debug)]
+pub struct PendingStop {
+    pub config: String,
+    pub session: u64,
+    pub request_id: u64,
+}
+
 /// One execution this editor requested, joined to the configuration that produced it.
 #[derive(Clone, Debug)]
 pub struct RunSession {
@@ -72,6 +80,8 @@ pub struct RunControls {
     /// Identity assigned to the next local session, used only before the runtime answers.
     next_request: u64,
     pending: Vec<PendingRun>,
+    /// Stop requests awaiting their provider's answer, keyed by the configuration they stop.
+    stops: Vec<PendingStop>,
     sessions: BTreeMap<u64, RunSession>,
     /// Storage directory used for host-local configuration files.
     root: Option<std::path::PathBuf>,
@@ -86,6 +96,7 @@ impl Default for RunControls {
             configs: RunConfigSet::default(),
             next_request: 0,
             pending: Vec::new(),
+            stops: Vec::new(),
             sessions: BTreeMap::new(),
             root: None,
             error: None,
@@ -268,6 +279,45 @@ impl RunControls {
             request_id: self.next_request,
         });
         self.next_request
+    }
+
+    /// Record that a stop was requested for one running session.
+    pub fn begin_stop(&mut self, config: &str, session: u64) -> u64 {
+        self.next_request += 1;
+        self.stops.push(PendingStop {
+            config: config.to_owned(),
+            session,
+            request_id: self.next_request,
+        });
+        self.next_request
+    }
+
+    /// Whether a stop for this configuration is still awaiting its provider's answer.
+    pub fn is_stopping(&self, config: &str) -> bool {
+        self.stops.iter().any(|stop| stop.config == config)
+    }
+
+    /// Accept the answers to stop requests this editor made; each answer is reported once.
+    ///
+    /// An answer belonging to a stop this editor did not request is ignored, so one window never
+    /// reports another window's result.
+    pub fn reconcile_stops(
+        &mut self,
+        published: &[(String, u64, Result<(), String>)],
+    ) -> Vec<(u64, Result<(), String>)> {
+        let mut reported = Vec::new();
+        for (config, request_id, result) in published {
+            let Some(index) = self
+                .stops
+                .iter()
+                .position(|stop| stop.config == *config && stop.request_id == *request_id)
+            else {
+                continue;
+            };
+            let stop = self.stops.remove(index);
+            reported.push((stop.session, result.clone()));
+        }
+        reported
     }
 
     /// Accept the session identities the runtime published for the requests this editor made.

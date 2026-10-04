@@ -996,14 +996,21 @@ impl ExtensionPanel {
         self.worker.tx.send(work).is_ok()
     }
 
-    /// Published host sessions and the start refusals reported by the worker.
+    /// Published host sessions, start refusals and stop answers reported by the worker.
     ///
-    /// Reading drains the refusal list, so each failed launch is explained exactly once.
-    pub(crate) fn take_host_runs(&self) -> (Vec<HostRunSnapshot>, Vec<(String, u64, String)>) {
+    /// Reading drains the answer lists, so each outcome is explained exactly once.
+    pub(crate) fn take_host_runs(
+        &self,
+    ) -> (
+        Vec<HostRunSnapshot>,
+        Vec<(String, u64, String)>,
+        Vec<(String, u64, Result<(), String>)>,
+    ) {
         let mut state = self.worker.state.lock().unwrap();
         (
             state.host_executions.clone(),
             std::mem::take(&mut state.run_errors),
+            std::mem::take(&mut state.stop_results),
         )
     }
 }

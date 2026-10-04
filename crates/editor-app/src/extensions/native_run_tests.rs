@@ -201,6 +201,45 @@ fn native_run_control_starts_a_real_program_and_shows_its_session(cx: &mut TestA
         assert!(state.status.contains("定位会话"), "{}", state.status);
     });
 
+    // Stop asks the session's own provider; the host never terminates a program by itself.
+    cx.update(|window, cx| {
+        let _ = window;
+        app.update(cx, |app, cx| app.stop_selected_run(cx));
+    });
+    let stop = cx.update(|_, cx| {
+        let state = app.read(cx);
+        assert!(
+            state.run_controls.is_stopping(&sessions[0].config),
+            "a stop stays pending until its provider answers"
+        );
+        state
+            .extensions
+            .read(cx)
+            .worker
+            .recorded
+            .lock()
+            .unwrap()
+            .try_iter()
+            .find_map(|work| match work {
+                Work::StopRun { session, .. } => Some(session),
+                _ => None,
+            })
+    });
+    let stopped_session = stop.expect("the stop control asked the worker to stop this session");
+    assert_eq!(stopped_session, session);
+    // The provider ends the owned program; its own private shell is not this session's program.
+    manager.stop_execution(stopped_session).unwrap();
+    for _ in 0..60 {
+        manager.poll();
+        if manager.live["terminal"].process_count() <= 1 {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    assert_eq!(manager.live["terminal"].process_count(), 1);
+    // Replacing a running instance is its own action rather than an effect of clicking Run again.
+    assert!(cx.debug_bounds("run-rerun").is_some());
+
     // Owned termination follows the provider's lifetime; no session outlives it as running.
     manager.disable("terminal").unwrap();
     for _ in 0..60 {

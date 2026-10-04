@@ -184,8 +184,7 @@ impl RunConfigForm {
             field.apply(&mut self.draft, value);
         }
     }
-
-    }
+}
 
 /// Structural accessors exist only for native checks, so production builds carry no unused surface.
 #[cfg(test)]
@@ -225,11 +224,19 @@ impl RunConfigForm {
 impl EditorApp {
     /// Read published host sessions into the run controls before the frame is painted.
     pub(crate) fn sync_run_controls(&mut self, cx: &mut Context<Self>) {
-        let (executions, errors) = self.extensions.read(cx).take_host_runs();
+        let (executions, errors, stops) = self.extensions.read(cx).take_host_runs();
         self.run_controls.reconcile(&executions);
         if let Some((_, _, message)) = errors.first() {
             // A refused start is reported where the launch was requested instead of failing silently.
             self.status = message.clone();
+        }
+        for (session, result) in self.run_controls.reconcile_stops(&stops) {
+            // An acknowledgement means the provider was asked, not that the program has exited, so
+            // the visible state never claims more than the provider actually reported.
+            self.status = match result {
+                Ok(()) => format!("已请求停止会话 {session}"),
+                Err(message) => format!("停止会话 {session} 失败：{message}"),
+            };
         }
     }
 
@@ -347,6 +354,21 @@ impl EditorApp {
                 ),
             )
             .child(
+                div().debug_selector(|| "run-rerun".into()).child(
+                    Button::new("run-rerun-action")
+                        .label("重新运行")
+                        .small()
+                        .compact()
+                        .ghost()
+                        // Rerunning is its own action: a repeat Run click only reveals a session.
+                        .disabled(!running)
+                        .tooltip("先停止当前实例，再重新启动")
+                        .on_click(
+                            cx.listener(|this, _, window, cx| this.rerun_selected(window, cx)),
+                        ),
+                ),
+            )
+            .child(
                 // The short vertical rule keeps the run group distinct from the plugin icon.
                 div()
                     .debug_selector(|| "run-controls-divider".into())
@@ -440,13 +462,50 @@ impl EditorApp {
         let Some(session) = self.run_controls.running_for(&config.id) else {
             return;
         };
-        // Graceful stop is delivered by the provider's own session control, which arrives with the
-        // stop/rerun ticket. Until then a request is never reported as a stopped program.
-        self.status = format!(
-            "会话 {} 由 {} 提供；停止请求尚未接通",
-            session.id, session.plugin
-        );
+        if !session.is_active() {
+            self.status = "所选会话已经结束".into();
+            cx.notify();
+            return;
+        }
+        let request_id = self.run_controls.begin_stop(&config.id, session.id);
+        let queued = self.extensions.read(cx).stage_host_run(Work::StopRun {
+            session: session.id,
+            config: config.id.clone(),
+            request_id,
+        });
+        self.status = if queued {
+            // The provider is asked, not commanded by the host; the answer arrives in its own time.
+            format!("正在请求停止会话 {}", session.id)
+        } else {
+            "插件后台服务不可用，无法请求停止".into()
+        };
         cx.notify();
+    }
+
+    /// Run the selected configuration again, replacing the instance it already has.
+    ///
+    /// Rerunning is an explicit action: the running instance is stopped first so two programs never
+    /// overlap, and the new start follows the ordinary launch rules including save coordination.
+    pub(crate) fn rerun_selected(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(config) = self.run_controls.selected().cloned() else {
+            self.open_run_config_dialog(window, cx, None);
+            return;
+        };
+        if let Some(session) = self.run_controls.running_for(&config.id) {
+            // The stop is requested before the replacement starts, and its outcome is reported.
+            let request_id = self.run_controls.begin_stop(&config.id, session.id);
+            let queued = self.extensions.read(cx).stage_host_run(Work::StopRun {
+                session: session.id,
+                config: config.id.clone(),
+                request_id,
+            });
+            if !queued {
+                self.status = "插件后台服务不可用，无法重新运行".into();
+                cx.notify();
+                return;
+            }
+        }
+        self.start_selected_run(window, cx);
     }
 
     /// Open the B1 configuration dialog for a stored configuration or a new one.
