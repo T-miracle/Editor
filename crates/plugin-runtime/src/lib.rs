@@ -29,7 +29,11 @@ mod plugin_services;
 mod process;
 mod toolchains;
 pub use instance::Instance;
-pub use manager::{InstallationPreparation, Installed, Manager, PreparedInstallation};
+pub use manager::{
+    EXECUTION_CONTRACT, EXECUTION_START_TIMEOUT_MS, ExecutionFailure, ExecutionSnapshot,
+    ExecutionState, HostExecution, InstallationPreparation, Installed, Manager,
+    PreparedInstallation, RunRequest,
+};
 pub use package::Package;
 pub use plugin_protocol;
 

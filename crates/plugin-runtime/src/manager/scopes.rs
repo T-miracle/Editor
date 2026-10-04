@@ -278,6 +278,8 @@ impl Manager {
     pub fn shutdown(&mut self) {
         self.retire_workspace_images();
         self.retire_workspace_image_inputs();
+        // Host execution sessions end with the window that owns them; no start is left queued.
+        self.host_sessions.retire();
         let _ = self.checkpoint();
         for instance in self.live.values_mut() {
             instance.stop();

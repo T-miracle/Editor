@@ -11,6 +11,7 @@ mod artwork;
 mod bundles;
 mod data_updates;
 mod dependencies;
+mod host_services;
 mod image_input;
 mod images;
 mod language;
@@ -18,10 +19,15 @@ mod plugin_services;
 mod preparation;
 mod recovery;
 pub use data_updates::PreparedInstallation;
+pub use host_services::{
+    EXECUTION_CONTRACT, EXECUTION_START_TIMEOUT_MS, ExecutionFailure, ExecutionSnapshot,
+    ExecutionState, HostExecution, RunRequest,
+};
 pub use preparation::InstallationPreparation;
 pub(crate) mod scopes;
 mod settings;
 mod ui_events;
+use host_services::HostSessions;
 use scopes::ParkedWorkspace;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -79,6 +85,10 @@ pub struct Manager {
     /// Reservations also cover payloads retained by an accepted native writer.
     image_input_budget: std::sync::Arc<std::sync::atomic::AtomicUsize>,
     retired_image_sources: BTreeMap<String, api::DocumentVersion>,
+    /// Host-owned execution sessions started through the public service contract.
+    host_sessions: HostSessions,
+    /// Retired with this runtime so a queued start cannot outlive the window that requested it.
+    host_alive: std::sync::Arc<std::sync::atomic::AtomicBool>,
 }
 impl Manager {
     /// Share the process-local log owner with host UI and independent real-package verification.
@@ -128,6 +138,7 @@ impl Manager {
     ) -> anyhow::Result<Self> {
         std::fs::create_dir_all(&root)?;
         let installed = Self::read_registry(&root)?;
+        let host_alive = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true));
         let mut manager = Self {
             _runtime_lock: None,
             diagnostic_history: BTreeMap::new(),
@@ -152,6 +163,8 @@ impl Manager {
             image_budget: Default::default(),
             image_input_budget: Default::default(),
             retired_image_sources: BTreeMap::new(),
+            host_sessions: HostSessions::new(host_alive.clone()),
+            host_alive,
         };
         if manager.installed.values().any(|entry| {
             entry.manifest.component.is_some() && entry.compatibility_error().is_none()
@@ -603,6 +616,16 @@ impl Manager {
     pub fn poll(&mut self) {
         self.route_services();
         self.poll_parked();
+        // Host sessions end when their pinned provider incarnation is gone, without replaying work.
+        let present = self
+            .live
+            .values()
+            .chain(self.parked.values().flat_map(|scope| scope.live.values()))
+            .filter_map(Instance::instance_id)
+            .map(str::to_owned)
+            .collect::<BTreeSet<_>>();
+        self.host_sessions
+            .retire_absent_providers(&|instance| present.contains(instance));
         for (id, instance) in &mut self.live {
             if let Err(error) = instance.poll() {
                 instance.stop();
