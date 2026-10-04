@@ -286,10 +286,12 @@ impl EditorApp {
                 .placeholder(t!("editor.select_file").to_string())
         });
         let session_state = SessionState::load(workspace.root());
-        // Run configurations are host-local and read once; a broken file is reported, never replaced.
-        let run_controls = run::RunControls::load(
+        // Run configurations are host-local and read once, together with anything this project
+        // shares; a broken file is reported, never replaced.
+        let run_controls = run::RunControls::load_with_project(
             &workspace.root().display().to_string(),
             editor_core::default_root(),
+            Some(workspace.root().to_path_buf()),
         );
         let tree_state = cx.new(|cx| TreeState::new(cx));
         let tree_subscription = cx.subscribe(&tree_state, |this, _, event: &TreeEvent, cx| {

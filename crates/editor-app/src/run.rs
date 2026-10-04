@@ -178,6 +178,10 @@ pub struct RunControls {
     step_requests: BTreeMap<u64, (String, usize)>,
     /// Storage directory used for host-local configuration files.
     root: Option<std::path::PathBuf>,
+    /// Workspace directory holding this project's shared file, when the workspace has one.
+    project: Option<std::path::PathBuf>,
+    /// The project's shared entries as the file currently holds them.
+    shared: editor_core::SharedSet,
     /// Set when the stored file could not be read or written; shown instead of silently defaulting.
     pub error: Option<String>,
 }
@@ -205,6 +209,8 @@ impl Default for RunControls {
             polls: Vec::new(),
             step_requests: BTreeMap::new(),
             root: None,
+            project: None,
+            shared: editor_core::SharedSet::default(),
             error: None,
         }
     }
@@ -213,20 +219,58 @@ impl Default for RunControls {
 impl RunControls {
     /// Load the configurations stored for one workspace, reporting an unreadable file.
     pub fn load(workspace: &str, root: Option<std::path::PathBuf>) -> Self {
+        Self::load_with_project(workspace, root, None)
+    }
+
+    /// Load this machine's configurations and merge the project's shared ones into them.
+    ///
+    /// The project file is read through the same validation the form uses, so a hand-edited file that
+    /// breaks a rule is reported here rather than at launch time; a file that cannot be read leaves
+    /// the machine's own configurations in place instead of replacing them.
+    pub fn load_with_project(
+        workspace: &str,
+        root: Option<std::path::PathBuf>,
+        project: Option<std::path::PathBuf>,
+    ) -> Self {
         let mut controls = Self {
             root: root.clone(),
+            project: project.clone(),
             ..Self::default()
         };
         let Some(root) = root else {
             return controls;
         };
-        match editor_core::load(&root, workspace) {
-            Ok(configs) => controls.configs = configs,
+        let local = match editor_core::load(&root, workspace) {
+            Ok(configs) => configs,
             // An unreadable file is never replaced by defaults: the user's previous configurations
             // must survive until they decide what to do with the file.
+            Err(error) => {
+                controls.error = Some(error.to_string());
+                return controls;
+            }
+        };
+        controls.configs = local;
+        let Some(project) = project else {
+            return controls;
+        };
+        match editor_core::load_shared(&project) {
+            Ok(shared) => {
+                controls.shared = shared.clone();
+                controls.configs = editor_core::merge(&project, &controls.configs, &shared);
+            }
             Err(error) => controls.error = Some(error.to_string()),
         }
         controls
+    }
+
+    /// The shared file this workspace reads and writes, when it has one.
+    pub fn project_file(&self) -> Option<&std::path::Path> {
+        self.project.as_deref()
+    }
+
+    /// Whether this workspace shares any configuration with the project.
+    pub fn shares_with_project(&self) -> bool {
+        !self.shared.configurations.is_empty()
     }
 
     /// Whether one session is still active, so a preparation can tell a live step from one the
@@ -288,16 +332,21 @@ impl RunControls {
     pub fn upsert(&mut self, configuration: RunConfig, workspace: &str) -> Result<(), String> {
         // A rejected configuration is reported here as well as returned, so the visible error and the
         // refused edit cannot disagree.
-        if let Err(error) = self.configs.upsert(configuration) {
+        let configuration = configuration.clone();
+        if let Err(error) = self.configs.upsert(configuration.clone()) {
             let message = error.to_string();
             self.error = Some(message.clone());
             return Err(message);
         }
-        self.persist(workspace)
+        self.persist_configuration(&configuration, workspace)
     }
 
+    /// Remove one configuration from wherever it was stored.
     pub fn remove(&mut self, id: &str, workspace: &str) -> Result<(), String> {
         self.configs.remove(id);
+        // Removing a shared configuration removes it from the project's file as well: leaving it
+        // there would resurrect it on the next load, after the user asked for it to be gone.
+        self.shared.configurations.retain(|entry| entry.id != id);
         // A removed configuration's finished sessions stay visible; running ones are not hidden.
         self.persist(workspace)
     }
@@ -308,6 +357,16 @@ impl RunControls {
     }
 
     fn persist(&mut self, workspace: &str) -> Result<(), String> {
+        self.persist_local(workspace)?;
+        self.persist_shared()
+    }
+
+    /// Write this machine's own record of every configuration it knows about.
+    ///
+    /// The record is complete rather than partial, so this file is always readable on its own. What is
+    /// shared is the project's file: a shared entry's portable half is read from there on every load,
+    /// so this copy cannot drift the configuration that actually runs.
+    fn persist_local(&mut self, workspace: &str) -> Result<(), String> {
         let Some(root) = self.root.clone() else {
             return Ok(());
         };
@@ -322,6 +381,51 @@ impl RunControls {
                 Err(message)
             }
         }
+    }
+
+    /// Write the project's shared file, creating it only when something is actually shared.
+    fn persist_shared(&mut self) -> Result<(), String> {
+        let Some(project) = self.project.clone() else {
+            return Ok(());
+        };
+        let path = editor_core::project_path(&project);
+        // Nothing is written into a project until a user shares something with it, so a workspace
+        // that never shared has no `.editor` directory at all.
+        if self.shared.configurations.is_empty() && !path.exists() {
+            return Ok(());
+        }
+        // Once the project has a file it stays a current document: unsharing the last entry removes it
+        // rather than leaving an entry that would reappear on the next load.
+        match editor_core::save_shared(&project, &self.shared) {
+            Ok(()) => {
+                self.error = None;
+                Ok(())
+            }
+            Err(error) => {
+                let message = error.to_string();
+                self.error = Some(message.clone());
+                Err(message)
+            }
+        }
+    }
+
+    /// Write one configuration to the place its sharing choice selects.
+    ///
+    /// Sharing moves the portable half into the project's file and leaves this machine's own values
+    /// here; unsharing removes it from the project's file, so a configuration that is no longer shared
+    /// stops being read by anyone else's editor. Neither direction deletes what the user typed.
+    fn persist_configuration(&mut self, config: &RunConfig, workspace: &str) -> Result<(), String> {
+        if let Some(project) = self.project.clone() {
+            if config.local {
+                self.shared
+                    .configurations
+                    .retain(|entry| entry.id != config.id);
+            } else {
+                self.shared
+                    .upsert(editor_core::SharedConfig::from_config(config, &project));
+            }
+        }
+        self.persist(workspace)
     }
 
     /// All sessions this editor knows about, newest request last.

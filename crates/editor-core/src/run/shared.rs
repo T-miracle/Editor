@@ -10,8 +10,8 @@
 //! same identity. Both the file and the form are validated by the same rules, so editing the file by
 //! hand cannot mean something different from editing the form.
 use super::{
-    MAX_RUN_CONFIGS, MAX_RUN_STEPS, RUN_CONFIG_VERSION, RunConfig, RunConfigError, RunConfigSet,
-    RunConfigSource, RunStep, RunTarget,
+    MAX_RUN_CONFIGS, MAX_RUN_STEPS, RunConfig, RunConfigError, RunConfigSet, RunConfigSource,
+    RunStep, RunTarget,
 };
 use serde::{Deserialize, Serialize};
 use std::{

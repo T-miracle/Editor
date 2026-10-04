@@ -47,6 +47,203 @@ fn with_steps(id: &str, name: &str, build: &str, prelaunch: &str) -> RunConfig {
         .expect("the fixture is a valid configuration")
 }
 
+/// Controls backed by a real host-local directory and a real project directory.
+fn shared_controls() -> (RunControls, std::path::PathBuf, std::path::PathBuf) {
+    let project = tempfile::tempdir().unwrap().keep();
+    let local = tempfile::tempdir().unwrap().keep();
+    let controls = RunControls::load_with_project(
+        &project.display().to_string(),
+        Some(local.clone()),
+        Some(project.clone()),
+    );
+    (controls, project, local)
+}
+
+/// Sharing writes the portable half into the project and leaves this machine's own values here.
+#[test]
+fn sharing_writes_the_project_file_and_keeps_local_values_local() {
+    let (mut controls, project, local) = shared_controls();
+    let workspace = project.display().to_string();
+    let mut configuration = config("run-1", "共享");
+    configuration.directory = Some(project.display().to_string());
+    configuration.env = [("SECRET".to_owned(), "s3cret".to_owned())].into();
+    configuration.tool_paths = vec![project.join("tools").display().to_string()];
+    // Nothing is written into the project until the user chooses to share.
+    assert!(!editor_core::project_path(&project).exists());
+    configuration.local = true;
+    controls.upsert(configuration.clone(), &workspace).unwrap();
+    assert!(
+        !editor_core::project_path(&project).exists(),
+        "a local-only save does not touch the project"
+    );
+
+    // Choosing the project writes the shared file and keeps the personal values host-local.
+    configuration.local = false;
+    controls.upsert(configuration.clone(), &workspace).unwrap();
+    let path = editor_core::project_path(&project);
+    let bytes = std::fs::read_to_string(&path).unwrap();
+    assert!(bytes.contains("共享"));
+    assert!(
+        !bytes.contains("s3cret"),
+        "a value never enters the project file"
+    );
+    assert!(
+        !bytes.contains("SECRET"),
+        "a variable name never enters the project file"
+    );
+    assert!(
+        bytes.contains(editor_core::WORKSPACE_TOKEN),
+        "the project root is stored as a token"
+    );
+    // The machine's own file keeps what is local and no copy of the portable half.
+    let stored = editor_core::load(&local, &workspace).unwrap();
+    let entry = stored.find("run-1").expect("the local half is stored");
+    assert_eq!(entry.env.get("SECRET").map(String::as_str), Some("s3cret"));
+    assert_eq!(entry.tool_paths, configuration.tool_paths);
+    // The local record is complete, but the project's file is what decides what runs: drifting this
+    // copy cannot change the shared definition.
+    assert_eq!(entry.name, "共享");
+
+    // Reopening merges them back into one configuration with its environment intact.
+    let reopened =
+        RunControls::load_with_project(&workspace, Some(local.clone()), Some(project.clone()));
+    let merged = reopened
+        .configuration("run-1")
+        .expect("the entry is loaded");
+    assert_eq!(merged.name, "共享");
+    assert_eq!(merged.env.get("SECRET").map(String::as_str), Some("s3cret"));
+    assert_eq!(merged.source, editor_core::RunConfigSource::Project);
+    assert_eq!(merged.directory.as_deref(), Some(workspace.as_str()));
+    // A drifting local copy cannot change what the project's file says: the next load reads the
+    // project's definition for the portable half.
+    let mut drifted = editor_core::load(&local, &workspace).unwrap();
+    let mut drifted_entry = drifted.find("run-1").cloned().unwrap();
+    drifted_entry.name = "本机改名".into();
+    drifted.upsert(drifted_entry).unwrap();
+    editor_core::save(&local, &workspace, &drifted).unwrap();
+    let reloaded =
+        RunControls::load_with_project(&workspace, Some(local.clone()), Some(project.clone()));
+    assert_eq!(
+        reloaded
+            .configuration("run-1")
+            .map(|config| config.name.as_str()),
+        Some("共享"),
+        "the project's file owns the shared definition"
+    );
+    assert_eq!(
+        reloaded
+            .configuration("run-1")
+            .and_then(|config| config.env.get("SECRET"))
+            .map(String::as_str),
+        Some("s3cret"),
+        "this machine's own value still applies"
+    );
+    let _ = path;
+}
+
+/// Unsharing removes the entry from the project without deleting what the user typed.
+#[test]
+fn unsharing_leaves_the_project_file_without_the_entry() {
+    let (mut controls, project, local) = shared_controls();
+    let workspace = project.display().to_string();
+    let mut configuration = config("run-1", "共享");
+    configuration.local = false;
+    controls.upsert(configuration.clone(), &workspace).unwrap();
+    assert!(
+        std::fs::read_to_string(editor_core::project_path(&project))
+            .unwrap()
+            .contains("共享")
+    );
+
+    // Choosing local again removes the shared entry and keeps the configuration here.
+    configuration.local = true;
+    controls.upsert(configuration.clone(), &workspace).unwrap();
+    let shared = std::fs::read_to_string(editor_core::project_path(&project)).unwrap();
+    assert!(
+        !shared.contains("共享"),
+        "an unshared configuration is gone from the project: {shared} (stored={:?})",
+        controls.configuration("run-1").map(|entry| entry.local)
+    );
+    let reopened =
+        RunControls::load_with_project(&workspace, Some(local.clone()), Some(project.clone()));
+    let kept = reopened
+        .configuration("run-1")
+        .expect("the configuration is still this machine's own");
+    assert_eq!(kept.source, editor_core::RunConfigSource::Local);
+    assert!(
+        kept.local,
+        "the reopened entry remembers that it is this machine's own"
+    );
+}
+
+/// A hand-edited shared file is reported and does not replace this machine's configurations.
+#[test]
+fn a_broken_shared_file_is_reported_without_losing_local_work() {
+    let (mut controls, project, local) = shared_controls();
+    let workspace = project.display().to_string();
+    controls
+        .upsert(config("run-1", "本机"), &workspace)
+        .unwrap();
+    // A file the form would refuse: the program is empty.
+    let path = editor_core::project_path(&project);
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    std::fs::write(
+        &path,
+        r#"{"version":1,"configurations":[{"id":"shared","name":"broken",
+            "target":{"mode":"program","program":"","args":[]}}]}"#
+            .as_bytes(),
+    )
+    .unwrap();
+    let reopened =
+        RunControls::load_with_project(&workspace, Some(local.clone()), Some(project.clone()));
+    let error = reopened
+        .error
+        .as_deref()
+        .expect("a broken shared file is reported");
+    // The refusal names the rule the file broke, which is the reason a user can act on.
+    assert!(
+        error.contains("program") || error.contains("Shared"),
+        "{error}"
+    );
+    assert!(
+        reopened.configuration("run-1").is_some(),
+        "the machine's own configuration is not replaced"
+    );
+    assert!(reopened.configuration("shared").is_none());
+}
+
+/// A configuration removed while shared is gone from the project too.
+#[test]
+fn removing_a_shared_configuration_removes_it_from_the_project() {
+    let (mut controls, project, _local) = shared_controls();
+    let workspace = project.display().to_string();
+    let mut configuration = config("run-1", "共享");
+    configuration.local = false;
+    controls.upsert(configuration, &workspace).unwrap();
+    controls.remove("run-1", &workspace).unwrap();
+    let shared = std::fs::read_to_string(editor_core::project_path(&project)).unwrap();
+    assert!(!shared.contains("共享"), "{shared}");
+    assert!(controls.configuration("run-1").is_none());
+}
+
+/// A host-local-only workspace never creates a project file.
+#[test]
+fn a_workspace_that_shares_nothing_writes_no_project_file() {
+    let (mut controls, project, _local) = shared_controls();
+    let workspace = project.display().to_string();
+    controls
+        .upsert(config("run-1", "本机"), &workspace)
+        .unwrap();
+    controls
+        .upsert(config("run-2", "另一个"), &workspace)
+        .unwrap();
+    controls.remove("run-1", &workspace).unwrap();
+    assert!(
+        !editor_core::project_path(&project).exists(),
+        "nothing writes into a project until something is shared with it"
+    );
+}
+
 /// A plan runs the configuration's build first, then its steps, then the program.
 #[test]
 fn a_plan_orders_build_steps_program() {
