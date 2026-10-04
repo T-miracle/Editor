@@ -175,7 +175,18 @@
 1. **已完成**：宿主作为 broker 参与者发布版本化契约 **`session.host` 1.0.0**（按工作区限定，四个操作 `start`/`list`/`status`/`stop`，各带声明形状；存活标志即运行时标志，注册随运行时消失）。
 2. **已完成**：四个方法由宿主作答，**取自 `host_sessions`——顶栏渲染的同一张表**；`start` 走与顶栏启动**完全相同的 `start_execution`**，去重规则是同一段代码。没有提供者能服务的启动**在记录会话之前**被拒为能力缺失。
 3. **已完成**：broker 把寻址到该契约的调用**派发进宿主自己的会话面**（不再去运行实例里找）；身份精确比较，只有宿主能被路由进宿主自己的面。消费者要求由 `session_dependency` 声明，从宿主公布的同一份声明构造，因此请求宿主没有的操作会在**打开时**而不是调用时被拒。
-4. **未完成**：尚无**真实访客插件**经该契约端到端跑通。所需改动已定位，供下一步直接执行：`plugins/capability-example` 的访客目前只在 `Notification::Service(Invoke)` 里处理 `"interactive.execute"` 分支，需要一个**按名字调用任意依赖契约**的命令（打开 `session.host`、发起 `list`/`start`、把结果放进面板），并同步提升该包清单版本与公开 SDK 导出；随后在 `crates/plugin-runtime/tests/support/interactive_packages.rs` 增加一份声明 `session.host` 依赖的消费者夹具，让用例**从真实包进入**。**在它跑通之前第 3 条不算通过**，工单 08 保持打开。
+4. **已完成（本轮核实）**：当时缺的是「**真实访客插件经该契约端到端跑通**」，此后已实现并验证——`plugins/capability-example` 增加了**按名字打开任意依赖契约**的命令（`service-call-contract`，用它打开 `session.host`），`interactive_packages.rs` 增加了声明 `session.host` 依赖的消费者夹具，用例**从真实包进入**：
+
+```
+cargo test -p plugin-runtime --test interactive_execution -- --ignored --test-threads=1
+a_consumer_session_started_through_the_host_is_the_one_the_title_bar_sees ... ok
+consumer_executes_argv_in_a_visible_terminal_session ... ok
+execution_authority_and_hot_update_never_replay_delegated_programs ... ok
+execution_contract_switches_to_an_independent_provider ... ok
+test result: ok. 4 passed; 0 failed; 0 ignored
+```
+
+**其中 `a_consumer_session_started_through_the_host_is_the_one_the_title_bar_sees` 正是当时缺的那一条**：它用真实 SDK 包按名字打开 `session.host`，因此「消费者经宿主会话边界启动的会话，就是顶栏看到的那一个」**已有真实包证据**。**第 3 条据此算通过**，下文「七条验收项全部有证据」的结论成立。
 
 **一处未验证并如实记录**：**伪造宿主身份的拒绝**没有测试。要测它需要构造带伪造提供者的 `Reference`，而 `Reference::revision` **刻意是私有字段**——为让测试能伪造而放开它，恰好会移除被测的那层保护。因此我**删掉了测试而不是去掉不变量**，检查仍在代码里。
 
@@ -331,7 +342,7 @@ Run and debug startup smoke passed: no program was left behind by shutdown.
 | 检查视图从未被请求（`Frames`/`Variables` 只在测试里构造） | **实现缺失**，已修 |
 | 断点从未被发给任何提供者（`set_breakpoints` 无调用方） | **实现缺失**，已修 |
 | 离开时不停「准备中」的步骤（`stop_preparations` 仅测试调用） | **实现缺失**，已修 |
-| 同一程序的停止被反复重发（`stop_preparation_step` 无守卫） | **实现缺失**，已修 |
+| 同一程序的停止被反复重发（`stop_preparation_step` 无守卫） | **修复已撤回，问题仍在**——见下节「本批引入的一处回归」：给它加的守卫以配置为键，吞掉了准备序列自己那次关键的停止请求，八次收窄尝试都未能让 `stopping_during_preparation…` 与 `leaving_stops…` 同时通过，因此**改回无守卫**，重复重发的问题**依旧存在**，与 #50 已报告的状态一致 |
 
 **教训**：先前「全部是环境受限项」的判断，依据的是**已有测试是否通过**；而这四处**在测试全绿的情况下依然存在**——因为**它们所在的链路没有测试覆盖到那一跳**。**判断「有没有实现缺失」不能只看测试结果，还要看该功能是否真的可达**（编译器对不可达代码的警告正是这种信号）。这一点已写进本文档，避免下一个人重复同样的误判。
 
