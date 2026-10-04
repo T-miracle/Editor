@@ -33,10 +33,11 @@ mod process;
 mod toolchains;
 pub use instance::Instance;
 pub use manager::{
-    DEBUG_CONTRACT, DebugAbilities, DebugBreakpoint, DebugFrame, DebugSession, DebugState,
-    DebugVariable, EXECUTION_CONTRACT, EXECUTION_START_TIMEOUT_MS, ExecutionFailure,
+    DEBUG_CONTRACT, DebugAbilities, DebugAnswer, DebugBreakpoint, DebugFrame, DebugSession,
+    DebugState, DebugVariable, EXECUTION_CONTRACT, EXECUTION_START_TIMEOUT_MS, ExecutionFailure,
     ExecutionSnapshot, ExecutionState, HostExecution, InstallationPreparation, Installed, Manager,
-    PreparedInstallation, ProviderCandidate, RunEnvEntry, RunRequest,
+    PreparedInstallation, ProviderCandidate, RunEnvEntry, RunRequest, frames_from_value,
+    variables_from_value,
 };
 pub use package::Package;
 pub use plugin_protocol;

@@ -1453,9 +1453,47 @@ impl RunControls {
         }
     }
 
+    /// Turn a provider's own failure into the reason a request did not produce a view.
+    ///
+    /// The provider's message is kept, because it is the only account of what went wrong; the
+    /// editor's own vocabulary is used only for the cases its message makes unambiguous.
+    fn inspection_failure(message: String) -> editor_core::InspectionError {
+        if message.contains("没有正在检查的调试会话") {
+            return editor_core::InspectionError::NoSession;
+        }
+        if message.contains("目标未暂停") {
+            return editor_core::InspectionError::NotPaused;
+        }
+        if message.contains("该暂停已结束") {
+            return editor_core::InspectionError::StalePause;
+        }
+        editor_core::InspectionError::Provider(message)
+    }
+
     /// Drop a request whose answer arrived malformed, so it is not awaited forever.
     pub fn abandon_debug_request(&mut self, request: u64) {
         self.debug_requests.retain(|pending| pending.id != request);
+    }
+
+    /// Record that a request failed, releasing it so it is not awaited forever.
+    ///
+    /// A failure is not an empty answer: a provider that could not report frames has said nothing
+    /// about the target, and reporting that as "no frames" would describe a stack the host invented.
+    pub fn fail_debug_request(&mut self, request: u64) -> Result<(), editor_core::InspectionError> {
+        let Some(index) = self
+            .debug_requests
+            .iter()
+            .position(|pending| pending.id == request)
+        else {
+            return Err(editor_core::InspectionError::NoSession);
+        };
+        let pending = self.debug_requests.remove(index);
+        // The pause is still checked, so a failure about a pause that has ended is not reported
+        // against the one the user is looking at.
+        self.debug_sessions
+            .current()
+            .ok_or(editor_core::InspectionError::NoSession)
+            .and_then(|(_, session)| session.pause().accepts(pending.scope))
     }
 
     /// How many debug requests are still unanswered.

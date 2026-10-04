@@ -70,6 +70,7 @@ use plugin_runtime::{
 #[cfg(test)]
 use std::cell::RefCell;
 use std::collections::BTreeMap;
+pub(crate) use worker::DebugAnswerMessage;
 pub use worker::{HostRunSnapshot, RunStatus, Work as HostWork};
 use worker::{LifecycleAction, OperationProgress, Work, Worker};
 
@@ -1011,6 +1012,33 @@ impl ExtensionPanel {
     /// The provider listing the runtime last published, if one has been asked for.
     pub(crate) fn run_providers(&self) -> Option<Vec<plugin_runtime::ProviderCandidate>> {
         self.worker.state.lock().unwrap().run_providers.clone()
+    }
+
+    /// Queue a debug call for the runtime, keyed by the request the editor will join the answer to.
+    ///
+    /// The method and arguments are the debug contract's, so nothing here decides what a call means,
+    /// and a request that cannot be queued produces no answer at all rather than a pretended one.
+    pub(crate) fn stage_debug_call(
+        &self,
+        request: u64,
+        method: &str,
+        arguments: serde_json::Value,
+    ) -> bool {
+        self.worker
+            .tx
+            .send(crate::extensions::worker::Work::DebugCall {
+                request,
+                method: method.to_owned(),
+                arguments,
+            })
+            .is_ok()
+    }
+
+    /// Debug answers published since the last read, keyed by the request that asked.
+    pub(crate) fn take_debug_answers(
+        &self,
+    ) -> Vec<(u64, crate::extensions::worker::DebugAnswerMessage)> {
+        std::mem::take(&mut self.worker.state.lock().unwrap().debug_answers)
     }
 
     /// Whether a debug session could start, as the runtime last reported it.

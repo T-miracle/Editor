@@ -30,6 +30,11 @@ pub enum InspectionError {
     NoSuchFrame { frame: u32 },
     /// The answer describes a pause belonging to a different session.
     WrongSession,
+    /// The provider itself reported a failure, with its own account of what went wrong.
+    ///
+    /// Kept apart from the host's own reasons: a provider that could not report frames has said
+    /// nothing about the target, and showing that as an empty stack would describe one it invented.
+    Provider(String),
 }
 
 impl std::fmt::Display for InspectionError {
@@ -40,6 +45,7 @@ impl std::fmt::Display for InspectionError {
             Self::StalePause => write!(formatter, "该暂停已结束，迟到的结果不会覆盖当前视图"),
             Self::NoSuchFrame { frame } => write!(formatter, "该暂停没有第 {frame} 个栈帧"),
             Self::WrongSession => write!(formatter, "该结果属于另一个调试会话"),
+            Self::Provider(message) => write!(formatter, "调试提供者报告失败：{message}"),
         }
     }
 }

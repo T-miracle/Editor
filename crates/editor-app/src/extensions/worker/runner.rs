@@ -169,6 +169,38 @@ impl Worker {
                     })
                 } else {
                     match work {
+                        // A debug call is answered by the provider and published as what it said,
+                        // never as a state the host inferred.
+                        Some(Work::DebugCall {
+                            request,
+                            method,
+                            arguments,
+                        }) => {
+                            let answer = match method.as_str() {
+                                "frames" => manager
+                                    .debug_call(&method, arguments)
+                                    .and_then(|answer| {
+                                        plugin_runtime::frames_from_value(&answer.result)
+                                            .map_err(|error| anyhow::anyhow!("{}", error.message))
+                                    })
+                                    .map(DebugAnswerMessage::Frames),
+                                "variables" => manager
+                                    .debug_call(&method, arguments)
+                                    .and_then(|answer| {
+                                        plugin_runtime::variables_from_value(&answer.result)
+                                            .map_err(|error| anyhow::anyhow!("{}", error.message))
+                                    })
+                                    .map(DebugAnswerMessage::Variables),
+                                // A method this worker does not carry is refused rather than sent
+                                // without the reading its answer would need.
+                                other => Err(anyhow::anyhow!("{other} 不是本编辑器发出的调试调用")),
+                            }
+                            .unwrap_or_else(|error| {
+                                DebugAnswerMessage::Failed(format!("{error:#}"))
+                            });
+                            output.lock().unwrap().debug_answers.push((request, answer));
+                            Ok(())
+                        }
                         // Reading the provider list holds no session and changes no selection, so it
                         // is safe to ask whenever the page that shows providers is opened.
                         Some(Work::ListRunProviders) => {

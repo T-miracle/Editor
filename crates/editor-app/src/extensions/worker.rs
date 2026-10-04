@@ -56,6 +56,15 @@ pub enum Work {
     /// A plain read: it opens no session and changes no selection, so it is safe to ask whenever a
     /// page that shows providers becomes visible.
     ListRunProviders,
+    /// Call one method on the selected debug provider, on behalf of the editor.
+    ///
+    /// The request identity is the editor's own, so the answer is joined to what it answers; the
+    /// method and arguments are the debug contract's, so nothing here decides what a call means.
+    DebugCall {
+        request: u64,
+        method: String,
+        arguments: serde_json::Value,
+    },
     /// Record the execution provider a workspace's launches should use.
     ///
     /// Applying a choice never touches a session that is already running: a launch that has started
@@ -285,6 +294,11 @@ pub(super) struct Published {
     /// answers "can a debug session start here at all", which is what an entry point must know before
     /// it offers debugging.
     pub debug_availability: Option<Result<String, String>>,
+    /// Answers to debug calls this editor made, keyed by the request that asked.
+    ///
+    /// A failed call is reported as a failure rather than as an empty answer: a provider that could
+    /// not report frames has said nothing about the target.
+    pub debug_answers: Vec<(u64, DebugAnswerMessage)>,
     pub startup: BTreeMap<String, String>,
     pub views: BTreeMap<String, Arc<ui::Document>>,
     /// Each scene's full-color image operations are ready before the UI observes that scene.
@@ -297,6 +311,15 @@ pub(super) struct Published {
     pub instance_epochs: BTreeMap<String, u64>,
     pub processes: BTreeMap<String, usize>,
 }
+/// One answer to one debug call, or the reason there is none.
+#[derive(Clone, Debug)]
+pub enum DebugAnswerMessage {
+    Frames(Vec<plugin_runtime::DebugFrame>),
+    Variables(Vec<plugin_runtime::DebugVariable>),
+    /// The provider reported a failure, with its own account of what went wrong.
+    Failed(String),
+}
+
 /// One transient operation error retains its target; manager failures cannot become another plugin's log.
 #[derive(Clone, Debug)]
 pub(super) struct OperationStatus {

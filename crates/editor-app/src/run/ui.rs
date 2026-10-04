@@ -416,6 +416,51 @@ impl EditorApp {
         if let Some(availability) = self.extensions.read(cx).debug_availability() {
             self.run_controls.note_debug_availability(availability);
         }
+        // Debug answers arrive like every other host publication, and are applied to the pause they
+        // were asked about: a late one is reported rather than replacing a newer view.
+        for (request, answer) in self.extensions.read(cx).take_debug_answers() {
+            use crate::extensions::DebugAnswerMessage;
+            let outcome = match answer {
+                DebugAnswerMessage::Frames(frames) => self.run_controls.apply_debug_answer(
+                    request,
+                    Some(
+                        frames
+                            .into_iter()
+                            .map(|frame| editor_core::StackFrame {
+                                id: frame.id,
+                                name: frame.name,
+                                source: frame.source,
+                                line: frame.line,
+                            })
+                            .collect(),
+                    ),
+                    None,
+                ),
+                DebugAnswerMessage::Variables(variables) => self.run_controls.apply_debug_answer(
+                    request,
+                    None,
+                    Some(
+                        variables
+                            .into_iter()
+                            .map(|variable| editor_core::DebugVariable {
+                                name: variable.name,
+                                value: variable.value,
+                            })
+                            .collect(),
+                    ),
+                ),
+                // A failed call is released and reported; it is never shown as an empty stack.
+                DebugAnswerMessage::Failed(message) => self
+                    .run_controls
+                    .fail_debug_request(request)
+                    .map_err(|error| {
+                        editor_core::InspectionError::Provider(format!("{error}（{message}）"))
+                    }),
+            };
+            if let Err(reason) = outcome {
+                self.status = reason.to_string();
+            }
+        }
 
         self.run_controls.reconcile(&executions);
         // A step's session belongs to its preparation as soon as the runtime publishes it, so the
