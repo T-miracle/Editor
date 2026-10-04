@@ -205,6 +205,50 @@ pub struct RunControls {
     pub error: Option<String>,
 }
 
+/// What one plugin's removal, disablement or update would do to the sessions it is serving.
+///
+/// Collected before anything destructive happens, so the user decides with the affected sessions
+/// named rather than discovering afterwards that a program or a debug session was taken away. Both
+/// kinds are reported because a plugin may serve either, and a session belongs to the plugin that
+/// answered it rather than to the one that happens to be installed now.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct PluginSessionImpact {
+    /// Running programs, by configuration name, in the order the sessions were started.
+    pub running: Vec<String>,
+    /// Debug sessions, by configuration name.
+    pub debugging: Vec<String>,
+}
+
+impl PluginSessionImpact {
+    /// Whether this plugin is serving anything that would be taken away.
+    pub fn is_empty(&self) -> bool {
+        self.running.is_empty() && self.debugging.is_empty()
+    }
+
+    /// What to tell the user before the change, or `None` when nothing is affected.
+    pub fn summary(&self) -> Option<String> {
+        if self.is_empty() {
+            return None;
+        }
+        let mut parts = Vec::new();
+        if !self.running.is_empty() {
+            parts.push(format!(
+                "将停止 {} 个正在运行的程序（{}）",
+                self.running.len(),
+                self.running.join("、")
+            ));
+        }
+        if !self.debugging.is_empty() {
+            parts.push(format!(
+                "将结束 {} 个调试会话（{}）",
+                self.debugging.len(),
+                self.debugging.join("、")
+            ));
+        }
+        Some(parts.join("；"))
+    }
+}
+
 /// One debug request this editor is waiting on.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PendingDebugRequest {
@@ -1391,6 +1435,41 @@ impl RunControls {
             .current()
             .and_then(|(_, session)| session.pause().scope())
     }
+    /// The sessions one plugin is currently serving, which a lifecycle change would take away.
+    ///
+    /// Reported for confirmation only: this asks nothing, stops nothing and changes no selection. A
+    /// session is attributed to the plugin that answered it, so a plugin that has since been replaced
+    /// is still credited with what it is running.
+    pub fn plugin_session_impact(
+        &self,
+        plugin: &str,
+        debug_provider: Option<&str>,
+    ) -> PluginSessionImpact {
+        let names = |config: &str| {
+            self.configs
+                .find(config)
+                .map(|configuration| configuration.name.clone())
+                .unwrap_or_else(|| config.to_owned())
+        };
+        let running = self
+            .sessions
+            .iter()
+            .filter(|(_, session)| session.plugin == plugin && session.is_active())
+            .map(|(_, session)| names(&session.config))
+            .collect::<Vec<_>>();
+        // A debug session exists only while the plugin that would serve it is the selected debug
+        // provider, so that is the plugin whose removal ends it.
+        let debugging = match debug_provider {
+            Some(provider) if provider == plugin => self
+                .debug_sessions
+                .entries()
+                .map(|(config, _)| names(config))
+                .collect::<Vec<_>>(),
+            _ => Vec::new(),
+        };
+        PluginSessionImpact { running, debugging }
+    }
+
     /// Record that a debug request was sent, and hand back its identity.
     ///
     /// The scope is captured here rather than by the caller, so a request can only ever be joined to

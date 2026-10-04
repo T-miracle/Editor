@@ -476,8 +476,8 @@ mod tests {
         assert_eq!(target.provider, "rust-binary");
         assert_eq!(target.label, "my-app");
         assert_eq!(
-            target.program, "my-app",
-            "the program comes from the field the provider named"
+            target.program, "cargo",
+            "the program is the toolchain the provider declared, from the field it named"
         );
         assert_eq!(target.found_in, "Cargo.toml");
         assert_eq!(

@@ -1563,6 +1563,94 @@ fn a_step_answer_begins_the_next_pause() {
     );
 }
 
+/// A lifecycle change names the sessions it would take away, and a plugin serving nothing names none.
+#[test]
+fn a_plugin_lifecycle_change_names_the_sessions_it_affects() {
+    use editor_core::DebugSessionState;
+    let mut controls = controls();
+    let workspace = "C:/work".to_owned();
+    controls
+        .upsert(config("run-1", "第一个"), &workspace)
+        .unwrap();
+    controls
+        .upsert(config("run-2", "第二个"), &workspace)
+        .unwrap();
+
+    // Nothing is running or being debugged, so a change takes nothing away.
+    let idle = controls.plugin_session_impact("adapter", Some("adapter"));
+    assert!(idle.is_empty());
+    assert_eq!(idle.summary(), None);
+
+    // One session served by one plugin: it is named by the plugin that answered it, and by the
+    // configuration name a user knows it by.
+    let request_id = controls.begin("run-1");
+    controls.reconcile(&[snapshot(
+        9,
+        "run-1",
+        request_id,
+        plugin_runtime::ExecutionState::Running,
+    )]);
+    let plugin = controls
+        .sessions()
+        .into_iter()
+        .find(|session| session.id == 9)
+        .map(|session| session.plugin)
+        .expect("the session records the plugin that answered it");
+    let impact = controls.plugin_session_impact(&plugin, Some("adapter"));
+    assert_eq!(impact.running, vec!["第一个".to_owned()]);
+    let summary = impact.summary().expect("a change takes a session away");
+    assert!(summary.contains("第一个"), "{summary}");
+    assert!(
+        controls
+            .plugin_session_impact("nobody", Some("adapter"))
+            .running
+            .is_empty(),
+        "a plugin that is not serving this session is not credited with it"
+    );
+
+    // A finished session is not something a change takes away: it is already over.
+    controls.reconcile(&[snapshot(
+        9,
+        "run-1",
+        request_id,
+        plugin_runtime::ExecutionState::Failed,
+    )]);
+    assert!(
+        controls
+            .plugin_session_impact(&plugin, Some("adapter"))
+            .running
+            .is_empty(),
+        "a session that has already ended is not reported as running"
+    );
+
+    // The debug provider's own removal ends its sessions, and another plugin's does not.
+    controls.note_debug_state(
+        "run-2",
+        DebugSessionState::Paused {
+            source: "src/main.rs".into(),
+            line: 2,
+            reason: None,
+        },
+    );
+    let impact = controls.plugin_session_impact("adapter", Some("adapter"));
+    assert_eq!(impact.debugging, vec!["第二个".to_owned()]);
+    assert!(impact.running.is_empty());
+    let summary = impact.summary().expect("a debug session is affected");
+    assert!(
+        summary.contains("调试会话") && summary.contains("第二个"),
+        "{summary}"
+    );
+    assert!(
+        controls
+            .plugin_session_impact("terminal", Some("adapter"))
+            .debugging
+            .is_empty(),
+        "a plugin that is not the selected debug provider ends no debug session"
+    );
+    // With no debug provider selected, no plugin is credited with the debug sessions either.
+    assert!(controls.plugin_session_impact("adapter", None).is_empty());
+}
+
 fn snapshot(
     id: u64,
     config: &str,

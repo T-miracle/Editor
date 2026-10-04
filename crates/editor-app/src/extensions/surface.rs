@@ -350,10 +350,15 @@ impl ExtensionPanel {
     }
 
     /// Confirm the uninstall impact and keep both data-retention choices visible.
+    ///
+    /// `extra_impact` names the sessions the plugin is serving, which the caller computes because
+    /// only it can see the run controls. Naming them before the change is what lets a user cancel
+    /// instead of discovering afterwards that a program or a debug session was taken away.
     pub(super) fn open_remove_dialog(
         &mut self,
         id: String,
         remove: bool,
+        extra_impact: Option<String>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
@@ -365,11 +370,18 @@ impl ExtensionPanel {
             entry.manifest.component.is_some() || !entry.manifest.services.is_empty()
         });
         let count = self.processes.get(&id).copied().unwrap_or(0);
-        let impact = if executable {
+        let mut impact = if executable {
             format!("将关闭 {count} 个运行中的程序。")
         } else {
             "将撤销此插件提供的语法、主题或图标资源。".to_owned()
         };
+        // Sessions this plugin is serving are named before the change rather than discovered
+        // afterwards. Cancelling leaves both the sessions and the plugin exactly as they are, so this
+        // only informs the decision.
+        if let Some(summary) = extra_impact {
+            impact.push('\n');
+            impact.push_str(&summary);
+        }
         let owner = cx.entity().downgrade();
         window.open_dialog(cx, move |dialog, _, cx| {
             let preserve_owner = owner.clone();
