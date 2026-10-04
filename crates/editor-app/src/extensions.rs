@@ -1013,6 +1013,14 @@ impl ExtensionPanel {
         self.worker.state.lock().unwrap().run_providers.clone()
     }
 
+    /// Whether a debug session could start, as the runtime last reported it.
+    ///
+    /// `None` means the question has not been asked yet, which an entry point treats as "not
+    /// available" rather than "available".
+    pub(crate) fn debug_availability(&self) -> Option<Result<String, String>> {
+        self.worker.state.lock().unwrap().debug_availability.clone()
+    }
+
     /// Published host sessions, start refusals and stop answers reported by the worker.
     ///
     /// Reading drains the answer lists, so each outcome is explained exactly once.

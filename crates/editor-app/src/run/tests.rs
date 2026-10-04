@@ -902,6 +902,71 @@ fn a_configuration_can_ask_for_one_provider() {
     assert!(error.contains("nobody"), "{error}");
 }
 
+/// A debug click is refused with a reason, and never becomes an ordinary run.
+#[test]
+fn a_debug_launch_is_refused_rather_than_replaced_by_a_plain_run() {
+    let mut controls = controls();
+    let workspace = "C:/work".to_owned();
+    controls
+        .upsert(config("run-1", "第一个"), &workspace)
+        .unwrap();
+
+    // Before the host has answered, nothing is offered: a capability may not be assumed.
+    assert!(controls.debug_availability().is_err());
+    let reason = controls
+        .debug_blocker("run-1")
+        .expect("an unconfirmed capability blocks debugging");
+    assert!(reason.contains("尚未确认"), "{reason}");
+
+    // No provider installed is reported as such, not as a reason to run plainly.
+    controls.note_debug_availability(Err("没有安装提供调试能力的插件".into()));
+    let reason = controls
+        .debug_blocker("run-1")
+        .expect("a missing capability blocks debugging");
+    assert!(reason.contains("没有安装"), "{reason}");
+
+    // A provider that cannot serve is reported with its own reason.
+    controls.note_debug_availability(Err(
+        "已安装的调试提供者都不能用：adapter（与当前宿主不兼容）".into(),
+    ));
+    let reason = controls
+        .debug_blocker("run-1")
+        .expect("an unusable provider blocks");
+    assert!(reason.contains("adapter"), "{reason}");
+    // The configuration itself is still launchable: only debugging is unavailable.
+    assert!(controls.launch_blocker("run-1").is_none());
+
+    // A confirmed capability names the provider, and a usable configuration is debugged.
+    controls.note_debug_availability(Ok("adapter".into()));
+    assert_eq!(controls.debug_availability(), Ok("adapter"));
+    assert!(controls.debug_blocker("run-1").is_none());
+
+    // A configuration that cannot run cannot be debugged either, and the two controls agree because
+    // they ask the same question.
+    let mut broken = config("run-2", "坏的");
+    broken.target = RunTarget::Program {
+        program: String::new(),
+        args: Vec::new(),
+    };
+    // The store refuses to save this, which is right; the question here is what the controls do with
+    // one that is already stored and unusable, so it is placed directly.
+    let mut stored = editor_core::RunConfigSet::default();
+    stored.configurations.push(broken);
+    let mut broken_controls = self::controls();
+    broken_controls.replace_configs(stored);
+    broken_controls.note_debug_availability(Ok("adapter".into()));
+    assert!(
+        broken_controls.debug_blocker("run-2").is_some(),
+        "a configuration that cannot run cannot be debugged"
+    );
+    assert_eq!(
+        broken_controls.debug_blocker("run-2"),
+        broken_controls.launch_blocker("run-2"),
+        "the debug control and the launch path agree about a broken configuration"
+    );
+    // An unknown configuration is refused by the same path rather than starting something else.
+    assert!(broken_controls.debug_blocker("nobody").is_some());
+}
 fn snapshot(
     id: u64,
     config: &str,

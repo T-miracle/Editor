@@ -404,6 +404,11 @@ impl EditorApp {
     /// Read published host sessions into the run controls before the frame is painted.
     pub(crate) fn sync_run_controls(&mut self, cx: &mut Context<Self>) {
         let (executions, errors, stops, statuses) = self.extensions.read(cx).take_host_runs();
+        // The host's own answer about debugging is carried into the controls, so a control that
+        // offers a debug launch and the launch itself cannot disagree about whether there is one.
+        if let Some(availability) = self.extensions.read(cx).debug_availability() {
+            self.run_controls.note_debug_availability(availability);
+        }
 
         self.run_controls.reconcile(&executions);
         // A step's session belongs to its preparation as soon as the runtime publishes it, so the
@@ -851,19 +856,28 @@ impl EditorApp {
                         })),
                 ),
             )
-            .child(
-                div().debug_selector(|| "run-debug".into()).child(
-                    Button::new("run-debug-action")
-                        .label("调试")
-                        .small()
-                        .compact()
-                        .ghost()
-                        // Debugging arrives with its own ticket; it must never behave like Run.
-                        .disabled(true)
-                        .tooltip("尚无兼容的调试提供者")
-                        .on_click(|_, _, _| {}),
-                ),
-            )
+            .child(div().debug_selector(|| "run-debug".into()).child({
+                // The reason is shown whether or not the control is available, and a debug click
+                // that cannot proceed never falls back to running the program plainly.
+                let debug_unavailable = selected.as_ref().is_none_or(|configuration| {
+                    self.run_controls.debug_blocker(&configuration.id).is_some()
+                });
+                let debug_blocker = selected
+                    .as_ref()
+                    .and_then(|configuration| self.run_controls.debug_blocker(&configuration.id))
+                    .or_else(|| match self.run_controls.debug_availability() {
+                        Ok(provider) => Some(format!("通过 {provider} 调试所选配置")),
+                        Err(reason) => Some(reason.to_owned()),
+                    });
+                Button::new("run-debug-action")
+                    .label("调试")
+                    .small()
+                    .compact()
+                    .ghost()
+                    .disabled(!permitted || debug_unavailable)
+                    .tooltip(debug_blocker.unwrap_or_else(|| "调试所选配置".into()))
+                    .on_click(cx.listener(|this, _, _, cx| this.debug_selected(cx)))
+            }))
             .child(
                 div().debug_selector(|| "run-stop".into()).child(
                     Button::new("run-stop-action")
@@ -1023,6 +1037,34 @@ impl EditorApp {
             .extensions
             .read(cx)
             .stage_host_run(crate::extensions::HostWork::SetRunProvider { provider });
+    }
+
+    /// Refuse or begin a debug launch, never substituting an ordinary run.
+    ///
+    /// The refusal is the point of this method: a debug click that cannot be honoured has to say so,
+    /// because running the program without a debugger would look like success while handing the user
+    /// something they did not ask for.
+    pub(crate) fn debug_selected(&mut self, cx: &mut Context<Self>) {
+        let Some(configuration) = self.run_controls.selected().cloned() else {
+            self.status = "未选择运行配置".into();
+            cx.notify();
+            return;
+        };
+        match self.run_controls.debug_blocker(&configuration.id) {
+            Some(reason) => {
+                self.status = reason;
+                cx.notify();
+            }
+            // Starting a real debug session arrives with its own change; until then this reports what
+            // was confirmed instead of pretending to have started something.
+            None => {
+                self.status = format!(
+                    "已确认调试能力，调试启动随后续改动接入：{}",
+                    configuration.name
+                );
+                cx.notify();
+            }
+        }
     }
 
     /// Ask the installed plugins what this workspace offers, and report what changed.
@@ -1394,6 +1436,10 @@ impl EditorApp {
             let _ = handle.update(cx, |_, window, _| window.remove_window());
         }
         let key = self.workspace_key();
+        // Opening the dialog asks the host for its provider listings, so the debug page and the debug
+        // control speak about a capability that has been confirmed rather than one assumed from the
+        // absence of a refusal.
+        self.extensions.read(cx).ask_run_providers();
         let editing_id = editing.clone();
         let form = cx.new(|cx| {
             RunConfigForm::open(&self.run_controls, &key, editing_id.as_deref(), window, cx)

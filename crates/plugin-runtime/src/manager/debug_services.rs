@@ -3,9 +3,10 @@
 //! Debugging is a provider contract like execution, so the host never learns which debugger answers,
 //! how it is driven, or over what transport. Everything here is the host's requirement, written out
 //! method for method; nothing names a debugger, a target language or an adapter protocol.
+use super::Manager;
 use super::host_services::{
     DEBUG_BREAKPOINT_TIMEOUT_MS, DEBUG_CONTRACT, DEBUG_CONTROL_TIMEOUT_MS, DEBUG_START_TIMEOUT_MS,
-    dependency_from_declaration,
+    ProviderCandidate, dependency_from_declaration,
 };
 use plugin_protocol::{
     api::{ErrorCode, Failure},
@@ -243,6 +244,61 @@ pub(crate) fn debug_dependency() -> Result<Dependency, Failure> {
         ">=1, <2",
         "Debug contract is incomplete",
     )
+}
+
+/// The debug capability as a host question, answered without ever naming a debugger.
+impl Manager {
+    /// The installed plugins that declare a debug contract, with why one cannot serve.
+    ///
+    /// The same shape as the execution listing, and for the same reason: a caller shows what is
+    /// missing instead of choosing silently.
+    pub fn debug_providers(&self) -> Vec<ProviderCandidate> {
+        self.contract_providers(DEBUG_CONTRACT, debug_dependency().ok().as_ref())
+    }
+
+    /// Whether a debug session could start here, and if not, why not.
+    ///
+    /// An entry point asks this before offering debugging. A missing capability is reported as such
+    /// and never as a reason to run the program without a debugger.
+    pub fn debug_availability(&self) -> Result<String, String> {
+        let providers = self.debug_providers();
+        if providers.is_empty() {
+            return Err("没有安装提供调试能力的插件".into());
+        }
+        let usable = providers
+            .iter()
+            .filter(|candidate| candidate.unavailable.is_none())
+            .map(|candidate| candidate.plugin.as_str())
+            .collect::<Vec<_>>();
+        if usable.is_empty() {
+            return Err(format!(
+                "已安装的调试提供者都不能用：{}",
+                providers
+                    .iter()
+                    .filter_map(|candidate| candidate
+                        .unavailable
+                        .as_ref()
+                        .map(|reason| format!("{}（{reason}）", candidate.plugin)))
+                    .collect::<Vec<_>>()
+                    .join("；")
+            ));
+        }
+        // A chosen provider that is usable wins; a single usable one is not a choice to make, and
+        // several usable ones are a choice for the user rather than one the host guesses at.
+        if let Some(selected) = providers
+            .iter()
+            .find(|candidate| candidate.selected && candidate.unavailable.is_none())
+        {
+            return Ok(selected.plugin.clone());
+        }
+        match usable.as_slice() {
+            [only] => Ok((*only).to_owned()),
+            _ => Err(format!(
+                "有多个可用的调试提供者（{}），请先选择其中一个",
+                usable.join("、")
+            )),
+        }
+    }
 }
 
 /// The timeout one debug method is allowed, or `None` for a method the host does not call.

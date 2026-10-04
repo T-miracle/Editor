@@ -173,7 +173,10 @@ impl Worker {
                         // is safe to ask whenever the page that shows providers is opened.
                         Some(Work::ListRunProviders) => {
                             let providers = manager.execution_providers();
-                            output.lock().unwrap().run_providers = Some(providers);
+                            let debug = manager.debug_availability();
+                            let mut published = output.lock().unwrap();
+                            published.run_providers = Some(providers);
+                            published.debug_availability = Some(debug);
                             Ok(())
                         }
                         Some(Work::SetRunProvider { provider }) => {

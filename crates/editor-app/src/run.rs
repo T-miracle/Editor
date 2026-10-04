@@ -186,6 +186,8 @@ pub struct RunControls {
     discovered: Vec<plugin_schema::DiscoveredTarget>,
     /// Whether a discovery has run at all, so an empty list is not mistaken for "not yet asked".
     discovery_ran: bool,
+    /// Which provider a debug launch would use, or the reason there is none.
+    debug_availability: Option<Result<String, String>>,
     /// Set when the stored file could not be read or written; shown instead of silently defaulting.
     pub error: Option<String>,
 }
@@ -228,6 +230,7 @@ impl Default for RunControls {
             shared: editor_core::SharedSet::default(),
             discovered: Vec::new(),
             discovery_ran: false,
+            debug_availability: None,
             error: None,
         }
     }
@@ -1149,6 +1152,60 @@ impl RunControls {
     /// Drop every status query belonging to one configuration's preparation.
     fn poll_config(&mut self, config: &str) {
         self.polls.retain(|poll| poll.config != config);
+    }
+
+    /// Record which provider a debug launch would use, or why there is none.
+    ///
+    /// The run controls keep this answer rather than asking the host at click time, so a refused
+    /// debug click can explain itself without a round trip and cannot be mistaken for a plain run.
+    pub fn note_debug_availability(&mut self, availability: Result<String, String>) {
+        self.debug_availability = Some(availability);
+    }
+
+    /// Replace the stored configurations, for a check that needs a state the save path would refuse.
+    ///
+    /// Editing a configuration normally validates it first, which is right; this exists so a check
+    /// can still ask what the controls do with a configuration that is already stored and unusable.
+    #[cfg(test)]
+    pub fn replace_configs(&mut self, configs: editor_core::RunConfigSet) {
+        self.configs = configs;
+    }
+
+    /// Whether a debug launch could start right now, and the reason it cannot.
+    pub fn debug_availability(&self) -> Result<&str, &str> {
+        match &self.debug_availability {
+            Some(Ok(provider)) => Ok(provider.as_str()),
+            Some(Err(reason)) => Err(reason.as_str()),
+            // Before the host has answered, nothing is offered: an entry point may not assume a
+            // capability it has not been told about, and it may not fall back to running plainly.
+            None => Err("尚未确认调试能力；打开调试页后重试"),
+        }
+    }
+
+    /// Whether this configuration may be debugged, and the reason it may not.
+    ///
+    /// Both halves matter: a configuration that cannot run cannot be debugged either, and a debug
+    /// click that cannot proceed is refused with a reason rather than quietly behaving like Run.
+    pub fn debug_blocker(&self, id: &str) -> Option<String> {
+        if let Err(reason) = self.debug_availability() {
+            return Some(reason.to_owned());
+        }
+        self.launch_blocker(id)
+    }
+
+    /// Why this configuration cannot be launched, or `None` when it can.
+    ///
+    /// This is the same validation the launch path performs, so a control that offers a launch and a
+    /// launch that refuses cannot disagree about whether the configuration is usable. A
+    /// configuration that does not exist is not launchable either: that is a reason, not a pass.
+    pub fn launch_blocker(&self, id: &str) -> Option<String> {
+        let Some(configuration) = self.configs.find(id) else {
+            return Some("未选择运行配置".into());
+        };
+        configuration
+            .validate()
+            .err()
+            .map(|error| error.to_string())
     }
 
     /// Stage the choice of execution provider for one configuration.

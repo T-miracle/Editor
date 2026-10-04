@@ -279,6 +279,12 @@ pub(super) struct Published {
     /// Descriptive only: publishing this never changes a selection, and a launch is not delayed by
     /// waiting for it. `None` means no listing has been asked for since the last lifecycle change.
     pub run_providers: Option<Vec<plugin_runtime::ProviderCandidate>>,
+    /// Which debug provider a debug launch would use, or the reason there is none.
+    ///
+    /// Held apart from the execution listing because the two are asked different questions: this one
+    /// answers "can a debug session start here at all", which is what an entry point must know before
+    /// it offers debugging.
+    pub debug_availability: Option<Result<String, String>>,
     pub startup: BTreeMap<String, String>,
     pub views: BTreeMap<String, Arc<ui::Document>>,
     /// Each scene's full-color image operations are ready before the UI observes that scene.
