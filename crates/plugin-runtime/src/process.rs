@@ -160,6 +160,7 @@ impl Processes {
         cols: u16,
         rows: u16,
         inherit_cursor: bool,
+        env: std::collections::BTreeMap<String, String>,
         diagnostics: crate::faults::NativeReporter,
     ) -> anyhow::Result<u64> {
         anyhow::ensure!(self.items.len() < 32, "Plugin process quota exceeded");
@@ -183,6 +184,7 @@ impl Processes {
             &cwd,
             size,
             inherit_cursor,
+            &env,
             diagnostics,
         )?;
         #[cfg(not(windows))]
@@ -196,6 +198,10 @@ impl Processes {
             let mut command = CommandBuilder::new(program);
             command.args(args);
             command.cwd(cwd);
+            // Caller entries first, so the transport's own identity is applied last.
+            for (key, value) in &env {
+                command.env(key, value);
+            }
             command.env("TERM", "xterm-256color");
             command.env("COLORTERM", "truecolor");
             let child = pair.slave.spawn_command(command)?;

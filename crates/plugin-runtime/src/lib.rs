@@ -32,7 +32,7 @@ pub use instance::Instance;
 pub use manager::{
     EXECUTION_CONTRACT, EXECUTION_START_TIMEOUT_MS, ExecutionFailure, ExecutionSnapshot,
     ExecutionState, HostExecution, InstallationPreparation, Installed, Manager,
-    PreparedInstallation, RunRequest,
+    PreparedInstallation, RunEnvEntry, RunRequest,
 };
 pub use package::Package;
 pub use plugin_protocol;

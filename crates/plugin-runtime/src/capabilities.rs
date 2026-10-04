@@ -50,7 +50,8 @@ pub(crate) fn negotiate(manifest: &Manifest) -> anyhow::Result<api::Negotiated> 
         ("configuration".into(), Version::new(1, 0, 0)),
         ("ui.panels".into(), Version::new(1, 0, 0)),
         ("ui.clipboard".into(), Version::new(1, 0, 0)),
-        ("process".into(), Version::new(1, 3, 0)),
+        // 1.4 adds caller-supplied environment overrides for an explicitly requested program.
+        ("process".into(), Version::new(1, 4, 0)),
         ("language.lsp".into(), Version::new(1, 1, 0)),
         ("dependencies".into(), Version::new(1, 0, 0)),
     ]

@@ -269,6 +269,15 @@ impl RunControls {
             args: config.literal_arguments(),
             cwd: directory.clone(),
             name: Some(name.clone()),
+            // Environment entries belong to this launch; the host passes them through untouched.
+            env: config
+                .env
+                .iter()
+                .map(|(name, value)| plugin_runtime::RunEnvEntry {
+                    name: name.clone(),
+                    value: value.clone(),
+                })
+                .collect(),
         })
     }
 
@@ -504,6 +513,8 @@ pub struct RunConfigDraft {
     /// One argument per line, so a value containing spaces is never re-split.
     pub arguments: String,
     pub directory: String,
+    /// Environment entries as `名称=值`, one per line; values keep everything after the first `=`.
+    pub environment: String,
 }
 
 impl RunConfigDraft {
@@ -516,6 +527,7 @@ impl RunConfigDraft {
                 program: config.target.executable().to_owned(),
                 arguments: config.literal_arguments().join("\n"),
                 directory: config.directory.clone().unwrap_or_default(),
+                environment: render_environment(&config.env),
             },
             None => Self {
                 id,
@@ -523,13 +535,16 @@ impl RunConfigDraft {
                 program: String::new(),
                 arguments: String::new(),
                 directory: String::new(),
+                environment: String::new(),
             },
         }
     }
 
     /// Build the configuration this draft describes, keeping program mode's literal arguments.
-    pub fn to_config(&self) -> RunConfig {
-        RunConfig {
+    ///
+    /// A malformed environment line is reported here, so an unusable entry never reaches a launch.
+    pub fn to_config(&self) -> Result<RunConfig, String> {
+        Ok(RunConfig {
             id: self.id.clone(),
             name: self.name.trim().to_owned(),
             target: RunTarget::Program {
@@ -543,7 +558,39 @@ impl RunConfigDraft {
             },
             directory: (!self.directory.trim().is_empty())
                 .then(|| self.directory.trim().to_owned()),
+            env: parse_environment(&self.environment)?,
             local: true,
-        }
+        })
     }
+}
+
+/// Read one `NAME=VALUE` entry per line, refusing anything that is not an environment entry.
+///
+/// Values are kept verbatim after the first `=`, so a value containing `=` or spaces is never
+/// split, and an empty value is a real value rather than a missing one.
+pub fn parse_environment(text: &str) -> Result<BTreeMap<String, String>, String> {
+    let mut entries = BTreeMap::new();
+    for line in text.lines() {
+        let line = line.trim_end();
+        if line.trim().is_empty() {
+            continue;
+        }
+        let Some((name, value)) = line.split_once('=') else {
+            return Err(format!("环境变量需要写成 名称=值：{line}"));
+        };
+        let name = name.trim();
+        if name.is_empty() {
+            return Err(format!("环境变量缺少名称：{line}"));
+        }
+        entries.insert(name.to_owned(), value.to_owned());
+    }
+    Ok(entries)
+}
+
+/// Render stored entries back into the one-per-line form the field edits.
+pub fn render_environment(env: &BTreeMap<String, String>) -> String {
+    env.iter()
+        .map(|(name, value)| format!("{name}={value}"))
+        .collect::<Vec<_>>()
+        .join("\n")
 }

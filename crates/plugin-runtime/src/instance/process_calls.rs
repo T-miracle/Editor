@@ -39,15 +39,36 @@ impl State {
                     .get(&service)
                     .cloned()
                     .ok_or_else(|| Failure::new(ErrorCode::NotFound, "Undeclared service"))?;
-                self.start_process(command, Transport::Stdio, permission, None)
+                self.start_process(
+                    command,
+                    Transport::Stdio,
+                    permission,
+                    None,
+                    Default::default(),
+                )
             }
             Operation::Execute {
                 program,
                 args,
                 transport,
                 cwd,
+                env,
             } => {
                 self.process_authority("process.exec")?;
+                // Environment overrides are process 1.4; a package that did not negotiate it cannot
+                // silently reach a child with variables its declared version never promised.
+                if !env.is_empty()
+                    && !self
+                        .api
+                        .capabilities
+                        .get("process")
+                        .is_some_and(|version| *version >= semver::Version::new(1, 4, 0))
+                {
+                    return Err(Failure::new(
+                        ErrorCode::CapabilityUnavailable,
+                        "process 1.4 is required for environment overrides",
+                    ));
+                }
                 self.start_process(
                     Service {
                         program,
@@ -59,6 +80,7 @@ impl State {
                     transport,
                     "process.exec".into(),
                     cwd,
+                    env,
                 )
             }
             Operation::Write { handle, bytes } => {
@@ -119,6 +141,9 @@ impl State {
         transport: Transport,
         permission: String,
         cwd: Option<String>,
+        // Caller-supplied environment applied over what the child inherits; empty for a start that
+        // has no such request.
+        env: std::collections::BTreeMap<String, String>,
     ) -> Result<Value, Failure> {
         // Cursor inheritance is a negotiated transport option, independent of package identity.
         if matches!(
@@ -229,6 +254,7 @@ impl State {
                 columns,
                 rows,
                 inherit_cursor,
+                env.clone(),
                 self.native_diagnostics.reporter(
                     &self.plugin_services.principal.plugin,
                     &self.plugin_services.principal.scope,

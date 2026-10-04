@@ -100,6 +100,12 @@ pub enum Operation {
         /// Omission preserves the instance's workspace/private-data default; this grants no WASI access.
         #[serde(default)]
         cwd: Option<String>,
+        /// process 1.4: caller-supplied environment applied over the environment the child inherits.
+        ///
+        /// The host neither reads nor logs these values. They belong to the program a caller asked for,
+        /// so they cannot widen another instance's environment or reach a process it already started.
+        #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+        env: std::collections::BTreeMap<String, String>,
     },
     Write {
         handle: crate::api::ResourceHandle,

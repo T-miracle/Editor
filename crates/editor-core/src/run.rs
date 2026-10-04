@@ -21,6 +21,10 @@ const MAX_NAME_BYTES: usize = 256;
 const MAX_PROGRAM_BYTES: usize = 4096;
 const MAX_ARGUMENT_BYTES: usize = 4096;
 const MAX_DIRECTORY_BYTES: usize = 4096;
+/// Environment entries are bounded exactly like the execution contract they become.
+const MAX_ENV_ENTRIES: usize = 64;
+const MAX_ENV_NAME_BYTES: usize = 128;
+const MAX_ENV_VALUE_BYTES: usize = 4096;
 
 /// What a configuration launches: a literal program, or an explicitly chosen interpreter.
 ///
@@ -75,6 +79,11 @@ pub struct RunConfig {
     /// Absolute or project-relative directory; empty means the workspace root.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub directory: Option<String>,
+    /// Environment entries applied to this configuration's program, over what it would inherit.
+    ///
+    /// Values are host-local by default and never shared; the host neither interprets nor logs them.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub env: BTreeMap<String, String>,
     /// Local-only configurations never modify project files; sharing is an explicit user action.
     #[serde(default = "crate::run::default_local")]
     pub local: bool,
@@ -100,6 +109,12 @@ pub enum RunConfigError {
     TooManyArguments,
     DirectoryNotAbsolute,
     DirectoryTooLong,
+    /// More environment entries than one launch may carry.
+    TooManyEnvEntries,
+    /// An entry whose name or value could not be passed to a native program.
+    InvalidEnvEntry {
+        name: String,
+    },
     /// The identifier is empty or duplicated inside one set.
     InvalidIdentity {
         id: String,
@@ -124,6 +139,15 @@ impl std::fmt::Display for RunConfigError {
                 "Working directory must be absolute; relative paths are resolved from the workspace"
             ),
             Self::DirectoryTooLong => write!(formatter, "Working directory is too long"),
+            Self::TooManyEnvEntries => {
+                write!(
+                    formatter,
+                    "Too many environment entries for one configuration"
+                )
+            }
+            Self::InvalidEnvEntry { name } => {
+                write!(formatter, "Invalid environment entry: {name}")
+            }
             Self::InvalidIdentity { id } => write!(formatter, "Invalid run configuration id: {id}"),
         }
     }
@@ -170,6 +194,20 @@ impl RunConfig {
             // depend on whatever directory a provider happened to inherit.
             if !std::path::Path::new(directory).is_absolute() {
                 return Err(RunConfigError::DirectoryNotAbsolute);
+            }
+        }
+        if self.env.len() > MAX_ENV_ENTRIES {
+            return Err(RunConfigError::TooManyEnvEntries);
+        }
+        for (name, value) in &self.env {
+            // A name that could not be passed to a native child is refused while the form is open,
+            // rather than failing after a console window has already appeared.
+            let valid_name = !name.is_empty()
+                && name.len() <= MAX_ENV_NAME_BYTES
+                && !name.contains('=')
+                && !name.chars().any(char::is_control);
+            if !valid_name || value.len() > MAX_ENV_VALUE_BYTES || value.contains('\0') {
+                return Err(RunConfigError::InvalidEnvEntry { name: name.clone() });
             }
         }
         Ok(())

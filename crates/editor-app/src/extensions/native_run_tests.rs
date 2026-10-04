@@ -53,6 +53,7 @@ fn fixture<'a>(
             args,
         },
         directory: None,
+        env: Default::default(),
         local: true,
     })
     .unwrap();
@@ -488,6 +489,7 @@ fn two_configurations_run_concurrently_with_their_own_sessions(cx: &mut TestAppC
                     args: vec!["/c".into(), "ping -n 60 127.0.0.1 > NUL".into()],
                 },
                 directory: None,
+                env: Default::default(),
                 local: true,
             };
             app.run_controls.upsert(configuration, &key).unwrap();
@@ -502,7 +504,7 @@ fn two_configurations_run_concurrently_with_their_own_sessions(cx: &mut TestAppC
     for config in [first_id.clone(), second.clone()] {
         cx.update(|window, cx| {
             app.update(cx, |app, cx| {
-                app.start_run_configuration(&config, window, cx)
+                app.start_configuration_without_environment(&config, window, cx)
             });
         });
         for _ in 0..200 {
@@ -545,13 +547,146 @@ fn two_configurations_run_concurrently_with_their_own_sessions(cx: &mut TestAppC
     let before = launches.len();
     cx.update(|window, cx| {
         app.update(cx, |app, cx| {
-            app.start_run_configuration(&second, window, cx);
+            app.start_configuration_without_environment(&second, window, cx);
         });
     });
     let mut repeats = Vec::new();
     pump_recording(&mut manager, &app, cx, &mut repeats);
     assert_eq!(launches.len(), before, "a repeat launch starts nothing new");
     assert!(repeats.is_empty());
+    let stored = cx.update(|_, cx| {
+        editor_core::storage_path(&app.read(cx).workspace_key()).expect("host-local path")
+    });
+    let _ = std::fs::remove_file(stored);
+}
+
+/// Collect the glyphs a provider painted, which is how a program's output becomes observable.
+fn painted_text(manager: &plugin_runtime::Manager) -> String {
+    use plugin_runtime::plugin_protocol::{Paint, ui::Kind};
+    let mut text = String::new();
+    let Some(scene) = manager.live["terminal"].views.get("terminal") else {
+        return text;
+    };
+    scene.root.visit(&mut |node| {
+        if let Kind::Canvas(canvas) = &node.kind {
+            for paint in &canvas.paint {
+                if let Paint::Text { text: glyphs, .. } = paint {
+                    text.push_str(glyphs);
+                }
+            }
+        }
+    });
+    text
+}
+
+/// A configuration's environment reaches the program it starts, through the public contract.
+#[gpui::test]
+#[ignore = "build terminal and capability-example through the public SDK first"]
+fn a_configuration_environment_reaches_the_program_it_starts(cx: &mut TestAppContext) {
+    let root = tempfile::tempdir().unwrap();
+    let (mut manager, app, cx) = fixture(
+        cx,
+        root.path(),
+        "powershell.exe",
+        vec![
+            "-NoProfile".into(),
+            "-Command".into(),
+            "[Console]::Write($env:RDB_PROBE); Start-Sleep -Seconds 60".into(),
+        ],
+    );
+    let mut renderer = images::VectorRenderer::default();
+    // The entry names what the program should see; no shell quoting is involved.
+    let config = cx.update(|_, cx| app.read(cx).run_controls.selected().unwrap().id.clone());
+    let mut launches = Vec::new();
+    cx.update(|window, cx| {
+        app.update(cx, |app, cx| {
+            app.start_configuration(
+                &config,
+                vec![plugin_runtime::RunEnvEntry {
+                    name: "RDB_PROBE".into(),
+                    value: "ENV_REACHED_CHILD".into(),
+                }],
+                window,
+                cx,
+            );
+        });
+    });
+    let mut session = None;
+    for _ in 0..200 {
+        pump_recording(&mut manager, &app, cx, &mut launches);
+        manager.poll();
+        publish_with_launches(&mut manager, &mut renderer, &app, cx, &launches);
+        if let Some((id, _, _)) = launches.first()
+            && painted_text(&manager).contains("ENV_REACHED_CHILD")
+        {
+            session = Some(*id);
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    let session = session.expect("the program printed the environment value it was given");
+    // The request carried exactly that entry, and nothing else was added for it.
+    let request = manager.execution(session).unwrap().request().clone();
+    assert_eq!(request.env.len(), 1);
+    assert_eq!(request.env[0].name, "RDB_PROBE");
+    assert_eq!(request.env[0].value, "ENV_REACHED_CHILD");
+    assert!(painted_text(&manager).contains("ENV_REACHED_CHILD"));
+
+    // A launch without the entry does not inherit it from a previous session of the same program.
+    let second = cx.update(|_, cx| {
+        app.update(cx, |app, cx| {
+            let key = app.workspace_key();
+            let id = app.run_controls.generate_id(&key);
+            app.run_controls
+                .upsert(
+                    editor_core::RunConfig {
+                        id: id.clone(),
+                        name: "无环境变量".into(),
+                        target: editor_core::RunTarget::Program {
+                            program: "powershell.exe".into(),
+                            args: vec![
+                                "-NoProfile".into(),
+                                "-Command".into(),
+                                "[Console]::Write('NO_ENV_HERE'); Start-Sleep -Seconds 60".into(),
+                            ],
+                        },
+                        directory: None,
+                        env: Default::default(),
+                        local: true,
+                    },
+                    &key,
+                )
+                .unwrap();
+            cx.notify();
+            id
+        })
+    });
+    let before = launches.len();
+    cx.update(|window, cx| {
+        app.update(cx, |app, cx| {
+            app.start_configuration_without_environment(&second, window, cx);
+        });
+    });
+    for _ in 0..200 {
+        pump_recording(&mut manager, &app, cx, &mut launches);
+        manager.poll();
+        publish_with_launches(&mut manager, &mut renderer, &app, cx, &launches);
+        if launches.len() > before && painted_text(&manager).contains("NO_ENV_HERE") {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    assert!(launches.len() > before, "the second configuration started");
+    let second_session = launches.last().unwrap().0;
+    assert!(
+        manager
+            .execution(second_session)
+            .unwrap()
+            .request()
+            .env
+            .is_empty(),
+        "a configuration without entries starts a program without them"
+    );
     let stored = cx.update(|_, cx| {
         editor_core::storage_path(&app.read(cx).workspace_key()).expect("host-local path")
     });

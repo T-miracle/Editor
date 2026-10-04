@@ -25,6 +25,7 @@ fn store_configuration(workspace_key: &str, name: &str) -> std::path::PathBuf {
             args: vec!["-NoProfile".into()],
         },
         directory: None,
+        env: Default::default(),
         local: true,
     })
     .unwrap();
@@ -87,7 +88,7 @@ fn the_run_configuration_dialog_owns_a_b1_draft(cx: &mut TestAppContext) {
             )
         })
     });
-    // The four tabs the prototype promises exist; only the basic page is implemented by this slice.
+    // The four tabs the prototype promises exist; only the pages this slice implements are enabled.
     let tabs = cx.update(|window, cx| {
         let _ = window;
         form.read(cx)
@@ -102,10 +103,11 @@ fn the_run_configuration_dialog_owns_a_b1_draft(cx: &mut TestAppContext) {
             ("基本".to_owned(), true),
             ("构建".to_owned(), false),
             ("调试".to_owned(), false),
-            ("环境".to_owned(), false),
+            // The environment page edits the same stored configuration, so this slice implements it.
+            ("环境".to_owned(), true),
         ]
     );
-    // The basic page exposes one field per setting, with arguments kept one per line.
+    // One field per setting, with arguments and environment entries each kept one per line.
     let fields = cx.update(|window, cx| {
         let _ = window;
         form.read(cx)
@@ -114,7 +116,16 @@ fn the_run_configuration_dialog_owns_a_b1_draft(cx: &mut TestAppContext) {
             .map(str::to_owned)
             .collect::<Vec<_>>()
     });
-    assert_eq!(fields, vec!["名称", "程序", "参数（每行一个）", "工作目录"]);
+    assert_eq!(
+        fields,
+        vec![
+            "名称",
+            "程序",
+            "参数（每行一个）",
+            "工作目录",
+            "环境变量（每行 名称=值）"
+        ]
+    );
     // A new draft starts empty, on the basic page, with nothing to report yet.
     cx.update(|window, cx| {
         let _ = window;

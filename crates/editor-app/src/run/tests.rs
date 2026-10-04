@@ -16,6 +16,7 @@ fn config(id: &str, name: &str) -> RunConfig {
             args: vec!["-NoProfile".into(), "Write-Output ok".into()],
         },
         directory: None,
+        env: Default::default(),
         local: true,
     }
 }
@@ -276,8 +277,10 @@ fn drafts_preserve_argument_boundaries() {
         program: " C:/Program Files/tool.exe ".into(),
         arguments: "--flag\nC:/path with spaces/file.txt\n".into(),
         directory: " C:/work ".into(),
+        // Values keep everything after the first `=`, including spaces and further equals signs.
+        environment: "APP_MODE=dev\nTOKEN=a=b c\nEMPTY=\n".into(),
     };
-    let configuration = draft.to_config();
+    let configuration = draft.to_config().expect("the draft is usable");
     assert_eq!(configuration.name, "带空格");
     assert_eq!(
         configuration.target.executable(),
@@ -288,15 +291,50 @@ fn drafts_preserve_argument_boundaries() {
         vec!["--flag", "C:/path with spaces/file.txt"]
     );
     assert_eq!(configuration.directory.as_deref(), Some("C:/work"));
+    assert_eq!(
+        configuration.env.get("TOKEN").map(String::as_str),
+        Some("a=b c")
+    );
+    assert_eq!(configuration.env.get("EMPTY").map(String::as_str), Some(""));
     configuration
         .validate()
         .expect("draft produces a valid configuration");
 
+    // The entries round-trip through the edited text without being re-parsed as anything else.
+    let reopened = RunConfigDraft::from_config(Some(&configuration), "run-1".into());
+    assert_eq!(reopened.environment, "APP_MODE=dev\nEMPTY=\nTOKEN=a=b c");
+    assert_eq!(
+        reopened.to_config().unwrap().env,
+        configuration.env,
+        "reopening a configuration keeps its environment"
+    );
+
     // An empty directory means the workspace root rather than an empty path.
     let bare = RunConfigDraft::from_config(None, "run-2".into());
-    assert_eq!(bare.to_config().directory, None);
+    assert_eq!(bare.to_config().unwrap().directory, None);
     assert_eq!(
         RunConfigDraft::from_config(Some(&configuration), "run-1".into()).arguments,
         "--flag\nC:/path with spaces/file.txt"
     );
+}
+
+/// A malformed environment line is refused where the user can correct it.
+#[test]
+fn a_malformed_environment_line_is_refused() {
+    let base = RunConfigDraft {
+        id: "run-1".into(),
+        name: "环境".into(),
+        program: "tool.exe".into(),
+        arguments: String::new(),
+        directory: String::new(),
+        environment: "没有等号".into(),
+    };
+    let error = base.to_config().expect_err("a line without '=' is refused");
+    assert!(error.contains("名称=值"), "{error}");
+    // A name that a native program could not accept is refused too, and by the store as well.
+    let invalid = RunConfigDraft {
+        environment: "BAD-NAME\n".into(),
+        ..base
+    };
+    assert!(invalid.to_config().is_err());
 }

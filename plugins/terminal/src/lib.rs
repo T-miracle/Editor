@@ -395,6 +395,9 @@ impl Terminal {
             program: tab.profile.program.clone(),
             args: shell::arguments(&tab.profile),
             cwd: (!tab.cwd.is_empty()).then(|| tab.cwd.clone()),
+            // The provider's own shell inherits the environment it has always had; no caller's
+            // entries reach it, and its profile stays the provider's private choice.
+            env: Default::default(),
             transport: process::Transport::Pty {
                 columns,
                 rows,

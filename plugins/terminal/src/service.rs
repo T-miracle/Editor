@@ -9,6 +9,17 @@ struct Execution {
     args: Vec<String>,
     cwd: Option<String>,
     name: Option<String>,
+    /// Execution contract 1.2 entries applied over the environment the child inherits.
+    #[serde(default)]
+    env: Vec<EnvEntry>,
+}
+
+/// One caller-supplied environment entry, so a variable name is never parsed from a joined string.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct EnvEntry {
+    name: String,
+    value: String,
 }
 
 /// Execution contract 1.1 names the session whose program should stop.
@@ -125,6 +136,13 @@ impl Terminal {
                 program: request.program.clone(),
                 args: request.args.clone(),
                 cwd: request.cwd.clone(),
+                // The caller's environment belongs to the program it asked for; the provider forwards
+                // it unchanged and never reads or logs the values.
+                env: request
+                    .env
+                    .iter()
+                    .map(|entry| (entry.name.clone(), entry.value.clone()))
+                    .collect(),
                 transport: process::Transport::Pty {
                     columns: extent.columns as u16,
                     rows: extent.rows as u16,

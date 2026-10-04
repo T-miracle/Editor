@@ -62,13 +62,14 @@ impl RunConfigTab {
             Self::Basic => "名称、程序、参数与工作目录",
             Self::Build => "构建操作与启动前步骤随后续工单提供",
             Self::Debug => "调试提供者与断点设置随后续工单提供",
-            Self::Environment => "环境变量与本机覆盖随后续工单提供",
+            Self::Environment => "本配置的环境变量，每行一个 名称=值",
         }
     }
 
     /// Tabs whose settings are not implemented yet are shown disabled instead of pretending.
     fn available(self) -> bool {
-        matches!(self, Self::Basic)
+        // The environment page edits the same stored configuration, so it is part of this slice.
+        matches!(self, Self::Basic | Self::Environment)
     }
 }
 
@@ -79,10 +80,17 @@ enum RunField {
     Program,
     Arguments,
     Directory,
+    Environment,
 }
 
 impl RunField {
-    const ALL: [Self; 4] = [Self::Name, Self::Program, Self::Arguments, Self::Directory];
+    const ALL: [Self; 5] = [
+        Self::Name,
+        Self::Program,
+        Self::Arguments,
+        Self::Directory,
+        Self::Environment,
+    ];
 
     fn label(self) -> &'static str {
         match self {
@@ -91,6 +99,7 @@ impl RunField {
             // One argument per line keeps a value containing spaces literal.
             Self::Arguments => "参数（每行一个）",
             Self::Directory => "工作目录",
+            Self::Environment => "环境变量（每行 名称=值）",
         }
     }
 
@@ -100,6 +109,7 @@ impl RunField {
             Self::Program => "run-config-program",
             Self::Arguments => "run-config-arguments",
             Self::Directory => "run-config-directory",
+            Self::Environment => "run-config-environment",
         }
     }
 
@@ -109,6 +119,7 @@ impl RunField {
             Self::Program => draft.program.clone(),
             Self::Arguments => draft.arguments.clone(),
             Self::Directory => draft.directory.clone(),
+            Self::Environment => draft.environment.clone(),
         }
     }
 
@@ -118,6 +129,7 @@ impl RunField {
             Self::Program => draft.program = value,
             Self::Arguments => draft.arguments = value,
             Self::Directory => draft.directory = value,
+            Self::Environment => draft.environment = value,
         }
     }
 }
@@ -649,30 +661,36 @@ impl EditorApp {
             self.open_run_config_dialog(window, cx, None);
             return;
         };
-        self.start_run_configuration(&config.id, window, cx);
+        self.start_configuration_without_environment(&config.id, window, cx);
     }
 
-    /// Start one named configuration, or locate the session that configuration already has.
+    /// Start one stored configuration, with no environment entries.
     ///
-    /// Different configurations start independently, so two programs run side by side; the same
-    /// configuration resolves to its existing session instead of starting a second instance.
-    pub(crate) fn start_run_configuration(
+    /// Kept beside the environment-aware entry point so a caller that has no environment cannot
+    /// accidentally supply one, and so the launch path stays one function.
+    pub(crate) fn start_configuration_without_environment(
         &mut self,
         config_id: &str,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        self.start_configuration(config_id, Vec::new(), window, cx);
+    }
+
+    /// Start one stored configuration with explicit environment entries.
+    pub(crate) fn start_configuration(
+        &mut self,
+        config_id: &str,
+        env: Vec<plugin_runtime::RunEnvEntry>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let Some(config) = self
             .run_controls
-            .configuration(config_id)
+            .configurations()
+            .iter()
+            .find(|config| config.id == config_id)
             .cloned()
-            .or_else(|| {
-                self.run_controls
-                    .configurations()
-                    .iter()
-                    .find(|config| config.id == config_id)
-                    .cloned()
-            })
         else {
             self.status = "运行配置不存在，请重新选择".into();
             cx.notify();
@@ -699,9 +717,12 @@ impl EditorApp {
                     return;
                 }
                 let plan = self.run_controls.plan_launch(&config.id, &root);
-                let Some(request) = RunControls::request_for(&plan) else {
+                let Some(mut request) = RunControls::request_for(&plan) else {
                     return;
                 };
+                // Explicit entries belong to this launch; the stored configuration's own entries are
+                // already part of the request the plan produced.
+                request.env = env;
                 let request_id = self.run_controls.begin(&config.id);
                 let queued = self.extensions.read(cx).stage_host_run(Work::StartRun {
                     request,
@@ -857,10 +878,23 @@ impl EditorApp {
             return;
         };
         // The draft is read from the fields themselves, so the saved value is what is on screen.
+        // A malformed environment line is reported while the form is open, never at launch time.
         let configuration = form.update(cx, |form, cx| {
             form.collect(cx);
             form.draft.to_config()
         });
+        let configuration = match configuration {
+            Ok(configuration) => configuration,
+            Err(message) => {
+                form.update(cx, |form, cx| {
+                    form.error = Some(message.clone());
+                    cx.notify();
+                });
+                self.status = message;
+                cx.notify();
+                return;
+            }
+        };
         let key = self.workspace_key();
         match self.run_controls.upsert(configuration.clone(), &key) {
             Ok(()) => {
@@ -1030,10 +1064,22 @@ fn render_run_config_form(
         })
         .collect::<Vec<_>>();
 
+    // The environment page edits its own field; the basic page shows the launch settings.
+    let page_fields: &[RunField] = if tab == RunConfigTab::Environment {
+        &[RunField::Environment]
+    } else {
+        &[
+            RunField::Name,
+            RunField::Program,
+            RunField::Arguments,
+            RunField::Directory,
+        ]
+    };
     let fields = RunField::ALL
         .into_iter()
         .zip(texts)
         .zip(inputs)
+        .filter(|((field, _), _)| page_fields.contains(field))
         .map(|((field, text), input)| {
             h_flex()
                 .gap_2()

@@ -45,7 +45,26 @@ pub struct RunRequest {
     pub cwd: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
+    /// Entries applied over the environment the program would otherwise inherit.
+    ///
+    /// These belong to the program the user asked for: the host neither reads nor logs the values,
+    /// and a request without entries inherits exactly what it did before this field existed.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub env: Vec<RunEnvEntry>,
 }
+
+/// One environment entry of an execution request, as the service contract expresses it.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RunEnvEntry {
+    pub name: String,
+    pub value: String,
+}
+
+/// Longest accepted environment variable name, matching the service schema's bound.
+const MAX_ENV_NAME_BYTES: usize = 128;
+/// Most environment entries one launch may carry.
+const MAX_ENV_ENTRIES: usize = 64;
 
 impl RunRequest {
     /// Reject oversized or malformed requests before they can occupy a provider's queue.
@@ -82,14 +101,41 @@ impl RunRequest {
                 "Execution label must be a bounded printable name",
             ));
         }
+        if self.env.len() > MAX_ENV_ENTRIES {
+            return Err(Failure::new(
+                ErrorCode::InvalidRequest,
+                "Execution environment carries too many entries",
+            ));
+        }
+        for entry in &self.env {
+            // A name that could not be passed to a native child is refused here, where the user can
+            // see why, rather than failing after a panel has already opened.
+            let valid_name = !entry.name.is_empty()
+                && entry.name.len() <= MAX_ENV_NAME_BYTES
+                && !entry.name.contains('=')
+                && !entry.name.chars().any(char::is_control);
+            if !valid_name || !bounded(&entry.value, 4096) {
+                return Err(Failure::new(
+                    ErrorCode::InvalidRequest,
+                    format!("Invalid execution environment entry: {}", entry.name),
+                ));
+            }
+        }
         Ok(())
     }
     /// One stable key per literal command so repeated clicks cannot silently start a second program.
+    ///
+    /// A launch with different environment entries is a different program context, so it is not
+    /// collapsed onto the session of a launch that never had them.
     pub fn dedup_key(&self, cwd: Option<&str>) -> String {
         let mut hasher = DefaultHasher::new();
         self.program.hash(&mut hasher);
         self.args.hash(&mut hasher);
         self.cwd.as_deref().or(cwd).hash(&mut hasher);
+        for entry in &self.env {
+            entry.name.hash(&mut hasher);
+            entry.value.hash(&mut hasher);
+        }
         format!("{:016x}", hasher.finish())
     }
 }
@@ -366,14 +412,17 @@ fn provider_session_of(value: &Value) -> Option<String> {
 /// incompatible instead of appearing available and then failing to end a program.
 pub(crate) fn execution_dependency() -> Result<Dependency, Failure> {
     let declaration: Value = serde_json::from_str(
-        r#"{"version":"1.1.0","methods":{
+        r#"{"version":"1.2.0","methods":{
             "execute":{
                 "parameters":{"type":"record","fields":{
                     "program":{"type":"string","max_bytes":4096},
                     "args":{"type":"array","max_items":128,"items":{"type":"string","max_bytes":4096}},
                     "cwd":{"type":"string","max_bytes":4096},
-                    "name":{"type":"string","max_bytes":256}},
-                    "optional":["cwd","name"]},
+                    "name":{"type":"string","max_bytes":256},
+                    "env":{"type":"array","max_items":64,"items":{"type":"record","fields":{
+                        "name":{"type":"string","max_bytes":128},
+                        "value":{"type":"string","max_bytes":4096}}}}},
+                    "optional":["cwd","name","env"]},
                 "result":{"type":"record","fields":{
                     "session":{"type":"string","max_bytes":128},
                     "state":{"type":"string","max_bytes":32}}},
@@ -398,7 +447,7 @@ pub(crate) fn execution_dependency() -> Result<Dependency, Failure> {
     }
     Ok(Dependency {
         // A newer provider may add methods, but these two must keep their exact shape.
-        version: ">=1.1, <2"
+        version: ">=1.2, <2"
             .parse()
             .expect("execution version requirement is valid"),
         optional: false,
