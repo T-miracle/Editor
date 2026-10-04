@@ -459,6 +459,136 @@ fn the_environment_a_launch_asks_for_reaches_the_program() {
     manager.stop_execution(session.id()).unwrap();
 }
 
+/// Arguments that are not ASCII reach the program unchanged, as separate arguments.
+///
+/// Ticket 04 asks for the argument boundary to be verified with spaces, quotes, Chinese and shell
+/// metacharacters. The instrument matters: a program that re-parses its own command line measures its
+/// own parser, not the transport. PowerShell does exactly that — when the host's argument vector
+/// reaches `powershell.exe -Command`, PowerShell flattens the rest into the command text and fails on
+/// a value containing `&`, which I confirmed with a separate probe before writing this. So the check
+/// uses a program that cannot re-parse: it writes `std::env::args` as it received them, one per line.
+#[test]
+#[ignore = "build terminal and capability-example through the public SDK first"]
+fn arguments_with_spaces_quotes_and_chinese_reach_the_program_unchanged() {
+    let root = tempfile::tempdir().unwrap();
+    // Compiled here from a source string, so the check carries its own instrument rather than
+    // depending on something built by hand outside the repository.
+    let Some(echo) = build_argument_echo(root.path()) else {
+        eprintln!("skipping: no Rust compiler is available to build the argument-echo probe");
+        return;
+    };
+    let mut manager = manager(root.path());
+    let package = terminal();
+    let grants = package.manifest.permissions.clone();
+    manager.install(&package, grants).unwrap();
+    let out = root.path().join("arguments.txt");
+    let request = RunRequest {
+        program: echo.display().to_string(),
+        args: vec![
+            out.display().to_string(),
+            "a b".into(),
+            "带 空格 的 参数".into(),
+            "引号\"在中间".into(),
+            "a&b|c>d".into(),
+            "".into(),
+        ],
+        cwd: Some(root.path().display().to_string()),
+        name: None,
+        env: Vec::new(),
+    };
+    let session = manager.start_execution(request).unwrap();
+    let state = wait_until(
+        &mut manager,
+        |manager| manager.execution(session.id()).unwrap().snapshot().state,
+        |state| *state != ExecutionState::Starting,
+    );
+    assert_eq!(state, ExecutionState::Running);
+    // The program's own file is the evidence: what it received, not what was sent. One value per
+    // line, so an argument that was split or rejoined shows up as the wrong number of lines.
+    let written = wait_until(
+        &mut manager,
+        |_| std::fs::read_to_string(&out).ok(),
+        |written| written.is_some(),
+    );
+    let written = written.expect("the program wrote what it received");
+    let received = written.lines().collect::<Vec<_>>();
+    assert_eq!(
+        received,
+        vec!["a b", "带 空格 的 参数", "引号\"在中间", "a&b|c>d", ""],
+        "every argument arrived as its own value, unchanged"
+    );
+    manager.stop_execution(session.id()).unwrap();
+}
+/// The source of a program whose argument handling is not itself a parser under test.
+const ARGUMENT_ECHO_SOURCE: &str = r#"
+fn main() {
+    let mut arguments = std::env::args().skip(1);
+    let out = arguments.next().expect("output path");
+    let rest: Vec<String> = arguments.collect();
+    std::fs::write(&out, rest.join("\n") + "\n").expect("write");
+    std::thread::sleep(std::time::Duration::from_secs(30));
+}
+"#;
+
+/// Compile the argument-echo probe into `directory`, or `None` when no compiler is available.
+fn build_argument_echo(directory: &std::path::Path) -> Option<std::path::PathBuf> {
+    let source = directory.join("argument_echo.rs");
+    std::fs::write(&source, ARGUMENT_ECHO_SOURCE).ok()?;
+    let binary = directory.join("argument_echo.exe");
+    let status = std::process::Command::new("rustc")
+        .args(["-O", "--edition", "2021", "-o"])
+        .arg(&binary)
+        .arg(&source)
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .ok()?;
+    (status.success() && binary.is_file()).then_some(binary)
+}
+
+/// A Chinese environment value reaches the program, so the path is not only correct for ASCII.
+#[test]
+#[ignore = "build terminal and capability-example through the public SDK first"]
+fn a_chinese_environment_value_reaches_the_program() {
+    let root = tempfile::tempdir().unwrap();
+    let mut manager = manager(root.path());
+    let package = terminal();
+    let grants = package.manifest.permissions.clone();
+    manager.install(&package, grants).unwrap();
+    let request = RunRequest {
+        program: "powershell.exe".into(),
+        args: vec![
+            "-NoProfile".into(),
+            "-Command".into(),
+            "[Console]::Write('TEXT=' + $env:ME_RUN_TEXT); Start-Sleep -Seconds 60".into(),
+        ],
+        cwd: Some(root.path().display().to_string()),
+        name: None,
+        env: vec![plugin_runtime::RunEnvEntry {
+            name: "ME_RUN_TEXT".into(),
+            value: "中文环境值（含括号）".into(),
+        }],
+    };
+    let session = manager.start_execution(request).unwrap();
+    let state = wait_until(
+        &mut manager,
+        |manager| manager.execution(session.id()).unwrap().snapshot().state,
+        |state| *state != ExecutionState::Starting,
+    );
+    assert_eq!(state, ExecutionState::Running);
+    assert!(reveal_panel(&mut manager) >= 1);
+    let shown = wait_until(
+        &mut manager,
+        |manager| panel_text(manager, "terminal"),
+        |shown| shown.contains("中文环境值"),
+    );
+    assert!(
+        shown.contains("中文环境值（含括号）"),
+        "the Chinese environment value reached the program unchanged: {shown}"
+    );
+    manager.stop_execution(session.id()).unwrap();
+}
+
 /// Closing the window leaves no program running.
 ///
 /// This is the end-to-end property, checked against the machine's own process table rather than the
