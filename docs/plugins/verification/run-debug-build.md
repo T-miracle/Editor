@@ -381,6 +381,18 @@ Run and debug startup smoke passed: no program was left behind by shutdown.
 
 **这不等于让视图端到端显示真实数据**：那需要一个调试提供者与真实目标，属本工单已记录的环境受限项。
 
+### 第二处同形缺陷：断点从未被发给任何提供者（本轮修复）
+
+读死代码警告时发现**与检查视图同形**的问题：`breakpoints_by_source` 与 `DebugBreakpointRequest::to_value` 存在、契约声明了 `set_breakpoints`、能力从它推导、答案读取函数也写好了——**但没有任何代码发出这个请求**。
+
+后果：**断点可以被保存、编辑、经表单往返，却从未被告诉任何提供者**。工单 09 的「断点属于运行程序的配置」因此**只接了一半**——**配置有断点，调试器没有**。
+
+已实现 `Manager::debug_set_breakpoints`：**每次发送全集，按源分组**（提供者就是这样被请求的）。发全集而非差分，因为**答案描述的是提供者能绑定哪些位置——一个被移除的断点必须不在请求里，那个答案对它才有意义**。
+
+**两条警告随之消失**，这正是「这些函数在等这个调用者，而不是冗余」的证据。用例断言的是**宿主构造的参数**而不是提供者的回复，因为那才是宿主负责的那一半。
+
+**尚未接线**：**编辑器侧还没有在会话开始或断点变更时发送它**，worker 也还不接受 `"set_breakpoints"`。这条与检查视图那条一样，是**下一步**，不声称端到端可用。
+
 ## 未覆盖与限制
 
 - **`editor-app` 整二进制全量运行不可作为判据**（本任务开始前即如此）：`cargo test -p editor-app --bin editor-app` 会让不同用例互相污染宿主内的共享注册表，出现一批失败。**实测对照**：在提交 `3a50511`（本轮工作之前）上单跑 `app::plugins` 已是 `18 passed; 2 failed`，当前为 `19 passed; 1 failed`；且每个失败用例单独运行时都通过（`app::plugins::tests::restricting_startup_withdraws_declarations_before_worker_publication` 单独跑 `ok`）。因此按仓库验证约定使用**按模块过滤**的针对性运行：`run::` 59 项、`extensions::worker` 11 项、`language::code_highlighting` 12 项、`extensions::markdown_tests` 1 项（其余为 ignored）在本轮全绿。这不是本任务引入的缺陷，也不据它宣称通过。
