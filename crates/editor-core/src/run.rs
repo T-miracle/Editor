@@ -9,7 +9,11 @@ use std::collections::BTreeMap;
 mod breakpoints;
 mod debug_state;
 mod discovery;
+mod inspection;
+mod sessions;
 pub use debug_state::{DebugCapabilities, DebugControls, DebugSessionState, DebugStep};
+pub use inspection::{DebugVariable, InspectionError, PauseData, PauseScope, StackFrame};
+pub use sessions::{DebugSession, DebugSessions};
 mod shared;
 pub use breakpoints::{
     BreakpointError, MAX_BREAKPOINT_SOURCE_BYTES, MAX_RUN_BREAKPOINTS, RunBreakpoint,
