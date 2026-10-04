@@ -347,8 +347,11 @@ Run and debug startup smoke passed: no program was left behind by shutdown.
 | 去掉「会话属于该插件」这一条件（`plugin_session_impact` 的 running 过滤） | `a_plugin_lifecycle_change_names_the_sessions_it_affects` | **失败**（第 1611 行断言） |
 | 把调试会话记给任意插件（而非选中的调试提供者） | 同上 | **失败**（第 1651 行断言） |
 | 把刚补的「丢失目标按身份与名字报告」断言改成空 | 该用例 | **失败**（`DELIBERATELY WRONG`） |
+| **让提供者消失后的会话仍报告为运行中**（删掉 `provider_active` 的失败判定） | `host_execution::losing_a_provider_fails_its_sessions_without_reviving_them` | **失败**（`host_execution.rs:895`，`session 1`） |
+| **让重复启动每次都新建会话**（废掉 `session_answer` 的去重查找） | `interactive_execution::a_consumer_session_started_through_the_host_is_the_one_the_title_bar_sees` | **失败**（`interactive_execution.rs:416`） |
+| **让未确认的调试能力不再阻塞**（删掉 `debug_blocker` 的可用性判定，即「缺能力退化为普通运行」） | `run::tests::a_debug_launch_is_refused_rather_than_replaced_by_a_plain_run` | **失败**（`tests.rs:929`） |
 
-三处恢复后 `run::` **62 项全绿**、`git diff` 为空。**结论**：这三条判据测得是它们声称的东西，而不是「碰巧在什么都没发生时成立」。
+六处恢复后 `run::` **62 项全绿**、两处 `host_execution`／`interactive_execution` 用例各自通过、`git diff` 为空。**结论**：这六条判据测得是它们声称的东西，而不是「碰巧在什么都没发生时成立」。其中后三条覆盖的正是本批的核心承诺——**提供者消失后会话必须失败、重复启动必须定位同一会话、缺调试能力不得退化为普通运行**。
 
 **同时发现并修补的一处空洞**：`invalid_targets()` 此前**只有「发现未运行时应为空」一条断言**——一个只被覆盖空情况的方法，与一个永远不报告任何东西的方法无法区分。现已断言它**非空且内容正确**（前一条用例里顺带补上）。
 
