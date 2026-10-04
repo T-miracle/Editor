@@ -188,8 +188,8 @@ pub struct RunControls {
     discovery_ran: bool,
     /// Which provider a debug launch would use, or the reason there is none.
     debug_availability: Option<Result<String, String>>,
-    /// What the debug session currently is, as its provider last reported it.
-    debug_state: editor_core::DebugSessionState,
+    /// Every debug session this editor is running, one per configuration.
+    debug_sessions: editor_core::DebugSessions,
     /// What the selected debug provider declared it can do.
     ///
     /// Defaulting to nothing is deliberate: an ability the host has not been told about is not one it
@@ -238,7 +238,7 @@ impl Default for RunControls {
             discovered: Vec::new(),
             discovery_ran: false,
             debug_availability: None,
-            debug_state: editor_core::DebugSessionState::Disconnected,
+            debug_sessions: editor_core::DebugSessions::default(),
             debug_capabilities: editor_core::DebugCapabilities::default(),
             error: None,
         }
@@ -1191,24 +1191,154 @@ impl RunControls {
         }
     }
 
-    /// Record what the debug session now is, as its provider reported it.
-    pub fn note_debug_state(&mut self, state: editor_core::DebugSessionState) {
-        self.debug_state = state;
+    /// Record what one configuration's debug session now is, as its provider reported it.
+    ///
+    /// State is per session, so a pause in one configuration never looks like a pause in another, and
+    /// a state that is no longer a pause ends that session's inspection data.
+    pub fn note_debug_state(&mut self, config: &str, state: editor_core::DebugSessionState) {
+        let mut session = self
+            .debug_sessions
+            .session(config)
+            .cloned()
+            .unwrap_or_default();
+        session.note_state(state.clone());
+        self.debug_sessions.insert(config, session);
     }
 
-    /// What the debug session currently is.
-    pub fn debug_state(&self) -> &editor_core::DebugSessionState {
-        &self.debug_state
+    /// End one configuration's debug session, handing the panel to another if there is one.
+    pub fn end_debug_session(&mut self, config: &str) {
+        self.debug_sessions.remove(config);
     }
 
+    /// The selected debug session, if one is selected and still running.
+    pub fn debug_session(&self) -> Option<(&str, &editor_core::DebugSession)> {
+        self.debug_sessions.current()
+    }
+
+    /// The debug session one configuration is running, if any.
+    pub fn debug_session_of(&self, config: &str) -> Option<&editor_core::DebugSession> {
+        self.debug_sessions.session(config)
+    }
+
+    /// Select the debug session the panel acts on, refusing a configuration with no session.
+    pub fn select_debug_session(&mut self, config: &str) -> bool {
+        self.debug_sessions.select(config)
+    }
+
+    /// Whether every debug session this editor has, for a panel that lists them.
+    pub fn debug_sessions(&self) -> impl Iterator<Item = (&str, &editor_core::DebugSession)> {
+        self.debug_sessions.entries()
+    }
+
+    /// The state of the selected debug session, or disconnected when there is none.
+    ///
+    /// A panel asks this rather than holding its own copy, so there is one answer about what the
+    /// selected session is.
+    pub fn debug_state(&self) -> editor_core::DebugSessionState {
+        self.debug_sessions
+            .current()
+            .map(|(_, session)| session.state().clone())
+            .unwrap_or_default()
+    }
+
+    /// Begin a pause for the selected session and hand out its scope.
+    ///
+    /// The scope is what an inspection answer is later checked against, so a late one about a pause
+    /// that has ended is refused instead of replacing the view.
+    pub fn begin_debug_pause(&mut self) -> Option<editor_core::PauseScope> {
+        let (config, _) = self.debug_sessions.current()?;
+        let config = config.to_owned();
+        self.debug_sessions
+            .session_mut(&config)
+            .map(|session| session.begin_pause())
+    }
+
+    /// Apply a provider's frame report to the selected session's current pause.
+    pub fn apply_debug_frames(
+        &mut self,
+        scope: editor_core::PauseScope,
+        frames: Vec<editor_core::StackFrame>,
+    ) -> Result<(), editor_core::InspectionError> {
+        let (config, _) = self
+            .debug_sessions
+            .current()
+            .ok_or(editor_core::InspectionError::NoSession)?;
+        let config = config.to_owned();
+        self.debug_sessions
+            .session_mut(&config)
+            .expect("the session was just selected")
+            .set_frames(scope, frames)
+    }
+
+    /// Apply a provider's variable report for one frame.
+    pub fn apply_debug_variables(
+        &mut self,
+        scope: editor_core::PauseScope,
+        frame: u32,
+        variables: Vec<editor_core::DebugVariable>,
+    ) -> Result<(), editor_core::InspectionError> {
+        let (config, _) = self
+            .debug_sessions
+            .current()
+            .ok_or(editor_core::InspectionError::NoSession)?;
+        let config = config.to_owned();
+        self.debug_sessions
+            .session_mut(&config)
+            .expect("the session was just selected")
+            .set_variables(scope, frame, variables)
+    }
+
+    /// Select a frame of the selected session's pause, which is what locates the source.
+    pub fn select_debug_frame(&mut self, frame: u32) -> Result<(), editor_core::InspectionError> {
+        let (config, _) = self
+            .debug_sessions
+            .current()
+            .ok_or(editor_core::InspectionError::NoSession)?;
+        let config = config.to_owned();
+        self.debug_sessions
+            .session_mut(&config)
+            .expect("the session was just selected")
+            .select_frame(frame)
+    }
+
+    /// Where the selected session's selected frame is, which is the location to reveal.
+    pub fn debug_location(&self) -> Option<(&str, u32)> {
+        self.debug_sessions
+            .current()
+            .and_then(|(_, session)| session.pause().selected_location())
+    }
+
+    /// The frames of the selected session's pause, empty when nothing has been reported.
+    pub fn debug_frames(&self) -> &[editor_core::StackFrame] {
+        self.debug_sessions
+            .current()
+            .map(|(_, session)| session.pause().frames())
+            .unwrap_or_default()
+    }
+
+    /// The variables of one frame of the selected session's pause.
+    pub fn debug_variables(&self, frame: u32) -> &[editor_core::DebugVariable] {
+        self.debug_sessions
+            .current()
+            .map(|(_, session)| session.pause().variables_of(frame))
+            .unwrap_or_default()
+    }
+
+    /// The selected session's current pause, if it has one.
+    pub fn debug_pause_scope(&self) -> Option<editor_core::PauseScope> {
+        self.debug_sessions
+            .current()
+            .and_then(|(_, session)| session.pause().scope())
+    }
     /// Which debug actions the panel may offer, each with the reason it may not.
     ///
     /// Both facts are assembled here so the panel and the launch path cannot disagree: availability
-    /// decides starting, the session state decides the rest.
+    /// decides starting, the selected session's own state decides the rest.
     pub fn debug_controls(&self) -> editor_core::DebugControls {
+        let state = self.debug_state();
         editor_core::DebugControls::derive(
             self.debug_availability(),
-            &self.debug_state,
+            &state,
             self.debug_capabilities,
         )
     }

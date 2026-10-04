@@ -1053,22 +1053,25 @@ fn debug_controls_follow_the_session_state() {
     assert!(!controls.debug_controls().can_stop());
 
     // Connecting is a state a user needs a way out of.
-    controls.note_debug_state(DebugSessionState::Starting);
+    controls.note_debug_state("run-1", DebugSessionState::Starting);
     assert!(controls.debug_controls().can_stop());
     assert!(!controls.debug_controls().can_start());
 
     // Running: pausing is offered, resuming is not, and starting a second session is refused.
-    controls.note_debug_state(DebugSessionState::Running);
+    controls.note_debug_state("run-1", DebugSessionState::Running);
     let running = controls.debug_controls();
     assert!(running.pause.is_ok() && running.resume.is_err());
     assert!(running.start.is_err() && running.can_stop());
 
     // Paused: the location is carried, resuming is offered, pausing is not.
-    controls.note_debug_state(DebugSessionState::Paused {
-        source: "src/main.rs".into(),
-        line: 12,
-        reason: Some("breakpoint".into()),
-    });
+    controls.note_debug_state(
+        "run-1",
+        DebugSessionState::Paused {
+            source: "src/main.rs".into(),
+            line: 12,
+            reason: Some("breakpoint".into()),
+        },
+    );
     assert_eq!(
         controls.debug_state().paused_at(),
         Some(("src/main.rs", 12)),
@@ -1078,9 +1081,12 @@ fn debug_controls_follow_the_session_state() {
     assert!(paused.resume.is_ok() && paused.pause.is_err());
 
     // A failed session reports the provider's own reason and offers only a new start.
-    controls.note_debug_state(DebugSessionState::Failed {
-        reason: "适配器退出".into(),
-    });
+    controls.note_debug_state(
+        "run-1",
+        DebugSessionState::Failed {
+            reason: "适配器退出".into(),
+        },
+    );
     let failed = controls.debug_controls();
     assert!(failed.can_start() && !failed.can_stop());
     assert!(failed.stop.unwrap_err().contains("适配器退出"));
@@ -1102,20 +1108,144 @@ fn debug_controls_follow_the_session_state() {
                 reason: "失败".into(),
             },
         ] {
-            controls.note_debug_state(state.clone());
+            controls.note_debug_state("run-1", state.clone());
             let derived = controls.debug_controls();
-            for outcome in [
+            let mut outcomes = vec![
                 &derived.start,
                 &derived.resume,
                 &derived.pause,
                 &derived.stop,
-            ] {
+            ];
+            outcomes.extend(derived.step.iter().map(|(_, outcome)| outcome));
+            for outcome in outcomes {
                 if let Err(reason) = outcome {
                     assert!(!reason.trim().is_empty(), "{state:?} has a silent refusal");
                 }
             }
         }
     }
+}
+
+/// The inspection view belongs to the selected session, and a late answer cannot replace it.
+#[test]
+fn inspection_follows_the_selected_session() {
+    use editor_core::{DebugSessionState, InspectionError, StackFrame};
+    let mut controls = controls();
+    let workspace = "C:/work".to_owned();
+    controls
+        .upsert(config("run-1", "第一个"), &workspace)
+        .unwrap();
+    controls
+        .upsert(config("run-2", "第二个"), &workspace)
+        .unwrap();
+
+    // Two configurations debugged together: each keeps its own state.
+    controls.note_debug_state(
+        "run-1",
+        DebugSessionState::Paused {
+            source: "src/main.rs".into(),
+            line: 12,
+            reason: Some("breakpoint".into()),
+        },
+    );
+    controls.note_debug_state("run-2", DebugSessionState::Running);
+    assert_eq!(
+        controls.debug_sessions().count(),
+        2,
+        "both sessions are listed"
+    );
+    // The panel starts on the first session, and pausing it did not pause the other.
+    assert_eq!(
+        controls.debug_session().map(|(config, _)| config),
+        Some("run-1")
+    );
+    assert_eq!(
+        controls
+            .debug_session_of("run-2")
+            .map(|session| session.state().clone()),
+        Some(DebugSessionState::Running)
+    );
+
+    // Frames apply to the selected session's current pause.
+    let scope = controls.begin_debug_pause().expect("a selected session");
+    controls
+        .apply_debug_frames(
+            scope,
+            vec![StackFrame {
+                id: 0,
+                name: "probe::add".into(),
+                source: "src/main.rs".into(),
+                line: 12,
+            }],
+        )
+        .expect("the pause is described");
+    assert_eq!(controls.debug_frames().len(), 1);
+    assert_eq!(controls.debug_location(), Some(("src/main.rs", 12)));
+    controls
+        .apply_debug_variables(
+            scope,
+            0,
+            vec![editor_core::DebugVariable {
+                name: "left".into(),
+                value: "2".into(),
+            }],
+        )
+        .expect("frame 0's variables");
+    assert_eq!(controls.debug_variables(0).len(), 1);
+
+    // Selecting the other session changes what the panel describes, and it has no pause data.
+    assert!(controls.select_debug_session("run-2"));
+    assert!(controls.debug_frames().is_empty());
+    assert_eq!(controls.debug_location(), None);
+
+    // A late answer about the first session's pause is refused, so it cannot replace this view.
+    assert_eq!(
+        controls.apply_debug_frames(
+            scope,
+            vec![StackFrame {
+                id: 9,
+                name: "late".into(),
+                source: "src/lib.rs".into(),
+                line: 3,
+            }]
+        ),
+        Err(InspectionError::StalePause)
+    );
+    assert!(controls.debug_frames().is_empty());
+
+    // Going back to the first session shows its own frames again, described for its own pause.
+    assert!(controls.select_debug_session("run-1"));
+    assert_eq!(controls.debug_frames().len(), 1);
+    assert_eq!(
+        controls.select_debug_frame(0),
+        Ok(()),
+        "the frame belongs to this pause"
+    );
+    assert_eq!(controls.debug_location(), Some(("src/main.rs", 12)));
+
+    // A state that is no longer a pause ends that session's data, and only that session's.
+    controls.note_debug_state("run-1", DebugSessionState::Running);
+    assert!(controls.debug_frames().is_empty());
+    assert_eq!(controls.debug_pause_scope(), None);
+
+    // Ending a session hands the panel to one that is still there.
+    controls.end_debug_session("run-1");
+    assert_eq!(
+        controls.debug_session().map(|(config, _)| config),
+        Some("run-2")
+    );
+    controls.end_debug_session("run-2");
+    assert!(controls.debug_session().is_none());
+    assert_eq!(
+        controls.debug_state(),
+        DebugSessionState::Disconnected,
+        "with no session the panel reports nothing rather than a stale state"
+    );
+    assert_eq!(controls.begin_debug_pause(), None);
+    assert_eq!(
+        controls.apply_debug_frames(scope, Vec::new()),
+        Err(InspectionError::NoSession)
+    );
 }
 
 fn snapshot(
