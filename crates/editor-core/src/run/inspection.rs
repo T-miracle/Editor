@@ -17,6 +17,16 @@ use std::collections::BTreeMap;
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct PauseScope(u64);
 
+impl PauseScope {
+    /// A scope for a request that is about no pause yet: starting a session.
+    ///
+    /// It is deliberately not a pause identity, so an answer carrying it can never be accepted as
+    /// describing a pause, and a pause can never be mistaken for a session that has not begun.
+    pub fn starting() -> Self {
+        Self(0)
+    }
+}
+
 /// Why inspection data was refused.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum InspectionError {

@@ -470,7 +470,14 @@ impl EditorApp {
                             editor_core::DebugSessionState::Exited
                         }
                     };
-                    self.run_controls.apply_debug_step(request, state)
+                    // A start and a step are both answered by a state, and the request says which one
+                    // it was: a start establishes the session, a step moves it.
+                    if self.run_controls.debug_request_is_start(request) {
+                        self.run_controls
+                            .apply_debug_start(request, &session.session, state)
+                    } else {
+                        self.run_controls.apply_debug_step(request, state)
+                    }
                 }
                 // A failed call is released and reported; it is never shown as an empty stack.
                 DebugAnswerMessage::Failed(message) => self
@@ -1223,16 +1230,51 @@ impl EditorApp {
                 self.status = reason;
                 cx.notify();
             }
-            // Starting a real debug session arrives with its own change; until then this reports what
-            // was confirmed instead of pretending to have started something.
-            None => {
-                self.status = format!(
-                    "已确认调试能力，调试启动随后续改动接入：{}",
-                    configuration.name
-                );
-                cx.notify();
-            }
+            None => self.start_debug_session(&configuration, cx),
         }
+    }
+
+    /// Ask the selected provider to start debugging one configuration.
+    ///
+    /// The request carries what the configuration says the program is, its arguments, its working
+    /// directory, its environment and the breakpoints it has set — nothing here decides what a debug
+    /// session means, and the identity it answers with is the provider's own.
+    fn start_debug_session(
+        &mut self,
+        configuration: &editor_core::RunConfig,
+        cx: &mut Context<Self>,
+    ) {
+        let root = self.workspace_key();
+        let Some(details) = self
+            .run_controls
+            .debug_launch_request(&configuration.id, &root)
+        else {
+            self.status = "无法为该配置建立调试请求".into();
+            cx.notify();
+            return;
+        };
+        // The session exists from the moment it is asked for, so the answer has somewhere to land.
+        self.run_controls.begin_debug_session(&configuration.id);
+        let Some(request) = self
+            .run_controls
+            .begin_debug_request(crate::run::DebugMethod::Start, None)
+        else {
+            self.status = "已有未完成的调试请求".into();
+            cx.notify();
+            return;
+        };
+        let queued = self
+            .extensions
+            .read(cx)
+            .stage_debug_call(request, "start", details);
+        if !queued {
+            self.run_controls.abandon_debug_request(request);
+            self.run_controls.end_debug_session(&configuration.id);
+            self.status = "插件后台服务不可用，无法开始调试".into();
+        } else {
+            self.status = format!("正在开始调试：{}", configuration.name);
+        }
+        cx.notify();
     }
 
     /// Ask the installed plugins what this workspace offers, and report what changed.

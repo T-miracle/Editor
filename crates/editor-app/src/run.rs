@@ -265,11 +265,15 @@ pub struct PendingDebugRequest {
     pub scope: editor_core::PauseScope,
     /// The frame a variable request asked about.
     pub frame: Option<u32>,
+    /// The configuration a start request begins, so its answer knows where to land.
+    pub config: Option<String>,
 }
 
 /// The debug methods this editor calls, so an answer can be joined to what it answers.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum DebugMethod {
+    /// Begin a session. The only method that is not about a pause, because it is what starts one.
+    Start,
     Frames,
     Variables,
     /// Move the paused target, in one of the three directions.
@@ -1481,7 +1485,13 @@ impl RunControls {
     /// The scope is captured here rather than by the caller, so a request can only ever be joined to
     /// the pause that was current when it was sent.
     pub fn begin_debug_request(&mut self, method: DebugMethod, frame: Option<u32>) -> Option<u64> {
-        let scope = self.debug_pause_scope()?;
+        // Starting is about no pause: it is what begins the session whose pauses are inspected later.
+        // Everything else names the pause it describes, so an answer can be refused once it is over.
+        let scope = match self.debug_pause_scope() {
+            Some(scope) => scope,
+            None if method == DebugMethod::Start => editor_core::PauseScope::starting(),
+            None => return None,
+        };
         // One request per method per pause: asking twice would leave two answers racing to describe
         // the same pause, and the later one would win for no reason the user could see.
         if self.debug_requests.iter().any(|request| {
@@ -1496,11 +1506,23 @@ impl RunControls {
             .max()
             .unwrap_or(0)
             + 1;
+        // Starting a session is what creates it, so the session exists from the moment it is asked
+        // for: the answer has somewhere to land, and a configuration that cannot be named has no
+        // session to begin.
+        let config = if method == DebugMethod::Start {
+            let selected = self.configs.selected.clone()?;
+            self.debug_sessions
+                .insert(&selected, editor_core::DebugSession::default());
+            Some(selected)
+        } else {
+            None
+        };
         self.debug_requests.push(PendingDebugRequest {
             id,
             method,
             scope,
             frame,
+            config,
         });
         Some(id)
     }
@@ -1526,6 +1548,9 @@ impl RunControls {
         let pending = self.debug_requests.remove(index);
         // The answer is applied to the pause it was asked about, which is what refuses a late one.
         match pending.method {
+            // A session that has started is recorded with the provider's own identity, so every later
+            // call names the session the provider knows rather than one the host made up.
+            DebugMethod::Start => Err(editor_core::InspectionError::NoSession),
             DebugMethod::Frames => self.apply_debug_frames(
                 pending.scope,
                 frames.ok_or(editor_core::InspectionError::NoSession)?,
@@ -1585,9 +1610,105 @@ impl RunControls {
         self.debug_action_in_flight = false;
     }
 
+    /// Whether a request this editor sent begins a session rather than asking about one.
+    pub fn debug_request_is_start(&self, request: u64) -> bool {
+        self.debug_requests
+            .iter()
+            .any(|pending| pending.id == request && pending.method == DebugMethod::Start)
+    }
+
     /// Whether a debug control action is still waiting for its answer.
     pub fn debug_action_pending(&self) -> bool {
         self.debug_action_in_flight
+    }
+
+    /// Apply a start's answer, which establishes the session the provider now owns.
+    ///
+    /// The identity and the state are both the provider's: the host records what it was told rather
+    /// than claiming a session it did not receive.
+    pub fn apply_debug_start(
+        &mut self,
+        request: u64,
+        session: &str,
+        state: editor_core::DebugSessionState,
+    ) -> Result<(), editor_core::InspectionError> {
+        let Some(index) = self
+            .debug_requests
+            .iter()
+            .position(|pending| pending.id == request)
+        else {
+            return Err(editor_core::InspectionError::NoSession);
+        };
+        let pending = self.debug_requests.remove(index);
+        if pending.method != DebugMethod::Start {
+            // An answer to one question is not an answer to another.
+            return Err(editor_core::InspectionError::NoSession);
+        }
+        // The configuration was recorded when the request was sent, so the answer lands on the
+        // session that asked rather than on whichever one happens to be selected now.
+        let Some(config) = pending.config else {
+            return Err(editor_core::InspectionError::NoSession);
+        };
+        let config = config.as_str();
+        self.debug_sessions
+            .session_mut(config)
+            .ok_or(editor_core::InspectionError::NoSession)?
+            .note_provider_session(session);
+        self.note_debug_state(config, state);
+        Ok(())
+    }
+
+    /// The arguments a debug provider is asked to start one configuration with.
+    ///
+    /// Assembled from the configuration itself — the program, its arguments, its working directory,
+    /// its environment and the breakpoints it has set — so a debug launch says what a run would say
+    /// plus where to stop. The breakpoints are grouped by source, which is how the contract asks for
+    /// them, and a configuration with none simply omits the field.
+    pub fn debug_launch_request(
+        &self,
+        id: &str,
+        workspace_root: &str,
+    ) -> Option<serde_json::Value> {
+        let configuration = self.configs.find(id)?;
+        let plan = self.launch_plan(id, workspace_root).ok()?;
+        let program = plan.steps.last()?;
+        let mut arguments = serde_json::json!({
+            "program": program.request.program,
+            "args": program.request.args,
+        });
+        let object = arguments.as_object_mut()?;
+        if let Some(cwd) = &program.request.cwd {
+            object.insert("cwd".into(), serde_json::json!(cwd));
+        }
+        if let Some(name) = &program.request.name {
+            object.insert("name".into(), serde_json::json!(name));
+        }
+        if !program.request.env.is_empty() {
+            object.insert("env".into(), serde_json::json!(program.request.env));
+        }
+        if !configuration.breakpoints.is_empty() {
+            object.insert(
+                "breakpoints".into(),
+                serde_json::json!(
+                    configuration
+                        .breakpoints
+                        .entries()
+                        .iter()
+                        .map(|breakpoint| serde_json::json!({
+                            "source": breakpoint.source,
+                            "line": breakpoint.line,
+                        }))
+                        .collect::<Vec<_>>()
+                ),
+            );
+        }
+        Some(arguments)
+    }
+
+    /// Begin the debug session for one configuration, so its identity can be recorded when it answers.
+    pub fn begin_debug_session(&mut self, config: &str) {
+        self.debug_sessions
+            .insert(config, editor_core::DebugSession::default());
     }
 
     /// Apply a step's answer, which is the session's new state rather than a view of a pause.

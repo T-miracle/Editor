@@ -1853,6 +1853,90 @@ fn a_control_action_is_awaited_before_the_next_one() {
     assert!(controls.debug_controls().resume.is_ok());
 }
 
+/// A start establishes the session its own configuration asked for, and says what it will run.
+#[test]
+fn a_start_request_carries_what_the_configuration_says() {
+    use editor_core::DebugSessionState;
+    let mut controls = controls();
+    let workspace = "C:/work".to_owned();
+    let mut mine = config("run-1", "第一个");
+    mine.target = RunTarget::Program {
+        program: "app.exe".into(),
+        args: vec!["--flag".into(), "a b".into()],
+    };
+    mine.env = [("MODE".to_owned(), "dev".to_owned())].into();
+    mine.breakpoints
+        .insert("src/main.rs", 7)
+        .expect("the location is valid");
+    controls.upsert(mine, &workspace).unwrap();
+    // A start names the configuration it begins, which is the selected one.
+    assert!(controls.select("run-1", &workspace));
+
+    // What a debug launch asks for is what a run would ask for, plus where to stop.
+    let request = controls
+        .debug_launch_request("run-1", &workspace)
+        .expect("the configuration is launchable");
+    assert_eq!(request["program"], "app.exe");
+    assert_eq!(
+        request["args"][1], "a b",
+        "an argument with spaces stays one argument"
+    );
+    assert_eq!(request["breakpoints"][0]["source"], "src/main.rs");
+    assert_eq!(request["breakpoints"][0]["line"], 7);
+    assert_eq!(request["env"][0]["name"], "MODE");
+    // A configuration without breakpoints omits the field rather than sending an empty list.
+    controls
+        .upsert(config("run-2", "第二个"), &workspace)
+        .unwrap();
+    let plain = controls
+        .debug_launch_request("run-2", &workspace)
+        .expect("the second configuration is launchable");
+    assert!(plain.get("breakpoints").is_none());
+    // A configuration that cannot be launched has no debug request either.
+    assert!(
+        controls
+            .debug_launch_request("nobody", &workspace)
+            .is_none()
+    );
+
+    // Starting is the one request that is not about a pause, so it is accepted while disconnected.
+    controls.note_debug_availability(Ok("adapter".into()));
+    let start = controls
+        .begin_debug_request(DebugMethod::Start, None)
+        .expect("starting is accepted before any pause exists");
+    assert!(controls.debug_request_is_start(start));
+    // A view request is still refused without a pause.
+    assert_eq!(
+        controls.begin_debug_request(DebugMethod::Frames, None),
+        None
+    );
+
+    // The answer establishes the session under the identity the provider reported.
+    controls
+        .apply_debug_start(start, "provider-3", DebugSessionState::Running)
+        .expect("the start answer matches its request");
+    assert_eq!(
+        controls.debug_provider_session().as_deref(),
+        Some("provider-3")
+    );
+    assert_eq!(controls.debug_state(), DebugSessionState::Running);
+    // An answer to a request this editor never sent cannot establish anything.
+    assert!(
+        controls
+            .apply_debug_start(999, "provider-4", DebugSessionState::Running)
+            .is_err()
+    );
+    // A view answer cannot be applied as a start.
+    let start_again = controls
+        .begin_debug_request(DebugMethod::Start, None)
+        .expect("starting is accepted");
+    assert!(
+        controls
+            .apply_debug_answer(start_again, Some(Vec::new()), None)
+            .is_err()
+    );
+}
+
 fn snapshot(
     id: u64,
     config: &str,
