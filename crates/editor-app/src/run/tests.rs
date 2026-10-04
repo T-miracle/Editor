@@ -463,6 +463,118 @@ fn an_observed_step_end_advances_or_blocks_its_sequence() {
     );
 }
 
+/// Two isolated workspaces read one shared configuration, each resolving to its own project.
+#[test]
+fn two_workspaces_resolve_one_shared_configuration_separately() {
+    let project = tempfile::tempdir().unwrap().keep();
+    let local = tempfile::tempdir().unwrap().keep();
+    let workspace = project.display().to_string();
+    let mut controls =
+        RunControls::load_with_project(&workspace, Some(local.clone()), Some(project.clone()));
+    let mut configuration = config("run-1", "共享");
+    configuration.directory = Some(workspace.clone());
+    // This machine's own value, which the other machine must not be able to read from the project.
+    configuration.env = [("SECRET".to_owned(), "s3cret".to_owned())].into();
+    configuration.local = false;
+    controls.upsert(configuration, &workspace).unwrap();
+
+    // A second workspace opens the same project file and resolves the token to its own root.
+    let other = tempfile::tempdir().unwrap().keep();
+    std::fs::create_dir_all(other.join(".editor")).unwrap();
+    std::fs::copy(
+        editor_core::project_path(&project),
+        editor_core::project_path(&other),
+    )
+    .unwrap();
+    let second = RunControls::load_with_project(
+        &other.display().to_string(),
+        Some(local.clone()),
+        Some(other.clone()),
+    );
+    let resolved = second
+        .configuration("run-1")
+        .expect("the shared entry is loaded by the second workspace");
+    assert_eq!(
+        resolved.directory.as_deref(),
+        Some(other.display().to_string().as_str()),
+        "each workspace resolves the token to its own project"
+    );
+    assert!(
+        resolved.env.is_empty(),
+        "another machine's values are not shared with this one"
+    );
+
+    // A hand edit to the project's file reaches the next load through the same validation.
+    let mut shared = editor_core::load_shared(&project).unwrap();
+    shared.configurations[0].name = "项目改名".into();
+    editor_core::save_shared(&project, &shared).unwrap();
+    let reloaded =
+        RunControls::load_with_project(&workspace, Some(local.clone()), Some(project.clone()));
+    assert_eq!(
+        reloaded
+            .configuration("run-1")
+            .map(|config| config.name.as_str()),
+        Some("项目改名")
+    );
+    assert_eq!(
+        reloaded
+            .configuration("run-1")
+            .and_then(|config| config.env.get("SECRET"))
+            .map(String::as_str),
+        Some("s3cret"),
+        "the hand edit did not disturb this machine's own values"
+    );
+}
+
+/// A saved or hand-edited configuration never retargets a session that already started.
+#[test]
+fn a_running_session_keeps_the_snapshot_it_started_with() {
+    let mut controls = controls();
+    let workspace = "C:/work".to_owned();
+    controls
+        .upsert(config("run-1", "发起"), &workspace)
+        .unwrap();
+    let plan = controls
+        .prepare_launch("run-1", &workspace, 16)
+        .expect("the plan is usable");
+    let launch = controls.begin("run-1");
+    controls.begin_sequence("run-1", plan, launch);
+    controls.adopt_step_sessions(&[(7, launch, Some("1".into()))]);
+    let started = controls
+        .preparation("run-1")
+        .and_then(|sequence| sequence.planned_request(0))
+        .cloned()
+        .expect("the sequence holds the request it started");
+
+    // The configuration is edited while the session runs.
+    let mut edited = config("run-1", "改过的");
+    edited.target = RunTarget::Program {
+        program: "other.exe".into(),
+        args: vec!["--new".into()],
+    };
+    controls.upsert(edited, &workspace).unwrap();
+    // The running session still reports what it started with: a save only affects later executions.
+    assert_eq!(
+        controls
+            .preparation("run-1")
+            .and_then(|sequence| sequence.planned_request(0))
+            .cloned(),
+        Some(started),
+        "the plan is fixed when the launch is accepted"
+    );
+    // A later launch uses the edited definition.
+    let next = controls
+        .prepare_launch("run-1", &workspace, 16)
+        .expect("the edited configuration is usable");
+    assert_eq!(next.steps[0].request.program, "other.exe");
+    assert_eq!(
+        controls
+            .configuration("run-1")
+            .map(|config| config.name.as_str()),
+        Some("改过的")
+    );
+}
+
 fn snapshot(
     id: u64,
     config: &str,

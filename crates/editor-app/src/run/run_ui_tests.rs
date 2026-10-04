@@ -207,6 +207,48 @@ fn the_build_page_edits_prepared_actions_row_by_row(cx: &mut TestAppContext) {
     );
 }
 
+/// The dialog's footer chooses where a save goes, and sharing is off until it is chosen.
+#[gpui::test]
+fn the_dialog_chooses_a_save_destination(cx: &mut TestAppContext) {
+    let root = tempfile::tempdir().unwrap();
+    let workspace = root.path().join("project");
+    std::fs::create_dir_all(&workspace).unwrap();
+    let (app, cx) = open_editor(cx, &workspace);
+    let form = cx.update(|window, cx| {
+        let key = app.read(cx).workspace_key();
+        cx.new(|cx| {
+            crate::run::RunConfigForm::open(
+                &crate::run::RunControls::default(),
+                &key,
+                None,
+                window,
+                cx,
+            )
+        })
+    });
+    // A new configuration is host-local until the user chooses otherwise, so a save writes nothing
+    // into the project.
+    let destination = cx.update(|window, cx| {
+        let _ = window;
+        (
+            form.read(cx).draft().share,
+            form.read(cx).destination_is_local(),
+        )
+    });
+    assert_eq!(destination, (false, true), "sharing is opt-in");
+
+    // Choosing the project is what changes the destination a save will use.
+    let chosen = cx.update(|window, cx| {
+        form.update(cx, |form, cx| {
+            form.share_with_project(true);
+            cx.notify();
+        });
+        let _ = window;
+        form.read(cx).destination_is_local()
+    });
+    assert!(!chosen, "the chosen destination is what the save stores");
+}
+
 /// The B1 configuration dialog is a native modal whose draft follows the approved structure.
 ///
 /// The dialog paints in its own window, so this check reads the state that window renders from

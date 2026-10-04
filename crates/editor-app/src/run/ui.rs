@@ -370,6 +370,17 @@ impl RunConfigForm {
             .collect()
     }
 
+    /// Choose whether this configuration is shared with the project, as the footer's control does.
+    pub(crate) fn share_with_project(&mut self, share: bool) {
+        self.draft.share = share;
+        self.error = None;
+    }
+
+    /// Whether a save from this form would write only to this machine.
+    pub(crate) fn destination_is_local(&self) -> bool {
+        !self.draft.share
+    }
+
     /// The draft currently being edited, for checks that read what the dialog would save.
     pub(crate) fn draft(&self) -> &RunConfigDraft {
         &self.draft
@@ -1542,6 +1553,41 @@ fn step_control(
         .into_any_element()
 }
 
+/// One destination choice for the configuration dialog's footer.
+///
+/// The two choices are explicit rather than a checkbox, because they mean different things: one keeps
+/// the configuration on this machine, the other puts its portable half in a file the whole project
+/// reads. The chosen one is marked, so the state a save will use is visible before it happens.
+fn save_destination(
+    app: &Entity<EditorApp>,
+    share: bool,
+    selector: &'static str,
+    label: &'static str,
+    to_project: bool,
+) -> AnyElement {
+    let selected = share == to_project;
+    let owner = app.clone();
+    div()
+        .id(selector)
+        .debug_selector(move || selector.into())
+        .when(selected, |choice| choice.font_semibold())
+        .child(label)
+        .on_click(move |_, _, cx| {
+            owner.update(cx, |state, cx| {
+                let Some(form) = state.run_form.clone() else {
+                    return;
+                };
+                form.update(cx, |form, cx| {
+                    form.draft.share = to_project;
+                    form.error = None;
+                    cx.notify();
+                });
+                cx.notify();
+            });
+        })
+        .into_any_element()
+}
+
 fn render_run_config_form(
     app: &WeakEntity<EditorApp>,
     content: DialogContent,
@@ -1550,7 +1596,7 @@ fn render_run_config_form(
     let Some(app) = app.upgrade() else {
         return content;
     };
-    let (tab, error, shell, texts, inputs, saved) = {
+    let (tab, error, shell, share, texts, inputs, saved) = {
         let state = app.read(cx);
         let saved = state.run_controls.configurations().to_vec();
         let Some(form) = state.run_form.as_ref() else {
@@ -1561,6 +1607,7 @@ fn render_run_config_form(
             form.tab,
             form.error.clone(),
             form.draft.shell,
+            form.draft.share,
             RunField::ALL.map(|field| {
                 let text = form.text(field, cx);
                 text
@@ -1795,10 +1842,25 @@ fn render_run_config_form(
                     .border_color(border)
                     .pt_2()
                     .child(
-                        div()
-                            .debug_selector(|| "run-config-local".into())
-                            // Saving is host-local by default; project sharing arrives with its ticket.
-                            .child("保存到：仅本机"),
+                        h_flex()
+                            .gap_2()
+                            .items_center()
+                            .debug_selector(|| "run-config-destination".into())
+                            .child("保存到：")
+                            .child(save_destination(
+                                &app,
+                                share,
+                                "run-config-local",
+                                "仅本机",
+                                false,
+                            ))
+                            .child(save_destination(
+                                &app,
+                                share,
+                                "run-config-shared",
+                                "项目共享",
+                                true,
+                            )),
                     )
                     .child(div().flex_1())
                     .child({
