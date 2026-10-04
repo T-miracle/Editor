@@ -215,6 +215,27 @@
 
 **结论与判据**：本批的证据一律取自**按模块/按用例过滤**的运行，**不取自整二进制运行**；整跑失败是环境与共享状态的产物，已在前面以 `3a50511` 的基线实测证明其先于本批存在。`cargo check --locked --workspace` 为本批新增的判据（此前提交的锁文件是坏的，已修）。
 
+### 真实二进制的启动与退出冒烟（本轮新增）
+
+`scripts/run-debug-startup-smoke.ps1` 补上本批**唯一缺少的真实二进制验收**（此前的冒烟脚本只覆盖终端与运行时插件的首帧）。它做三件事：
+
+1. 在一个**含真实共享配置**（`.me-editor/run-configs.json`）的工作区上启动 `target/debug/editor-app.exe`，确认它**没有在加载配置时退出**，并且**真的创建了原生窗口**（句柄非零）；
+2. 向该窗口发送关闭消息，确认**进程随之退出**；
+3. 确认**没有留下任何它拥有的程序**。
+
+**判据本身也要能被证伪**：脚本先启动一个**编辑器不可能拥有**的对照程序（带本次运行的唯一标记），确认泄漏检查**看得见它**；关闭窗口后要求它**仍在**（否则这次运行无法区分「没有泄漏」与「检查是瞎的」），并要求总数不超过「对照 1 个」。实测输出：
+
+```
+editor started with a shared configuration and owns a native window (10162308)
+leak check is sensitive: it sees 1 program(s) carrying this run's marker
+closing the window ended the editor process
+Run and debug startup smoke passed: no program was left behind by shutdown.
+```
+
+**它明确不测什么**：不点「运行」，因此**不测量启动行为**（那由进程内的原生验收覆盖）；它测量的是**加载共享配置不破坏启动**与**关闭窗口会回收会话拥有的东西**。
+
+**过程中一处环境问题**：`Start-Process` 在一份同时设置 `NO_PROXY` 与 `no_proxy` 的普通 Windows 环境上会抛 `已添加项`，因此脚本改用 `System.Diagnostics.Process` 直接启动。
+
 ## 未覆盖与限制
 
 - **`editor-app` 整二进制全量运行不可作为判据**（本任务开始前即如此）：`cargo test -p editor-app --bin editor-app` 会让不同用例互相污染宿主内的共享注册表，出现一批失败。**实测对照**：在提交 `3a50511`（本轮工作之前）上单跑 `app::plugins` 已是 `18 passed; 2 failed`，当前为 `19 passed; 1 failed`；且每个失败用例单独运行时都通过（`app::plugins::tests::restricting_startup_withdraws_declarations_before_worker_publication` 单独跑 `ok`）。因此按仓库验证约定使用**按模块过滤**的针对性运行：`run::` 59 项、`extensions::worker` 11 项、`language::code_highlighting` 12 项、`extensions::markdown_tests` 1 项（其余为 ignored）在本轮全绿。这不是本任务引入的缺陷，也不据它宣称通过。
