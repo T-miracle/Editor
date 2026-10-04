@@ -1651,6 +1651,119 @@ fn a_plugin_lifecycle_change_names_the_sessions_it_affects() {
     assert!(controls.plugin_session_impact("adapter", None).is_empty());
 }
 
+/// Stopping a session does not disturb its configuration, its breakpoints or the other sessions.
+#[test]
+fn stopping_a_session_leaves_everything_else_alone() {
+    use editor_core::{DebugSessionState, StackFrame};
+    let mut controls = controls();
+    let workspace = "C:/work".to_owned();
+    let mut mine = config("run-1", "第一个");
+    mine.breakpoints
+        .insert("src/main.rs", 7)
+        .expect("the location is valid");
+    controls.upsert(mine, &workspace).unwrap();
+    controls
+        .upsert(config("run-2", "第二个"), &workspace)
+        .unwrap();
+
+    // Two sessions running, one of them also paused in a debugger with frames described.
+    let first = controls.begin("run-1");
+    let second = controls.begin("run-2");
+    controls.reconcile(&[
+        snapshot(1, "run-1", first, plugin_runtime::ExecutionState::Running),
+        snapshot(2, "run-2", second, plugin_runtime::ExecutionState::Running),
+    ]);
+    controls.note_debug_state(
+        "run-1",
+        DebugSessionState::Paused {
+            source: "src/main.rs".into(),
+            line: 7,
+            reason: Some("breakpoint".into()),
+        },
+    );
+    let scope = controls.begin_debug_pause().expect("a selected session");
+    controls
+        .apply_debug_frames(
+            scope,
+            vec![StackFrame {
+                id: 0,
+                name: "probe::main".into(),
+                source: "src/main.rs".into(),
+                line: 7,
+            }],
+        )
+        .expect("the pause is described");
+    let request = controls.begin_debug_request(DebugMethod::Frames, None);
+    assert!(request.is_some(), "a request is in flight");
+
+    // Stopping one session is a launch operation: it does not touch the debugger's pause, the other
+    // session, the stored breakpoints or a request that is already in flight.
+    let stop = controls.begin_stop("run-1", 1);
+    controls.reconcile(&[snapshot(
+        2,
+        "run-2",
+        second,
+        plugin_runtime::ExecutionState::Running,
+    )]);
+    let reported = controls.reconcile_stops(&[("run-1".to_owned(), stop, Ok(()))]);
+    assert_eq!(reported, vec![(1, Ok(()))]);
+    assert!(controls.pending_debug_requests() >= 1);
+    assert_eq!(
+        controls.debug_frames().len(),
+        1,
+        "a pause in the debugger is not a launch session to stop"
+    );
+    assert_eq!(controls.debug_location(), Some(("src/main.rs", 7)));
+    assert_eq!(
+        controls.configuration("run-1").unwrap().breakpoints.len(),
+        1,
+        "breakpoints belong to the configuration, not to the session that stopped"
+    );
+    assert_eq!(
+        controls.running_for("run-2").map(|session| session.id),
+        Some(2),
+        "the other session is untouched"
+    );
+    // A stop is answered once: a repeated answer is not a second stop.
+    let repeated = controls.reconcile_stops(&[("run-1".to_owned(), stop, Ok(()))]);
+    assert!(repeated.is_empty(), "the answer was already reported");
+}
+
+/// A stop that is never answered leaves the session as it was, rather than inventing an end.
+#[test]
+fn a_silent_provider_leaves_the_session_as_reported() {
+    let mut controls = controls();
+    let workspace = "C:/work".to_owned();
+    controls
+        .upsert(config("run-1", "第一个"), &workspace)
+        .unwrap();
+    let request_id = controls.begin("run-1");
+    controls.reconcile(&[snapshot(
+        1,
+        "run-1",
+        request_id,
+        plugin_runtime::ExecutionState::Running,
+    )]);
+    let stop = controls.begin_stop("run-1", 1);
+
+    // Nothing arrives: the last reported state stands. The host does not decide a program ended
+    // because it stopped hearing about it.
+    assert_eq!(
+        controls.running_for("run-1").map(|session| session.state),
+        Some(plugin_runtime::ExecutionState::Running),
+        "silence is not an ending"
+    );
+    // A refusal is reported and also leaves the state as reported.
+    assert_eq!(
+        controls.reconcile_stops(&[("run-1".to_owned(), stop, Err("提供者不可达".into()))]),
+        vec![(1, Err("提供者不可达".to_owned()))]
+    );
+    assert_eq!(
+        controls.running_for("run-1").map(|session| session.state),
+        Some(plugin_runtime::ExecutionState::Running)
+    );
+}
+
 fn snapshot(
     id: u64,
     config: &str,
