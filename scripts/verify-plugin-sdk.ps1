@@ -1,6 +1,22 @@
 # Verify the distributed host SDK from an independent project outside the repository.
 param([string]$HostExe = "$PSScriptRoot/../target/debug/editor-app.exe")
 
+function Invoke-Native([string]$Program, [string[]]$Arguments) {
+    # Cargo writes progress and warnings to stderr, which Windows PowerShell 5.1
+    # turns into a terminating error under $ErrorActionPreference = 'Stop'. The exit
+    # code is the contract, so stderr is passed through instead of raised.
+    $previous = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    try {
+        & $Program @Arguments
+    } finally {
+        $ErrorActionPreference = $previous
+    }
+    if ($LASTEXITCODE -ne 0) {
+        throw "$Program exited with code $LASTEXITCODE."
+    }
+}
+
 $ErrorActionPreference = 'Stop'
 $projectRoot = (Resolve-Path -LiteralPath "$PSScriptRoot/..").Path
 $hostPath = (Resolve-Path -LiteralPath $HostExe).Path
@@ -32,14 +48,15 @@ try {
     foreach ($name in @('src', 'Cargo.toml', 'Cargo.lock', 'manifest.json', 'README.md', 'welcome.txt', 'composed-ui.json')) {
         Copy-Item -LiteralPath (Join-Path $source $name) -Destination $guest -Recurse
     }
-    $manifest = Get-Content -LiteralPath (Join-Path $guest 'manifest.json') -Raw | ConvertFrom-Json
+    # The fixture manifest carries non-ASCII titles, so the encoding must be explicit:
+    # Windows PowerShell 5.1 otherwise decodes it as ANSI and the JSON parse fails.
+    $manifest = Get-Content -LiteralPath (Join-Path $guest 'manifest.json') -Raw -Encoding UTF8 | ConvertFrom-Json
     if ($manifest.protocol -ne 7 -or $manifest.component -ne 'capability-example.wasm') {
         throw 'The SDK fixture must declare the current protocol and its packaged component.'
     }
 
     $sdk = Join-Path $workRoot 'exported-sdk'
-    & $hostPath --export-plugin-sdk $sdk
-    if ($LASTEXITCODE -ne 0) { throw 'Public SDK export failed.' }
+    Invoke-Native $hostPath @('--export-plugin-sdk', $sdk)
     foreach ($name in @('Cargo.toml', 'README.md', 'src/lib.rs', 'src/api.rs', 'src/api/guest.rs', 'wit/plugin.wit')) {
         if (-not (Test-Path -LiteralPath (Join-Path $sdk $name) -PathType Leaf)) {
             throw "The exported SDK is missing $name."
@@ -49,8 +66,7 @@ try {
     # Repair uses the same public export entry point and touches only this disposable export.
     [IO.File]::WriteAllText((Join-Path $sdk 'src/api.rs'), 'damaged SDK source')
     Remove-Item -LiteralPath (Join-Path $sdk 'wit/plugin.wit')
-    & $hostPath --export-plugin-sdk $sdk
-    if ($LASTEXITCODE -ne 0) { throw 'Public SDK repair export failed.' }
+    Invoke-Native $hostPath @('--export-plugin-sdk', $sdk)
     $after = Get-SdkHashes $sdk
     if ($before.Count -ne $after.Count) { throw 'SDK repair changed the exported file set.' }
     foreach ($name in $before.Keys) {
@@ -61,8 +77,7 @@ try {
     $env:CARGO_TARGET_DIR = Join-Path $workRoot 'target'
     Push-Location $guest
     try {
-        & $hostPath --plugin-cargo 'Cargo.toml' build --locked --target wasm32-wasip2 --release
-        if ($LASTEXITCODE -ne 0) { throw 'Public SDK build outside the repository failed.' }
+        Invoke-Native $hostPath @('--plugin-cargo', 'Cargo.toml', 'build', '--locked', '--target', 'wasm32-wasip2', '--release')
     } finally { Pop-Location }
     $component = Join-Path $env:CARGO_TARGET_DIR 'wasm32-wasip2/release/capability_example_guest.wasm'
     $bytes = [IO.File]::ReadAllBytes($component)
