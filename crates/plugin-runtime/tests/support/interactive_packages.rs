@@ -21,8 +21,13 @@ pub fn methods() -> Value {
                 "program":{"type":"string","max_bytes":4096},
                 "args":{"type":"array","max_items":128,"items":{"type":"string","max_bytes":4096}},
                 "cwd":{"type":"string","max_bytes":4096},
-                "name":{"type":"string","max_bytes":256}
-            }, "optional":["cwd","name"]},
+                "name":{"type":"string","max_bytes":256},
+                // A consumer must require the environment shape as well: the match is exact per
+                // method, so a consumer that omits it matches no provider the host can call.
+                "env":{"type":"array","max_items":64,"items":{"type":"record","fields":{
+                    "name":{"type":"string","max_bytes":128},
+                    "value":{"type":"string","max_bytes":32768}}}}
+            }, "optional":["cwd","name","env"]},
             "result":{"type":"record","fields":{
                 "session":{"type":"string","max_bytes":128},
                 "state":{"type":"string","max_bytes":32}
