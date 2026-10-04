@@ -11,12 +11,33 @@ use std::collections::BTreeMap;
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct DebugSession {
     state: DebugSessionState,
+    /// The provider's own session identity, which every later call names.
+    ///
+    /// Kept exactly as the provider reported it: the host never derives one, and a session without
+    /// one cannot be asked anything, because there would be nothing to address the question to.
+    provider_session: Option<String>,
     pause: PauseData,
 }
 
 impl DebugSession {
     pub fn state(&self) -> &DebugSessionState {
         &self.state
+    }
+
+    /// The provider's own identity for this session, once it has answered.
+    pub fn provider_session(&self) -> Option<&str> {
+        self.provider_session.as_deref()
+    }
+
+    /// Record the provider's identity for this session.
+    ///
+    /// A different identity means a different session, so whatever described the previous one is
+    /// dropped: frames and variables belong to the session that reported them.
+    pub fn note_provider_session(&mut self, session: &str) {
+        if self.provider_session.as_deref() != Some(session) {
+            self.pause.clear();
+        }
+        self.provider_session = Some(session.to_owned());
     }
 
     pub fn pause(&self) -> &PauseData {

@@ -1764,6 +1764,95 @@ fn a_silent_provider_leaves_the_session_as_reported() {
     );
 }
 
+/// A control action withholds the others until its answer arrives, and names the provider's session.
+#[test]
+fn a_control_action_is_awaited_before_the_next_one() {
+    use editor_core::{DebugSessionState, StackFrame};
+    let mut controls = controls();
+    let workspace = "C:/work".to_owned();
+    controls
+        .upsert(config("run-1", "第一个"), &workspace)
+        .unwrap();
+    // A capable provider is confirmed first, so an unavailable control would be about the action
+    // rather than about a missing ability.
+    controls.note_debug_availability(Ok("adapter".into()));
+    controls.note_debug_capabilities(editor_core::DebugCapabilities {
+        breakpoints: true,
+        resume_pause: true,
+        step: true,
+    });
+    controls.note_debug_state(
+        "run-1",
+        DebugSessionState::Paused {
+            source: "src/main.rs".into(),
+            line: 2,
+            reason: None,
+        },
+    );
+    // A session without the provider's own identity cannot be asked anything: there is nothing to
+    // address the question to, so a call is never sent to a session the host invented.
+    assert_eq!(controls.debug_provider_session(), None);
+
+    // The identity is kept exactly as the provider reported it.
+    controls.note_debug_provider_session("run-1", "provider-7");
+    assert_eq!(
+        controls.debug_provider_session().as_deref(),
+        Some("provider-7")
+    );
+
+    // A different identity means a different session, so what described the old one is dropped.
+    let scope = controls.begin_debug_pause().expect("a session is selected");
+    controls
+        .apply_debug_frames(
+            scope,
+            vec![StackFrame {
+                id: 0,
+                name: "f".into(),
+                source: "src/main.rs".into(),
+                line: 2,
+            }],
+        )
+        .expect("the pause is described");
+    assert_eq!(controls.debug_frames().len(), 1);
+    controls.note_debug_provider_session("run-1", "provider-8");
+    assert!(
+        controls.debug_frames().is_empty(),
+        "the frames belonged to the session that reported them"
+    );
+    assert_eq!(controls.debug_pause_scope(), None);
+
+    // While an action is outstanding every control is withheld with a reason, because the session's
+    // state is about to change and a second click would race the answer.
+    controls.note_debug_state(
+        "run-1",
+        DebugSessionState::Paused {
+            source: "src/main.rs".into(),
+            line: 2,
+            reason: None,
+        },
+    );
+    assert!(controls.debug_controls().resume.is_ok());
+    controls.note_debug_action();
+    assert!(controls.debug_action_pending());
+    let busy = controls.debug_controls();
+    // Starting is unavailable for its own reason — a session is already being served — while every
+    // control that would act on it is withheld because the action in flight is about to change it.
+    assert!(busy.start.is_err());
+    for outcome in [&busy.resume, &busy.pause, &busy.stop] {
+        assert!(
+            outcome.as_ref().unwrap_err().contains("正在进行"),
+            "{outcome:?}"
+        );
+    }
+    for (_, outcome) in &busy.step {
+        assert!(outcome.as_ref().unwrap_err().contains("正在进行"));
+    }
+    // The answer releases them.
+    controls.note_debug_action_finished();
+    assert!(!controls.debug_action_pending());
+    assert!(controls.debug_controls().resume.is_ok());
+}
+
 fn snapshot(
     id: u64,
     config: &str,

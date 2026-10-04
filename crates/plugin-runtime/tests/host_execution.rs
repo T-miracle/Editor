@@ -539,7 +539,76 @@ fn powershell_processes() -> usize {
         .unwrap_or(0)
 }
 
-/// Closing a window with nothing running is immediate: waiting is bounded, never open-ended.
+/// Closing the window while a launch is still preparing leaves no program behind.
+///
+/// A session that has been asked for but has not answered is still the host's responsibility: the
+/// program may be starting, and the provider is told to stop it before the instance goes away. The
+/// program count is read from the machine by a second process, so the check is about what is really
+/// running rather than about the host's own bookkeeping.
+#[test]
+#[ignore = "build terminal and capability-example through the public SDK first"]
+fn closing_while_a_launch_is_still_preparing_leaves_no_program_running() {
+    let root = tempfile::tempdir().unwrap();
+    let before = powershell_processes();
+    let workspace = root.path().join("workspace");
+    std::fs::create_dir(&workspace).unwrap();
+    let plugins = root.path().join("plugins");
+    let program = workspace.display().to_string();
+    // The launch runs on its own thread: the window closes while it is still starting, which is the
+    // state this check is about and cannot be arranged from the same thread.
+    // The state at the moment of closing is reported by the worker, so the check knows it was really
+    // about a launch that had not been confirmed.
+    let (report, observed) = std::sync::mpsc::channel();
+    let launched = std::thread::spawn(move || {
+        let mut manager = Manager::open(
+            plugins,
+            plugin_runtime::plugin_protocol::Environment {
+                workspace: program,
+                os: "windows".into(),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let package = Package::read(
+            &Path::new(env!("CARGO_MANIFEST_DIR")).join("../../dist/plugins/terminal.zip"),
+        )
+        .unwrap();
+        let grants = package.manifest.permissions.clone();
+        manager.install(&package, grants).unwrap();
+        let session = manager
+            .start_execution(RunRequest {
+                program: "powershell.exe".into(),
+                args: vec![
+                    "-NoProfile".into(),
+                    "-Command".into(),
+                    "Start-Sleep -Seconds 120".into(),
+                ],
+                cwd: None,
+                name: None,
+                env: Vec::new(),
+            })
+            .unwrap();
+        // Close immediately, while the request is still only queued: nothing has confirmed a program.
+        let state = manager.execution(session.id()).unwrap().snapshot().state;
+        let _ = report.send(state);
+        manager.shutdown();
+    });
+    launched.join().unwrap();
+    let state = observed
+        .recv()
+        .expect("the worker reported the state it closed on");
+    assert_eq!(
+        state,
+        ExecutionState::Starting,
+        "the window closed while the launch was still preparing"
+    );
+    let remaining = powershell_processes();
+    assert!(
+        remaining <= before,
+        "closing during a launch leaves no program running: {before} before, {remaining} after"
+    );
+}
+
 #[test]
 #[ignore = "build terminal and capability-example through the public SDK first"]
 fn shutdown_with_no_sessions_is_immediate() {

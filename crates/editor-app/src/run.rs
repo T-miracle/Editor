@@ -190,6 +190,11 @@ pub struct RunControls {
     debug_availability: Option<Result<String, String>>,
     /// Every debug session this editor is running, one per configuration.
     debug_sessions: editor_core::DebugSessions,
+    /// Whether a control action is in flight for the selected session.
+    ///
+    /// While one is outstanding the session's state is about to change, so the controls are withheld
+    /// rather than letting a second click race the answer that has not arrived.
+    debug_action_in_flight: bool,
     /// Debug requests this editor has sent and not yet answered, oldest first.
     ///
     /// A debug call is asynchronous, so the scope a request belongs to is recorded with it: an answer
@@ -343,6 +348,7 @@ impl Default for RunControls {
             discovery_ran: false,
             debug_availability: None,
             debug_sessions: editor_core::DebugSessions::default(),
+            debug_action_in_flight: false,
             debug_requests: Vec::new(),
             debug_capabilities: editor_core::DebugCapabilities::default(),
             error: None,
@@ -1554,6 +1560,36 @@ impl RunControls {
         editor_core::InspectionError::Provider(message)
     }
 
+    /// Record the provider's own identity for one configuration's debug session.
+    pub fn note_debug_provider_session(&mut self, config: &str, session: &str) {
+        if let Some(session_state) = self.debug_sessions.session_mut(config) {
+            session_state.note_provider_session(session);
+        }
+    }
+
+    /// The selected session's provider identity, which every call names.
+    pub fn debug_provider_session(&self) -> Option<String> {
+        self.debug_sessions
+            .current()
+            .and_then(|(_, session)| session.provider_session())
+            .map(str::to_owned)
+    }
+
+    /// Note that one debug control action was sent, and is waiting for its answer.
+    pub fn note_debug_action(&mut self) {
+        self.debug_action_in_flight = true;
+    }
+
+    /// Note that the outcome of a debug control action is known, whichever way it went.
+    pub fn note_debug_action_finished(&mut self) {
+        self.debug_action_in_flight = false;
+    }
+
+    /// Whether a debug control action is still waiting for its answer.
+    pub fn debug_action_pending(&self) -> bool {
+        self.debug_action_in_flight
+    }
+
     /// Apply a step's answer, which is the session's new state rather than a view of a pause.
     ///
     /// A state that is paused begins a new pause, so the old frames and variables stop describing a
@@ -1689,6 +1725,26 @@ impl RunControls {
     /// Both facts are assembled here so the panel and the launch path cannot disagree: availability
     /// decides starting, the selected session's own state decides the rest.
     pub fn debug_controls(&self) -> editor_core::DebugControls {
+        // An action that is already in flight is not joined by a second one: the session's state is
+        // about to change, so a click now would race the answer that has not arrived. Every control
+        // carries that reason, including the ones the state alone would have allowed.
+        if self.debug_action_in_flight {
+            let busy = || Err("调试操作正在进行".to_owned());
+            return editor_core::DebugControls {
+                start: busy(),
+                resume: busy(),
+                pause: busy(),
+                stop: busy(),
+                step: [
+                    editor_core::DebugStep::Into,
+                    editor_core::DebugStep::Over,
+                    editor_core::DebugStep::Out,
+                ]
+                .into_iter()
+                .map(|kind| (kind, busy()))
+                .collect(),
+            };
+        }
         let state = self.debug_state();
         editor_core::DebugControls::derive(
             self.debug_availability(),

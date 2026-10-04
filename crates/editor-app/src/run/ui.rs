@@ -1114,6 +1114,56 @@ impl EditorApp {
             .stage_host_run(crate::extensions::HostWork::SetRunProvider { provider });
     }
 
+    /// Ask the provider to act on the selected debug session: resume, pause or end it.
+    ///
+    /// The call is only sent when the control was offered, so a click can never become a method the
+    /// provider did not declare. The answer is the session's new state, and it is awaited before any
+    /// further action is offered.
+    pub(crate) fn debug_action(&mut self, method: &str, cx: &mut Context<Self>) {
+        let controls = self.run_controls.debug_controls();
+        let outcome = match method {
+            "resume" => &controls.resume,
+            "pause" => &controls.pause,
+            "stop" => &controls.stop,
+            other => {
+                self.status = format!("未知的调试操作：{other}");
+                cx.notify();
+                return;
+            }
+        };
+        if let Err(reason) = outcome {
+            self.status = reason.clone();
+            cx.notify();
+            return;
+        }
+        let Some(session) = self
+            .run_controls
+            .debug_session()
+            .map(|(_, session)| session.state().clone())
+        else {
+            self.status = "没有正在检查的调试会话".into();
+            cx.notify();
+            return;
+        };
+        // The provider's session identity is what it answered with, never one the host invents.
+        let Some(provider_session) = self.run_controls.debug_provider_session() else {
+            self.status = "调试会话尚未建立".into();
+            cx.notify();
+            return;
+        };
+        let _ = session;
+        self.run_controls.note_debug_action();
+        if !self.extensions.read(cx).stage_debug_call(
+            0,
+            method,
+            serde_json::json!({ "session": provider_session }),
+        ) {
+            self.run_controls.note_debug_action_finished();
+            self.status = "插件后台服务不可用，无法执行调试操作".into();
+        }
+        cx.notify();
+    }
+
     /// Ask the provider to step the paused target, and remember which pause the answer describes.
     ///
     /// The request is only sent when the provider declared the ability and the target is stopped, so a
@@ -2213,14 +2263,11 @@ fn render_run_config_form(
                         .child(label);
                     match outcome {
                         Ok(()) => {
-                            let reported = action.clone();
+                            // The method is the control's own name, so what a click asks for is what
+                            // the contract declares and nothing the view invents.
+                            let method = selector.trim_start_matches("run-debug-").to_owned();
                             button = button.on_click(move |_, _, cx| {
-                                owner.update(cx, |state, cx| {
-                                    // Starting a real debug session arrives with its own change; until
-                                    // then this reports what was confirmed rather than pretending.
-                                    state.status = format!("已确认可执行该调试操作（{reported}）");
-                                    cx.notify();
-                                });
+                                owner.update(cx, |state, cx| state.debug_action(&method, cx));
                             });
                         }
                         Err(reason) => {
