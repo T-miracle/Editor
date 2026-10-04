@@ -1042,6 +1042,35 @@ impl EditorApp {
         })
         .detach();
     }
+    /// Show every panel one provider declared, because a session's output lives in its own surface.
+    ///
+    /// The host holds no panel naming convention beyond the provider's own declaration: it reveals
+    /// what that package contributed and reports the first failure rather than guessing a name.
+    pub(crate) fn show_provider_panel(
+        &mut self,
+        plugin: &str,
+        window: &mut Window,
+        cx: &mut Context<EditorApp>,
+    ) -> Result<(), String> {
+        let prefix = format!("{plugin}/");
+        let panels = self
+            .plugin_panels
+            .iter()
+            .filter(|(key, _)| key.starts_with(&prefix))
+            .map(|(key, panel)| (key.clone(), panel.clone()))
+            .collect::<Vec<_>>();
+        if panels.is_empty() {
+            return Err("提供者没有可显示的界面".into());
+        }
+        for (key, panel) in panels {
+            panel.update(cx, |panel, cx| panel.show(window, cx));
+            self.session_state.plugin_panel_visibility.insert(key, true);
+        }
+        self.persist_session();
+        self.dock_area.update(cx, |_, cx| cx.notify());
+        Ok(())
+    }
+
     /// Each installed dock contribution has its own visibility toggle in the editor status bar.
     pub(crate) fn plugin_panel_buttons(&self, cx: &mut Context<Self>) -> Vec<AnyElement> {
         // Keep the status order declarative; plugin identities remain opaque to the host.

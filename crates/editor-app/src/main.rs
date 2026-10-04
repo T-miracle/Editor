@@ -209,6 +209,8 @@ struct EditorApp {
     leave_confirmed: bool,
     /// Sessions the leave confirmation is asking about; `None` while no decision is pending.
     leave_confirm: Option<Vec<u64>>,
+    /// The unified run dropdown: active sessions, saved configurations and the edit entries.
+    run_menu: Option<run::RunMenu>,
     _tree_subscription: Subscription,
     _dock_subscription: Subscription,
     _bounds_subscription: Option<Subscription>,
@@ -454,6 +456,7 @@ impl EditorApp {
             main_window: None,
             leave_confirmed: false,
             leave_confirm: None,
+            run_menu: None,
             _tree_subscription: tree_subscription,
             _dock_subscription: dock_subscription,
             _bounds_subscription: None,

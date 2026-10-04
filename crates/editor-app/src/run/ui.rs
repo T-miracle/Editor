@@ -4,16 +4,28 @@
 //! used. The group's position, separation and disabled states follow the approved B1 layout, and a
 //! control whose capability is not implemented yet is disabled with a visible reason rather than
 //! behaving like the control next to it.
-use super::{LaunchPlan, RunConfigDraft, RunControls};
+use super::{LaunchPlan, RunConfigDraft, RunControls, RunMenuEntry};
 use crate::app::dialog as app_dialog;
 use crate::extensions::HostWork as Work;
+use crate::ui::controls::menu::MenuStyle;
 use crate::ui::controls::{Button, DialogContent};
 // The crate root already selects the same widget and styling traits the rest of the shell uses.
 use crate::*;
 use gpui_base::input::{Input as BaseInput, InputEvent, InputState};
-use gpui_kit::{AnyElement, WeakEntity, Window, div, px};
+use gpui_kit::component::menu::{PopupMenu as KitPopupMenu, PopupMenuItem};
+use gpui_kit::{AnyElement, DismissEvent, WeakEntity, Window, div, px};
 use rust_i18n::t;
 use sha2::{Digest, Sha256};
+
+/// Width of the unified run dropdown; it holds session labels with state words beside them.
+const RUN_MENU_WIDTH: f32 = 260.;
+
+/// The unified dropdown retaining the component lifetime and its dismissal subscription.
+pub(crate) struct RunMenu {
+    pub position: gpui_kit::Point<gpui_kit::Pixels>,
+    pub popup: Entity<KitPopupMenu>,
+    _dismiss: Subscription,
+}
 
 /// The B1 configuration dialog's tabs; only the basic page is implemented by this slice.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -245,6 +257,133 @@ impl EditorApp {
         self.extensions.read(cx).workspace_trusted()
     }
 
+    /// Open the one run dropdown: active sessions, saved configurations, and the edit entries.
+    ///
+    /// Grouping is what keeps the title bar compact: running work and future launches are separate
+    /// lists in one component instead of two permanent selectors.
+    pub(crate) fn open_run_menu(
+        &mut self,
+        position: gpui_kit::Point<gpui_kit::Pixels>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let owner = cx.entity().downgrade();
+        let previous_focus = window
+            .focused(cx)
+            .unwrap_or_else(|| self.editor.focus_handle(cx));
+        // One description drives both the menu and its native check, so grouping cannot drift
+        // between what a test asserts and what a user opens.
+        let entries = self.run_controls.menu_entries();
+        let popup = KitPopupMenu::build(window, cx, move |mut menu, _window, _cx| {
+            menu = menu
+                .min_w(px(RUN_MENU_WIDTH))
+                .action_context(previous_focus);
+            for entry in entries {
+                match entry {
+                    RunMenuEntry::Separator => menu = menu.separator(),
+                    RunMenuEntry::Session { id, label } => {
+                        let locate = owner.clone();
+                        menu =
+                            menu.item(PopupMenuItem::new(label).on_click(move |_, window, cx| {
+                                let _ = locate.update(cx, |app, cx| {
+                                    // The session's own configuration is the selection Stop acts on.
+                                    let config = app
+                                        .run_controls
+                                        .sessions()
+                                        .into_iter()
+                                        .find(|session| session.id == id)
+                                        .map(|session| session.config)
+                                        .unwrap_or_default();
+                                    app.reveal_run_session(id, &config, window, cx);
+                                });
+                            }));
+                    }
+                    RunMenuEntry::Configuration { id, label } => {
+                        let choose = owner.clone();
+                        menu = menu.item(PopupMenuItem::new(label).on_click(move |_, _, cx| {
+                            let _ = choose.update(cx, |app, cx| {
+                                let key = app.workspace_key();
+                                app.run_controls.select(&id, &key);
+                                cx.notify();
+                            });
+                        }));
+                    }
+                    RunMenuEntry::Action { id, label, enabled } => {
+                        if !enabled {
+                            menu = menu.item(PopupMenuItem::new(label).disabled(true));
+                            continue;
+                        }
+                        let act = owner.clone();
+                        menu =
+                            menu.item(PopupMenuItem::new(label).on_click(move |_, window, cx| {
+                                let _ = act.update(cx, |app, cx| match id.as_str() {
+                                    "run-edit" => {
+                                        let editing =
+                                            app.run_controls.selected().map(|c| c.id.clone());
+                                        app.open_run_config_dialog(window, cx, editing);
+                                    }
+                                    "run-new" => app.open_run_config_dialog(window, cx, None),
+                                    _ => {}
+                                });
+                            }));
+                    }
+                }
+            }
+            menu
+        });
+        let popup_id = popup.entity_id();
+        let dismiss = cx.subscribe(&popup, move |this, _, _: &DismissEvent, cx| {
+            // A delayed dismissal from an older menu must not close a newly opened one.
+            if this
+                .run_menu
+                .as_ref()
+                .is_some_and(|menu| menu.popup.entity_id() == popup_id)
+            {
+                this.run_menu = None;
+                cx.notify();
+            }
+        });
+        popup.focus_handle(cx).focus(window, cx);
+        self.run_menu = Some(RunMenu {
+            position,
+            popup,
+            _dismiss: dismiss,
+        });
+        cx.notify();
+    }
+
+    /// The anchored dropdown overlay; it consumes outside presses and owns no modal window.
+    pub(crate) fn render_run_menu(
+        &self,
+        _window: &Window,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        let Some(menu) = &self.run_menu else {
+            return div().into_any_element();
+        };
+        div()
+            .id("run-menu-overlay")
+            .debug_selector(|| "run-menu".into())
+            .absolute()
+            .inset_0()
+            .occlude()
+            .on_mouse_up(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(|this, _, _, cx| {
+                    this.run_menu = None;
+                    cx.stop_propagation();
+                    cx.notify();
+                }),
+            )
+            .child(
+                gpui_kit::anchored()
+                    .position(menu.position)
+                    .child(menu.popup.clone()),
+            )
+            .into_any_element()
+    }
+
     /// Answer the window's close request.
     ///
     /// Returning `false` keeps the window open. With managed work in flight the user is asked first,
@@ -404,9 +543,12 @@ impl EditorApp {
                         .compact()
                         .ghost()
                         .tooltip(label.clone())
-                        .on_click(cx.listener(|this, _, window, cx| {
-                            this.open_run_config_dialog(window, cx, None);
-                        })),
+                        .on_click(
+                            cx.listener(|this, event: &gpui_kit::ClickEvent, window, cx| {
+                                // The dropdown opens at the pointer, like every other menu in the shell.
+                                this.open_run_menu(event.position(), window, cx);
+                            }),
+                        ),
                 ),
             )
             .child(
@@ -516,7 +658,7 @@ impl EditorApp {
         match self.run_controls.plan_launch(&config.id, &root) {
             LaunchPlan::Existing { session } => {
                 // A repeat launch reveals the running session rather than starting a second program.
-                self.reveal_run_session(session, cx);
+                self.reveal_run_session(session, &config.id, window, cx);
             }
             LaunchPlan::Invalid { message } => {
                 self.status = message;
@@ -547,24 +689,38 @@ impl EditorApp {
         }
     }
 
-    /// Reveal one session's output by selecting the configuration it belongs to.
-    pub(crate) fn reveal_run_session(&mut self, session: u64, cx: &mut Context<Self>) {
-        if let Some(found) = self
+    /// Reveal one session's output: select its configuration and show the surface that owns it.
+    ///
+    /// The provider already asked the editor to show its own panel when it started the program; the
+    /// host repeats only that recorded request rather than guessing which panel a provider uses.
+    pub(crate) fn reveal_run_session(
+        &mut self,
+        session: u64,
+        config: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(found) = self
             .run_controls
             .sessions()
             .into_iter()
             .find(|candidate| candidate.id == session)
-        {
-            // Selection follows the session's own configuration so Stop affects exactly this session.
-            let key = self.workspace_key();
-            self.run_controls.select(&found.config, &key);
-            self.status = format!(
-                "定位会话：{}（{}）",
-                found.plugin,
+        else {
+            return;
+        };
+        // Selection follows the session's own configuration so Stop affects exactly this session.
+        let key = self.workspace_key();
+        self.run_controls.select(config, &key);
+        let outcome = self.show_provider_panel(&found.plugin, window, cx);
+        self.status = match outcome {
+            Ok(()) => format!(
+                "定位会话 {}（{}）",
+                found.provider_session.clone().unwrap_or_default(),
                 run_state_label(found.state)
-            );
-            cx.notify();
-        }
+            ),
+            Err(message) => format!("无法定位会话输出：{message}"),
+        };
+        cx.notify();
     }
 
     /// Stop is only meaningful once the provider accepts a stop request; until then it explains why.

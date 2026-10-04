@@ -509,6 +509,7 @@ impl Render for EditorApp {
             .when_some(self.render_leave_confirmation(cx), |shell, confirm| {
                 shell.child(confirm)
             })
+            .child(self.render_run_menu(window, cx))
             .child(self.render_plugin_popup(window, cx))
             .child(self.render_explorer_menu(window, cx))
             .child(self.render_explorer_edit(cx))

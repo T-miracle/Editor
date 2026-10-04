@@ -9,6 +9,7 @@ use std::collections::BTreeMap;
 
 mod ui;
 pub use ui::RunConfigForm;
+pub(crate) use ui::RunMenu;
 #[cfg(test)]
 mod run_ui_tests;
 #[cfg(test)]
@@ -395,6 +396,102 @@ impl RunControls {
     /// Whether a launch request for this configuration is still awaiting its session identity.
     pub fn is_pending(&self, config: &str) -> bool {
         self.pending.iter().any(|pending| pending.config == config)
+    }
+}
+
+/// One entry of the unified run dropdown, described before it is handed to the menu component.
+///
+/// The description comes from the run state alone, so the grouping a user sees can be checked
+/// without depending on how the menu component happens to paint itself.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum RunMenuEntry {
+    /// A session, revealed by selecting it.
+    Session { id: u64, label: String },
+    /// A saved configuration, which becomes the next launch target when selected.
+    Configuration { id: String, label: String },
+    /// An action that changes the configuration list rather than starting anything.
+    Action {
+        id: String,
+        label: String,
+        enabled: bool,
+    },
+    /// A group boundary between sessions, configurations and the edit entries.
+    Separator,
+}
+
+impl RunControls {
+    /// Describe the unified dropdown: sessions first, then saved configurations, then the edits.
+    pub fn menu_entries(&self) -> Vec<RunMenuEntry> {
+        let mut entries = Vec::new();
+        if self.sessions.is_empty() {
+            entries.push(RunMenuEntry::Action {
+                id: "run-none".into(),
+                label: "(没有运行中的会话)".into(),
+                enabled: false,
+            });
+        } else {
+            for session in self.sessions.values() {
+                // The provider's own session word is what the user can recognise in its own panel.
+                let label = format!(
+                    "{} · {}",
+                    session
+                        .provider_session
+                        .clone()
+                        .unwrap_or_else(|| session.id.to_string()),
+                    session_state_word(session.state)
+                );
+                entries.push(RunMenuEntry::Session {
+                    id: session.id,
+                    label,
+                });
+            }
+        }
+        entries.push(RunMenuEntry::Separator);
+        if self.configs.configurations.is_empty() {
+            entries.push(RunMenuEntry::Action {
+                id: "run-empty".into(),
+                label: "(尚未保存运行配置)".into(),
+                enabled: false,
+            });
+        } else {
+            for config in &self.configs.configurations {
+                let selected = self.configs.selected.as_deref() == Some(config.id.as_str());
+                entries.push(RunMenuEntry::Configuration {
+                    id: config.id.clone(),
+                    label: if selected {
+                        format!("{} ✓", config.name)
+                    } else {
+                        config.name.clone()
+                    },
+                });
+            }
+        }
+        entries.push(RunMenuEntry::Separator);
+        entries.push(RunMenuEntry::Action {
+            id: "run-edit".into(),
+            label: "编辑所选配置…".into(),
+            enabled: self.configs.selected.is_some(),
+        });
+        entries.push(RunMenuEntry::Action {
+            id: "run-new".into(),
+            label: "新建运行配置…".into(),
+            enabled: true,
+        });
+        entries.push(RunMenuEntry::Action {
+            id: "run-discover".into(),
+            label: "发现配置（待插件贡献）".into(),
+            enabled: false,
+        });
+        entries
+    }
+}
+
+/// The state word shown beside a session in the dropdown and in the title bar.
+pub fn session_state_word(state: plugin_runtime::ExecutionState) -> &'static str {
+    match state {
+        plugin_runtime::ExecutionState::Starting => "启动中",
+        plugin_runtime::ExecutionState::Running => "运行中",
+        plugin_runtime::ExecutionState::Failed => "已结束",
     }
 }
 

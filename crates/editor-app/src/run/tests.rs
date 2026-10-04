@@ -177,6 +177,96 @@ fn configurations_round_trip_through_the_host_local_file() {
     );
 }
 
+/// The unified dropdown separates running work from saved targets, in that order.
+#[test]
+fn the_unified_dropdown_groups_sessions_before_configurations() {
+    let mut controls = controls();
+    // An empty editor still explains itself instead of showing an empty menu.
+    assert_eq!(
+        controls.menu_entries(),
+        vec![
+            RunMenuEntry::Action {
+                id: "run-none".into(),
+                label: "(没有运行中的会话)".into(),
+                enabled: false
+            },
+            RunMenuEntry::Separator,
+            RunMenuEntry::Action {
+                id: "run-empty".into(),
+                label: "(尚未保存运行配置)".into(),
+                enabled: false
+            },
+            RunMenuEntry::Separator,
+            RunMenuEntry::Action {
+                id: "run-edit".into(),
+                label: "编辑所选配置…".into(),
+                enabled: false
+            },
+            RunMenuEntry::Action {
+                id: "run-new".into(),
+                label: "新建运行配置…".into(),
+                enabled: true
+            },
+            RunMenuEntry::Action {
+                id: "run-discover".into(),
+                label: "发现配置（待插件贡献）".into(),
+                enabled: false
+            },
+        ]
+    );
+
+    // Two configurations and one running session produce three groups in one component.
+    controls
+        .upsert(config("run-1", "第一个"), "C:/work")
+        .unwrap();
+    controls
+        .upsert(config("run-2", "第二个"), "C:/work")
+        .unwrap();
+    controls.select("run-2", "C:/work");
+    let request_id = controls.begin("run-1");
+    controls.reconcile(&[snapshot(
+        9,
+        "run-1",
+        request_id,
+        plugin_runtime::ExecutionState::Running,
+    )]);
+    assert_eq!(
+        controls.menu_entries(),
+        vec![
+            RunMenuEntry::Session {
+                id: 9,
+                label: "1 · 运行中".into()
+            },
+            RunMenuEntry::Separator,
+            RunMenuEntry::Configuration {
+                id: "run-1".into(),
+                label: "第一个".into()
+            },
+            // The selected target is marked, so the collapsed name and the menu agree.
+            RunMenuEntry::Configuration {
+                id: "run-2".into(),
+                label: "第二个 ✓".into()
+            },
+            RunMenuEntry::Separator,
+            RunMenuEntry::Action {
+                id: "run-edit".into(),
+                label: "编辑所选配置…".into(),
+                enabled: true
+            },
+            RunMenuEntry::Action {
+                id: "run-new".into(),
+                label: "新建运行配置…".into(),
+                enabled: true
+            },
+            RunMenuEntry::Action {
+                id: "run-discover".into(),
+                label: "发现配置（待插件贡献）".into(),
+                enabled: false
+            },
+        ]
+    );
+}
+
 /// A draft keeps one argument per line and never re-splits a value containing spaces.
 #[test]
 fn drafts_preserve_argument_boundaries() {

@@ -138,6 +138,53 @@ fn the_run_configuration_dialog_owns_a_b1_draft(cx: &mut TestAppContext) {
     }));
 }
 
+/// The selector opens the unified dropdown instead of a second permanent session list.
+#[gpui::test]
+fn the_selector_opens_the_unified_dropdown(cx: &mut TestAppContext) {
+    let root = tempfile::tempdir().unwrap();
+    let workspace = root.path().join("project");
+    std::fs::create_dir_all(&workspace).unwrap();
+    let key = std::fs::canonicalize(&workspace)
+        .unwrap()
+        .display()
+        .to_string();
+    let stored = store_configuration(&key, "本机程序");
+    let (app, cx) = open_editor(cx, &workspace);
+    // Nothing is open until the selector is used.
+    assert!(cx.debug_bounds("run-menu").is_none());
+
+    cx.update(|window, cx| {
+        app.update(cx, |app, cx| {
+            app.open_run_menu(gpui_kit::point(px(320.), px(30.)), window, cx);
+        });
+    });
+    cx.run_until_parked();
+    // One component holds the sessions, the saved configurations and the edit entries.
+    let entries = cx.update(|_, cx| app.read(cx).run_controls.menu_entries());
+    assert_eq!(
+        entries
+            .iter()
+            .filter(|entry| matches!(entry, crate::run::RunMenuEntry::Configuration { .. }))
+            .count(),
+        1
+    );
+    assert!(entries.iter().any(|entry| matches!(
+        entry,
+        crate::run::RunMenuEntry::Action { id, .. } if id == "run-edit"
+    )));
+    assert!(cx.update(|_, cx| app.read(cx).run_menu.is_some()));
+    // Closing it leaves the editor usable and no second selector behind.
+    cx.update(|_, cx| {
+        app.update(cx, |app, cx| {
+            app.run_menu = None;
+            cx.notify();
+        });
+    });
+    assert!(cx.update(|_, cx| app.read(cx).run_menu.is_none()));
+
+    let _ = std::fs::remove_file(stored);
+}
+
 /// Leaving with a running program asks first, and cancelling keeps both the project and the program.
 #[gpui::test]
 fn closing_with_a_running_session_asks_before_leaving(cx: &mut TestAppContext) {
