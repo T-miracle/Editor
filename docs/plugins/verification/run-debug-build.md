@@ -446,6 +446,20 @@ if self.run_controls.is_stopping(config) { return; }
 
 **另一处更正**：本文件先前称「修复后测试全绿」的印象是**错的**——本条回归自 `7c5cfcd` 起一直存在，当时被并行噪声掩盖。**本批「已修」的五处实现缺失结论不受影响**，但**「全绿」这一表述作废**。
 
+**根因定位（实测，本轮取得）**：在失败用例的循环里加打印，得到
+
+```
+probe blocked=None  session_known=true  active=true
+```
+
+**即使测试已经直接调用 `manager.stop_execution(session)` 结束了那个程序，编辑器侧的会话仍然是 `active=true`。**
+
+因此**序列无从得知它拥有的步骤已经结束**：`preparation_blocked` 需要 `!is_active()`，而序列既没收到「停止已应答」（测试是直接调 manager、没走 UI 的 StopRun 应答路径），也**收不到「会话已结束」**——**因为编辑器从未把 `stop_execution` 的结果映射成会话的终态**。
+
+**这就是那条缺失的连线，而且它比本文件先前猜测的「停止请求的所有权」更靠下**：**问题不在谁有权发停止，而在「程序已经结束」这个事实从未到达 `RunControls`**。`RunSession::is_active()` 只在状态为 `Failed` 时返回 false，而 `stop_execution` 之后状态并未变为 `Failed`（仍是 `Running`）。
+
+**下一步应当从这里入手**：先查清 `stop_execution` 之后宿主发布了什么（`Work::PollRun` 的 `RunStatus`、以及 `reconcile` 如何把它映射进 `RunSession`），再决定「已结束」应当由哪个观察（`status` 的 `ended`/`exited`，还是会话从 `published` 列表消失）驱动。**本轮的代码尝试已全部撤回**，仓库保持在已验证状态。
+
 ## 未覆盖与限制
 
 - **`editor-app` 整二进制全量运行不可作为判据**（本任务开始前即如此）：`cargo test -p editor-app --bin editor-app` 会让不同用例互相污染宿主内的共享注册表，出现一批失败。**实测对照**：在提交 `3a50511`（本轮工作之前）上单跑 `app::plugins` 已是 `18 passed; 2 failed`，当前为 `19 passed; 1 failed`；且每个失败用例单独运行时都通过（`app::plugins::tests::restricting_startup_withdraws_declarations_before_worker_publication` 单独跑 `ok`）。因此按仓库验证约定使用**按模块过滤**的针对性运行：`run::` 59 项、`extensions::worker` 11 项、`language::code_highlighting` 12 项、`extensions::markdown_tests` 1 项（其余为 ignored）在本轮全绿。这不是本任务引入的缺陷，也不据它宣称通过。
