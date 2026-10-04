@@ -1,5 +1,7 @@
 # Me Editor
 
+使用者文档以[文档站点](https://t-miracle.github.io/Editor/)为准，本文件用于开发者：源码构建、工作区结构与测试命令。
+
 Me Editor 是一个 Rust + GPUI Kit 编写的原生桌面代码编辑器初版。
 
 ## 当前可用功能

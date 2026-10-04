@@ -1,0 +1,6 @@
+# Node version for the documentation site, read by fnm.
+#
+# Pinned so that a local build and the deployment workflow compile the same
+# Markdown and emit the same routes. The GitHub Actions workflow names the same
+# version explicitly; change both together.
+24.19.0
