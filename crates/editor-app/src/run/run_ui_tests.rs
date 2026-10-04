@@ -571,6 +571,147 @@ fn closing_with_a_running_session_asks_before_leaving(cx: &mut TestAppContext) {
     let _ = std::fs::remove_file(stored);
 }
 
+/// A launch whose save cannot proceed starts nothing, rather than running the older file.
+///
+/// The saving half of this is checked above; this is the other half of the same criterion. A document
+/// the disk has moved away from needs an overwrite decision the user has not made, so `false` from the
+/// save step must stop the launch before anything is queued — otherwise the user would be running code
+/// they were still being asked about.
+#[gpui::test]
+fn a_launch_stops_when_its_save_cannot_proceed(cx: &mut TestAppContext) {
+    let root = tempfile::tempdir().unwrap();
+    let workspace = root.path().join("project");
+    std::fs::create_dir_all(&workspace).unwrap();
+    let path = workspace.join("main.rs");
+    std::fs::write(&path, "fn main() {}\n").unwrap();
+    // A tab records the canonical path, so every comparison below names the same file the tab holds.
+    let path = path.canonicalize().unwrap();
+    let (app, cx) = open_editor(cx, &workspace);
+    // The store is written and read under the key the editor itself resolves. Deriving it separately
+    // is how this check first passed without reaching the save step at all: the file was stored under a
+    // different key, so the launch stopped at "configuration does not exist" instead.
+    let (config_id, config_file) = cx.update(|_, cx| {
+        let key = app.read(cx).workspace_key();
+        let file = editor_core::storage_path(&key).expect("a configuration path is resolved");
+        std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+        let mut set = editor_core::RunConfigSet::default();
+        let id = set.generate_id(&key);
+        set.upsert(editor_core::RunConfig {
+            id: id.clone(),
+            name: "本机程序".into(),
+            target: editor_core::RunTarget::Program {
+                program: "powershell.exe".into(),
+                args: vec!["-NoProfile".into()],
+            },
+            directory: None,
+            env: Default::default(),
+            tool_paths: Default::default(),
+            build: Default::default(),
+            prelaunch: Default::default(),
+            source: editor_core::RunConfigSource::Local,
+            from_target: None,
+            provider: None,
+            breakpoints: Default::default(),
+            local: true,
+        })
+        .unwrap();
+        set.select(&id);
+        std::fs::write(&file, set.to_json().unwrap()).unwrap();
+        (id, file)
+    });
+    // The configuration has to be loaded before a launch can reach its save step, or the launch would
+    // stop earlier for a different reason and this check would pass without measuring anything.
+    cx.update(|_, cx| {
+        app.update(cx, |app, cx| {
+            let key = app.workspace_key();
+            let local = editor_core::storage_path(&key)
+                .and_then(|file| file.parent().map(std::path::Path::to_path_buf));
+            app.run_controls = crate::run::RunControls::load(&key, local);
+            assert!(
+                app.run_controls.configuration(&config_id).is_some(),
+                "the stored configuration is the one this launch will ask for"
+            );
+            cx.notify();
+        });
+    });
+    cx.update(|window, cx| {
+        app.update(cx, |app, cx| {
+            app.open_file(path.clone(), window, cx);
+            // An edit marks the document; writing a different file behind it makes the disk state a
+            // conflict the user has not answered.
+            let editor = app.editor.clone();
+            editor.update(cx, |editor, cx| {
+                editor.insert("// 本地修改\n", window, cx);
+            });
+        });
+    });
+    cx.run_until_parked();
+    // The disk moves away from the edited buffer through the same reconciliation the file watcher
+    // delivers, so the conflict is the editor's own rather than one arranged for the check.
+    cx.update(|window, cx| {
+        app.update(cx, |app, cx| {
+            app.apply_reconciliation(
+                Reconciliation {
+                    snapshot: Some(app.workspace.snapshot()),
+                    documents: vec![(
+                        path.clone(),
+                        Ok("fn main() { /* 磁盘已改 */ }\n".into()),
+                        Instant::now(),
+                    )],
+                    renames: Vec::new(),
+                    native: true,
+                },
+                window,
+                cx,
+            );
+            assert_eq!(
+                app.tabs[0].disk_state,
+                DiskState::Conflict,
+                "the disk and the buffer disagree, and the user has not answered"
+            );
+            assert!(
+                app.tabs[0].session.is_dirty(),
+                "the buffer is the unsaved one"
+            );
+        });
+    });
+    // With the launch refusing to proceed, nothing is queued and no status claims a start.
+    cx.update(|window, cx| {
+        app.update(cx, |app, cx| {
+            app.start_configuration_without_environment(&config_id, window, cx)
+        });
+    });
+    cx.run_until_parked();
+    let (sessions, status, restored) = cx.update(|_, cx| {
+        let app = app.read(cx);
+        (
+            app.run_controls.sessions().len(),
+            app.status.clone(),
+            app.tabs[0].editor.read(cx).value().to_string(),
+        )
+    });
+    assert_eq!(sessions, 0, "a refused save starts no session");
+    assert!(
+        !status.contains("已启动") && !status.contains("正在准备"),
+        "the status does not claim a launch that did not happen: {status}"
+    );
+    // The reason has to be the save gate's own. Without this, a launch refused earlier — for a missing
+    // configuration or a missing provider — would satisfy every assertion above while measuring nothing,
+    // which is exactly how this check first passed.
+    // The reason is the save gate's own message. The dialog's text is localized, so the check names the
+    // message the gate produces rather than one language's rendering of it.
+    assert!(
+        status.contains("changed on disk") || status.contains("保存失败"),
+        "the launch stopped at the save step, not somewhere before it: {status}"
+    );
+    // The user's buffer is untouched: the launch stopped instead of discarding or overwriting it.
+    assert!(
+        restored.contains("本地修改"),
+        "the unsaved edit is still there: {restored}"
+    );
+    let _ = std::fs::remove_file(config_file);
+}
+
 #[gpui::test]
 fn a_launch_saves_modified_documents_before_starting(cx: &mut TestAppContext) {
     let root = tempfile::tempdir().unwrap();
