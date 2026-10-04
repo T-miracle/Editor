@@ -1313,14 +1313,11 @@ impl EditorApp {
         ) {
             return;
         }
-        let capabilities = self.run_controls.debug_capabilities;
         let Some(provider_session) = self.run_controls.debug_provider_session() else {
             return;
         };
-        // The frame a variable request asks about is the one the panel has selected.
-        let frame = self.run_controls.selected_debug_frame();
         let mut staged = Vec::new();
-        if capabilities.inspect
+        if self.run_controls.debug_capabilities.inspect
             && let Some(request) = self
                 .run_controls
                 .begin_debug_request(crate::run::DebugMethod::Frames, None)
@@ -1331,11 +1328,49 @@ impl EditorApp {
                 serde_json::json!({ "session": provider_session }),
             ));
         }
-        if capabilities.inspect
-            && let Some(frame) = frame
-            && let Some(request) = self
-                .run_controls
-                .begin_debug_request(crate::run::DebugMethod::Variables, Some(frame))
+        // The frame list is a new pause's description, so it carries the first frame's scope with it.
+        if let Some(frame) = self.run_controls.selected_debug_frame() {
+            self.stage_variables(cx, &provider_session, frame, &mut staged);
+        }
+        self.stage_debug_requests(cx, staged);
+    }
+
+    /// Ask for the selected frame's variables, which is a different question once the frame changes.
+    ///
+    /// Selecting a frame changes the pause's scope without changing which pause it is, so nothing else
+    /// would ask again: the panel would keep showing the previous frame's variables until some other
+    /// update happened to pass through. The request is scoped to the frame, so a second selection makes
+    /// the first answer stale rather than the two racing.
+    fn fetch_debug_frame_variables(&mut self, cx: &mut Context<Self>) {
+        if !self.run_controls.debug_capabilities.inspect {
+            return;
+        }
+        let Some(provider_session) = self.run_controls.debug_provider_session() else {
+            return;
+        };
+        let Some(frame) = self.run_controls.selected_debug_frame() else {
+            return;
+        };
+        let mut staged = Vec::new();
+        self.stage_variables(cx, &provider_session, frame, &mut staged);
+        self.stage_debug_requests(cx, staged);
+    }
+
+    /// Build the variables request for one frame, when the provider declared inspection and the
+    /// request for this pause and frame has not already been made.
+    fn stage_variables(
+        &mut self,
+        _cx: &mut Context<Self>,
+        provider_session: &str,
+        frame: u32,
+        staged: &mut Vec<(u64, &'static str, serde_json::Value)>,
+    ) {
+        if !self.run_controls.debug_capabilities.inspect {
+            return;
+        }
+        if let Some(request) = self
+            .run_controls
+            .begin_debug_request(crate::run::DebugMethod::Variables, Some(frame))
         {
             staged.push((
                 request,
@@ -1343,13 +1378,20 @@ impl EditorApp {
                 serde_json::json!({ "session": provider_session, "frame": frame }),
             ));
         }
+    }
+
+    /// Send the staged debug calls, releasing any the worker refused rather than awaiting it forever.
+    fn stage_debug_requests(
+        &mut self,
+        cx: &mut Context<Self>,
+        staged: Vec<(u64, &'static str, serde_json::Value)>,
+    ) {
         for (request, method, arguments) in staged {
             if !self
                 .extensions
                 .read(cx)
                 .stage_debug_call(request, method, arguments)
             {
-                // The request is released rather than awaited forever: nothing will answer it.
                 self.run_controls.abandon_debug_request(request);
             }
         }
@@ -2573,6 +2615,9 @@ pub(crate) fn render_run_config_form(
                             if let Err(error) = state.run_controls.select_debug_frame(frame_id) {
                                 state.status = error.to_string();
                             }
+                            // The new scope is asked for here rather than left to the next sync pass:
+                            // the pause has not changed, so nothing else would notice the selection.
+                            state.fetch_debug_frame_variables(cx);
                             cx.notify();
                         });
                     });

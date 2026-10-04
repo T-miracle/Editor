@@ -2174,6 +2174,55 @@ fn the_panel_lists_the_selected_configurations_breakpoints() {
     assert_eq!(controls.debug_breakpoint_verified("src/main.rs", 4), None);
 }
 
+/// Selecting a frame is a second question about the same pause, so it needs its own request.
+///
+/// This is what the panel's frame click relies on. The pause does not change when the selection does,
+/// so if the request key were only the pause, a second frame's variables could never be asked for —
+/// the previous frame's would stay on screen until some unrelated update happened to pass through.
+#[test]
+fn each_selected_frame_gets_its_own_variables_request() {
+    use editor_core::DebugSessionState;
+    let mut controls = controls();
+    let workspace = "C:/work".to_owned();
+    controls
+        .upsert(config("run-1", "第一个"), &workspace)
+        .unwrap();
+    controls.select("run-1", &workspace);
+    controls.note_debug_state(
+        "run-1",
+        DebugSessionState::Paused {
+            source: "src/main.rs".into(),
+            line: 2,
+            reason: None,
+        },
+    );
+    // A pause has to be begun before anything about it can be asked for.
+    controls.begin_debug_pause().expect("a selected session");
+
+    let first = controls
+        .begin_debug_request(DebugMethod::Variables, Some(1))
+        .expect("the first frame's variables are asked for");
+    // The same frame twice is one request: two answers would race to describe the same scope.
+    assert_eq!(
+        controls.begin_debug_request(DebugMethod::Variables, Some(1)),
+        None
+    );
+    // A different frame in the same pause is a different question, and is allowed.
+    let second = controls
+        .begin_debug_request(DebugMethod::Variables, Some(2))
+        .expect("a second frame is a second request");
+    assert_ne!(first, second);
+    // The frame list is asked for once per pause, whichever frame is selected.
+    let frames = controls
+        .begin_debug_request(DebugMethod::Frames, None)
+        .expect("the stack is asked for once");
+    assert_eq!(
+        controls.begin_debug_request(DebugMethod::Frames, None),
+        None
+    );
+    let _ = frames;
+}
+
 fn snapshot(
     id: u64,
     config: &str,
