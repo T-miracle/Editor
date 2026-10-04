@@ -495,7 +495,19 @@ probe C step=2..9 blocked=None      // 之后序列永远不阻塞，循环耗�
 
 **第八次尝试（已撤回）**：按上一条结论把守卫改为「序列是否已为**这个会话**发过停止」、并在离开路径跳过由序列拥有的会话。**结果：`leaving_stops…` 仍报出两次停止（`[1, 1]`）。** 说明**「离开」与「序列驱动」这两条路径在同一帧里各自发出了一次停止**，而**本轮没有找到让两者互斥的落点**——`confirm_leave` 先调 `stop_preparations()`、序列的驱动随后发送，两者之间的时序在本轮观察到的两种运行里并不一致。
 
-**另一处不确定性（如实记录）**：`extensions::native_build_tests` 的**用例总数在两次串行运行之间不同**——一次报 `5 passed; 1 failed`，另一次报 `4 passed; 1 failed`（过滤数 400 与 423）。**因此该模块的「通过数」本身不是稳定判据**，只有那一条失败用例的**失败是稳定的**。后续若要动这一块，**必须先弄清这 1 条用例的差异从何而来**，否则任何「修好了」的判断都可能是运行差异而非改动效果。
+**另一处更正（本轮实测推翻上一轮的说法）**：上一轮我记录 `extensions::native_build_tests` 的**用例数在两次运行间不同**（`5 passed` 与 `4 passed`）。**本轮连续两次运行逐条比对，用例集合完全相同**：
+
+```
+a_failing_step_blocks_every_later_step_and_the_program
+a_launch_prepares_each_step_in_order_before_the_program
+a_step_that_references_a_build_tracks_its_current_definition
+build_runs_only_the_build_actions
+stopping_during_preparation_never_starts_the_program      ← 稳定失败
+```
+
+两次都是 `4 passed; 1 failed; 423 filtered`。**因此「基线不稳定」是错的，那是我读到的一次误计数**（先前的 `5 passed / 400 filtered` 应当来自不同的过滤或我读错了行）。**该模块的判据是稳定的：5 条用例、4 通过、1 稳定失败。**
+
+**这条更正本身有价值**：前几轮我曾在同一处得到互相矛盾的读数，并据此怀疑环境；**实际是我的读数不一致，不是环境**。**后续任何关于这一块的结论，都应当以「逐条列出用例名」为准，而不是只看汇总行。**
 
 ## 未覆盖与限制
 
