@@ -53,6 +53,37 @@ fn workspace(files: &[(&str, &str)]) -> (Vec<String>, std::collections::BTreeMap
     (contents.keys().cloned().collect(), contents)
 }
 
+/// A plugin's contribution file names its discovery declarations, and each is read the same way.
+#[test]
+fn a_plugin_declares_its_discovery_files_in_its_contributions() {
+    let contributions = r#"
+[plugin]
+id = "rust"
+name = "Rust"
+version = "0.3.0"
+host_version = ">=0.1.0"
+
+[[run_targets]]
+id = "rust-binary"
+file = "run-targets/rust.json"
+"#;
+    let manifest = crate::PluginManifest::parse(contributions).expect("the file is valid");
+    assert_eq!(manifest.run_targets.len(), 1);
+    assert_eq!(manifest.run_targets[0].id, "rust-binary");
+    assert_eq!(
+        manifest.run_targets[0].file,
+        std::path::PathBuf::from("run-targets/rust.json")
+    );
+    // A field the host does not define is refused rather than silently dropped.
+    assert!(
+        crate::PluginManifest::parse(
+            "[plugin]\nid = \"x\"\nname = \"x\"\nversion = \"1.0.0\"\nhost_version = \">=0.1.0\"\n\
+             [[run_targets]]\nid = \"x\"\nfile = \"a.json\"\nmode = \"magic\"\n"
+        )
+        .is_err()
+    );
+}
+
 /// A Rust project's own manifest is recognized by the provider that declared how to read it.
 #[test]
 fn a_rust_manifest_yields_the_package_target() {

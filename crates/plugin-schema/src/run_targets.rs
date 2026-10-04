@@ -50,6 +50,12 @@ fn current_version() -> u32 {
 pub struct DiscoveryRule {
     /// The file to read, relative to the workspace; `*` matches one path segment.
     pub file: String,
+    /// A table that must exist before this rule applies at all, as `a.b`.
+    ///
+    /// This is how a provider says "only describe this shape when the file declares it", which is
+    /// what keeps a general rule from also firing on a file that names its entries explicitly.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub when_present: Option<String>,
     /// Values this rule must find before it offers anything.
     pub fields: Vec<FieldShape>,
     /// One target per match, named from these fields.
@@ -169,6 +175,14 @@ impl RunTargetDiscovery {
             ));
         }
         for rule in &self.rules {
+            if let Some(section) = &rule.when_present
+                && !bounded(section)
+            {
+                return Err(DiscoveryError::Invalid(format!(
+                    "rule {} has an unusable guard section",
+                    rule.file
+                )));
+            }
             if !bounded(&rule.file) || Path::new(&rule.file).is_absolute() {
                 return Err(DiscoveryError::Invalid(format!(
                     "rule file must be workspace-relative: {}",
@@ -239,8 +253,10 @@ impl RunTargetDiscovery {
         read: impl Fn(&str) -> Option<String>,
     ) -> Vec<DiscoveredTarget> {
         let mut targets = Vec::new();
-        for pattern in self.file_patterns() {
-            for path in resolve_pattern(&pattern, files) {
+        // Each rule is applied on its own, so two rules reading the same file describe two shapes
+        // instead of one rule shadowing the other.
+        for rule in &self.rules {
+            for path in resolve_pattern(&rule.file, files) {
                 let Some(contents) = read(&path) else {
                     continue;
                 };
@@ -251,10 +267,13 @@ impl RunTargetDiscovery {
                     // told about parse errors it did not ask to report.
                     Err(_) => continue,
                 };
-                let Some(values) = self.values_of(&document, &path) else {
+                if !rule_applies(rule, &document) {
+                    continue;
+                }
+                let Some(values) = self.values_of(rule, &document) else {
                     continue;
                 };
-                for target in self.targets_of(&values, &path) {
+                for target in self.targets_of(rule, &values, &path) {
                     if targets.len() >= MAX_DISCOVERED_TARGETS {
                         return targets;
                     }
@@ -265,17 +284,12 @@ impl RunTargetDiscovery {
         targets
     }
 
-    /// The declared file patterns, in declaration order.
-    fn file_patterns(&self) -> Vec<String> {
-        self.rules.iter().map(|rule| rule.file.clone()).collect()
-    }
-
-    /// Read one recognized file's declared values, or `None` when a required one is missing.
-    fn values_of(&self, document: &toml::Value, path: &str) -> Option<BTreeMap<String, String>> {
-        let rule = self
-            .rules
-            .iter()
-            .find(|rule| pattern_matches(&rule.file, path))?;
+    /// Read one rule's declared values, or `None` when a required one is missing.
+    fn values_of(
+        &self,
+        rule: &DiscoveryRule,
+        document: &toml::Value,
+    ) -> Option<BTreeMap<String, String>> {
         let mut values = BTreeMap::new();
         for field in &rule.fields {
             let found =
@@ -291,17 +305,15 @@ impl RunTargetDiscovery {
         Some(values)
     }
 
-    /// The targets one recognized file contributes.
-    fn targets_of(&self, values: &BTreeMap<String, String>, path: &str) -> Vec<DiscoveredTarget> {
-        let Some(rule) = self
-            .rules
-            .iter()
-            .find(|rule| pattern_matches(&rule.file, path))
-        else {
-            return Vec::new();
-        };
-        // Without a target shape the file itself is the target, named by its first required field:
-        // a provider that runs one thing per file does not have to repeat itself.
+    /// The targets one rule's values describe.
+    fn targets_of(
+        &self,
+        rule: &DiscoveryRule,
+        values: &BTreeMap<String, String>,
+        path: &str,
+    ) -> Vec<DiscoveredTarget> {
+        // Without a target shape the file itself is the target, named by its first present field: a
+        // provider that runs one thing per file does not have to repeat itself.
         if rule.targets.is_empty() {
             let Some(name) = rule.fields.iter().find_map(|field| values.get(&field.name)) else {
                 return Vec::new();
@@ -427,6 +439,21 @@ fn segment_matches(pattern: &str, segment: &str) -> bool {
             rest = &rest[position + part.len()..];
         } else {
             return false;
+        }
+    }
+    true
+}
+
+/// Whether a rule's guard is satisfied by this file.
+fn rule_applies(rule: &DiscoveryRule, document: &toml::Value) -> bool {
+    let Some(section) = &rule.when_present else {
+        return true;
+    };
+    let mut current = document;
+    for part in section.split('.') {
+        match current.get(part) {
+            Some(next) => current = next,
+            None => return false,
         }
     }
     true

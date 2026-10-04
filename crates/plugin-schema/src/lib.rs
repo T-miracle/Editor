@@ -46,6 +46,22 @@ pub struct PluginManifest {
     pub file_icons: Option<PathBuf>,
     #[serde(default)]
     pub theme: Option<ThemeContribution>,
+    /// Runnable targets this plugin can offer, declared as a list of discovery files.
+    ///
+    /// A plugin may declare several providers with different identities and target types; the host
+    /// reads each declaration and applies it without knowing what the plugin runs.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub run_targets: Vec<RunTargetContribution>,
+}
+
+/// One discovery declaration a plugin contributes, and where it lives in the package.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct RunTargetContribution {
+    /// Stable identity of this provider within the plugin, so a saved configuration can name it.
+    pub id: String,
+    /// JSON file holding the declaration, relative to the plugin root.
+    pub file: PathBuf,
 }
 
 /// Identifies a theme's JSON file containing forced file icon overrides.

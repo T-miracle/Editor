@@ -1,7 +1,10 @@
 //! Loads installed declarative resources through the same registry as WASM plugins.
 
 use plugin_runtime::{Installed, Manager};
-use plugin_schema::{FileIconConfig, PluginManifest, ThemeDefinition, ThemeFile, ThemeMode};
+use plugin_schema::{
+    DiscoveredTarget, FileIconConfig, PluginManifest, ProviderFailure, RunTargetDiscovery,
+    ThemeDefinition, ThemeFile, ThemeMode,
+};
 use std::{
     collections::BTreeMap,
     path::{Path, PathBuf},
@@ -22,6 +25,8 @@ struct Contribution {
     icons: Option<FileIconConfig>,
     theme_icons: Option<FileIconConfig>,
     theme: Option<ThemeFile>,
+    /// Discovery declarations this plugin contributes, already validated.
+    run_targets: Vec<Arc<RunTargetDiscovery>>,
     assets: BTreeMap<String, Vec<u8>>,
 }
 
@@ -157,6 +162,15 @@ impl Contribution {
                 )?)?)?)
             })
             .transpose()?;
+        let (run_targets, failures) = read_run_targets(&root, &manifest.run_targets);
+        for failure in &failures {
+            tracing::warn!(
+                plugin = %id,
+                provider = %failure.provider,
+                error = %failure.error,
+                "run target discovery unavailable"
+            );
+        }
         let mut assets = BTreeMap::new();
         for config in [&icons, &theme_icons].into_iter().flatten() {
             for icon in &config.icons {
@@ -183,9 +197,59 @@ impl Contribution {
             icons,
             theme_icons,
             theme,
+            run_targets,
             assets,
         })
     }
+}
+
+/// Whether a declaration may stand for the contribution that announced it.
+///
+/// The declaration's own identity is what a saved configuration names, so it has to be the identity
+/// the contribution file announced; otherwise the two could disagree silently and a configuration
+/// would point at a provider nobody installed.
+pub fn declaration_matches_contribution(
+    contribution: &str,
+    declaration: &str,
+) -> Result<(), String> {
+    if contribution == declaration {
+        return Ok(());
+    }
+    Err(format!(
+        "declaration names provider {declaration} but the contribution names {contribution}"
+    ))
+}
+
+/// Read every discovery declaration a plugin contributes.
+///
+/// Each declaration is validated as it is read, so a plugin that ships an unusable one is reported
+/// with the file that failed instead of taking the rest of its contributions down with it.
+fn read_run_targets(
+    root: &Path,
+    contributions: &[plugin_schema::RunTargetContribution],
+) -> (Vec<Arc<RunTargetDiscovery>>, Vec<ProviderFailure>) {
+    let mut providers = Vec::new();
+    let mut failures = Vec::new();
+    // The package root is resolved once, so a declaration may only name files inside it.
+    let resolved = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
+    for contribution in contributions {
+        let provider = contribution.id.clone();
+        let read = || -> anyhow::Result<RunTargetDiscovery> {
+            let bytes = read_asset(&resolved, &contribution.file)?;
+            Ok(RunTargetDiscovery::from_json(&bytes)?)
+        };
+        match read() {
+            Ok(discovery) => match declaration_matches_contribution(&provider, &discovery.id) {
+                Ok(()) => providers.push(Arc::new(discovery)),
+                Err(error) => failures.push(ProviderFailure { provider, error }),
+            },
+            Err(error) => failures.push(ProviderFailure {
+                provider,
+                error: format!("{error:#}"),
+            }),
+        }
+    }
+    (providers, failures)
 }
 
 fn read_icons(root: &Path, path: &Path) -> anyhow::Result<FileIconConfig> {
@@ -250,6 +314,68 @@ fn language_for_path_in_catalog(
     None
 }
 
+/// Run every enabled plugin's discovery declarations against one workspace.
+///
+/// Each declaration is applied independently, so a provider that offers nothing — or offers
+/// something unusable — cannot stop another provider from offering its own targets. The candidates
+/// are gathered here and handed on; nothing in this module decides what a candidate means.
+pub fn discover_run_targets(workspace: &Path) -> Vec<DiscoveredTarget> {
+    let providers = CATALOG
+        .read()
+        .unwrap()
+        .plugins
+        .values()
+        .flat_map(|contribution| contribution.run_targets.iter().cloned())
+        .collect::<Vec<_>>();
+    if providers.is_empty() {
+        return Vec::new();
+    }
+    // The caller lists the files once, so every provider reads the same view of the project and a
+    // wildcard pattern cannot reach a file the workspace never offered.
+    let files = workspace_files(workspace);
+    let mut targets = Vec::new();
+    for provider in providers {
+        targets.extend(provider.discover(&files, |path| {
+            let resolved = workspace.join(path);
+            // A declaration may only read regular files inside the workspace it was given.
+            (resolved.starts_with(workspace) && resolved.is_file())
+                .then(|| std::fs::read_to_string(resolved).ok())
+                .flatten()
+        }));
+    }
+    targets
+}
+
+/// Workspace-relative file names, bounded so a discovery walk stays a bounded read.
+fn workspace_files(workspace: &Path) -> Vec<String> {
+    /// Most names one discovery walk offers to the providers.
+    const MAX_LISTED_FILES: usize = 20000;
+    let mut files = Vec::new();
+    let mut pending = vec![workspace.to_path_buf()];
+    while let Some(directory) = pending.pop() {
+        let Ok(entries) = std::fs::read_dir(&directory) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let name = entry.file_name();
+            // Generated directories are never discovery inputs and would dominate the walk.
+            if matches!(name.to_str(), Some(".git" | "target" | "node_modules")) {
+                continue;
+            }
+            if path.is_dir() {
+                pending.push(path);
+            } else if let Ok(relative) = path.strip_prefix(workspace) {
+                files.push(relative.to_string_lossy().replace('\\', "/"));
+                if files.len() >= MAX_LISTED_FILES {
+                    return files;
+                }
+            }
+        }
+    }
+    files
+}
+
 /// Locate an enabled package so its grammar can be validated off the UI thread.
 #[cfg(test)]
 pub fn plugin_root(id: &str) -> Option<PathBuf> {
@@ -301,6 +427,84 @@ pub fn asset(path: &str) -> Option<Vec<u8>> {
 mod tests {
     use super::*;
 
+    /// The shipped Rust plugin's declaration is read and applied by the host's own code.
+    ///
+    /// This is the vertical seam for discovery: the package's contribution file, the declaration it
+    /// names, and the candidates a real Cargo manifest produces — with no host knowledge of Rust.
+    #[test]
+    fn the_rust_plugin_offers_a_real_projects_targets() {
+        let plugins = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../plugins");
+        let rust = Contribution::read(
+            &plugins.join("rust"),
+            "plugin.toml",
+            "rust",
+            &"b".repeat(64),
+        )
+        .unwrap_or_else(|error| panic!("the shipped rust plugin reads: {error:#}"));
+        assert_eq!(rust.run_targets.len(), 1);
+        assert_eq!(rust.run_targets[0].id, "rust-binary");
+        assert_eq!(rust.run_targets[0].target_type, "rust-binary");
+
+        let project = tempfile::tempdir().unwrap();
+        std::fs::write(
+            project.path().join("Cargo.toml"),
+            "[package]\nname = \"my-app\"\nversion = \"0.4.0\"\n",
+        )
+        .unwrap();
+        std::fs::create_dir_all(project.path().join("src")).unwrap();
+        std::fs::write(project.path().join("src/main.rs"), "fn main() {}").unwrap();
+        let mut catalog = Catalog::default();
+        catalog.plugins.insert("rust".to_owned(), rust);
+        *CATALOG.write().unwrap() = Arc::new(catalog);
+        let targets = discover_run_targets(project.path());
+        assert_eq!(targets.len(), 1, "{targets:?}");
+        let target = &targets[0];
+        assert_eq!(target.id, "rust-binary:my-app");
+        assert_eq!(target.provider, "rust-binary");
+        assert_eq!(target.label, "my-app");
+        assert_eq!(target.found_in, "Cargo.toml");
+        assert_eq!(
+            target.fields.get("package").map(String::as_str),
+            Some("my-app")
+        );
+        assert_eq!(
+            target.fields.get("version").map(String::as_str),
+            Some("0.4.0")
+        );
+
+        // A project without a manifest simply offers nothing.
+        let empty = tempfile::tempdir().unwrap();
+        assert!(discover_run_targets(empty.path()).is_empty());
+        // Restore the catalog so another check does not inherit this one's plugins.
+        *CATALOG.write().unwrap() = Arc::new(Catalog::default());
+    }
+
+    /// A declaration that disagrees with its contribution file is reported, not silently accepted.
+    #[test]
+    fn a_mismatched_discovery_identity_is_refused() {
+        assert!(declaration_matches_contribution("rust-binary", "rust-binary").is_ok());
+        let error = declaration_matches_contribution("declared", "other")
+            .expect_err("a declaration naming another provider is refused");
+        assert!(
+            error.contains("other") && error.contains("declared"),
+            "{error}"
+        );
+        // A contribution whose file is absent is reported with the file it named.
+        let directory = tempfile::tempdir().unwrap();
+        let (providers, failures) = read_run_targets(
+            directory.path(),
+            &[plugin_schema::RunTargetContribution {
+                id: "declared".into(),
+                file: PathBuf::from("missing.json"),
+            }],
+        );
+        assert!(providers.is_empty());
+        assert_eq!(failures.len(), 1);
+        assert_eq!(failures[0].provider, "declared");
+        // The reason comes from the platform and is not asserted word for word, but a plugin that
+        // names a file it does not ship has to be reported rather than quietly offering nothing.
+        assert!(!failures[0].error.trim().is_empty());
+    }
     /// Startup resource loading must reject old protocols before opening their grammar/theme/icon assets.
     #[test]
     fn incompatible_resource_records_do_not_publish_contributions() {

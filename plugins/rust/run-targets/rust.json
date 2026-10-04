@@ -1,0 +1,29 @@
+{
+  "version": 1,
+  "id": "rust-binary",
+  "name": "Rust 可执行目标",
+  "target_type": "rust-binary",
+  "rules": [
+    {
+      "file": "Cargo.toml",
+      "fields": [
+        {"name": "package", "section": "package", "key": "name"},
+        {"name": "version", "section": "package", "key": "version", "optional": true}
+      ],
+      "targets": [
+        {"name_from": "package", "fields": ["package", "version"]}
+      ]
+    },
+    {
+      "file": "Cargo.toml",
+      "when_present": "bin",
+      "fields": [
+        {"name": "bin", "section": "bin", "key": "name"},
+        {"name": "package", "section": "package", "key": "name", "optional": true}
+      ],
+      "targets": [
+        {"name_from": "bin", "fields": ["bin", "package"]}
+      ]
+    }
+  ]
+}
