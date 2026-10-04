@@ -166,6 +166,11 @@ pub struct RunControls {
     step_sessions: BTreeMap<u64, (String, usize)>,
     /// Status queries awaiting their provider's answer, keyed by the request identity.
     polls: Vec<PendingPoll>,
+    /// The step each staged request prepares, keyed by the request identity.
+    ///
+    /// The request identity is this editor's own, so a session is joined to its step by the identity
+    /// the launch was requested under rather than by anything a provider reports back.
+    step_requests: BTreeMap<u64, (String, usize)>,
     /// Storage directory used for host-local configuration files.
     root: Option<std::path::PathBuf>,
     /// Set when the stored file could not be read or written; shown instead of silently defaulting.
@@ -193,6 +198,7 @@ impl Default for RunControls {
             sequences: BTreeMap::new(),
             step_sessions: BTreeMap::new(),
             polls: Vec::new(),
+            step_requests: BTreeMap::new(),
             root: None,
             error: None,
         }
@@ -239,6 +245,8 @@ impl RunControls {
         if let Some(sequence) = self.sequences.get_mut(config) {
             sequence.requested(index, request_id);
         }
+        self.step_requests
+            .insert(request_id, (config.to_owned(), index));
     }
 
     /// Whether a status query for this step is already outstanding.
@@ -403,12 +411,47 @@ impl RunControls {
         })
     }
 
+    /// The configuration's own build actions, and nothing else.
+    ///
+    /// This is what the Build control runs: a build never executes a pre-launch step, because those
+    /// exist to prepare a launch rather than to produce the build's output.
+    pub fn prepare_build(
+        &self,
+        id: &str,
+        workspace_root: &str,
+        limit: usize,
+    ) -> Result<RunPlan, String> {
+        let config = self
+            .configs
+            .configurations
+            .iter()
+            .find(|config| config.id == id)
+            .ok_or_else(|| "运行配置不存在，请重新选择".to_owned())?;
+        let mut steps = Vec::new();
+        for step in &config.build {
+            steps.push(self.action_step(
+                config,
+                StepKind::Build,
+                &step.name,
+                &step.target,
+                workspace_root,
+            )?);
+        }
+        if steps.is_empty() {
+            return Err("该配置没有构建操作".to_owned());
+        }
+        if limit == 0 || steps.len() > limit {
+            return Err(format!("一次构建不能超过 {limit} 个操作"));
+        }
+        Ok(RunPlan { steps })
+    }
+
     /// Every action a launch performs for one configuration, in order: build, then each pre-launch
     /// step, then the program.
     ///
     /// A step that names another configuration expands that configuration's build actions here, once,
-    /// so the sequence cannot change halfway through a launch. `limit` bounds a plan without a
-    /// program, which is what a build-only request produces.
+    /// so the sequence cannot change halfway through a launch. `limit` bounds the preparation, which
+    /// is what a launch computes before its program is appended.
     pub fn prepare(&self, id: &str, workspace_root: &str, limit: usize) -> Result<RunPlan, String> {
         let config = self
             .configs
@@ -673,6 +716,36 @@ impl RunControls {
         }
     }
 
+    /// Whether a preparation has finished: everything it prepared completed, and the program it ends
+    /// with — when it has one — is the session now running.
+    ///
+    /// This is what the native acceptance waits on, so readiness is read from the sequence's own
+    /// state rather than inferred from how many sessions happen to exist.
+    pub fn preparation_complete(&self, config: &str) -> bool {
+        let Some(sequence) = self.sequences.get(config) else {
+            return true;
+        };
+        if sequence.blocked_by().is_some() {
+            return false;
+        }
+        // A finished preparation whose last step is the program it launched is complete even though
+        // the sequence still owns that program: the launch succeeded, which is what was asked.
+        match sequence.steps().last().map(|step| &step.state) {
+            Some(StepState::Running { .. }) => true,
+            Some(_) => false,
+            None => !sequence.is_active(),
+        }
+    }
+
+    /// Whether a preparation has stopped for good, with the reason it stopped.
+    pub fn preparation_blocked(&self, config: &str) -> Option<String> {
+        self.sequences.get(config).and_then(|sequence| {
+            (!sequence.is_active())
+                .then(|| sequence.blocked_by().map(str::to_owned))
+                .flatten()
+        })
+    }
+
     /// Whether a launch request for this configuration is still awaiting its session identity.
     pub fn is_pending(&self, config: &str) -> bool {
         self.pending.iter().any(|pending| pending.config == config)
@@ -707,13 +780,10 @@ impl RunControls {
     /// The Build control asks this before it is enabled, so a disabled button always has a reason a
     /// user can read rather than a control that silently does nothing.
     pub fn preparation_error(&self, config: &str) -> Option<String> {
-        let Some(stored) = self.configs.find(config) else {
+        if self.configs.find(config).is_none() {
             return Some("运行配置不存在，请重新选择".into());
-        };
-        if stored.build.is_empty() {
-            return Some("该配置没有构建操作".into());
         }
-        self.prepare(config, "", MAX_PREPARED_STEPS).err()
+        self.prepare_build(config, "", MAX_PREPARED_STEPS).err()
     }
 
     /// Begin preparing a configuration, using the launch identity the caller already reserved.
@@ -765,6 +835,30 @@ impl RunControls {
             request_id,
             step: None,
         });
+    }
+
+    /// Join published sessions to the preparation steps that requested them.
+    ///
+    /// A step owns its session from the moment the runtime reports it, not from the moment its
+    /// provider confirms the program: waiting for confirmation would leave the step unowned while a
+    /// second click could request it again. The step's request identity is checked against the
+    /// session's, so a session that belongs to a different launch is never adopted.
+    pub fn adopt_step_sessions(&mut self, published: &[(u64, u64, Option<String>)]) {
+        for (session, request_id, provider_session) in published {
+            let Some((config, index)) = self.step_by_request(*request_id) else {
+                continue;
+            };
+            if let Some(sequence) = self.sequences.get_mut(&config) {
+                sequence.started(index, *session, provider_session.clone());
+            }
+            self.step_sessions
+                .insert(*session, (config.to_owned(), index));
+        }
+    }
+
+    /// The preparation step whose request identity matches, if any.
+    fn step_by_request(&self, request_id: u64) -> Option<(String, usize)> {
+        self.step_requests.get(&request_id).cloned()
     }
 
     /// Record the session the runtime published for one step of a configuration's preparation.
@@ -880,6 +974,23 @@ impl RunControls {
             stopped.push((config.clone(), sequence.current_session()));
         }
         stopped
+    }
+
+    /// Record that a session a preparation was stopping has ended.
+    ///
+    /// The sequence was already blocked by the stop request, so this only closes the step that owned
+    /// the session: no later step can start, and the preparation stops reporting work in progress.
+    pub fn note_preparation_stopped(&mut self, session: u64) -> Option<String> {
+        let (config, _) = self.step_sessions.get(&session)?.clone();
+        let sequence = self.sequences.get_mut(&config)?;
+        sequence.stopped(session);
+        self.poll_config(&config);
+        Some(config)
+    }
+
+    /// Drop every status query belonging to one configuration's preparation.
+    fn poll_config(&mut self, config: &str) {
+        self.polls.retain(|poll| poll.config != config);
     }
 
     /// Drop finished preparations, keeping only what is still running.

@@ -287,26 +287,82 @@ pub(super) fn pump(
 ///
 /// Host launches travel the same public contract any plugin uses, so the test harness performs
 /// exactly what the production worker does with this work item.
+///
+/// Returns the provider answers collected for pending status queries, which a frame then publishes
+/// the way the production worker does.
 pub(super) fn pump_recording(
     manager: &mut plugin_runtime::Manager,
     app: &Entity<EditorApp>,
     cx: &mut gpui_kit::VisualTestContext,
     launches: &mut Vec<(u64, String, u64)>,
+) -> (
+    Vec<(String, u64, super::RunStatus)>,
+    Vec<(String, u64, Result<(), String>)>,
 ) {
+    let mut stop_results: Vec<(String, u64, Result<(), String>)> = Vec::new();
     let mut work: Vec<_> = cx.update(|_, cx| {
-        app.read(cx)
+        let recorder = app
+            .read(cx)
             .extensions
             .read(cx)
             .worker
             .recorded
             .lock()
-            .unwrap()
-            .try_iter()
-            .collect()
+            .unwrap();
+        let mut collected = Vec::new();
+        // Drain by receive rather than by iterator: an item staged between two frames must not be
+        // skipped, which is exactly what a status query depends on.
+        while let Ok(item) = recorder.try_recv() {
+            collected.push(item);
+        }
+        collected
     });
     // A host launch reaches the runtime through the same public contract any plugin uses, so the
     // test harness performs exactly what the production worker would do with this work item. These
     // are taken first so the ordinary branches below keep their by-value patterns.
+    // A status query observes one step's program, so the harness asks the same runtime the
+    // production worker would ask and records the answer where the worker publishes it.
+    let mut statuses: Vec<(String, u64, super::RunStatus)> = Vec::new();
+    // A stop is performed exactly as the production worker performs it: through the session's own
+    // provider, with the answer recorded where the worker publishes it.
+    work.retain(|item| match item {
+        Work::StopRun {
+            session,
+            config,
+            request_id,
+        } => {
+            let result = manager
+                .stop_execution(*session)
+                .map_err(|error| format!("{error:#}"));
+            stop_results.push((config.clone(), *request_id, result));
+            false
+        }
+        _ => true,
+    });
+    work.retain(|item| match item {
+        Work::PollRun {
+            session,
+            config,
+            request_id,
+        } => {
+            let status = match manager.query_execution(*session) {
+                Ok(completion) => {
+                    manager.poll_request(&completion);
+                    match completion.status() {
+                        protocol::api::RequestUpdate::Completed { result: Ok(value) } => {
+                            super::RunStatus::from_value(&value)
+                        }
+                        other => super::RunStatus::Unknown,
+                    }
+                }
+                Err(error) => super::RunStatus::Unknown,
+            };
+            statuses.push((config.clone(), *request_id, status));
+            false
+        }
+        _ => true,
+    });
+    let _ = &mut statuses;
     work.retain(|item| match item {
         Work::StartRun {
             request,
@@ -351,6 +407,7 @@ pub(super) fn pump_recording(
             }
         }
     }
+    (statuses, stop_results)
 }
 
 /// The existing worker publication seam also supplies the actual asynchronous vector renderer output.
@@ -370,6 +427,20 @@ pub(super) fn publish_with_launches(
     app: &Entity<EditorApp>,
     cx: &mut gpui_kit::VisualTestContext,
     launches: &[(u64, String, u64)],
+) {
+    // A frame on its own carries no pending provider answer.
+    publish_frame(manager, renderer, app, cx, launches, Vec::new(), Vec::new());
+}
+
+/// Publish one frame together with the answers the harness collected for pending status queries.
+pub(super) fn publish_frame(
+    manager: &mut plugin_runtime::Manager,
+    renderer: &mut images::VectorRenderer,
+    app: &Entity<EditorApp>,
+    cx: &mut gpui_kit::VisualTestContext,
+    launches: &[(u64, String, u64)],
+    mut statuses: Vec<(String, u64, super::RunStatus)>,
+    stop_results: Vec<(String, u64, Result<(), String>)>,
 ) {
     let scenes: BTreeMap<_, _> = manager
         .live
@@ -406,6 +477,9 @@ pub(super) fn publish_with_launches(
             state.entries = manager.published_entries();
             state.views = scenes;
             state.images = images;
+            // A provider answer about a preparation step reaches the UI the way the worker publishes it.
+            state.run_status.extend(statuses.drain(..));
+            state.stop_results.extend(stop_results);
             // The launch identity recorded by the harness joins each published session to its request.
             state.host_executions = host_executions
                 .iter()

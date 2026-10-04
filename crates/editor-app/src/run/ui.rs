@@ -275,22 +275,22 @@ impl EditorApp {
     /// Read published host sessions into the run controls before the frame is painted.
     pub(crate) fn sync_run_controls(&mut self, cx: &mut Context<Self>) {
         let (executions, errors, stops, statuses) = self.extensions.read(cx).take_host_runs();
+
         self.run_controls.reconcile(&executions);
-        // A step's session belongs to its preparation, so the sequence learns about it before the
-        // next step can be requested.
-        for execution in &executions {
-            if let Some(step) = self.run_controls.step_of(execution.id) {
-                let (config, index) = (step.0.to_owned(), step.1);
-                if execution.state == plugin_runtime::ExecutionState::Running {
-                    self.run_controls.sequence_started(
-                        &config,
-                        index,
-                        execution.id,
-                        execution.provider_session.clone(),
-                    );
-                }
-            }
-        }
+        // A step's session belongs to its preparation as soon as the runtime publishes it, so the
+        // sequence owns it before the provider has even confirmed the program.
+        let adopted = executions
+            .iter()
+            .map(|execution| {
+                (
+                    execution.id,
+                    execution.request_id,
+                    execution.provider_session.clone(),
+                )
+            })
+            .collect::<Vec<_>>();
+        self.run_controls.adopt_step_sessions(&adopted);
+
         if let Some((_, _, message)) = errors.first() {
             // A refused start is reported where the launch was requested instead of failing silently.
             self.status = message.clone();
@@ -298,13 +298,17 @@ impl EditorApp {
         for (session, result) in self.run_controls.reconcile_stops(&stops) {
             // An acknowledgement means the provider was asked, not that the program has exited, so
             // the visible state never claims more than the provider actually reported.
-            self.status = match result {
+            self.status = match &result {
                 Ok(()) => format!("已请求停止会话 {session}"),
                 Err(message) => format!("停止会话 {session} 失败：{message}"),
             };
+            if result.is_ok() {
+                // A preparation that was stopping is now finished rather than still working.
+                self.run_controls.note_preparation_stopped(session);
+            }
         }
         // An observed end advances its sequence; a program still running is not progress.
-        for (config, _, _) in self.run_controls.reconcile_run_status(&statuses) {
+        for (config, _, outcome) in self.run_controls.reconcile_run_status(&statuses) {
             self.drive_preparation(cx);
             if let Some(sequence) = self.run_controls.preparation(&config)
                 && !sequence.is_active()
@@ -805,6 +809,7 @@ impl EditorApp {
                     return;
                 }
                 let request_id = self.run_controls.begin(&config.id);
+
                 self.run_controls
                     .begin_sequence(&config.id, plan, request_id);
                 // Extra entries belong to this launch only. The plan already carries the
@@ -860,9 +865,10 @@ impl EditorApp {
             return;
         }
         let root = self.workspace_key();
+        // A build plan holds the build actions only: Build must never run a pre-launch step.
         let plan = match self
             .run_controls
-            .prepare(&config.id, &root, MAX_PREPARED_STEPS)
+            .prepare_build(&config.id, &root, MAX_PREPARED_STEPS)
         {
             Ok(plan) => plan,
             Err(message) => {

@@ -176,6 +176,93 @@ fn a_plan_beyond_its_bound_is_refused() {
     assert!(message.contains('2'), "{message}");
 }
 
+/// A preparation step owns its session from the moment the runtime answers its request.
+#[test]
+fn a_published_session_joins_the_step_that_requested_it() {
+    let mut controls = controls();
+    controls
+        .upsert(
+            with_steps("run-1", "运行", "构建 = cargo.exe | build", ""),
+            "C:/work",
+        )
+        .unwrap();
+    let plan = controls
+        .prepare_launch("run-1", "C:/work", 16)
+        .expect("the plan is usable");
+    let launch = controls.begin("run-1");
+    controls.begin_sequence("run-1", plan, launch);
+    // The step is requested under its own identity before its session exists.
+    let step_request = controls.begin("run-1");
+    controls.note_step_request("run-1", 0, step_request);
+    controls.adopt_step_sessions(&[(7, step_request, Some("1".into()))]);
+    let sequence = controls.preparation("run-1").unwrap();
+    assert_eq!(sequence.current_session(), Some(7));
+    assert!(sequence.is_active());
+    // A session belonging to no request of this editor is not adopted.
+    controls.adopt_step_sessions(&[(8, step_request + 99, None)]);
+    assert_eq!(
+        controls.preparation("run-1").unwrap().current_session(),
+        Some(7)
+    );
+}
+
+/// An observed step end advances or blocks the sequence that is waiting on it.
+#[test]
+fn an_observed_step_end_advances_or_blocks_its_sequence() {
+    let mut controls = controls();
+    controls
+        .upsert(
+            with_steps(
+                "run-1",
+                "运行",
+                "构建 = cargo.exe | build",
+                "生成 = tool.exe | gen",
+            ),
+            "C:/work",
+        )
+        .unwrap();
+    let plan = controls
+        .prepare_launch("run-1", "C:/work", 16)
+        .expect("the plan is usable");
+    let launch = controls.begin("run-1");
+    controls.begin_sequence("run-1", plan, launch);
+    let first = controls.begin("run-1");
+    controls.note_step_request("run-1", 0, first);
+    controls.adopt_step_sessions(&[(7, first, Some("1".into()))]);
+    // A successful end advances to the second step.
+    let poll = controls.begin_poll("run-1", 0, 7);
+    let applied = controls.reconcile_run_status(&[(
+        "run-1".into(),
+        poll,
+        crate::extensions::RunStatus::Ended { code: Some(0) },
+    )]);
+    assert_eq!(applied.len(), 1, "the observation advanced the sequence");
+    let sequence = controls.preparation("run-1").unwrap();
+    assert_eq!(sequence.current_index(), 1);
+    assert_eq!(
+        sequence.current_step().map(|step| step.name.as_str()),
+        Some("生成")
+    );
+    // A failing end blocks the launch and names the step that caused it.
+    let second = controls.begin("run-1");
+    controls.note_step_request("run-1", 1, second);
+    controls.adopt_step_sessions(&[(8, second, Some("2".into()))]);
+    let poll = controls.begin_poll("run-1", 1, 8);
+    let applied = controls.reconcile_run_status(&[(
+        "run-1".into(),
+        poll,
+        crate::extensions::RunStatus::Ended { code: Some(4) },
+    )]);
+    assert_eq!(applied.len(), 1);
+    let sequence = controls.preparation("run-1").unwrap();
+    assert!(!sequence.is_active());
+    assert!(
+        sequence
+            .blocked_by()
+            .is_some_and(|reason| reason.contains('4'))
+    );
+}
+
 fn snapshot(
     id: u64,
     config: &str,

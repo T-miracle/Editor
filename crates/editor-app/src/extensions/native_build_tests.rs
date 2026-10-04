@@ -1,0 +1,535 @@
+//! The vertical acceptance for ordered preparation: build actions and pre-launch steps.
+//!
+//! Every assertion is about something a user can observe: which programs ran, in which order, what a
+//! failure stopped, and whether a program was started at all. The real terminal package and the
+//! worker's own work items are used, so no test-only host API is introduced.
+#![cfg(windows)]
+use super::composable_tests::{publish_frame, publish_with_launches, pump_recording};
+use super::*;
+use gpui_kit::{TestAppContext, gpui};
+
+/// One prepared action as the configuration form writes it: `名称 = 程序 | 参数`.
+fn action(name: &str, script: &str) -> String {
+    format!("{name} = powershell.exe | -NoProfile | -Command | {script}")
+}
+
+/// Install the real terminal package and open the editor on one configuration with these steps.
+fn fixture<'a>(
+    cx: &'a mut TestAppContext,
+    root: &std::path::Path,
+    build: &str,
+    prelaunch: &str,
+) -> (
+    plugin_runtime::Manager,
+    Entity<EditorApp>,
+    String,
+    &'a mut gpui_kit::VisualTestContext,
+) {
+    cx.update(|cx| {
+        gpui_kit::init(cx);
+        typography::init(cx);
+        apply_theme(builtin_theme(false), cx);
+        cx.set_reduce_motion(true);
+    });
+    let mut manager = plugin_runtime::Manager::open(
+        root.join("runtime"),
+        protocol::Environment {
+            workspace: root.display().to_string(),
+            os: "windows".into(),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    let terminal = Package::read(
+        &PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../dist/plugins/terminal.zip"),
+    )
+    .unwrap();
+    let grants = terminal.manifest.permissions.clone();
+    manager.install(&terminal, grants).unwrap();
+
+    let key = root.display().to_string();
+    let mut set = editor_core::RunConfigSet::default();
+    let id = set.generate_id(&key);
+    // The steps are read by the same line form the build page edits, so the acceptance exercises the
+    // form's own rules rather than a hand-built structure.
+    let build = crate::run::parse_steps(build).expect("the build actions are well formed");
+    let prelaunch = crate::run::parse_steps(prelaunch).expect("the steps are well formed");
+    set.upsert(editor_core::RunConfig {
+        id: id.clone(),
+        name: "验收配置".into(),
+        target: editor_core::RunTarget::Program {
+            program: "powershell.exe".into(),
+            args: vec![
+                "-NoProfile".into(),
+                "-Command".into(),
+                format!(
+                    "[Console]::Write('PROGRAM_RAN'); Set-Content -Path '{}' -Value ran",
+                    root.join("program.txt").display()
+                ),
+            ],
+        },
+        directory: None,
+        env: Default::default(),
+        tool_paths: Default::default(),
+        build,
+        prelaunch,
+        local: true,
+    })
+    .unwrap();
+    set.select(&id);
+
+    let slot = Rc::new(RefCell::new(None));
+    let capture = slot.clone();
+    let installed = id.clone();
+    let workspace = Workspace::open(root).unwrap();
+    let (_, cx) = cx.add_window_view(move |window, cx| {
+        let app = cx.new(|cx| EditorApp::new(workspace, None, window, cx));
+        app.update(cx, |app, cx| {
+            let key = app.workspace_key();
+            app.run_controls
+                .upsert(set.configurations[0].clone(), &key)
+                .unwrap();
+            app.run_controls.select(&installed, &key);
+            cx.notify();
+        });
+        *capture.borrow_mut() = Some(app.clone());
+        Root::new(app, window, cx)
+    });
+    let app = slot.borrow_mut().take().unwrap();
+    cx.simulate_resize(size(px(1400.), px(900.)));
+    let mut renderer = images::VectorRenderer::default();
+    publish_with_launches(&mut manager, &mut renderer, &app, cx, &[]);
+    (manager, app, id, cx)
+}
+
+/// Drive one frame of the editor's own loop: the work items, the runtime, and the publication.
+fn frame(
+    manager: &mut plugin_runtime::Manager,
+    renderer: &mut images::VectorRenderer,
+    app: &Entity<EditorApp>,
+    cx: &mut gpui_kit::VisualTestContext,
+    launches: &mut Vec<(u64, String, u64)>,
+) {
+    // The harness performs the worker's own work items and hands back the answers a frame publishes.
+    let (statuses, stops) = pump_recording(manager, app, cx, launches);
+    manager.poll();
+    publish_frame(manager, renderer, app, cx, launches, statuses, stops);
+    std::thread::sleep(std::time::Duration::from_millis(20));
+}
+
+/// Drive preparation until `done` reports it finished, returning every launch in order.
+fn run_until(
+    manager: &mut plugin_runtime::Manager,
+    app: &Entity<EditorApp>,
+    cx: &mut gpui_kit::VisualTestContext,
+    mut done: impl FnMut(&Entity<EditorApp>, &mut gpui_kit::VisualTestContext) -> bool,
+) -> Vec<(u64, String, u64)> {
+    let mut renderer = images::VectorRenderer::default();
+    let mut launches = Vec::new();
+    for _ in 0..300 {
+        frame(manager, &mut renderer, app, cx, &mut launches);
+        if done(app, cx) {
+            return launches;
+        }
+    }
+    let (status, preparing, sessions, steps) = cx.update(|_, cx| {
+        let state = app.read(cx);
+        let id = state
+            .run_controls
+            .selected()
+            .map(|config| config.id.clone());
+        (
+            state.status.clone(),
+            id.as_deref()
+                .and_then(|id| state.run_controls.preparing_step(id)),
+            state.run_controls.sessions().len(),
+            id.as_deref()
+                .and_then(|id| state.run_controls.preparation(id))
+                .map(|sequence| {
+                    sequence
+                        .steps()
+                        .iter()
+                        .map(|step| format!("{}={:?}", step.name, step.state))
+                        .collect::<Vec<_>>()
+                }),
+        )
+    });
+    let named = launches
+        .iter()
+        .map(|(id, _, _)| {
+            manager
+                .execution(*id)
+                .and_then(|session| session.request().name.clone())
+                .unwrap_or_default()
+        })
+        .collect::<Vec<_>>();
+    panic!(
+        "preparation did not finish; status={status:?} preparing={preparing:?} \
+         sessions={sessions} steps={steps:?} launches={named:?}"
+    );
+}
+
+/// End the test without leaving a program running on the machine.
+fn shut_down(
+    manager: &mut plugin_runtime::Manager,
+    app: &Entity<EditorApp>,
+    cx: &mut gpui_kit::VisualTestContext,
+) {
+    let sessions = cx.update(|_, cx| app.read(cx).run_controls.active_sessions());
+    for session in sessions {
+        let _ = manager.stop_execution(session.id);
+    }
+    for _ in 0..40 {
+        manager.poll();
+        if manager.executions().iter().all(|execution| {
+            !matches!(
+                execution.state(),
+                plugin_runtime::ExecutionState::Starting | plugin_runtime::ExecutionState::Running
+            )
+        }) {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(25));
+    }
+    manager.shutdown();
+}
+
+/// Two preparation steps run in order, then the program — and each step is its own session.
+#[gpui::test]
+#[ignore = "build terminal and capability-example through the public SDK first"]
+fn a_launch_prepares_each_step_in_order_before_the_program(cx: &mut TestAppContext) {
+    let root = tempfile::tempdir().unwrap();
+    let first = root.path().join("first.txt");
+    let second = root.path().join("second.txt");
+    let (mut manager, app, _id, cx) = fixture(
+        cx,
+        root.path(),
+        &action(
+            "第一步",
+            &format!("Set-Content -Path '{}' -Value one", first.display()),
+        ),
+        &action(
+            "第二步",
+            &format!("Set-Content -Path '{}' -Value two", second.display()),
+        ),
+    );
+    cx.update(|window, cx| {
+        app.update(cx, |app, cx| app.start_selected_run(window, cx));
+    });
+    // Readiness is read from the sequence: every preparation step finished and the program is the
+    // session now running. The program itself is then given a moment to produce its own output, so
+    // the assertion is about what it did rather than about how fast it was scheduled.
+    let launches = run_until(&mut manager, &app, cx, |app, cx| {
+        cx.update(|_, cx| {
+            let state = app.read(cx);
+            state
+                .run_controls
+                .selected()
+                .is_some_and(|config| state.run_controls.preparation_complete(&config.id))
+        })
+    });
+    let mut renderer = images::VectorRenderer::default();
+    let mut extra = Vec::new();
+    for _ in 0..100 {
+        frame(&mut manager, &mut renderer, &app, cx, &mut extra);
+        if root.path().join("program.txt").exists() {
+            break;
+        }
+    }
+    let named = launches
+        .iter()
+        .map(|(id, _, request)| {
+            (
+                *id,
+                *request,
+                manager
+                    .execution(*id)
+                    .and_then(|session| session.request().name.clone())
+                    .unwrap_or_default(),
+            )
+        })
+        .collect::<Vec<_>>();
+    let progress = cx.update(|_, cx| {
+        let state = app.read(cx);
+        let selected = state
+            .run_controls
+            .selected()
+            .map(|config| config.id.clone());
+        (
+            state.status.clone(),
+            selected
+                .as_deref()
+                .and_then(|id| state.run_controls.preparation(id))
+                .map(|sequence| {
+                    sequence
+                        .steps()
+                        .iter()
+                        .map(|step| format!("{}={:?}", step.name, step.state))
+                        .collect::<Vec<_>>()
+                }),
+            state.run_controls.sessions().len(),
+        )
+    });
+    assert_eq!(
+        named.len(),
+        3,
+        "the build, the pre-launch step and the program are three sessions: {named:?} progress={progress:?}"
+    );
+    // The order is the description's order: a step may rely on what the previous one produced.
+    let names = launches
+        .iter()
+        .map(|(id, _, _)| manager.execution(*id).unwrap().request().name.clone())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        names,
+        vec![
+            Some("第一步".to_owned()),
+            Some("第二步".to_owned()),
+            Some("验收配置".to_owned())
+        ]
+    );
+    // Each step really ran, and the program ran only after both.
+    assert_eq!(std::fs::read_to_string(&first).unwrap().trim(), "one");
+    assert_eq!(std::fs::read_to_string(&second).unwrap().trim(), "two");
+    assert!(root.path().join("program.txt").exists());
+    shut_down(&mut manager, &app, cx);
+}
+
+/// A failing step stops the sequence: no later step and no program are started.
+#[gpui::test]
+#[ignore = "build terminal and capability-example through the public SDK first"]
+fn a_failing_step_blocks_every_later_step_and_the_program(cx: &mut TestAppContext) {
+    let root = tempfile::tempdir().unwrap();
+    let later = root.path().join("later.txt");
+    let (mut manager, app, id, cx) = fixture(
+        cx,
+        root.path(),
+        &action("会失败", "exit 3"),
+        &action(
+            "不应执行",
+            &format!("Set-Content -Path '{}' -Value later", later.display()),
+        ),
+    );
+    cx.update(|window, cx| {
+        app.update(cx, |app, cx| app.start_selected_run(window, cx));
+    });
+    let launches = run_until(&mut manager, &app, cx, |app, cx| {
+        cx.update(|_, cx| !app.read(cx).run_controls.is_preparing(&id))
+    });
+    assert_eq!(launches.len(), 1, "only the failing step was requested");
+    // Neither the later step nor the program ran, and the reason is visible with the failing step.
+    assert!(!later.exists(), "a blocked step must not run");
+    assert!(!root.path().join("program.txt").exists());
+    let status = cx.update(|_, cx| app.read(cx).status.clone());
+    assert!(
+        status.contains("会失败") && status.contains('3'),
+        "{status}"
+    );
+    shut_down(&mut manager, &app, cx);
+}
+
+/// Build runs the build actions only: no pre-launch step and no program.
+#[gpui::test]
+#[ignore = "build terminal and capability-example through the public SDK first"]
+fn build_runs_only_the_build_actions(cx: &mut TestAppContext) {
+    let root = tempfile::tempdir().unwrap();
+    let produced = root.path().join("built.txt");
+    let (mut manager, app, id, cx) = fixture(
+        cx,
+        root.path(),
+        &action(
+            "构建",
+            &format!("Set-Content -Path '{}' -Value built", produced.display()),
+        ),
+        &action(
+            "启动前",
+            &format!(
+                "Set-Content -Path '{}' -Value prelaunch",
+                root.path().join("prelaunch.txt").display()
+            ),
+        ),
+    );
+    cx.update(|window, cx| {
+        app.update(cx, |app, cx| app.build_selected(window, cx));
+    });
+    // A build is only finished once it has been observed to start and then to end.
+    let mut renderer = images::VectorRenderer::default();
+    let mut launches = Vec::new();
+    let mut started = false;
+    for _ in 0..300 {
+        frame(&mut manager, &mut renderer, &app, cx, &mut launches);
+        let preparing = cx.update(|_, cx| app.read(cx).run_controls.is_preparing(&id));
+        if preparing {
+            started = true;
+        } else if started {
+            break;
+        }
+    }
+    assert!(started, "the build was requested");
+    let named = launches
+        .iter()
+        .map(|(id, _, request)| {
+            (
+                *id,
+                *request,
+                manager
+                    .execution(*id)
+                    .and_then(|session| session.request().name.clone())
+                    .unwrap_or_default(),
+            )
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        named,
+        vec![(launches[0].0, launches[0].2, "构建".to_owned())],
+        "a build starts one session"
+    );
+    assert_eq!(
+        manager
+            .execution(launches[0].0)
+            .unwrap()
+            .request()
+            .name
+            .as_deref(),
+        Some("构建")
+    );
+    // The build really ran, and it started nothing else.
+    let entries = std::fs::read_dir(root.path())
+        .map(|entries| {
+            entries
+                .filter_map(Result::ok)
+                .map(|entry| entry.file_name().to_string_lossy().into_owned())
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    assert!(
+        produced.exists(),
+        "the build action's own output is missing; root={} entries={entries:?} status={:?}",
+        root.path().display(),
+        cx.update(|_, cx| app.read(cx).status.clone())
+    );
+    assert!(!root.path().join("prelaunch.txt").exists());
+    assert!(!root.path().join("program.txt").exists());
+    shut_down(&mut manager, &app, cx);
+}
+
+/// Stopping during preparation stops the step and never starts the program.
+#[gpui::test]
+#[ignore = "build terminal and capability-example through the public SDK first"]
+fn stopping_during_preparation_never_starts_the_program(cx: &mut TestAppContext) {
+    let root = tempfile::tempdir().unwrap();
+    let (mut manager, app, id, cx) = fixture(
+        cx,
+        root.path(),
+        &action("长构建", "Start-Sleep -Seconds 120"),
+        "",
+    );
+    cx.update(|window, cx| {
+        app.update(cx, |app, cx| app.start_selected_run(window, cx));
+    });
+    // One loop drives the whole interaction, so the stop is requested at the moment the step is
+    // actually running rather than after a second look that could observe something else.
+    let mut renderer = images::VectorRenderer::default();
+    let mut launches = Vec::new();
+    let mut stopped_session = None;
+    let mut requested = None;
+    for _ in 0..300 {
+        frame(&mut manager, &mut renderer, &app, cx, &mut launches);
+        if stopped_session.is_none() {
+            let current = cx.update(|_, cx| {
+                app.update(cx, |app, _| {
+                    let session = app
+                        .run_controls
+                        .preparation(&id)
+                        .and_then(|sequence| sequence.current_session());
+                    if session.is_some() {
+                        app.run_controls.stop_preparations();
+                    }
+                    session
+                })
+            });
+            stopped_session = current;
+            continue;
+        }
+        if requested.is_none() {
+            // The sequence's next action is the stop of the session it owns.
+            requested = cx.update(|_, cx| {
+                app.read(cx)
+                    .extensions
+                    .read(cx)
+                    .worker
+                    .recorded
+                    .lock()
+                    .unwrap()
+                    .try_iter()
+                    .find_map(|work| match work {
+                        Work::StopRun { session, .. } => Some(session),
+                        _ => None,
+                    })
+            });
+            if let Some(session) = requested {
+                // The provider ends the owned program through the public contract.
+                manager.stop_execution(session).unwrap();
+            }
+            continue;
+        }
+        let blocked = cx.update(|_, cx| app.read(cx).run_controls.preparation_blocked(&id));
+        if blocked.is_some() {
+            break;
+        }
+    }
+    let stopped_session = stopped_session.expect("the step was running when it was stopped");
+    assert_eq!(
+        requested,
+        Some(stopped_session),
+        "the stop is addressed to the step's own session"
+    );
+    let reason = cx.update(|_, cx| app.read(cx).run_controls.preparation_blocked(&id));
+    assert!(
+        reason
+            .as_deref()
+            .is_some_and(|reason| reason.contains("停止")),
+        "a stopped preparation reports why: {reason:?}"
+    );
+    assert!(
+        !root.path().join("program.txt").exists(),
+        "a stopped preparation must not launch the program"
+    );
+    assert_eq!(launches.len(), 1, "the program was never requested");
+    shut_down(&mut manager, &app, cx);
+}
+
+/// A configuration without build actions says why Build cannot run.
+#[test]
+fn build_reports_why_it_is_unavailable() {
+    let root = tempfile::tempdir().unwrap().keep();
+    let mut set = editor_core::RunConfigSet::default();
+    let id = set.generate_id("C:/work");
+    set.upsert(
+        crate::run::RunConfigDraft {
+            id: id.clone(),
+            name: "无构建".into(),
+            shell: false,
+            program: "app.exe".into(),
+            arguments: String::new(),
+            script: String::new(),
+            directory: String::new(),
+            environment: String::new(),
+            tool_paths: String::new(),
+            build: String::new(),
+            prelaunch: String::new(),
+        }
+        .to_config()
+        .unwrap(),
+    )
+    .unwrap();
+    // The control's reason is read from the same store the title bar uses.
+    let mut controls = crate::run::RunControls::load("C:/work", Some(root));
+    controls
+        .upsert(set.configurations[0].clone(), "C:/work")
+        .unwrap();
+    let reason = controls
+        .preparation_error(&id)
+        .expect("a configuration without build actions cannot build");
+    assert!(reason.contains("没有构建操作"), "{reason}");
+}

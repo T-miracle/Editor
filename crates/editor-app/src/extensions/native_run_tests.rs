@@ -878,7 +878,9 @@ fn a_shell_configuration_runs_its_script_through_the_named_interpreter(cx: &mut 
             "[Console]::Write('SCRIPT_MODE_OK ' + (1 + 1)); Start-Sleep -Seconds 60".to_owned()
         ]
     );
-    // The evaluation happened: the same marker carries the interpreter's own arithmetic result.\n    let painted = painted_text(&manager);\n    assert!(painted.contains("SCRIPT_MODE_OK2"), "{painted:?}");
+    // The evaluation happened: the same marker carries the interpreter's own arithmetic result.
+    let painted = painted_text(&manager);
+    assert!(painted.contains("SCRIPT_MODE_OK2"), "{painted:?}");
     let stored = cx.update(|_, cx| {
         editor_core::storage_path(&app.read(cx).workspace_key()).expect("host-local path")
     });

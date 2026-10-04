@@ -108,11 +108,16 @@ impl Terminal {
             (true, None) => "ended",
             (true, Some(_)) => "exited",
         };
-        Ok(serde_json::json!({
+        // Only the keys that describe this answer are present: an absent exit status is left out
+        // rather than sent as a null the declared schema never describes.
+        let mut answer = serde_json::json!({
             "session": request.session,
             "state": state,
-            "code": tab.exit_code,
-        }))
+        });
+        if let Some(code) = tab.exit_code {
+            answer["code"] = serde_json::json!(code);
+        }
+        Ok(answer)
     }
 
     /// Stop the program a delegated session owns.

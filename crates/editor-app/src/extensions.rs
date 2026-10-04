@@ -29,6 +29,8 @@ mod management;
 mod management_tests;
 #[cfg(test)]
 mod markdown_tests;
+#[cfg(test)]
+mod native_build_tests;
 mod native_controls;
 #[cfg(test)]
 mod native_run_tests;

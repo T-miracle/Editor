@@ -670,21 +670,21 @@ impl Manager {
         Ok(())
     }
 
-    /// Poll until the given request is answered, or until its own timeout expires.
+    /// Poll until the given request is answered, or until this call's own bound expires.
     ///
     /// A caller that must act on one specific answer — whether a preparation step ended, for example
-    /// — should not have to guess how many poll rounds another guest needs. This drives the same
-    /// polling a normal frame does, and never waits past the request's own bound.
+    /// — should not have to guess how many poll rounds another guest needs. The loop gives the guest
+    /// a short window to answer rather than waiting out the request's full timeout, so a caller that
+    /// observes every frame keeps making progress while a genuinely unanswerable request is bounded.
     pub fn poll_request<T: Clone>(&mut self, completion: &Completion<T>) {
-        let deadline = std::time::Instant::now()
-            + std::time::Duration::from_millis(EXECUTION_STATUS_TIMEOUT_MS as u64);
+        let deadline = std::time::Instant::now() + std::time::Duration::from_millis(500);
         loop {
             self.poll();
-            if !matches!(
-                completion.status(),
-                RequestUpdate::Accepted | RequestUpdate::Progress { .. }
-            ) {
-                return;
+            match completion.status() {
+                // Neither an unconsumed nor an in-flight request is an answer: the guest still has
+                // work to do, and this loop is what gives it the chance.
+                RequestUpdate::Progress { .. } | RequestUpdate::Accepted => {}
+                RequestUpdate::Completed { .. } | RequestUpdate::Cancelled { .. } => return,
             }
             if std::time::Instant::now() >= deadline {
                 return;
