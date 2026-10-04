@@ -9,6 +9,9 @@ pub(super) fn document(document: &Document) -> Result<(), String> {
     if document.editor_image_input && document.source.is_none() {
         return Err("Editor image input requires Document.source".into());
     }
+    if document.code_highlighting && document.source.is_none() {
+        return Err("Code highlighting requires Document.source".into());
+    }
     let mut validator = Validator {
         ids: BTreeSet::new(),
         count: 0,

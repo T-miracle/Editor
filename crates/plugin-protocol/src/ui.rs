@@ -39,6 +39,10 @@ pub struct Document {
     /// Emit clicked native rich-text links through `ui.links`; false retains inert link defaults.
     #[serde(default)]
     pub link_events: bool,
+    /// Readonly CodeBlock language/text requests use the selected plugin WASM highlighter.
+    /// Requires ui.code_highlighting, editor.read and the owning preview's exact source version.
+    #[serde(default)]
+    pub code_highlighting: bool,
     /// At most one modal per panel. Removing it closes the modal.
     #[serde(default)]
     pub dialog: Option<Dialog>,
@@ -57,6 +61,7 @@ impl Document {
             editor_toolbar: None,
             editor_image_input: false,
             link_events: false,
+            code_highlighting: false,
             dialog: None,
             menu: None,
         }

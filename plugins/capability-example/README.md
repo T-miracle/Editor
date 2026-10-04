@@ -1,5 +1,7 @@
 # Capability Example
 
+版本 0.15.7 的普通 `preview-probe` 命令接收完整公开 `ui::Document` 并原样发布到 welcome 面板，用于独立检查版本、能力与权限的发布门禁；它不修正或伪造 source。组合 UI 资产的 `code_highlighting` 在没有 Preview source 时暂时关闭，绑定版本后恢复原声明。代码高亮消费者需要协商 `ui.code_highlighting`、`ui.richtext` 与 `editor.documents` 并获得 `editor.read`；普通等宽代码保持默认惰性。
+
 0.15.6 使用当前独立 SDK 验证 `editor.navigation`／`ui.links`。公开 `scope-probe` 能发起版本化通用导航；测试重新打包为另一身份，验证非 Markdown 文档、权限、场景归属及取消。默认示例不增加浏览器权限，导航按测试夹具的声明与批准执行。
 
 0.15.5 增加独立 `image-input-fixture` 的 `editor.images` 验收：组合树在没有 `Document.source` 时隐藏图片输入声明；原生图片通知只传元数据，示例使用公开 `scope-probe` 发起保存并展示异步回执。测试覆盖权限、跨实例句柄、名称边界、配额、碰撞重试与源版本撤销；默认包不增加图片写入权限。

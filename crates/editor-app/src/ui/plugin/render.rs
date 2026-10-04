@@ -15,6 +15,7 @@ impl PluginView {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         self.sync_widgets(window, cx);
+        self.sync_code_highlighting(cx);
         let root = self.document.root.clone();
         let body = self.node(&root, false, window, cx);
         let mut view = div()
@@ -316,12 +317,22 @@ impl PluginView {
                     .p_3()
                     .font_family(font.family.unwrap_or_else(|| "Consolas".into()))
                     .text_size(px(font.size_px.unwrap_or(14.)))
-                    .child(div().flex().flex_col().children(text.lines().map(|line| {
-                        div()
-                            .flex_shrink_0()
-                            .whitespace_nowrap()
-                            .child(if line.is_empty() { " " } else { line }.to_owned())
-                    })))
+                    .child(div().flex().flex_col().children({
+                        let mut start = 0;
+                        text.split_inclusive('\n')
+                            .enumerate()
+                            .map(|(index, raw)| {
+                                // CRLF consumes two source bytes; splitting offsets must retain both of them.
+                                let line = raw
+                                    .strip_suffix('\n')
+                                    .map(|line| line.strip_suffix('\r').unwrap_or(line))
+                                    .unwrap_or(raw);
+                                let content = self.code_line(&node.id, index, line, start, cx);
+                                start += raw.len();
+                                content
+                            })
+                            .collect::<Vec<_>>()
+                    }))
                     .into_any_element()
             }
             Kind::Button { label } => self

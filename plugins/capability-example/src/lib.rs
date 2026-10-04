@@ -389,6 +389,22 @@ impl State {
                 }
             }
             api::Input::Event {
+                event: api::Notification::Command { id, arguments },
+                ..
+            } if id == "preview-probe" => {
+                // Independent SDK consumers can inspect host publication validation without bypassing it.
+                // Echo the complete public document unchanged, including any stale source under test.
+                let document = serde_json::from_value(arguments.unwrap_or_default())
+                    .map_err(|error| Failure::new(ErrorCode::InvalidRequest, error.to_string()))?;
+                return Ok(api::Output {
+                    views: vec![api::View {
+                        panel: "welcome".into(),
+                        document,
+                    }],
+                    ..Default::default()
+                });
+            }
+            api::Input::Event {
                 event: api::Notification::Command { id, .. },
                 ..
             } => {

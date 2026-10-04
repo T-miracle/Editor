@@ -1,7 +1,7 @@
 {
   "id": "markdown",
   "name": "Markdown",
-  "version": "0.8.0",
+  "version": "0.9.0",
   "protocol": 7,
   "contributions": "plugin.toml",
   "component": "markdown.wasm",
@@ -12,6 +12,7 @@
     "required": {
       "ui.native": "^1",
       "ui.richtext": "^1",
+      "ui.code_highlighting": "^1",
       "ui.images": "^1",
       "ui.links": "^1",
       "editor.documents": "^1",

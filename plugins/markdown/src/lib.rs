@@ -253,6 +253,8 @@ impl State {
         document.source = self.source.as_ref().map(|source| source.version.clone());
         document.editor_image_input = self.source.is_some();
         document.link_events = self.source.is_some();
+        // Literal code requests remain readonly and use only the user's selected WASM providers.
+        document.code_highlighting = self.source.is_some();
         if self.source.is_some() {
             let import_message = self.imports.message(self.source.as_ref(), english);
             // Text failures, navigation failures and external-file receipts are independent outcomes.

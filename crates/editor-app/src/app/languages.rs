@@ -228,6 +228,12 @@ impl EditorApp {
     }
 
     fn refresh_dynamic_documents(&mut self, cx: &mut Context<Self>) {
+        // Same-text previews otherwise retain their native tree; provider withdrawal must clear colors now.
+        for panel in self.plugin_panels.values() {
+            panel.update(cx, |panel, cx| {
+                panel.invalidate_code_highlighting(cx);
+            });
+        }
         let current = providers::languages();
         for tab in &self.tabs {
             let language = editor::language_for_path(tab.session.path());

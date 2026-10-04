@@ -1,5 +1,6 @@
 //! Plugin language registration, navigation, and external tool resolution.
 
+pub(crate) mod code_highlighting;
 pub(crate) mod completion;
 pub(crate) mod diagnostics;
 pub(crate) mod hover;

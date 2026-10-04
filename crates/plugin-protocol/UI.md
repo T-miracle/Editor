@@ -1,5 +1,7 @@
 # 插件原生界面协议 v1
 
+`ui.code_highlighting ^1` 通过默认关闭的 `Document.code_highlighting` 请求已选动态 WASM 语言提供者高亮只读 CodeBlock；仍需 `ui.richtext`、`editor.read`、当前 source 与本实例工作区编辑区面板。缺失、失败或停用提供者降级为等宽文字，不拒绝整份合法视图。版本、取消、预算与原生主题绘制契约见 [CODE_HIGHLIGHTING.md](CODE_HIGHLIGHTING.md)。
+
 `ui.links ^1` 允许 `Document.link_events` 启用实际富文本链接事件 `Action::Link { uri }`；默认惰性，不在解析或绘制时打开地址。节点、UI revision、模态、禁用与实例归属门禁仍有效。事件与版本化 `editor.navigation` 请求的权限、目标及取消契约见 [NAVIGATION.md](NAVIGATION.md)。
 
 ## 可组合布局（清单 protocol 7）
@@ -85,7 +87,7 @@
 
 需要链接交互时另行协商 `ui.links`，显式开启 `Document.link_events`，并用 `Node.links` 提供图片外层链接与文字键盘目标。声明不会获得浏览器或文件授权；版本化事件、原生焦点与共享配额见 [NAVIGATION.md](NAVIGATION.md)。
 
-`CodeBlock.text` 是无需转义的原始代码，空白与换行按原样显示；可选 `language` 是 1–100 个 ASCII 字母、数字或 `._+-#` 的标识，允许 `c++`、`c#` 等名称。它不启动工具，不授予高亮能力；当前基础呈现是等宽文字，后续高亮只能复用已启用的语言提供者。
+`CodeBlock.text` 是无需转义的原始代码，空白与换行按原样显示；可选 `language` 是 1–100 个 ASCII 字母、数字或 `._+-#` 的标识，允许 `c++`、`c#` 等名称。单独声明语言不启动工具或授予高亮能力；基础呈现为等宽文字，显式开启 `Document.code_highlighting` 后才经独立能力复用已选动态 WASM 高亮提供者。插件负责把业务别名归一为提供者的公开语言身份，未知或不可用语言继续显示等宽代码。
 
 每个源码块使用稳定的 `Node.id`，`Node.source_range = { start, end }` 表示半开 UTF-8 字节范围。范围针对 `Document.source` 绑定的不可变内存文本版本，不能用生成的 HTML 字节偏移代替。任何类型的节点都可带映射，但必须协商 `ui.richtext` 并提供 `Document.source`；未提供版本或 `start > end`、`end > 1 MiB` 返回 `InvalidRequest`。宿主使用映射前还应对当前源文本核对长度与字符边界；旧文档身份或 revision 仍按现有预览门禁返回 `StaleRevision`。
 

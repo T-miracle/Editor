@@ -483,3 +483,26 @@ fn canvas_geometry_and_aggregate_resource_limits_are_validated() {
         crate::api::ErrorCode::InvalidRequest
     );
 }
+
+/// Highlighting is an opt-in readonly request that cannot outlive its owning source version.
+#[test]
+fn code_highlighting_requires_a_source_version_and_defaults_inert() {
+    let document = Document::new(Node::code_block(
+        "sample",
+        "answer = 42",
+        Some("novel".into()),
+    ));
+    let mut encoded = serde_json::to_value(&document).unwrap();
+    assert!(
+        !encoded
+            .get("code_highlighting")
+            .and_then(|value| value.as_bool())
+            .unwrap_or(false)
+    );
+    encoded["code_highlighting"] = serde_json::json!(true);
+    let requested: Document = serde_json::from_value(encoded.clone()).unwrap();
+    assert!(requested.validate().unwrap_err().contains("source"));
+    encoded["source"] = serde_json::json!({"id":"source", "path":"notes.md", "revision":1});
+    let requested: Document = serde_json::from_value(encoded).unwrap();
+    requested.validate().unwrap();
+}

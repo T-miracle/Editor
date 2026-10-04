@@ -71,11 +71,29 @@ pub(crate) struct LoadedGrammar {
     injection_languages: Vec<String>,
 }
 
+impl LoadedGrammar {
+    /// Borrow the validated static injection query and its allowed identities from this same module.
+    /// Read-only consumers must independently select each target and retain provider-epoch guards.
+    pub(crate) fn readonly_injections(&self) -> (&str, &[String]) {
+        (&self.injections, &self.injection_languages)
+    }
+}
+
 /// Validate bytes on a background worker without mutating the process-wide parser registry.
 pub(crate) fn prepare_dynamic(
     provider: &super::providers::GrammarProvider,
 ) -> anyhow::Result<(Arc<LoadedGrammar>, String)> {
     load_plugin_language(&provider.root, &provider.declaration)
+}
+
+/// Create isolated read-only parser state from an already validated plugin module.
+///
+/// Call on a background worker. The dedicated initialization stack matches editor parsers;
+/// callers retain cancellation/deadline checks around this non-interruptible initialization.
+pub(crate) fn readonly_parser(
+    grammar: Arc<LoadedGrammar>,
+) -> anyhow::Result<(Parser, tree_sitter::Language)> {
+    parser_factory(grammar)()
 }
 
 /// Only the UI owner may publish a generation-checked successful load.

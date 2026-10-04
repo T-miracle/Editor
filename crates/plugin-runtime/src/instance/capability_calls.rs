@@ -233,6 +233,29 @@ impl State {
         Ok(())
     }
 
+    /// Code requests have read-only authority, scoped to the same owned preview as their source.
+    fn check_code_highlighting_authority(&self, panel: &str) -> Result<(), Failure> {
+        // Opt-in requires both contracts even when this particular scene has no code yet.
+        for capability in ["ui.code_highlighting", "ui.richtext"] {
+            if !self.api.capabilities.contains_key(capability) {
+                return Err(Failure::new(
+                    ErrorCode::CapabilityUnavailable,
+                    format!("{capability} was not negotiated"),
+                ));
+            }
+        }
+        if self.roots.application
+            || !self.permissions.contains("editor.read")
+            || !self.declared_editor_panels.contains(panel)
+        {
+            return Err(Failure::new(
+                ErrorCode::PermissionDenied,
+                "Code highlighting requires an owned workspace editor panel and editor.read",
+            ));
+        }
+        Ok(())
+    }
+
     /// Availability and authorization are separate; preparation can read only immutable assets.
     fn read_capability_asset(&self, path: &str) -> Result<api::Value, Failure> {
         if !self.api.capabilities.contains_key("package.assets") {
@@ -354,6 +377,11 @@ impl Instance {
             }
             if view.document.editor_image_input {
                 self.store.data().check_image_input_authority(&view.panel)?;
+            }
+            if view.document.code_highlighting {
+                self.store
+                    .data()
+                    .check_code_highlighting_authority(&view.panel)?;
             }
             let mut canvas = false;
             let mut grid = false;

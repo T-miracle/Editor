@@ -3,6 +3,7 @@
 use super::*;
 use gpui_kit::{TestAppContext, gpui};
 
+mod code_highlighting;
 mod format_toolbar;
 mod harness;
 mod image_import;

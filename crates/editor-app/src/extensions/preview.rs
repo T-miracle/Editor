@@ -6,6 +6,14 @@ mod presentation;
 mod toolbar;
 
 impl ExtensionPanel {
+    /// Withdraw derived code jobs in every native projection owned by this surface.
+    pub(crate) fn invalidate_code_highlighting(&mut self, cx: &mut Context<Self>) {
+        for view in self.native_ui.iter().chain(self.native_toolbar.iter()) {
+            view.update(cx, |view, cx| view.invalidate_code_highlighting(cx));
+        }
+        cx.notify();
+    }
+
     /// Layout restoration must exclude panels whose lifecycle follows the current document.
     pub(crate) fn is_editor_preview(&self) -> bool {
         self.editor_preview
@@ -47,8 +55,10 @@ impl EditorApp {
     /// Input changes invalidate the token even for clean disk reloads that keep the saved revision.
     pub(crate) fn invalidate_editor_previews(&self, cx: &mut Context<Self>) {
         for panel in self.plugin_panels.values() {
-            panel.update(cx, |panel, _| {
+            panel.update(cx, |panel, cx| {
                 if panel.editor_preview {
+                    // A retained focus handle does not authorize a background result from the previous source.
+                    panel.invalidate_code_highlighting(cx);
                     panel.preview_document = None;
                     panel.preview_version = None;
                     panel.preview_error = None;
@@ -108,6 +118,7 @@ impl EditorApp {
                         }
                         // Retain control focus only for this same source identity. The exact version
                         // gate still hides old trees until the new guest publication has arrived.
+                        panel.invalidate_code_highlighting(cx);
                         if panel
                             .native_ui
                             .as_ref()

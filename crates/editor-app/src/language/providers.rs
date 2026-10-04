@@ -4,9 +4,12 @@ use plugin_schema::{Highlighter, LanguageDefinition};
 mod preferences;
 use preferences::Saved;
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, BTreeSet},
     path::{Path, PathBuf},
-    sync::{LazyLock, RwLock},
+    sync::{
+        LazyLock, RwLock,
+        atomic::{AtomicU64, Ordering},
+    },
 };
 
 /// Package identity and content-addressed root travel with every background grammar load.
@@ -28,8 +31,21 @@ struct Registry {
     language_servers: BTreeMap<String, Vec<String>>,
     /// Retain a valid selected provider when another package joins the candidate set.
     selected: BTreeMap<String, String>,
+    /// Never reuse an earlier selection generation, including disable/re-enable and A/B/A choices.
+    highlight_epoch: u64,
 }
 static REGISTRY: LazyLock<RwLock<Registry>> = LazyLock::new(|| RwLock::new(Registry::default()));
+static NEXT_HIGHLIGHT_EPOCH: AtomicU64 = AtomicU64::new(0);
+
+/// Configuration rebuilds cannot reset this process-wide generation counter.
+fn next_highlight_epoch() -> u64 {
+    NEXT_HIGHLIGHT_EPOCH
+        .fetch_update(Ordering::AcqRel, Ordering::Acquire, |epoch| {
+            epoch.checked_add(1)
+        })
+        .expect("language provider generation exhausted")
+        + 1
+}
 
 /// A refresh replaces all contributions together; disabled and failed packages are absent upstream.
 pub(crate) fn refresh(
@@ -95,7 +111,22 @@ pub(crate) fn refresh(
             next.error = Some(format!("{error:#}"));
         }
     }
+    // Alias declarations affect code-block selection just as much as the selected grammar does.
+    // Equal refreshes preserve reusable work; every observable change invalidates old jobs.
+    next.highlight_epoch = if registry.root == next.root
+        && registry.workspace == next.workspace
+        && registry.recognizers == next.recognizers
+        && registry.highlighters == next.highlighters
+        && registry.selected == next.selected
+    {
+        registry.highlight_epoch
+    } else {
+        next_highlight_epoch()
+    };
+    let epoch = next.highlight_epoch;
     *registry = next;
+    drop(registry);
+    super::code_highlighting::invalidate_prepared(epoch);
 }
 
 impl Registry {
@@ -154,6 +185,51 @@ impl Registry {
         }
         rows
     }
+
+    /// Canonical IDs win over aliases; ambiguous display names never depend on install ordering.
+    fn code_language(&self, language: &str) -> Option<String> {
+        if language.len() > 128 {
+            return None;
+        }
+        let language = language.trim().to_lowercase();
+        if language.is_empty() {
+            return None;
+        }
+        let definitions = || {
+            self.recognizers
+                .values()
+                .flatten()
+                .map(|(_, definition)| definition)
+        };
+        if self.highlighters.contains_key(&language)
+            || definitions().any(|definition| definition.id == language)
+        {
+            return Some(language);
+        }
+        let mut candidates = definitions()
+            .filter(|definition| definition.name.to_lowercase() == language)
+            .map(|definition| definition.id.clone())
+            .collect::<BTreeSet<_>>();
+        let extension = format!("ext:{}", language.strip_prefix('.').unwrap_or(&language));
+        if let Some(definitions) = self.recognizers.get(&extension) {
+            // Recognition preferences resolve shared extensions independently of grammar choice.
+            let owner = self.selected.get(&format!("recognition:{extension}"))?;
+            let (_, definition) = definitions
+                .iter()
+                .find(|(owner_id, definition)| format!("{owner_id}/{}", definition.id) == *owner)?;
+            candidates.insert(definition.id.clone());
+        }
+        (candidates.len() == 1).then(|| candidates.into_iter().next().unwrap())
+    }
+
+    /// Resolve one language's selected package without consulting the upstream parser registry.
+    fn grammar(&self, language: &str) -> Option<&GrammarProvider> {
+        let selected = self.selected.get(&format!("highlight:{language}"))?;
+        self.highlighters
+            .get(language)?
+            .iter()
+            .find(|provider| format!("{}/{}", provider.owner, provider.declaration.id) == *selected)
+    }
 }
 
 /// Workspace context is host-owned; reading repository files cannot set these preferences.
@@ -166,6 +242,9 @@ pub(crate) fn configure(root: &Path, workspace: &Path) {
     let mut registry = REGISTRY.write().unwrap();
     if !same_root(&registry.root, root) || registry.workspace != workspace {
         *registry = configured(root, &workspace);
+        let epoch = registry.highlight_epoch;
+        drop(registry);
+        super::code_highlighting::invalidate_prepared(epoch);
     }
 }
 
@@ -184,6 +263,7 @@ fn configured(root: &Path, workspace: &str) -> Registry {
         workspace: workspace.into(),
         saved,
         error,
+        highlight_epoch: next_highlight_epoch(),
         ..Default::default()
     }
 }
@@ -282,8 +362,15 @@ pub(crate) fn choose(scope: Scope, key: &str, provider: Option<&str>) -> anyhow:
         .or_default()
         .remove(key);
     saved.write(&registry.root)?;
+    let previous = registry.selected.clone();
     registry.saved = saved;
     registry.resolve();
+    if registry.selected != previous {
+        registry.highlight_epoch = next_highlight_epoch();
+    }
+    let epoch = registry.highlight_epoch;
+    drop(registry);
+    super::code_highlighting::invalidate_prepared(epoch);
     Ok(())
 }
 
@@ -345,6 +432,28 @@ pub(crate) fn language_servers() -> BTreeMap<String, Option<String>> {
 /// A removed or replaced provider cannot register a parser after its task completes.
 pub(crate) fn is_current(provider: &GrammarProvider) -> bool {
     grammars().contains(provider)
+}
+
+/// Snapshot identity and generation together so a worker cannot observe a torn provider choice.
+pub(super) fn code_provider(language: &str) -> Option<(GrammarProvider, u64)> {
+    let registry = REGISTRY.read().unwrap();
+    let language = registry.code_language(language)?;
+    Some((
+        registry.grammar(&language)?.clone(),
+        registry.highlight_epoch,
+    ))
+}
+
+/// Native owners observe this generation even when no grammar is currently available.
+pub(super) fn code_epoch() -> u64 {
+    REGISTRY.read().unwrap().highlight_epoch
+}
+
+/// Equality alone cannot reject results from a provider that was removed then reinstalled.
+pub(super) fn code_is_current(provider: &GrammarProvider, epoch: u64) -> bool {
+    let registry = REGISTRY.read().unwrap();
+    registry.highlight_epoch == epoch
+        && registry.grammar(&provider.declaration.language) == Some(provider)
 }
 
 /// Dynamic recognition claims this path even when ambiguity prevents choosing a language.

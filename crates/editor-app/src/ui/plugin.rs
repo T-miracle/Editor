@@ -2,6 +2,7 @@
 mod atlas;
 pub(crate) mod bitmap;
 mod canvas;
+mod code;
 pub(crate) mod controls;
 pub(crate) mod images;
 mod layout;
@@ -51,6 +52,8 @@ pub(crate) struct PluginView {
     link_press: Option<links::LinkPress>,
     /// Per-target Base focus survives source refresh; subscriptions reveal only the focused link cue.
     link_focus: BTreeMap<String, links::LinkFocus>,
+    /// Versioned readonly capture cache and a cancellable, bounded native background batch.
+    code_highlights: code::CodeHighlights,
     canvases: BTreeMap<String, Entity<canvas::CanvasView>>,
     /// Collection widgets retain native rename/drag state independently of canvas redraws.
     collections: BTreeMap<String, Entity<controls::CollectionView>>,
@@ -186,6 +189,7 @@ impl PluginView {
             scene_layout: Default::default(),
             link_press: None,
             link_focus: BTreeMap::new(),
+            code_highlights: Default::default(),
             canvases: BTreeMap::new(),
             collections: BTreeMap::new(),
             popup: None,
@@ -238,6 +242,9 @@ impl PluginView {
     ) {
         if self.document == document && self.environment == environment {
             return;
+        }
+        if self.document != document {
+            self.invalidate_code_highlighting(cx);
         }
         let old_dialog = self.document.dialog.as_ref().map(|d| d.id.clone());
         // A new scene/theme cannot adopt an earlier pointer press, even when node IDs are reused.

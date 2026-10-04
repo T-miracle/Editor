@@ -45,4 +45,6 @@ Windows 隔离目录；Cargo 串行、CARGO_BUILD_JOBS=1；原生另设 RUST_MIN
 
 独立 Standards：硬性 0、Fowler 判断性 0；独立 Spec：0 findings。按授权“测试与审查 → 提交”，固定基线至工作树及新增文件审查；此时 git log base..HEAD 为空，不伪称已提交差异。审查发现的图片外链、逐链接键盘焦点、长文可见性和仅预览提示均已修复。
 
-浏览器在既有 GPUI 测试边界记录，不依赖真实外网；Windows 原生自动交互为本单平台。保留环境既有 LNK4217、private-interface、未使用 API 警告。代码块高亮、同步滚动和发行继续由 09–11 交付。#26 不修改；普通提交、推送与 #34 关闭读回完成后追加。
+浏览器在既有 GPUI 测试边界记录，不依赖真实外网；Windows 原生自动交互为本单平台。保留环境既有 LNK4217、private-interface、未使用 API 警告。代码块高亮、同步滚动和发行继续由 09–11 交付。#26 不修改。
+
+2026-10-04 交付：普通提交 `ae7b9f375a129e17791df37e66c6c3d49bc90778` 已推送 origin/codex/markdown-plugin，git ls-remote 远端 SHA 一致；#34 PATCH 后独立 GET 读回 closed / completed。此记录追加在 09，不改写已推送历史。
