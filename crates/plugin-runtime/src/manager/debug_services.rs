@@ -158,13 +158,67 @@ fn text(value: &Value, key: &str) -> Option<String> {
         .map(str::to_owned)
 }
 
-/// What the host requires of a debug provider.
+/// The methods every debug provider must declare, whatever else it offers.
 ///
-/// The shape is declared here rather than derived from a provider, because a provider matches only
-/// by declaring exactly this: the host's requirement is the contract, and an adapter that cannot set
-/// breakpoints, resume, pause or stop cannot serve a debug session.
+/// These are the ones a session cannot exist without: beginning it, asking what it is, and ending it.
+pub(super) const DEBUG_REQUIRED_METHODS: [&str; 3] = ["start", "status", "stop"];
+
+/// The methods a provider may declare to offer more, and what each one enables.
+///
+/// A capability is the provider's to offer and the host's to describe: a provider that cannot step
+/// simply never declares it, and a control that needs it is disabled with that reason instead of
+/// failing when pressed. Requiring them outright would make a capable provider unusable for lacking
+/// an unrelated ability.
+pub(super) const DEBUG_OPTIONAL_METHODS: [&str; 4] = ["set_breakpoints", "resume", "pause", "step"];
+
+/// A debug provider's declaration, read as the methods it actually offers.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct DebugAbilities {
+    /// Whether the provider can set breakpoints.
+    pub breakpoints: bool,
+    /// Whether it can resume a paused target, and stop a running one.
+    pub resume_pause: bool,
+    /// Whether it can step a paused target.
+    pub step: bool,
+}
+
+/// What the host requires of a debug provider, method for method.
+///
+/// The shape is declared here rather than derived from a provider, because a provider matches by
+/// declaring exactly what the host calls. Only the methods a session cannot exist without are
+/// required; everything else is a capability the provider may offer, checked against this same
+/// declaration so a provider that offers one cannot offer it with a different meaning.
 pub(crate) fn debug_dependency() -> Result<Dependency, Failure> {
-    let declaration: Value = serde_json::from_str(
+    dependency_from_declaration(
+        debug_declaration(),
+        &DEBUG_REQUIRED_METHODS,
+        ">=1, <2",
+        "Debug contract is incomplete",
+    )
+}
+
+/// The methods one provider declaration actually offers, judged against the host's own declaration.
+///
+/// A method is offered when the provider declares it with exactly the shape the host calls: the same
+/// rule the base requirement uses, applied per capability so an incomplete offer is simply not an
+/// offer rather than a broken provider.
+pub(super) fn debug_abilities(declaration: &plugin_protocol::service::Contract) -> DebugAbilities {
+    let host: plugin_protocol::service::Contract =
+        serde_json::from_value(debug_declaration()).expect("the host's own declaration is valid");
+    let offers = |method: &str| {
+        declaration.methods.get(method).is_some()
+            && declaration.methods.get(method) == host.methods.get(method)
+    };
+    DebugAbilities {
+        breakpoints: offers("set_breakpoints"),
+        resume_pause: offers("resume") && offers("pause"),
+        step: offers("step"),
+    }
+}
+
+/// The host's own debug declaration, as one value.
+fn debug_declaration() -> Value {
+    serde_json::from_str(
         r#"{"version":"1.0.0","methods":{
             "start":{
                 "parameters":{"type":"record","fields":{
@@ -210,6 +264,14 @@ pub(crate) fn debug_dependency() -> Result<Dependency, Failure> {
                     "session":{"type":"string","max_bytes":128},
                     "state":{"type":"string","max_bytes":32}}},
                 "permissions":["process.exec"]},
+            "step":{
+                "parameters":{"type":"record","fields":{
+                    "session":{"type":"string","max_bytes":128},
+                    "kind":{"type":"string","max_bytes":32}}},
+                "result":{"type":"record","fields":{
+                    "session":{"type":"string","max_bytes":128},
+                    "state":{"type":"string","max_bytes":32}}},
+                "permissions":["process.exec"]},
             "status":{
                 "parameters":{"type":"record","fields":{
                     "session":{"type":"string","max_bytes":128}}},
@@ -230,30 +292,41 @@ pub(crate) fn debug_dependency() -> Result<Dependency, Failure> {
                 "permissions":["process.exec"]}
         }}"#,
     )
-    .expect("the host's own debug declaration is valid");
-    dependency_from_declaration(
-        declaration,
-        &[
-            "start",
-            "set_breakpoints",
-            "resume",
-            "pause",
-            "status",
-            "stop",
-        ],
-        ">=1, <2",
-        "Debug contract is incomplete",
-    )
+    .expect("the host's own debug declaration is valid")
 }
 
+/// The timeout one debug method is allowed, or `None` for a method the host does not call.
+///
+/// A start includes building and attaching, so it gets the longest window; the control exchanges are
+/// short, because a provider that cannot acknowledge promptly is reported rather than waited on.
+pub(super) fn debug_timeout_ms(method: &str) -> Option<u32> {
+    match method {
+        "start" => Some(DEBUG_START_TIMEOUT_MS),
+        "set_breakpoints" => Some(DEBUG_BREAKPOINT_TIMEOUT_MS),
+        "resume" | "pause" | "step" | "stop" | "status" => Some(DEBUG_CONTROL_TIMEOUT_MS),
+        _ => None,
+    }
+}
 /// The debug capability as a host question, answered without ever naming a debugger.
 impl Manager {
     /// The installed plugins that declare a debug contract, with why one cannot serve.
     ///
-    /// The same shape as the execution listing, and for the same reason: a caller shows what is
-    /// missing instead of choosing silently.
+    /// The match is the base requirement, not the optional methods: a provider that cannot step is
+    /// still a debug provider, and its missing ability is reported where the control that needs it
+    /// is, rather than making the whole provider unusable.
     pub fn debug_providers(&self) -> Vec<ProviderCandidate> {
         self.contract_providers(DEBUG_CONTRACT, debug_dependency().ok().as_ref())
+    }
+
+    /// What one installed plugin offers for debugging, or `None` when it is not a debug provider.
+    pub fn debug_abilities(&self, plugin: &str) -> Option<DebugAbilities> {
+        let installed = self.installed.get(plugin)?;
+        let declaration = installed
+            .manifest
+            .plugin_services
+            .provides
+            .get(DEBUG_CONTRACT)?;
+        Some(debug_abilities(declaration))
     }
 
     /// Whether a debug session could start here, and if not, why not.
@@ -298,19 +371,6 @@ impl Manager {
                 usable.join("、")
             )),
         }
-    }
-}
-
-/// The timeout one debug method is allowed, or `None` for a method the host does not call.
-///
-/// A start includes building and attaching, so it gets the longest window; the control exchanges are
-/// short, because a provider that cannot acknowledge promptly is reported rather than waited on.
-pub(super) fn debug_timeout_ms(method: &str) -> Option<u32> {
-    match method {
-        "start" => Some(DEBUG_START_TIMEOUT_MS),
-        "set_breakpoints" => Some(DEBUG_BREAKPOINT_TIMEOUT_MS),
-        "resume" | "pause" | "stop" | "status" => Some(DEBUG_CONTROL_TIMEOUT_MS),
-        _ => None,
     }
 }
 

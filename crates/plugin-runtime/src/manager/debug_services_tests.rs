@@ -9,26 +9,30 @@ use super::*;
 fn the_debug_requirement_names_no_debugger() {
     let dependency = debug_dependency().expect("the host's own requirement is valid");
     let methods = dependency.methods.keys().cloned().collect::<Vec<_>>();
+    let mut declared = DEBUG_REQUIRED_METHODS.to_vec();
+    declared.extend(DEBUG_OPTIONAL_METHODS);
+    declared.sort_unstable();
     assert_eq!(
-        methods,
-        vec![
-            "pause".to_owned(),
-            "resume".to_owned(),
-            "set_breakpoints".to_owned(),
-            "start".to_owned(),
-            "status".to_owned(),
-            "stop".to_owned()
-        ],
-        "the host requires exactly what it calls"
+        methods, declared,
+        "the host declares everything it may call, required and optional alike"
     );
-    // Every method the host calls has a window; a method it does not call is not silently callable.
+    // Only the methods a session cannot exist without are required of every provider.
+    assert_eq!(
+        dependency
+            .methods
+            .keys()
+            .filter(|method| DEBUG_REQUIRED_METHODS.contains(&method.as_str()))
+            .count(),
+        DEBUG_REQUIRED_METHODS.len()
+    );
+    // Every method the host may call has a window; one it does not call is not silently callable.
     for method in &methods {
         assert!(
             debug_timeout_ms(method).is_some(),
             "{method} has no window, so it could be called without a bound"
         );
     }
-    assert_eq!(debug_timeout_ms("step"), None);
+    assert_eq!(debug_timeout_ms("variables"), None);
     // Starting includes building and attaching; the control exchanges are much shorter.
     assert!(debug_timeout_ms("start").unwrap() > debug_timeout_ms("resume").unwrap());
     // The declaration is the host's, so a debugger name or an adapter protocol cannot appear in it.
@@ -94,6 +98,56 @@ fn a_paused_session_carries_where_it_stopped() {
     .expect("a running session reads");
     assert_eq!(running.source, None);
     assert_eq!(running.line, None);
+}
+
+/// A provider that cannot step is still a debug provider; the missing ability is reported, not fatal.
+#[test]
+fn a_missing_optional_ability_does_not_withdraw_the_provider() {
+    let host: plugin_protocol::service::Contract =
+        serde_json::from_value(debug_declaration()).expect("the host's declaration is valid");
+    // Everything the host declares is offered.
+    assert_eq!(
+        debug_abilities(&host),
+        DebugAbilities {
+            breakpoints: true,
+            resume_pause: true,
+            step: true,
+        }
+    );
+
+    // Dropping `step` leaves the rest offered and says so, rather than making the provider unusable.
+    let mut without_step = host.clone();
+    without_step.methods.remove("step");
+    let abilities = debug_abilities(&without_step);
+    assert!(!abilities.step);
+    assert!(abilities.breakpoints && abilities.resume_pause);
+
+    // A provider that declares a method with a different shape has not offered that ability: the same
+    // exactness the base requirement uses applies per capability, so an incomplete offer is no offer.
+    let mut reshaped = host.clone();
+    if let Some(step) = reshaped.methods.get_mut("step") {
+        step.parameters = serde_json::from_value(serde_json::json!({
+            "type": "string",
+            "max_bytes": 32
+        }))
+        .expect("a reshaped schema parses");
+    }
+    assert!(!debug_abilities(&reshaped).step);
+
+    // Dropping resume and pause withdraws that ability together: a session you can pause but never
+    // continue is worse than one that never offered either.
+    let mut without_control = host.clone();
+    without_control.methods.remove("resume");
+    without_control.methods.remove("pause");
+    let abilities = debug_abilities(&without_control);
+    assert!(!abilities.resume_pause);
+    assert!(abilities.step, "the abilities are independent");
+
+    // A declaration that is not the host's at all offers nothing, without failing.
+    let foreign: plugin_protocol::service::Contract =
+        serde_json::from_value(serde_json::json!({"version": "1.0.0", "methods": {}}))
+            .expect("an empty declaration parses");
+    assert_eq!(debug_abilities(&foreign), DebugAbilities::default());
 }
 
 /// Breakpoints are grouped by source, because one request per source is what a provider is asked for.
