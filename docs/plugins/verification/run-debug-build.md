@@ -312,6 +312,21 @@ Run and debug startup smoke passed: no program was left behind by shutdown.
 
 **结论**：七张工单中，**#56 与 #60 的验收项除一项外部阻塞外全部有证据**；其余各张的剩余项**全部是环境受限项**（无 PDB 调试器、无原生输入法实测）或**与其直接相关的部分项**。**没有任何一项是「实现缺失」**——上一轮发现的自动定位缺失已实现。
 
+### 合并就绪度（本轮实测，供维护者执行合并）
+
+对 `main` 与本分支的实际拓扑做了核对，结论是**合并本身没有任何冲突**，但**主工作区当前的状态会挡住它**：
+
+- **`main` 是本分支的祖先**（`main..HEAD` 90 个提交，`HEAD..main` 0 个），因此合并是**快进（fast-forward）**：**不存在需要解决的冲突**。试合并 `git merge --no-commit --no-ff main` 返回 `Already up to date`，冲突文件为空。
+- **但主工作区有 199 个已跟踪文件处于修改状态**（另有 199 个未跟踪文件，含 `docs/plugins/tickets/run-debug-build/` 与本分支的 79 个改动文件中的未跟踪项）。其中与本分支改动**重叠的已跟踪文件有 9 个**，快进会用分支版本覆盖它们：
+
+  `Cargo.lock`、`README.md`、`crates/editor-app/src/app/shell.rs`、`crates/editor-app/src/extensions.rs`、`crates/editor-core/src/lib.rs`、`crates/editor-core/src/run.rs`、`crates/editor-core/src/run/store.rs`、`crates/plugin-protocol/README.md`、`crates/plugin-runtime/src/capabilities.rs`
+
+- 另有 `AGENT.md` 在主工作区处于**已删除**状态。
+
+**因此合并前主工作区需要先干净**（提交或另行保存那 199 个改动，至少是上述 9 个重叠文件）。**我没有执行合并**：那会覆盖你或其他任务的在制改动，而本会话已无 `stash` 回退的余量。这一点在前几轮已由你选择「先别合并，我处理主工作区」。
+
+**合并后待办**：`docs/README.md`（文档总入口，位于主工作区且未被 git 跟踪）需补一行登记 `docs/run-debug-build.md`。
+
 ## 未覆盖与限制
 
 - **`editor-app` 整二进制全量运行不可作为判据**（本任务开始前即如此）：`cargo test -p editor-app --bin editor-app` 会让不同用例互相污染宿主内的共享注册表，出现一批失败。**实测对照**：在提交 `3a50511`（本轮工作之前）上单跑 `app::plugins` 已是 `18 passed; 2 failed`，当前为 `19 passed; 1 failed`；且每个失败用例单独运行时都通过（`app::plugins::tests::restricting_startup_withdraws_declarations_before_worker_publication` 单独跑 `ok`）。因此按仓库验证约定使用**按模块过滤**的针对性运行：`run::` 59 项、`extensions::worker` 11 项、`language::code_highlighting` 12 项、`extensions::markdown_tests` 1 项（其余为 ignored）在本轮全绿。这不是本任务引入的缺陷，也不据它宣称通过。
