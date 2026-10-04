@@ -1405,25 +1405,6 @@ impl EditorApp {
         };
         cx.notify();
     }
-    fn stage_run_request(
-        &mut self,
-        config: &editor_core::RunConfig,
-        request: plugin_runtime::RunRequest,
-        cx: &mut Context<Self>,
-    ) {
-        let request_id = self.run_controls.begin(&config.id);
-        let queued = self.extensions.read(cx).stage_host_run(Work::StartRun {
-            request,
-            config: config.id.clone(),
-            request_id,
-        });
-        self.status = if queued {
-            format!("正在启动 {}", config.name)
-        } else {
-            "插件后台服务不可用，无法启动".into()
-        };
-        cx.notify();
-    }
 
     /// Build the selected configuration: its own build actions, then nothing else.
     ///
@@ -1628,8 +1609,11 @@ impl EditorApp {
 
     /// Start a stored configuration exactly as its own target describes it.
     ///
-    /// Used by the native acceptance for a mode the form produces, so the request under test is the
-    /// one the launch path builds rather than a hand-assembled equivalent.
+    /// Kept for checks that need the request the launch path builds rather than a hand-assembled
+    /// equivalent. Nothing in the application calls it — the title bar goes through the preparation
+    /// sequence, which also owns the step it starts — so it is compiled only for tests instead of
+    /// sitting in the shipping binary as an unused second way to start a program.
+    #[cfg(test)]
     pub(crate) fn start_stored_configuration(
         &mut self,
         window: &mut Window,
@@ -1644,7 +1628,21 @@ impl EditorApp {
         let Some(request) = RunControls::request_for(&plan) else {
             return;
         };
-        self.stage_run_request(&config, request, cx);
+        // The request is staged here rather than through the sequence, because this entry point has no
+        // step to own: it exists so a check can start a stored configuration exactly as the launch path
+        // builds it, without the title bar's preparation in between.
+        let request_id = self.run_controls.begin(&config.id);
+        let queued = self.extensions.read(cx).stage_host_run(Work::StartRun {
+            request,
+            config: config.id.clone(),
+            request_id,
+        });
+        self.status = if queued {
+            format!("正在启动 {}", config.name)
+        } else {
+            "插件后台服务不可用，无法启动".into()
+        };
+        cx.notify();
     }
 
     /// Reveal one session's output: select its configuration and show the surface that owns it.
