@@ -65,6 +65,11 @@ pub struct RunEnvEntry {
 const MAX_ENV_NAME_BYTES: usize = 128;
 /// Most environment entries one launch may carry.
 const MAX_ENV_ENTRIES: usize = 64;
+/// Longest accepted environment value.
+///
+/// A real search path is easily several kilobytes, so this bound is generous enough to carry one
+/// while still refusing a value that could not be passed to a native child.
+const MAX_ENV_VALUE_BYTES: usize = 32 * 1024;
 
 impl RunRequest {
     /// Reject oversized or malformed requests before they can occupy a provider's queue.
@@ -114,7 +119,7 @@ impl RunRequest {
                 && entry.name.len() <= MAX_ENV_NAME_BYTES
                 && !entry.name.contains('=')
                 && !entry.name.chars().any(char::is_control);
-            if !valid_name || !bounded(&entry.value, 4096) {
+            if !valid_name || !bounded(&entry.value, MAX_ENV_VALUE_BYTES) {
                 return Err(Failure::new(
                     ErrorCode::InvalidRequest,
                     format!("Invalid execution environment entry: {}", entry.name),
@@ -421,7 +426,7 @@ pub(crate) fn execution_dependency() -> Result<Dependency, Failure> {
                     "name":{"type":"string","max_bytes":256},
                     "env":{"type":"array","max_items":64,"items":{"type":"record","fields":{
                         "name":{"type":"string","max_bytes":128},
-                        "value":{"type":"string","max_bytes":4096}}}}},
+                        "value":{"type":"string","max_bytes":32768}}}}},
                     "optional":["cwd","name","env"]},
                 "result":{"type":"record","fields":{
                     "session":{"type":"string","max_bytes":128},
@@ -691,6 +696,7 @@ mod tests {
             args: vec!["run".into()],
             cwd: None,
             name: Some("运行".into()),
+            env: Vec::new(),
         };
         let same = base.clone();
         let other = RunRequest {
@@ -714,6 +720,7 @@ mod tests {
             args: vec![],
             cwd: None,
             name: None,
+            env: Vec::new(),
         };
         assert!(empty.validate().is_err());
         let unbounded = RunRequest {
@@ -721,6 +728,7 @@ mod tests {
             args: vec!["x".repeat(4097)],
             cwd: None,
             name: None,
+            env: Vec::new(),
         };
         assert!(unbounded.validate().is_err());
         let control_label = RunRequest {
@@ -728,6 +736,7 @@ mod tests {
             args: vec![],
             cwd: None,
             name: Some("bad\nlabel".into()),
+            env: Vec::new(),
         };
         assert!(control_label.validate().is_err());
     }

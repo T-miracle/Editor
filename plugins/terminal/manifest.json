@@ -21,7 +21,7 @@
         "name":{"type":"string","max_bytes":256},
         "env":{"type":"array","max_items":64,"items":{"type":"record","fields":{
           "name":{"type":"string","max_bytes":128},
-          "value":{"type":"string","max_bytes":4096}}}}
+          "value":{"type":"string","max_bytes":32768}}}}
       }, "optional":["cwd","name","env"]},
       "result":{"type":"record","fields":{
         "session":{"type":"string","max_bytes":128},

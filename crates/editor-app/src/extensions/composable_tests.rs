@@ -313,9 +313,12 @@ pub(super) fn pump_recording(
             config,
             request_id,
         } => {
-            let session = manager
-                .start_execution(request.clone())
-                .expect("a compatible execution provider is installed");
+            let session = match manager.start_execution(request.clone()) {
+                Ok(session) => session,
+                Err(error) => panic!(
+                    "a compatible execution provider is installed: {error:#} (request {request:?})"
+                ),
+            };
             launches.push((session.id(), config.clone(), *request_id));
             false
         }

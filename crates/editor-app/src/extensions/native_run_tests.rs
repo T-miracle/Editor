@@ -54,6 +54,7 @@ fn fixture<'a>(
         },
         directory: None,
         env: Default::default(),
+        tool_paths: Default::default(),
         local: true,
     })
     .unwrap();
@@ -490,6 +491,7 @@ fn two_configurations_run_concurrently_with_their_own_sessions(cx: &mut TestAppC
                 },
                 directory: None,
                 env: Default::default(),
+                tool_paths: Default::default(),
                 local: true,
             };
             app.run_controls.upsert(configuration, &key).unwrap();
@@ -639,6 +641,96 @@ fn a_configuration_environment_reaches_the_program_it_starts(cx: &mut TestAppCon
     assert_eq!(request.env[0].value, "ENV_REACHED_CHILD");
     assert!(painted_text(&manager).contains("ENV_REACHED_CHILD"));
 
+    // The configuration itself gains tool directories; its own entries stay authoritative for the
+    // program, and this launch adds one entry of its own beside them.
+    let tool_root = root.path().join("tools");
+    std::fs::create_dir_all(&tool_root).unwrap();
+    let tool_config = cx.update(|_, cx| {
+        app.update(cx, |app, cx| {
+            let key = app.workspace_key();
+            let id = app.run_controls.generate_id(&key);
+            let mut configuration = app
+                .run_controls
+                .configurations()
+                .first()
+                .cloned()
+                .expect("one configuration exists");
+            configuration.id = id.clone();
+            configuration.name = "工具路径".into();
+            configuration.tool_paths = vec![tool_root.display().to_string()];
+            app.run_controls.upsert(configuration, &key).unwrap();
+            cx.notify();
+            id
+        })
+    });
+    let before_tools = launches.len();
+    cx.update(|window, cx| {
+        app.update(cx, |app, cx| {
+            app.start_configuration(
+                &tool_config,
+                vec![plugin_runtime::RunEnvEntry {
+                    name: "RDB_SECOND".into(),
+                    value: "ALSO_PRESENT".into(),
+                }],
+                window,
+                cx,
+            );
+        });
+    });
+    for _ in 0..200 {
+        pump_recording(&mut manager, &app, cx, &mut launches);
+        manager.poll();
+        publish_with_launches(&mut manager, &mut renderer, &app, cx, &launches);
+        if launches.len() > before_tools
+            && manager
+                .execution(launches.last().unwrap().0)
+                .is_some_and(|session| {
+                    session.request().env.iter().any(|entry| {
+                        entry.name.eq_ignore_ascii_case("PATH")
+                            && entry.value.starts_with(&tool_root.display().to_string())
+                    })
+                })
+        {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    assert!(
+        launches.len() > before_tools,
+        "the tool-path launch started"
+    );
+    let tool_request = manager
+        .execution(launches.last().unwrap().0)
+        .unwrap()
+        .request()
+        .clone();
+    let path = tool_request
+        .env
+        .iter()
+        .find(|entry| entry.name.eq_ignore_ascii_case("PATH"))
+        .map(|entry| entry.value.clone())
+        .expect("a tool directory becomes the program's search order");
+    assert!(
+        path.starts_with(&tool_root.display().to_string()),
+        "the configuration's own tools are searched first: {path}"
+    );
+    // The configuration's own entries are not replaced by a launch that adds one of its own.
+    assert!(
+        tool_request
+            .env
+            .iter()
+            .any(|entry| entry.name == "RDB_SECOND" && entry.value == "ALSO_PRESENT")
+    );
+    assert_eq!(
+        tool_request
+            .env
+            .iter()
+            .filter(|entry| entry.name.eq_ignore_ascii_case("PATH"))
+            .count(),
+        1,
+        "one PATH reaches the program"
+    );
+
     // A launch without the entry does not inherit it from a previous session of the same program.
     let second = cx.update(|_, cx| {
         app.update(cx, |app, cx| {
@@ -659,6 +751,7 @@ fn a_configuration_environment_reaches_the_program_it_starts(cx: &mut TestAppCon
                         },
                         directory: None,
                         env: Default::default(),
+                        tool_paths: Default::default(),
                         local: true,
                     },
                     &key,
@@ -732,6 +825,7 @@ fn a_shell_configuration_runs_its_script_through_the_named_interpreter(cx: &mut 
                     .into(),
                 directory: String::new(),
                 environment: String::new(),
+                tool_paths: String::new(),
             };
             app.run_controls
                 .upsert(draft.to_config().expect("the draft is valid"), &key)

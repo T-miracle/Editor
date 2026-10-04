@@ -14,8 +14,70 @@ fn program_config(id: &str, name: &str) -> RunConfig {
             ],
         },
         directory: Some("C:/work".into()),
+        env: Default::default(),
+        tool_paths: Default::default(),
         local: true,
     }
+}
+
+/// Tool directories search before the inherited path and never replace it.
+#[test]
+fn tool_directories_lead_the_search_order() {
+    use std::collections::BTreeMap;
+    // With no override the caller's entries are handed back exactly as written.
+    let written = BTreeMap::from([("APP_MODE".to_owned(), "dev".to_owned())]);
+    assert_eq!(launch_environment(&written, &[]), written);
+
+    // An override leads, and one PATH reaches the child even when the user also wrote one.
+    let with_path = BTreeMap::from([
+        ("Path".to_owned(), "C:/inherited".to_owned()),
+        ("APP_MODE".to_owned(), "dev".to_owned()),
+    ]);
+    let derived = launch_environment(
+        &with_path,
+        &["C:/tools/bin".to_owned(), "C:/more/bin".to_owned()],
+    );
+    let separator = if cfg!(windows) { ';' } else { ':' };
+    let expected = format!("C:/tools/bin{separator}C:/more/bin{separator}C:/inherited");
+    assert_eq!(
+        derived.get("PATH").map(String::as_str),
+        Some(expected.as_str())
+    );
+    // The user's own spelling of the variable does not survive as a second entry.
+    assert_eq!(
+        derived
+            .keys()
+            .filter(|name| name.eq_ignore_ascii_case("PATH"))
+            .count(),
+        1
+    );
+    assert_eq!(derived.get("APP_MODE").map(String::as_str), Some("dev"));
+}
+
+/// A tool directory that could not be searched is refused with its name.
+#[test]
+fn tool_directories_must_be_absolute_and_searchable() {
+    let mut configuration = program_config("run-1", "工具");
+    configuration.tool_paths = vec!["relative/bin".into()];
+    assert_eq!(
+        configuration.validate(),
+        Err(RunConfigError::InvalidToolPath {
+            path: "relative/bin".into()
+        })
+    );
+    // A separator inside one entry would silently become two search directories.
+    configuration.tool_paths = vec!["C:/one;C:/two".into()];
+    assert!(matches!(
+        configuration.validate(),
+        Err(RunConfigError::InvalidToolPath { .. })
+    ));
+    configuration.tool_paths = vec!["C:/tools/bin".into()];
+    assert_eq!(configuration.validate(), Ok(()));
+    configuration.tool_paths = (0..17).map(|index| format!("C:/t{index}")).collect();
+    assert_eq!(
+        configuration.validate(),
+        Err(RunConfigError::TooManyToolPaths)
+    );
 }
 
 /// Saving, editing and re-selecting one configuration keeps its identity and content.
@@ -106,6 +168,8 @@ fn program_arguments_are_never_reinterpreted_as_a_shell_command() {
             args: vec!["a b".into(), "a&b".into(), "中文".into()],
         },
         directory: None,
+        env: Default::default(),
+        tool_paths: Default::default(),
         local: true,
     };
     configuration.validate().unwrap();

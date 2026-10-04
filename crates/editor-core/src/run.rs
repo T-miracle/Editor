@@ -24,7 +24,7 @@ const MAX_DIRECTORY_BYTES: usize = 4096;
 /// Environment entries are bounded exactly like the execution contract they become.
 const MAX_ENV_ENTRIES: usize = 64;
 const MAX_ENV_NAME_BYTES: usize = 128;
-const MAX_ENV_VALUE_BYTES: usize = 4096;
+const MAX_ENV_VALUE_BYTES: usize = 32 * 1024;
 
 /// What a configuration launches: a literal program, or an explicitly chosen interpreter.
 ///
@@ -84,6 +84,12 @@ pub struct RunConfig {
     /// Values are host-local by default and never shared; the host neither interprets nor logs them.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub env: BTreeMap<String, String>,
+    /// Directories searched before the inherited path when this configuration's program is found.
+    ///
+    /// This is the local tool-path override: it affects only this configuration's launch and never
+    /// changes the editor, the plugin platform or any other program's search order.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tool_paths: Vec<String>,
     /// Local-only configurations never modify project files; sharing is an explicit user action.
     #[serde(default = "crate::run::default_local")]
     pub local: bool,
@@ -92,6 +98,42 @@ pub struct RunConfig {
 /// Sharing is off unless the user opts in, including for files written by older versions.
 pub(crate) fn default_local() -> bool {
     true
+}
+
+/// Longest accepted tool directory, matching the bounded environment it becomes.
+const MAX_TOOL_PATH_BYTES: usize = 4096;
+/// Most directories one configuration may search before the inherited path.
+const MAX_TOOL_PATHS: usize = 16;
+
+/// The environment this configuration's launch needs beyond what the user typed.
+///
+/// Tool directories become a leading `PATH`, so the program resolves from the configuration's own
+/// choice of tools. The value is derived rather than stored: the file keeps the directories, and a
+/// user's own `PATH` entry is preserved behind them instead of being replaced.
+pub fn launch_environment(
+    env: &BTreeMap<String, String>,
+    tool_paths: &[String],
+) -> BTreeMap<String, String> {
+    let mut entries = env.clone();
+    if tool_paths.is_empty() {
+        return entries;
+    }
+    let separator = if cfg!(windows) { ';' } else { ':' };
+    let inherited = entries
+        .iter()
+        .find(|(name, _)| name.eq_ignore_ascii_case("PATH"))
+        .map(|(_, value)| value.clone())
+        .or_else(|| std::env::var("PATH").ok())
+        .unwrap_or_default();
+    let mut value = tool_paths.join(&separator.to_string());
+    if !inherited.is_empty() {
+        value.push(separator);
+        value.push_str(&inherited);
+    }
+    // One `PATH` reaches the child: the override first, then whatever it was going to search.
+    entries.retain(|name, _| !name.eq_ignore_ascii_case("PATH"));
+    entries.insert("PATH".to_owned(), value);
+    entries
 }
 
 /// Why a configuration cannot be launched; the form shows the same reason before starting.
@@ -114,6 +156,12 @@ pub enum RunConfigError {
     /// An entry whose name or value could not be passed to a native program.
     InvalidEnvEntry {
         name: String,
+    },
+    /// More tool directories than one launch may search before the inherited path.
+    TooManyToolPaths,
+    /// A tool directory that is not an absolute, searchable path.
+    InvalidToolPath {
+        path: String,
     },
     /// The identifier is empty or duplicated inside one set.
     InvalidIdentity {
@@ -147,6 +195,12 @@ impl std::fmt::Display for RunConfigError {
             }
             Self::InvalidEnvEntry { name } => {
                 write!(formatter, "Invalid environment entry: {name}")
+            }
+            Self::TooManyToolPaths => {
+                write!(formatter, "Too many tool directories for one configuration")
+            }
+            Self::InvalidToolPath { path } => {
+                write!(formatter, "Invalid tool directory: {path}")
             }
             Self::InvalidIdentity { id } => write!(formatter, "Invalid run configuration id: {id}"),
         }
@@ -194,6 +248,23 @@ impl RunConfig {
             // depend on whatever directory a provider happened to inherit.
             if !std::path::Path::new(directory).is_absolute() {
                 return Err(RunConfigError::DirectoryNotAbsolute);
+            }
+        }
+        if self.tool_paths.len() > MAX_TOOL_PATHS {
+            return Err(RunConfigError::TooManyToolPaths);
+        }
+        for directory in &self.tool_paths {
+            // A directory a native program could not search is refused while the form is open. An
+            // entry containing a separator would silently become two search directories.
+            let valid = !directory.is_empty()
+                && directory.len() <= MAX_TOOL_PATH_BYTES
+                && !directory.contains('\0')
+                && !directory.contains(';')
+                && std::path::Path::new(directory).is_absolute();
+            if !valid {
+                return Err(RunConfigError::InvalidToolPath {
+                    path: directory.clone(),
+                });
             }
         }
         if self.env.len() > MAX_ENV_ENTRIES {

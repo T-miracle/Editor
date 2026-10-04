@@ -82,16 +82,18 @@ enum RunField {
     Script,
     Directory,
     Environment,
+    ToolPaths,
 }
 
 impl RunField {
-    const ALL: [Self; 6] = [
+    const ALL: [Self; 7] = [
         Self::Name,
         Self::Program,
         Self::Arguments,
         Self::Script,
         Self::Directory,
         Self::Environment,
+        Self::ToolPaths,
     ];
 
     fn label(self) -> &'static str {
@@ -103,6 +105,7 @@ impl RunField {
             Self::Script => "脚本文本",
             Self::Directory => "工作目录",
             Self::Environment => "环境变量（每行 名称=值）",
+            Self::ToolPaths => "本机工具路径（每行一个目录，优先于继承的 PATH）",
         }
     }
 
@@ -114,6 +117,7 @@ impl RunField {
             Self::Script => "run-config-script",
             Self::Directory => "run-config-directory",
             Self::Environment => "run-config-environment",
+            Self::ToolPaths => "run-config-tool-paths",
         }
     }
 
@@ -125,6 +129,7 @@ impl RunField {
             Self::Script => draft.script.clone(),
             Self::Directory => draft.directory.clone(),
             Self::Environment => draft.environment.clone(),
+            Self::ToolPaths => draft.tool_paths.clone(),
         }
     }
 
@@ -136,6 +141,7 @@ impl RunField {
             Self::Script => draft.script = value,
             Self::Directory => draft.directory = value,
             Self::Environment => draft.environment = value,
+            Self::ToolPaths => draft.tool_paths = value,
         }
     }
 }
@@ -726,9 +732,15 @@ impl EditorApp {
                 let Some(mut request) = RunControls::request_for(&plan) else {
                     return;
                 };
-                // Explicit entries belong to this launch, so the caller's environment is what the
-                // program receives; the stored configuration's own entries are already in the plan.
-                request.env = env;
+                // The configuration's own entries, including its tool directories, are what the
+                // program must receive; extra entries are added for this launch only, and one of
+                // them replaces the configuration's entry of the same name.
+                for entry in env {
+                    request
+                        .env
+                        .retain(|existing| !existing.name.eq_ignore_ascii_case(&entry.name));
+                    request.env.push(entry);
+                }
                 self.stage_run_request(&config, request, cx);
             }
         }
@@ -1104,7 +1116,7 @@ fn render_run_config_form(
 
     // The environment page edits its own field; the basic page shows the launch settings.
     let page_fields: &[RunField] = if tab == RunConfigTab::Environment {
-        &[RunField::Environment]
+        &[RunField::Environment, RunField::ToolPaths]
     } else {
         // Shell mode replaces the program field's meaning and adds the script body.
         if shell {

@@ -26,6 +26,7 @@ fn store_configuration(workspace_key: &str, name: &str) -> std::path::PathBuf {
         },
         directory: None,
         env: Default::default(),
+        tool_paths: Default::default(),
         local: true,
     })
     .unwrap();
@@ -107,7 +108,8 @@ fn the_run_configuration_dialog_owns_a_b1_draft(cx: &mut TestAppContext) {
             ("环境".to_owned(), true),
         ]
     );
-    // One field per setting, with arguments and environment entries each kept one per line.
+    // One field per setting, with arguments, environment entries and tool directories each kept
+    // one per line.
     let fields = cx.update(|window, cx| {
         let _ = window;
         form.read(cx)
@@ -124,7 +126,8 @@ fn the_run_configuration_dialog_owns_a_b1_draft(cx: &mut TestAppContext) {
             "参数（每行一个）",
             "脚本文本",
             "工作目录",
-            "环境变量（每行 名称=值）"
+            "环境变量（每行 名称=值）",
+            "本机工具路径（每行一个目录，优先于继承的 PATH）"
         ]
     );
     // A new draft starts empty, on the basic page, with nothing to report yet.

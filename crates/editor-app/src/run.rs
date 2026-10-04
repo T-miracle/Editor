@@ -270,13 +270,11 @@ impl RunControls {
             cwd: directory.clone(),
             name: Some(name.clone()),
             // Environment entries belong to this launch; the host passes them through untouched.
-            env: config
-                .env
-                .iter()
-                .map(|(name, value)| plugin_runtime::RunEnvEntry {
-                    name: name.clone(),
-                    value: value.clone(),
-                })
+            // The configuration's tool directories become a leading PATH, so its own tools are found
+            // first without changing the search order of anything else on this machine.
+            env: editor_core::launch_environment(&config.env, &config.tool_paths)
+                .into_iter()
+                .map(|(name, value)| plugin_runtime::RunEnvEntry { name, value })
                 .collect(),
         })
     }
@@ -522,6 +520,8 @@ pub struct RunConfigDraft {
     pub directory: String,
     /// Environment entries as `名称=值`, one per line; values keep everything after the first `=`.
     pub environment: String,
+    /// Tool directories searched before the inherited path, one per line.
+    pub tool_paths: String,
 }
 
 impl RunConfigDraft {
@@ -544,6 +544,7 @@ impl RunConfigDraft {
                 },
                 directory: config.directory.clone().unwrap_or_default(),
                 environment: render_environment(&config.env),
+                tool_paths: config.tool_paths.join("\n"),
             },
             None => Self {
                 id,
@@ -554,6 +555,7 @@ impl RunConfigDraft {
                 script: String::new(),
                 directory: String::new(),
                 environment: String::new(),
+                tool_paths: String::new(),
             },
         }
     }
@@ -589,6 +591,13 @@ impl RunConfigDraft {
             directory: (!self.directory.trim().is_empty())
                 .then(|| self.directory.trim().to_owned()),
             env: parse_environment(&self.environment)?,
+            tool_paths: self
+                .tool_paths
+                .lines()
+                .map(str::trim)
+                .filter(|line| !line.is_empty())
+                .map(str::to_owned)
+                .collect(),
             local: true,
         })
     }

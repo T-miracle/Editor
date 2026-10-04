@@ -17,6 +17,7 @@ fn config(id: &str, name: &str) -> RunConfig {
         },
         directory: None,
         env: Default::default(),
+        tool_paths: Default::default(),
         local: true,
     }
 }
@@ -279,6 +280,7 @@ fn drafts_preserve_argument_boundaries() {
         script: String::new(),
         arguments: "--flag\nC:/path with spaces/file.txt\n".into(),
         directory: " C:/work ".into(),
+        tool_paths: String::new(),
         // Values keep everything after the first `=`, including spaces and further equals signs.
         environment: "APP_MODE=dev\nTOKEN=a=b c\nEMPTY=\n".into(),
     };
@@ -332,6 +334,7 @@ fn a_malformed_environment_line_is_refused() {
         arguments: String::new(),
         directory: String::new(),
         environment: "没有等号".into(),
+        tool_paths: String::new(),
     };
     let error = base.to_config().expect_err("a line without '=' is refused");
     assert!(error.contains("名称=值"), "{error}");
@@ -356,6 +359,7 @@ fn shell_mode_names_an_interpreter_and_passes_the_script_verbatim() {
         script: "Get-ChildItem | Where-Object { $_.Name -like 'a b*' }".into(),
         directory: String::new(),
         environment: String::new(),
+        tool_paths: String::new(),
     };
     let configuration = draft.to_config().expect("the draft is usable");
     assert_eq!(configuration.target.executable(), "pwsh.exe");
