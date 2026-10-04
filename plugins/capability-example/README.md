@@ -60,6 +60,8 @@ SDK 提供 open_workspace、open_data、read_file、write_file、close_resource�
 
 ## 声明式配置
 
+独立 SDK 夹具可用 `preview-probe` 发布原样的 source-bound Scroll，并通过 `scope-probe` 发出公开 `LocateViewport`；无 source 时视口 opt-in 撤销，不制造虚假的文档身份。`editor.viewport` 为可选协商，普通示例保持惰性。
+
 编辑器“设置 → 插件设置”根据清单生成 enabled（布尔）、label（文本）、count（1–20 的整数，仅用户级）、style（枚举）的原生表单。选择用户全局或本项目后点击应用才写入；重置移除所选层级覆盖。每项显示当前生效来源。配置顺序为已确认项目值 → 用户值 → 自动发现 → 默认值；项目不能写宿主信任、授权或主题等设置。
 
 示例钩子在 Validate 阶段提供 label 的自动发现值 `Discovered label`；显式 label 为 `invalid` 时拒绝应用，保留之前实例和配置。显式有效值不会被发现值替换。Apply 阶段把最终配置送入候选实例，激活后显示 enabled 的实际值。清单声明 `restart_instance`，修改仅替换受影响的实例，不重启编辑器。全局更改也更新其他已打开逻辑工作区，但保留其项目覆盖。

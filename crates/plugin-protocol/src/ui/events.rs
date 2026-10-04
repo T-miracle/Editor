@@ -38,6 +38,15 @@ impl Document {
             )
         })?;
         let valid = match (&node.kind, &event.action) {
+            (Kind::Scroll { content }, Action::Viewport(position)) => {
+                self.dialog.is_none()
+                    && self.menu.is_none()
+                    && self.editor_viewport.as_deref() == Some(&node.id)
+                    && position.validate().is_ok()
+                    && content
+                        .viewport_block(&position.block)
+                        .is_some_and(|block| block.source_range == Some(position.source_range))
+            }
             (Kind::Image { .. } | Kind::Text { .. }, Action::Link { uri }) => {
                 self.link_events && node.links.iter().any(|link| link.uri == *uri)
             }

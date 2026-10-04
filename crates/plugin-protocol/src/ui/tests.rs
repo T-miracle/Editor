@@ -506,3 +506,131 @@ fn code_highlighting_requires_a_source_version_and_defaults_inert() {
     let requested: Document = serde_json::from_value(encoded).unwrap();
     requested.validate().unwrap();
 }
+
+/// A viewport opt-in cannot derive document authority from an ordinary unbound scroll tree.
+#[test]
+fn editor_viewport_binding_requires_a_source_document() {
+    let document = Document::new(Node::scroll("viewport", Node::text("paragraph", "source")));
+    let mut encoded = serde_json::to_value(document).unwrap();
+    encoded["editor_viewport"] = serde_json::json!("viewport");
+    let bound: Document = serde_json::from_value(encoded).unwrap();
+    assert!(
+        bound.validate().is_err(),
+        "viewport binding requires exact source identity"
+    );
+}
+
+/// Binding, active block identity and normalized finite geometry are checked before a guest receives input.
+#[test]
+fn editor_viewport_events_require_exact_current_active_block_and_bounded_geometry() {
+    use crate::api::{DocumentVersion, PreviewViewport, ViewportTarget};
+    let mut document = Document::new(Node::scroll(
+        "viewport",
+        Node::column(
+            "content",
+            vec![
+                Node::text("paragraph", "中文").source_range(0..6),
+                Node::text("disabled", "隐藏")
+                    .source_range(7..13)
+                    .disabled(true),
+                Node::scroll(
+                    "inner",
+                    Node::text("inner-block", "内层").source_range(14..20),
+                )
+                .source_range(14..20),
+            ],
+        ),
+    ))
+    .revision(9);
+    document.source = Some(DocumentVersion {
+        id: "source".into(),
+        path: "notes.md".into(),
+        revision: 7,
+    });
+    document.editor_viewport = Some("viewport".into());
+    document.validate().unwrap();
+    let position = PreviewViewport {
+        block: "paragraph".into(),
+        source_range: SourceRange { start: 0, end: 6 },
+        fraction: 0.5,
+        origin: None,
+        layout: false,
+    };
+    let event = UiEvent {
+        revision: 9,
+        node: "viewport".into(),
+        action: Action::Viewport(position.clone()),
+    };
+    document.validate_event(&event).unwrap();
+    for changed in [
+        PreviewViewport {
+            source_range: SourceRange { start: 0, end: 5 },
+            ..position.clone()
+        },
+        PreviewViewport {
+            block: "disabled".into(),
+            source_range: SourceRange { start: 7, end: 13 },
+            ..position.clone()
+        },
+        PreviewViewport {
+            block: "inner-block".into(),
+            source_range: SourceRange { start: 14, end: 20 },
+            ..position.clone()
+        },
+        PreviewViewport {
+            block: "inner".into(),
+            source_range: SourceRange { start: 14, end: 20 },
+            ..position.clone()
+        },
+        PreviewViewport {
+            fraction: f32::NAN,
+            ..position.clone()
+        },
+        PreviewViewport {
+            origin: Some(0),
+            ..position.clone()
+        },
+    ] {
+        assert!(
+            document
+                .validate_event(&UiEvent {
+                    action: Action::Viewport(changed),
+                    ..event.clone()
+                })
+                .is_err()
+        );
+    }
+    assert!(
+        document
+            .validate_event(&UiEvent {
+                revision: 8,
+                ..event.clone()
+            })
+            .is_err()
+    );
+    document.editor_viewport = None;
+    assert!(
+        document.validate_event(&event).is_err(),
+        "ordinary scroll defaults inert"
+    );
+    for target in [
+        ViewportTarget::Source {
+            offset: 1024 * 1024 + 1,
+            line_fraction: 0.0,
+        },
+        ViewportTarget::Source {
+            offset: 0,
+            line_fraction: f32::INFINITY,
+        },
+        ViewportTarget::Preview {
+            node: "".into(),
+            fraction: 0.0,
+        },
+        ViewportTarget::Preview {
+            node: "paragraph".into(),
+            fraction: -0.1,
+        },
+    ] {
+        assert!(target.validate().is_err());
+    }
+}

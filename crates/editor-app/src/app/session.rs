@@ -42,6 +42,9 @@ pub struct SessionState {
     #[serde(default)]
     pub editor_preview_modes:
         std::collections::BTreeMap<String, plugin_runtime::plugin_protocol::PreviewMode>,
+    /// Explicit synchronization choices are scoped to this workspace; absent entries default on.
+    #[serde(default)]
+    pub editor_preview_sync: std::collections::BTreeMap<String, bool>,
     /// Base serializes the complete split tree, dock extents and open state.
     #[serde(default)]
     pub dock_layout: Option<gpui_base::dock::DockAreaState>,
@@ -70,6 +73,7 @@ impl SessionState {
             plugin_dock_sizes: Default::default(),
             plugin_panel_visibility: Default::default(),
             editor_preview_modes: Default::default(),
+            editor_preview_sync: Default::default(),
             dock_layout: None,
             open_tabs: Vec::new(),
             active_file: None,

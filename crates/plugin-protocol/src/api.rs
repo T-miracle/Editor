@@ -7,6 +7,8 @@ mod navigation;
 pub use navigation::{
     NavigationTarget, decode_uri_component, document_relative_path, is_windows_device_segment,
 };
+mod viewport;
+pub use viewport::{PreviewViewport, SourceViewport, ViewportTarget};
 
 #[cfg(test)]
 mod images_tests;
@@ -291,6 +293,9 @@ pub enum Input {
 /// Native UI notifications contain no legacy canvas or character-grid fields.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum Notification {
+    /// An authorized source-bound preview receives coalesced, readonly native source positions.
+    /// Delivery stops outside split mode, while synchronization is disabled, or on owner retirement.
+    SourceViewport(SourceViewport),
     /// User-initiated native input belongs to this exact source version and UTF-8 selection.
     /// Only the authorized active workspace preview receives the ordered metadata batch.
     ImageInput {
@@ -376,6 +381,15 @@ pub struct DocumentChange {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum EditorOperation {
+    /// Locate a viewport in the exact active source/UI scene; requires editor.viewport and editor.read.
+    /// Nonzero origins identify programmatic movement so a guest cannot create a feedback loop.
+    LocateViewport {
+        document: DocumentVersion,
+        panel: String,
+        ui_revision: u64,
+        target: ViewportTarget,
+        origin: u64,
+    },
     /// Navigate from the exact active source version. Requires `editor.navigation` and `editor.read`;
     /// relative documents additionally require `workspace.read`, external URLs `navigation.external`.
     NavigateDocument {

@@ -19,6 +19,38 @@ impl Manager {
         self.refresh_services();
         // Never deliver document text to a guest without the same editor permission as native reads.
         let inner = &event;
+        if let api::Notification::SourceViewport(position) = inner {
+            position.validate()?;
+            let instance = self.live.get(id).ok_or_else(|| {
+                api::Failure::new(api::ErrorCode::InvalidState, "Viewport owner is disabled")
+            })?;
+            let scene = panel
+                .as_ref()
+                .and_then(|panel| instance.views.get(panel))
+                .ok_or_else(|| {
+                    api::Failure::new(
+                        api::ErrorCode::InvalidHandle,
+                        "Viewport panel is unavailable",
+                    )
+                })?;
+            if scene.editor_viewport.is_none()
+                || scene.dialog.is_some()
+                || scene.menu.is_some()
+                || scene.source.as_ref() != Some(&position.document)
+                || scene.revision != position.ui_revision
+                || panel
+                    .as_ref()
+                    .and_then(|panel| instance.preview_sources.get(panel))
+                    .and_then(Option::as_ref)
+                    != Some(&position.document)
+            {
+                return Err(api::Failure::new(
+                    api::ErrorCode::StaleRevision,
+                    "Viewport source or scene has changed",
+                )
+                .into());
+            }
+        }
         if let api::Notification::Preview { document, text } = inner {
             let panel_id = panel.as_ref();
             let entry = self

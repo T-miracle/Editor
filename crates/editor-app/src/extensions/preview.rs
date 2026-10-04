@@ -4,6 +4,7 @@ use super::*;
 
 mod presentation;
 mod toolbar;
+pub(crate) mod viewport;
 
 impl ExtensionPanel {
     /// Withdraw derived code jobs in every native projection owned by this surface.
@@ -57,6 +58,7 @@ impl EditorApp {
         for panel in self.plugin_panels.values() {
             panel.update(cx, |panel, cx| {
                 if panel.editor_preview {
+                    panel.source_viewport.reset();
                     // A retained focus handle does not authorize a background result from the previous source.
                     panel.invalidate_code_highlighting(cx);
                     panel.preview_document = None;
@@ -141,6 +143,8 @@ impl EditorApp {
                         panel.preview_document = context.clone();
                     }
                 } else if !active && panel.preview_document.take().is_some() {
+                    // The removed source observer will not receive a pointer release in the next document.
+                    panel.source_viewport.withdraw();
                     panel.send(protocol::api::Notification::Preview {
                         document: None,
                         text: String::new(),

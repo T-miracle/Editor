@@ -16,6 +16,8 @@ impl PluginView {
     ) -> AnyElement {
         self.sync_widgets(window, cx);
         self.sync_code_highlighting(cx);
+        let viewport_frame = self.begin_viewport_frame();
+        let revision = self.document.revision;
         let root = self.document.root.clone();
         let body = self.node(&root, false, window, cx);
         let mut view = div()
@@ -26,6 +28,12 @@ impl PluginView {
             .flex_col()
             .tab_group()
             .track_focus(&self.view_focus)
+            .capture_key_down(cx.listener(|view, _, window, cx| {
+                // Register on the focused root's ancestry; an overlay's paint node may be a sibling.
+                if view.view_focus.contains_focused(window, cx) {
+                    view.viewport.cancel_locate();
+                }
+            }))
             .relative()
             .overflow_hidden()
             .bg(self.colors("container", cx).background)
@@ -33,6 +41,7 @@ impl PluginView {
         // Popup anchors use this composed view's native origin, never the containing editor window origin.
         let owner = cx.entity().downgrade();
         let released = cx.entity().downgrade();
+        let viewport = cx.entity().downgrade();
         view = view.child(
             gpui_kit::canvas(
                 move |bounds, _, cx| {
@@ -43,12 +52,43 @@ impl PluginView {
                         }
                     });
                 },
-                move |_, _, window, _| {
+                move |_, _, window, cx| {
+                    // All source blocks have completed prepaint before this composed view paints.
+                    let _ = viewport.update(cx, |view, cx| {
+                        view.finish_viewport_frame(viewport_frame, revision, cx);
+                    });
+                    let input = viewport.clone();
+                    window.on_mouse_event(
+                        move |event: &gpui_kit::ScrollWheelEvent, phase, _, cx| {
+                            if phase.capture() {
+                                let _ = input.update(cx, |view, _| {
+                                    view.viewport_wheel(event.position, revision);
+                                });
+                            }
+                        },
+                    );
+                    // A scrollbar press supersedes a queued locate before Base begins its native drag.
+                    let pointer = viewport.clone();
+                    window.on_mouse_event(move |event: &gpui_kit::MouseDownEvent, phase, _, cx| {
+                        if phase.capture() {
+                            let _ = pointer.update(cx, |view, _| {
+                                view.viewport_pointer_down(event.position, revision)
+                            });
+                        }
+                    });
+                    let drag = viewport.clone();
+                    window.on_mouse_event(move |event: &gpui_kit::MouseMoveEvent, phase, _, cx| {
+                        // A request can arrive after the press; every held move renews manual ownership.
+                        if phase.capture() && event.pressed_button.is_some() {
+                            let _ = drag.update(cx, |view, _| view.viewport_pointer_move());
+                        }
+                    });
                     // Every release ends ownership, including releases outside the link's hit box.
                     // Defer cleanup so Base can consume a matching link release in this dispatch.
                     let released = released.clone();
                     window.on_mouse_event(move |_: &gpui_kit::MouseUpEvent, phase, _, cx| {
                         if phase.capture() {
+                            let _ = released.update(cx, |view, _| view.viewport_pointer_up());
                             let released = released.clone();
                             cx.defer(move |cx| {
                                 let _ = released.update(cx, |view, _| view.link_press = None);

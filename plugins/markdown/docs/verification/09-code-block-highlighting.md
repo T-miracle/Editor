@@ -36,3 +36,5 @@ Markdown 0.9.0、独立 capability-example 0.15.7。公开能力同时要求 `ui
 `cargo fmt --check`、Markdown／独立示例访客格式检查及 `cargo check --workspace` 通过（最终编译 3.15 秒）；`cargo test --workspace --exclude editor-app` 实际 73 passed、105 ignored、37 个结果组（09-workspace-tests.log）。忽略项不计为通过，本单涉及的实际 WASM 已显式执行。文档链接、包查询与 ZIP 一致性及 `git diff --check` 已核对。
 
 独立 Spec 最终 0 findings；Standards 最终硬规则 0、Fowler 判断性 0，修复与最终日志均已独立复核。Windows 原生 GPUI 自动交互是本单验收平台，不冒称额外人工桌面验收。保留环境已有链接及未使用接口警告；同步滚动和发行继续由 10–11 交付，父议题 #26 不修改。
+
+2026-10-04 交付：普通提交 `783498a9697354ca9a4505048d57a42def491529` 已推送 origin/codex/markdown-plugin，远端 SHA 一致；#35 PATCH 后独立 GET 读回 closed / completed。此记录追加在 10，不改写已推送历史。

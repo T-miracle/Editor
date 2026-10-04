@@ -1,5 +1,7 @@
 # 插件 SDK
 
+源码视口通知、双向语义定位、来源抑制和工作区同步偏好通过 `editor.viewport ^1` 提供，见 [VIEWPORT.md](VIEWPORT.md)。
+
 只读原生代码块的提供者高亮、授权、降级与资源生命周期见 [CODE_HIGHLIGHTING.md](CODE_HIGHLIGHTING.md)。
 
 原生链接事件、文档／预览块／HTTP(S) 导航与权限契约见 [NAVIGATION.md](NAVIGATION.md)。

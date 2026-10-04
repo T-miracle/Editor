@@ -73,6 +73,8 @@ impl ExtensionPanel {
         // A modal in the complete publication also owns input over its source-local projection.
         toolbar.disabled |= document.dialog.is_some() || document.menu.is_some();
         document.root = toolbar;
+        // This projection has no preview scroll and cannot claim the original scene's viewport stream.
+        document.editor_viewport = None;
         document.dialog = None;
         document.menu = None;
         let environment = self.native_environment(cx);

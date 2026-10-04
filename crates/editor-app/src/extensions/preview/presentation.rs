@@ -4,8 +4,26 @@ use gpui_kit::{AnyElement, SharedString, Styled, prelude::FluentBuilder as _};
 use protocol::PreviewMode;
 
 impl EditorApp {
+    /// Viewport identity does not require an optional set of presentation icons.
+    pub(super) fn editor_preview_owner_key(
+        &self,
+        preview: &Entity<ExtensionPanel>,
+        cx: &App,
+    ) -> Option<String> {
+        let panel = preview.read(cx);
+        Some(format!(
+            "{}/{}",
+            panel.active.as_ref()?,
+            panel.surface_id.as_ref()?
+        ))
+    }
+
     /// A mode preference applies only while this installed contribution still offers all three icons.
-    fn editor_preview_key(&self, preview: &Entity<ExtensionPanel>, cx: &App) -> Option<String> {
+    pub(super) fn editor_preview_key(
+        &self,
+        preview: &Entity<ExtensionPanel>,
+        cx: &App,
+    ) -> Option<String> {
         let panel = preview.read(cx);
         if panel.mode_icons.iter().any(Option::is_none) {
             return None;
@@ -36,6 +54,7 @@ impl EditorApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
+        let source = self.render_source_viewport_probe(source, preview.clone(), cx);
         match self.editor_preview_mode(&preview, cx) {
             PreviewMode::Source => {
                 let overlay = preview.update(cx, |panel, cx| panel.source_overlay(window, cx));
@@ -116,7 +135,14 @@ impl EditorApp {
         cx: &mut Context<Self>,
     ) -> Option<AnyElement> {
         let preview = self.active_editor_preview(cx)?;
-        self.editor_preview_key(&preview, cx)?;
+        let has_modes = self.editor_preview_key(&preview, cx).is_some();
+        let has_viewport = preview
+            .read(cx)
+            .current_document()
+            .is_some_and(|scene| scene.editor_viewport.is_some());
+        if !has_modes && !has_viewport {
+            return None;
+        }
         let selected = self.editor_preview_mode(&preview, cx);
         let selected_style = component_styles(cx, ThemeComponent::PanelToggle).selected;
         let mut controls = h_flex().tab_group().items_center().gap_1().child(
@@ -128,43 +154,90 @@ impl EditorApp {
                 .bg(cx.theme().border)
                 .mx(px(4.)),
         );
-        for (index, mode, key, label) in [
-            (
-                0,
-                PreviewMode::Source,
-                "editor-preview-source-mode",
-                t!("preview.source_mode").to_string(),
-            ),
-            (
-                1,
-                PreviewMode::Split,
-                "editor-preview-split-mode",
-                t!("preview.split_mode").to_string(),
-            ),
-            (
-                2,
-                PreviewMode::Preview,
-                "editor-preview-preview-mode",
-                t!("preview.preview_mode").to_string(),
-            ),
-        ] {
-            let icon = preview.read(cx).mode_icons[index].as_deref()?;
-            let button = Button::new(SharedString::from(key))
-                .icon(Icon::default().data(icon))
+        if has_modes {
+            for (index, mode, key, label) in [
+                (
+                    0,
+                    PreviewMode::Source,
+                    "editor-preview-source-mode",
+                    t!("preview.source_mode").to_string(),
+                ),
+                (
+                    1,
+                    PreviewMode::Split,
+                    "editor-preview-split-mode",
+                    t!("preview.split_mode").to_string(),
+                ),
+                (
+                    2,
+                    PreviewMode::Preview,
+                    "editor-preview-preview-mode",
+                    t!("preview.preview_mode").to_string(),
+                ),
+            ] {
+                let icon = preview.read(cx).mode_icons[index].as_deref()?;
+                let button = Button::new(SharedString::from(key))
+                    .icon(Icon::default().data(icon))
+                    .small()
+                    .compact()
+                    .ghost()
+                    .accessibility_label(label.clone())
+                    .tooltip(label)
+                    .when(selected == mode, |button| {
+                        button
+                            .bg(selected_style.background.unwrap_or(cx.theme().list_active))
+                            .text_color(selected_style.foreground.unwrap_or(cx.theme().foreground))
+                    })
+                    .on_click(cx.listener(move |app, _, window, cx| {
+                        app.set_editor_preview_mode(mode, window, cx)
+                    }));
+                controls = controls.child(div().debug_selector(move || key.into()).child(button));
+            }
+        }
+        if has_viewport {
+            let enabled = self.editor_preview_sync_enabled(&preview, cx);
+            let label = t!("preview.synchronized_scroll").to_string();
+            let toggle = Button::new("editor-preview-sync-scroll")
+                .icon(Icon::default().data(include_bytes!("../../../assets/icons/sync-scroll.svg")))
                 .small()
                 .compact()
                 .ghost()
+                .disabled(selected != PreviewMode::Split)
                 .accessibility_label(label.clone())
                 .tooltip(label)
-                .when(selected == mode, |button| {
+                .when(enabled, |button| {
                     button
                         .bg(selected_style.background.unwrap_or(cx.theme().list_active))
                         .text_color(selected_style.foreground.unwrap_or(cx.theme().foreground))
                 })
-                .on_click(cx.listener(move |app, _, window, cx| {
-                    app.set_editor_preview_mode(mode, window, cx)
+                .on_click(cx.listener(|app, _, _, cx| {
+                    let Some(preview) = app.active_editor_preview(cx) else {
+                        return;
+                    };
+                    if app.editor_preview_mode(&preview, cx) != PreviewMode::Split {
+                        return;
+                    }
+                    let Some(key) = app.editor_preview_owner_key(&preview, cx) else {
+                        return;
+                    };
+                    let enabled = app.editor_preview_sync_enabled(&preview, cx);
+                    app.session_state.editor_preview_sync.insert(key, !enabled);
+                    preview.update(cx, |panel, cx| {
+                        panel.source_viewport.reset();
+                        panel.viewport_sync_enabled = !enabled;
+                        if let Some(view) = &panel.native_ui {
+                            view.update(cx, |view, cx| view.set_viewport_enabled(!enabled, cx));
+                        }
+                    });
+                    app.persist_session();
+                    app.editor_panel.update(cx, |_, cx| cx.notify());
+                    cx.notify();
                 }));
-            controls = controls.child(div().debug_selector(move || key.into()).child(button));
+            controls = controls.child(
+                div()
+                    .debug_selector(|| "editor-preview-sync-scroll".into())
+                    .child(toggle),
+            );
         }
         Some(controls.into_any_element())
     }

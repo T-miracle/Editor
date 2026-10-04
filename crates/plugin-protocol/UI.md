@@ -1,5 +1,7 @@
 # 插件原生界面协议 v1
 
+`Document.editor_viewport` 以活动 Scroll ID 绑定源视口通知及 `Action::Viewport`。需要 `editor.viewport`、`ui.richtext`、`editor.read` 和精确 source；分栏、同步开关、来源标记、定位与撤销契约见 [VIEWPORT.md](VIEWPORT.md)。
+
 `ui.code_highlighting ^1` 通过默认关闭的 `Document.code_highlighting` 请求已选动态 WASM 语言提供者高亮只读 CodeBlock；仍需 `ui.richtext`、`editor.read`、当前 source 与本实例工作区编辑区面板。缺失、失败或停用提供者降级为等宽文字，不拒绝整份合法视图。版本、取消、预算与原生主题绘制契约见 [CODE_HIGHLIGHTING.md](CODE_HIGHLIGHTING.md)。
 
 `ui.links ^1` 允许 `Document.link_events` 启用实际富文本链接事件 `Action::Link { uri }`；默认惰性，不在解析或绘制时打开地址。节点、UI revision、模态、禁用与实例归属门禁仍有效。事件与版本化 `editor.navigation` 请求的权限、目标及取消契约见 [NAVIGATION.md](NAVIGATION.md)。

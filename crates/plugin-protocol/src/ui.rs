@@ -43,6 +43,10 @@ pub struct Document {
     /// Requires ui.code_highlighting, editor.read and the owning preview's exact source version.
     #[serde(default)]
     pub code_highlighting: bool,
+    /// Bind one active source-mapped Scroll to native source viewport notifications and locate requests.
+    /// Requires editor.viewport, ui.richtext, editor.read and this preview's exact source identity.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub editor_viewport: Option<String>,
     /// At most one modal per panel. Removing it closes the modal.
     #[serde(default)]
     pub dialog: Option<Dialog>,
@@ -62,6 +66,7 @@ impl Document {
             editor_image_input: false,
             link_events: false,
             code_highlighting: false,
+            editor_viewport: None,
             dialog: None,
             menu: None,
         }
@@ -321,6 +326,8 @@ pub struct UiEvent {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", content = "value", rename_all = "snake_case")]
 pub enum Action {
+    /// Coalesced live geometry of the bound preview scroll; it never mutates its derived block.
+    Viewport(crate::api::PreviewViewport),
     /// URI supplied by a clicked native rich-text link, never by parsing or layout alone.
     Link {
         uri: String,
@@ -520,6 +527,26 @@ impl Node {
             Kind::Scroll { content } => content.visit(visitor),
             Kind::Tabs { tabs, .. } => tabs.iter().for_each(|t| t.content.visit(visitor)),
             _ => {}
+        }
+    }
+
+    /// A bound viewport cannot report a block owned by a nested independent Scroll.
+    fn viewport_block(&self, id: &str) -> Option<&Self> {
+        if self.disabled || matches!(self.kind, Kind::Scroll { .. }) {
+            return None;
+        }
+        if self.id == id {
+            return Some(self);
+        }
+        match &self.kind {
+            Kind::Column { children } | Kind::Row { children } => {
+                children.iter().find_map(|node| node.viewport_block(id))
+            }
+            Kind::Tabs { tabs, selected } => tabs
+                .iter()
+                .find(|tab| &tab.id == selected)
+                .and_then(|tab| tab.content.viewport_block(id)),
+            _ => None,
         }
     }
 

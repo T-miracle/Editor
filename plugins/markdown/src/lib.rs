@@ -12,6 +12,7 @@ mod formatting;
 mod imports;
 mod navigation;
 mod preview;
+mod scrolling;
 mod tasks;
 mod toolbar;
 
@@ -34,6 +35,8 @@ struct State {
     /// Links keep separate task correlation and feedback without changing document text or undo history.
     navigation: navigation::Navigation,
     navigation_index: navigation::Index,
+    /// Viewport requests retain one current intent and one latest position, never another scroll handle.
+    scrolling: scrolling::Scrolling,
     revision: u64,
 }
 
@@ -67,7 +70,12 @@ impl Guest for MarkdownPlugin {
                             ..Default::default()
                         };
                     }
-                    api::Input::Event { panel, event } => state.event(panel.as_deref(), event),
+                    api::Input::Event { panel, event } => {
+                        if state.viewport_event(panel.as_deref(), &event) {
+                            return Ok(api::Output::default());
+                        }
+                        state.event(panel.as_deref(), event);
+                    }
                     api::Input::Snapshot => {
                         // Source text and derived trees are transient and cannot revive a closed document.
                         return Ok(api::Output {
@@ -92,6 +100,34 @@ impl Guest for MarkdownPlugin {
 export!(MarkdownPlugin);
 
 impl State {
+    /// Viewport events and their task receipts do not redraw or revise the immutable preview tree.
+    fn viewport_event(&mut self, panel: Option<&str>, event: &api::Notification) -> bool {
+        match event {
+            api::Notification::SourceViewport(position) if panel == Some("preview") => {
+                if let Some(source) = &self.source {
+                    self.scrolling
+                        .source(position, source, &self.blocks, self.revision);
+                }
+                true
+            }
+            api::Notification::Ui(event) if panel == Some("preview") => {
+                if let ui::Action::Viewport(position) = &event.action {
+                    if event.revision == self.revision
+                        && event.node == "preview-scroll"
+                        && let Some(source) = &self.source
+                    {
+                        self.scrolling
+                            .preview(position, source, &self.blocks, self.revision);
+                    }
+                    true
+                } else {
+                    false
+                }
+            }
+            api::Notification::Request { .. } => self.scrolling.request(event),
+            _ => false,
+        }
+    }
     /// Only the file-scoped preview notification may replace this readonly source snapshot.
     fn event(&mut self, panel: Option<&str>, event: api::Notification) {
         match event {
@@ -107,6 +143,7 @@ impl State {
                     _ => true,
                 };
                 if changed {
+                    self.scrolling.reset();
                     self.formatting.source_changed();
                     self.imports.source_changed();
                     self.navigation.source_changed(document.as_ref());
@@ -210,6 +247,7 @@ impl State {
 
     /// Rebuild only derived nodes; offsets remain UTF-8 bytes in exactly the echoed source version.
     fn refresh(&mut self) {
+        self.scrolling.reset();
         self.blocks = self.source.as_ref().map_or_else(Vec::new, |source| {
             preview::blocks(&source.text, &self.environment.locale)
         });
@@ -255,6 +293,7 @@ impl State {
         document.link_events = self.source.is_some();
         // Literal code requests remain readonly and use only the user's selected WASM providers.
         document.code_highlighting = self.source.is_some();
+        document.editor_viewport = self.source.as_ref().map(|_| "preview-scroll".into());
         if self.source.is_some() {
             let import_message = self.imports.message(self.source.as_ref(), english);
             // Text failures, navigation failures and external-file receipts are independent outcomes.
@@ -275,6 +314,8 @@ impl State {
         // A large or deeply nested document should leave the guest alive and preserve its source authority.
         // The same public quotas apply to this preview and every other native plugin view.
         if document.validate().is_err() {
+            // The quota fallback has no displayed source blocks; withdraw its viewport stream as well.
+            document.editor_viewport = None;
             let message = if english {
                 "This document exceeds the native preview limits."
             } else {

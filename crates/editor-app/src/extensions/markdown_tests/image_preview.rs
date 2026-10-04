@@ -9,7 +9,7 @@ use std::{
 };
 
 /// Wait for real background completion while still publishing and drawing through the native worker seam.
-fn complete(fixture: &mut NativeMarkdown, ui: &mut gpui_kit::VisualTestContext) {
+pub(super) fn complete(fixture: &mut NativeMarkdown, ui: &mut gpui_kit::VisualTestContext) {
     let deadline = Instant::now() + Duration::from_secs(5);
     loop {
         fixture.settle(ui);
@@ -28,7 +28,7 @@ fn complete(fixture: &mut NativeMarkdown, ui: &mut gpui_kit::VisualTestContext) 
 }
 
 /// Content-encoded PNG bytes avoid fixtures that depend on a user's files or the real network.
-fn png(width: u32, height: u32) -> Vec<u8> {
+pub(super) fn png(width: u32, height: u32) -> Vec<u8> {
     let image = image::DynamicImage::ImageRgba8(image::RgbaImage::from_pixel(
         width,
         height,

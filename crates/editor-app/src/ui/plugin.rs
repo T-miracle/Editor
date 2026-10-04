@@ -14,6 +14,9 @@ mod svg;
 #[cfg(test)]
 mod tests;
 mod theme;
+mod viewport;
+#[cfg(test)]
+mod viewport_tests;
 mod widgets;
 
 use gpui_base::input::{InputEvent, InputState};
@@ -48,6 +51,8 @@ pub(crate) struct PluginView {
     scrolls: BTreeMap<String, ScrollHandle>,
     /// Read-only source block ownership and one revision-bound reveal; native scroll remains in Base.
     scene_layout: layout::SceneLayout,
+    /// Coalesced source-block geometry and one locate receipt; Base owns the actual scroll offset.
+    viewport: viewport::ViewportState,
     /// Base resolves the release target; the local adapter retains the real native press owner.
     link_press: Option<links::LinkPress>,
     /// Per-target Base focus survives source refresh; subscriptions reveal only the focused link cue.
@@ -187,6 +192,7 @@ impl PluginView {
             inputs: BTreeMap::new(),
             scrolls: BTreeMap::new(),
             scene_layout: Default::default(),
+            viewport: Default::default(),
             link_press: None,
             link_focus: BTreeMap::new(),
             code_highlights: Default::default(),
@@ -302,6 +308,7 @@ impl PluginView {
 
     fn sync_native(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.scene_layout.reset(&self.document);
+        self.viewport.reset_scene();
         self.sync_link_focus(window, cx);
         let mut nodes = vec![];
         self.document

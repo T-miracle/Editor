@@ -24,6 +24,22 @@ impl State {
             ));
         }
         let (capability, permission) = match &operation {
+            EditorOperation::LocateViewport {
+                panel,
+                target,
+                origin,
+                ..
+            } => {
+                target.validate()?;
+                if *origin == 0 {
+                    return Err(Failure::new(
+                        ErrorCode::InvalidRequest,
+                        "Viewport location requires a nonzero origin",
+                    ));
+                }
+                self.check_editor_viewport_authority(panel)?;
+                ("editor.viewport", "editor.read")
+            }
             EditorOperation::NavigateDocument { target, .. } => {
                 target.validate()?;
                 if !self.permissions.contains("editor.read") {

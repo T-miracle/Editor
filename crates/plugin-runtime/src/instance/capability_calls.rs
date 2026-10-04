@@ -256,6 +256,28 @@ impl State {
         Ok(())
     }
 
+    /// Semantic viewport declarations carry readonly document authority, never editing permission.
+    pub(super) fn check_editor_viewport_authority(&self, panel: &str) -> Result<(), Failure> {
+        for capability in ["editor.viewport", "ui.richtext"] {
+            if !self.api.capabilities.contains_key(capability) {
+                return Err(Failure::new(
+                    ErrorCode::CapabilityUnavailable,
+                    format!("{capability} was not negotiated"),
+                ));
+            }
+        }
+        if self.roots.application
+            || !self.permissions.contains("editor.read")
+            || !self.declared_editor_panels.contains(panel)
+        {
+            return Err(Failure::new(
+                ErrorCode::PermissionDenied,
+                "Viewport binding requires an owned workspace editor panel and editor.read",
+            ));
+        }
+        Ok(())
+    }
+
     /// Availability and authorization are separate; preparation can read only immutable assets.
     fn read_capability_asset(&self, path: &str) -> Result<api::Value, Failure> {
         if !self.api.capabilities.contains_key("package.assets") {
@@ -382,6 +404,11 @@ impl Instance {
                 self.store
                     .data()
                     .check_code_highlighting_authority(&view.panel)?;
+            }
+            if view.document.editor_viewport.is_some() {
+                self.store
+                    .data()
+                    .check_editor_viewport_authority(&view.panel)?;
             }
             let mut canvas = false;
             let mut grid = false;

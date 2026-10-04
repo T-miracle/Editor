@@ -65,6 +65,9 @@ preview.split_mode:
 preview.preview_mode:
   en: "Preview only"
   zh-CN: "仅预览"
+preview.synchronized_scroll:
+  en: "Synchronize scrolling"
+  zh-CN: "同步滚动"
 plugins.manager_title:
   en: "Plugin Management"
   zh-CN: "插件管理"

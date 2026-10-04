@@ -12,6 +12,18 @@ pub(super) fn document(document: &Document) -> Result<(), String> {
     if document.code_highlighting && document.source.is_none() {
         return Err("Code highlighting requires Document.source".into());
     }
+    if let Some(scroll) = &document.editor_viewport {
+        if document.source.is_none() {
+            return Err("Editor viewport requires Document.source".into());
+        }
+        if document
+            .root
+            .find(scroll)
+            .is_none_or(|node| !matches!(node.kind, Kind::Scroll { .. }))
+        {
+            return Err("Editor viewport requires an active root Scroll".into());
+        }
+    }
     let mut validator = Validator {
         ids: BTreeSet::new(),
         count: 0,

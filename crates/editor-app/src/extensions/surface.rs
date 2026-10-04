@@ -75,6 +75,7 @@ impl ExtensionPanel {
         );
         let view = self.native_ui.as_ref().unwrap().clone();
         view.update(cx, |view, cx| {
+            view.set_viewport_enabled(self.viewport_sync_enabled, cx);
             view.update_images(&key, &self.images, window, cx)
         });
         view

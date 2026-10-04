@@ -48,6 +48,6 @@ HTTP(S) 网页链接在点击后通过受控系统浏览器入口打开，需要
 
 构建时先构建宿主，再执行 `./scripts/build-plugins.ps1 -Packages markdown -HostExe target/debug/editor-app.exe`。脚本使用宿主 `--plugin-cargo` 和版本化 SDK，生成 `dist/plugins/markdown.zip`；访客项目无需引用宿主源码路径。
 
-链接导航与代码块高亮已接入公开能力，实际交付状态以[工单目录](docs/tickets/README.md)与验证记录为准。同步滚动按[总方案](docs/spec.md)继续实施，链条按钮随工单 10 的实际双向同步行为一同上线。
+分栏默认开启双向同步滚动，模式组右侧的链条按钮可关闭，选择按工作区保存；仅编辑、仅预览时开关不可操作。源码与预览按当前内容块对应，程序性定位回执不反向触发；图片加载、表格、换行、宽度及窗口变化后重新测量。滚轮、键盘及滚动条拖动继续由原生 Base 控件处理，手动拖动到释放期间拒绝迟到定位。源文档、场景或实例变化立即撤销旧定位，不修改文本、选区、焦点与 Undo。实际交付状态以[工单目录](docs/tickets/README.md)与验证记录为准。
 
 grammar 来源与资源 hash 见[说明](grammar/README.md)，包内保留上游 MIT 许可证。Markdown 解析使用 [pulldown-cmark 0.13.0](https://github.com/pulldown-cmark/pulldown-cmark/tree/v0.13.0)，包内保留其 MIT 许可证。

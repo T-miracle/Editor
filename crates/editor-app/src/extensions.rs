@@ -97,6 +97,9 @@ pub struct ExtensionPanel {
     preview_version: Option<protocol::api::DocumentVersion>,
     /// A host transport limit is shown against the current source instead of leaving an empty preview.
     preview_error: Option<String>,
+    /// Only an authorized visible split enables either semantic viewport stream.
+    viewport_sync_enabled: bool,
+    source_viewport: preview::viewport::SourceTracking,
     panel_title: String,
     /// Cache package-owned artwork so repainting does not read from disk.
     panel_icons: [Option<Vec<u8>>; 2],
@@ -261,6 +264,8 @@ impl ExtensionPanel {
             active: None,
             surface_id: None,
             editor_preview: false,
+            viewport_sync_enabled: false,
+            source_viewport: Default::default(),
             preview_document: None,
             preview_version: None,
             preview_error: None,
@@ -358,6 +363,8 @@ impl ExtensionPanel {
             active: Some(id),
             surface_id: Some(panel.id),
             editor_preview: panel.position == "editor",
+            viewport_sync_enabled: false,
+            source_viewport: Default::default(),
             preview_document: None,
             preview_version: None,
             preview_error: None,
@@ -496,6 +503,9 @@ impl ExtensionPanel {
                     self.preview_document = None;
                     self.preview_version = None;
                     self.preview_error = None;
+                    // A replacement can reuse source/UI revisions; instance retirement still revokes its locate.
+                    self.source_viewport.withdraw();
+                    self.viewport_sync_enabled = false;
                     self.native_ui = None;
                     self.native_toolbar = None;
                     self._focus_events.clear();

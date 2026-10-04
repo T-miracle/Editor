@@ -13,6 +13,7 @@ mod modes;
 mod navigation_safety;
 mod range_edits;
 mod source_overlay;
+mod synchronized_scroll;
 mod task_checkboxes;
 mod task_safety;
 

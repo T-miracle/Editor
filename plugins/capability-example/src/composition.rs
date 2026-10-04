@@ -166,6 +166,7 @@ impl Demo {
             document.editor_toolbar = None;
             document.editor_image_input = false;
             document.code_highlighting = false;
+            document.editor_viewport = None;
             // Preserve the asset's mapping template for later previews, but never publish unbound ranges.
             visit(&mut document.root, &mut unbind_source);
             if let Some(dialog) = &mut document.dialog {
