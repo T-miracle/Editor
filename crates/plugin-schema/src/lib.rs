@@ -3,8 +3,14 @@ use std::{collections::BTreeMap, path::PathBuf};
 use thiserror::Error;
 
 mod languages;
+mod run_targets;
 mod theme_effects;
 pub use languages::{Highlighter, LanguageDefinition};
+pub use run_targets::{
+    DiscoveredTarget, DiscoveryError, DiscoveryRule, FieldShape, MAX_DISCOVERED_TARGETS,
+    ProviderFailure, RUN_TARGET_DISCOVERY_VERSION, RunTargetDiscovery, TargetShape,
+    pattern_matches,
+};
 pub use theme_effects::{ThemeWindow, ThemeWindowBackground};
 
 /// Read pre-rename identifiers without retaining their prefix in current manifests or UI state.
