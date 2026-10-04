@@ -284,3 +284,48 @@ fn breakpoints_are_grouped_by_their_source() {
         "a breakpoint without verification is not claimed to be set"
     );
 }
+
+/// The arguments a provider is asked for are the shape the contract declares, grouped by source.
+///
+/// The whole set travels on every call, because the answer describes the positions the provider could
+/// bind: a removed breakpoint has to be absent from the request for that answer to mean anything about
+/// it. This checks the arguments the host builds rather than a provider's reply, which is the half the
+/// host owns.
+#[test]
+fn the_breakpoint_arguments_are_grouped_by_source() {
+    let requests = [
+        DebugBreakpointRequest {
+            source: "src/main.rs".into(),
+            line: 4,
+        },
+        DebugBreakpointRequest {
+            source: "src/lib.rs".into(),
+            line: 12,
+        },
+        DebugBreakpointRequest {
+            source: "src/main.rs".into(),
+            line: 9,
+        },
+    ];
+    let grouped = breakpoints_by_source(&requests);
+    // Each position keeps the provider's own vocabulary rather than being reformatted.
+    let arguments = grouped
+        .into_iter()
+        .map(|(source, positions)| serde_json::json!({ "source": source, "lines": positions }))
+        .collect::<Vec<_>>();
+    assert_eq!(arguments.len(), 2, "one entry per source");
+    let main = arguments
+        .iter()
+        .find(|entry| entry["source"] == "src/main.rs")
+        .expect("the first source is present");
+    assert_eq!(
+        main["lines"],
+        serde_json::json!([
+            {"source": "src/main.rs", "line": 4},
+            {"source": "src/main.rs", "line": 9}
+        ]),
+        "both positions for one source travel together, in the order they were given"
+    );
+    // An empty set is an empty request, which is how a provider is told a breakpoint was removed.
+    assert!(breakpoints_by_source(&[]).is_empty());
+}

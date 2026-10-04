@@ -678,6 +678,30 @@ impl Manager {
         )?;
         variables_from_value(&answer.result).map_err(|error| anyhow::anyhow!("{error:?}"))
     }
+
+    /// Ask a debug session to set the configuration's breakpoints.
+    ///
+    /// The whole set is sent every time rather than a difference, because that is what the contract's
+    /// answer describes: the provider reports which of the positions it could bind, so a removed
+    /// breakpoint has to be absent from the request for the answer to mean anything about it. The
+    /// requests are grouped by source, which is how a provider is asked.
+    pub fn debug_set_breakpoints(
+        &mut self,
+        session: &str,
+        requests: &[DebugBreakpointRequest],
+    ) -> anyhow::Result<Vec<DebugBreakpoint>> {
+        let grouped = breakpoints_by_source(requests);
+        let breakpoints = grouped
+            .into_iter()
+            .map(|(source, positions)| serde_json::json!({ "source": source, "lines": positions }))
+            .collect::<Vec<_>>();
+        let answer = self.debug_call(
+            "set_breakpoints",
+            serde_json::json!({ "session": session, "breakpoints": breakpoints }),
+        )?;
+        DebugBreakpoint::list_from_value(&answer.result)
+            .map_err(|error| anyhow::anyhow!("{error:?}"))
+    }
 }
 
 /// Group breakpoints by source, which is how a provider is asked to set them.
