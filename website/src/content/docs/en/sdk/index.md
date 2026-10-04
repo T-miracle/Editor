@@ -1,6 +1,6 @@
 ---
 title: Plugin contract
-description: How to build a plugin package: capability negotiation, native UI, services, processes and packaging.
+description: How to build a plugin package — capability negotiation, native UI, services, processes and packaging.
 section: sdk
 order: 0
 alternate: /zh-cn/sdk/
@@ -23,6 +23,34 @@ processes, permissions and reclamation are described in
 independently contributed recognition and highlighting providers, are described in
 [Language packages](/en/sdk/languages/); they do not need an empty lifecycle component, and
 install, enable, update and uninstall stay in sync with documents that are already open.
+Private storage, data-format migration and the transactional cutover that replaces a running
+instance are described in [Private data and migration](/en/sdk/migration/). The budgets
+applied to guest execution, and what recovery does and does not promise, are described in
+[Execution limits and recovery](/en/sdk/faults/).
+
+## process 1.1 and language.lsp 1.1
+
+A native service may declare `search_paths` and `check_args`. The former holds at most 32
+absolute path globs and the only supported variable is a leading `${HOME}/`; it must not
+contain `..`, control characters or a recursive `**`. Candidates are searched in the declared
+order, entries matching one pattern are ordered by reverse path, and absolute `PATH`
+directories are searched afterwards. A search visits at most 20,000 directory entries, keeps
+at most 256 intermediate candidates and 256 discovered results, and the whole discovery is
+limited to five seconds; a guest request is additionally bounded by the shorter deadline of
+that call. `check_args` runs as a literal argument array without a shell, and probing is
+limited to two seconds sharing the remaining discovery deadline; a candidate that exits with
+a failure is skipped. Every probe uses the host's process ownership and cleanup rules.
+
+An explicit absolute path in a service's `program` or `executable_setting` has exactly one
+candidate, and an error is reported directly instead of falling back to a search result.
+Approving a service permission approves the declared lookup and probing behaviour; these
+fields grant no permission to run an arbitrary executable.
+
+An LSP provider may declare `client_experimental`, which is passed to
+`initialize.capabilities.experimental`; standard transport capabilities remain owned by the
+host. It holds at most 64 non-empty keys of at most 256 bytes each, with a JSON depth of at
+most 16, and counts against the provider's 256 KiB declaration limit. The host recognises no
+specific service name, extension field or Rust project structure.
 
 ## The current capability protocol
 

@@ -209,27 +209,52 @@ pub(crate) fn cargo_config() -> anyhow::Result<PathBuf> {
 fn prepare_cache(root: &Path) -> anyhow::Result<PathBuf> {
     let mut digest = Sha256::new();
     for (name, bytes) in SDK_FILES {
+        let payload = payload(name, bytes);
         digest.update((name.len() as u64).to_le_bytes());
         digest.update(name.as_bytes());
-        digest.update((bytes.len() as u64).to_le_bytes());
-        digest.update(bytes);
+        digest.update((payload.len() as u64).to_le_bytes());
+        digest.update(&payload);
     }
     let target = root.join(format!("{:x}", digest.finalize()));
     export(&target)?;
     Ok(target)
 }
 
+/// Return the bytes an export writes for one SDK file.
+///
+/// Contract documents are authored as site pages, so they carry YAML frontmatter
+/// that the site needs and a plugin project does not: the exported document must
+/// start with its heading. Stripping it here keeps one hand-written source for
+/// both readers instead of maintaining a second copy for the SDK.
+fn payload(name: &str, bytes: &'static [u8]) -> Vec<u8> {
+    if !name.ends_with(".md") {
+        return bytes.to_vec();
+    }
+    let Ok(text) = std::str::from_utf8(bytes) else {
+        return bytes.to_vec();
+    };
+    let Some(rest) = text.strip_prefix("---\n") else {
+        return bytes.to_vec();
+    };
+    match rest.find("\n---") {
+        Some(end) => rest[end + 4..].trim_start_matches('\n').as_bytes().to_vec(),
+        // An unterminated block is not frontmatter; export the text unchanged.
+        None => bytes.to_vec(),
+    }
+}
+
 /// Preserve unchanged files for Cargo freshness and atomically repair incomplete caches.
 pub fn export(target: &Path) -> anyhow::Result<()> {
     for (relative, bytes) in SDK_FILES {
+        let payload = payload(relative, bytes);
         let path = target.join(relative);
-        if std::fs::read(&path).is_ok_and(|existing| existing == *bytes) {
+        if std::fs::read(&path).is_ok_and(|existing| existing == payload) {
             continue;
         }
         let parent = path.parent().unwrap();
         std::fs::create_dir_all(parent)?;
         let mut file = tempfile::NamedTempFile::new_in(parent)?;
-        file.write_all(bytes)?;
+        file.write_all(&payload)?;
         file.persist(&path)?;
     }
     Ok(())
@@ -244,7 +269,7 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         let sdk = prepare_cache(root.path()).unwrap();
         for (relative, bytes) in SDK_FILES {
-            assert_eq!(std::fs::read(sdk.join(relative)).unwrap(), *bytes);
+            assert_eq!(std::fs::read(sdk.join(relative)).unwrap(), payload(relative, bytes));
         }
         let manifest = sdk.join("Cargo.toml");
         let modified = manifest.metadata().unwrap().modified().unwrap();
@@ -254,7 +279,38 @@ mod tests {
         std::fs::remove_file(sdk.join("wit/plugin.wit")).unwrap();
         prepare_cache(root.path()).unwrap();
         for (relative, bytes) in SDK_FILES {
-            assert_eq!(std::fs::read(sdk.join(relative)).unwrap(), *bytes);
+            assert_eq!(std::fs::read(sdk.join(relative)).unwrap(), payload(relative, bytes));
         }
+    }
+
+    #[test]
+    fn exported_documents_carry_no_site_frontmatter() {
+        for (relative, bytes) in SDK_FILES {
+            if !relative.ends_with(".md") {
+                continue;
+            }
+            let exported = String::from_utf8(payload(relative, bytes)).unwrap();
+            assert!(
+                exported.starts_with("# "),
+                "{relative} must start with its heading"
+            );
+            assert!(
+                !exported.starts_with("---"),
+                "{relative} must not export the site frontmatter"
+            );
+        }
+    }
+
+    #[test]
+    fn frontmatter_stripping_leaves_other_text_alone() {
+        let with_frontmatter = b"---\ntitle: Example\nalternate: /en/x/\n---\n\n# Heading\n\nBody.\n";
+        assert_eq!(
+            String::from_utf8(payload("DOC.md", with_frontmatter)).unwrap(),
+            "# Heading\n\nBody.\n"
+        );
+        let without_frontmatter = b"# Heading\n\nBody.\n";
+        assert_eq!(payload("DOC.md", without_frontmatter), without_frontmatter);
+        let horizontal_rule = b"# Heading\n\n---\n\nBody.\n";
+        assert_eq!(payload("DOC.md", horizontal_rule), horizontal_rule);
     }
 }

@@ -79,6 +79,26 @@ describe('documentation sources', () => {
     }
   });
 
+  it('keeps frontmatter values parseable as YAML', () => {
+    // A plain YAML scalar cannot contain a colon followed by a space: js-yaml
+    // reads it as a nested mapping and fails the build, while this suite's line
+    // parser would happily accept it. Catching it here turns a build failure into
+    // a test failure that names the page.
+    for (const page of pages) {
+      const end = page.text.split('\n').indexOf('---', 1);
+      const head = page.text.split('\n').slice(1, end === -1 ? undefined : end);
+      for (const line of head) {
+        const pair = /^([A-Za-z][\w-]*):\s(.*)$/.exec(line);
+        if (pair === null) continue;
+        const [, key, value] = pair;
+        assert.ok(
+          value.startsWith('"') || !value.includes(': '),
+          `${page.id}: frontmatter "${key}" contains a colon and space; rephrase it or quote the value`,
+        );
+      }
+    }
+  });
+
   it('agrees between frontmatter section and directory layout', () => {
     for (const page of pages) {
       if (page.slug === 'index' && page.section === '') continue; // locale home page

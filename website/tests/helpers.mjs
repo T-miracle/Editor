@@ -93,6 +93,8 @@ export function listPages() {
         slug: segments[segments.length - 1],
         trail: segments.slice(1).join('/'),
         path: full,
+        /** Raw file contents, so a test can inspect the frontmatter verbatim. */
+        text,
         ...parsed,
       });
     }
