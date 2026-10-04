@@ -252,10 +252,42 @@ fn text(value: &Value, key: &str) -> Option<String> {
         .map(str::to_owned)
 }
 
+/// The host's own debug requirement, exposed so a test can name the exact method that differs.
+///
+/// This states the requirement; it grants nothing, and a plugin has no path to it.
+pub fn debug_dependency_for_test() -> Result<plugin_protocol::service::Dependency, String> {
+    debug_dependency().map_err(|error| format!("{error:?}"))
+}
+
+/// Whether a declaration can serve a debug session, judged on what is required of every provider.
+///
+/// Only the required methods are demanded here. Every method the host *calls* must still match
+/// exactly, but that check belongs where a call is resolved: a provider that cannot step is still a
+/// debug provider, and reporting it unusable would take away the abilities it does offer.
+pub(super) fn debug_contract_is_usable(declaration: &plugin_protocol::service::Contract) -> bool {
+    let version = ">=1, <2"
+        .parse::<semver::VersionReq>()
+        .expect("the host's own version requirement is valid");
+    version.matches(&declaration.version)
+        && DEBUG_REQUIRED_METHODS
+            .iter()
+            .all(|method| declaration.methods.contains_key(*method))
+}
+
 /// The methods every debug provider must declare, whatever else it offers.
 ///
-/// These are the ones a session cannot exist without: beginning it, asking what it is, and ending it.
-pub const DEBUG_REQUIRED_METHODS: [&str; 3] = ["start", "status", "stop"];
+/// These are the ones the debug entry points promise: beginning a session, asking what it is, ending
+/// it, setting the breakpoints a session stops at, and pausing or continuing the target. A provider
+/// that cannot do one of these cannot serve the panel, so it is reported as incomplete rather than
+/// offered and then failing at the control the user pressed.
+pub const DEBUG_REQUIRED_METHODS: [&str; 6] = [
+    "start",
+    "status",
+    "stop",
+    "set_breakpoints",
+    "resume",
+    "pause",
+];
 
 /// The methods a provider may declare to offer more, and what each one enables.
 ///
@@ -263,14 +295,7 @@ pub const DEBUG_REQUIRED_METHODS: [&str; 3] = ["start", "status", "stop"];
 /// simply never declares it, and a control that needs it is disabled with that reason instead of
 /// failing when pressed. Requiring them outright would make a capable provider unusable for lacking
 /// an unrelated ability.
-pub const DEBUG_OPTIONAL_METHODS: [&str; 6] = [
-    "set_breakpoints",
-    "resume",
-    "pause",
-    "step",
-    "frames",
-    "variables",
-];
+pub const DEBUG_OPTIONAL_METHODS: [&str; 3] = ["step", "frames", "variables"];
 
 /// A debug provider's declaration, read as the methods it actually offers.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -443,7 +468,45 @@ impl Manager {
     /// still a debug provider, and its missing ability is reported where the control that needs it
     /// is, rather than making the whole provider unusable.
     pub fn debug_providers(&self) -> Vec<ProviderCandidate> {
-        self.contract_providers(DEBUG_CONTRACT, debug_dependency().ok().as_ref())
+        // Availability is judged on the required methods only; the exact match on every method the
+        // host calls is enforced where a call is resolved.
+        let scope = self.host_scope();
+        let selected = self
+            .plugin_services
+            .lock()
+            .map(|broker| broker.selected_provider(&scope, DEBUG_CONTRACT))
+            .ok()
+            .flatten();
+        let mut candidates = self
+            .installed
+            .values()
+            .filter_map(|installed| {
+                let declaration = installed
+                    .manifest
+                    .plugin_services
+                    .provides
+                    .get(DEBUG_CONTRACT)?;
+                let unavailable = if !installed.enabled {
+                    Some("该插件未启用".to_owned())
+                } else if let Some(error) = installed.compatibility_error() {
+                    Some(format!("与当前宿主不兼容：{error}"))
+                } else if let Some(error) = &installed.error {
+                    Some(format!("插件运行出错：{error}"))
+                } else if !debug_contract_is_usable(declaration) {
+                    Some("声明的 debug.session 必需方法不完整".to_owned())
+                } else {
+                    None
+                };
+                let plugin = installed.manifest.id.clone();
+                Some(ProviderCandidate {
+                    selected: selected.as_deref() == Some(plugin.as_str()),
+                    unavailable,
+                    plugin,
+                })
+            })
+            .collect::<Vec<_>>();
+        candidates.sort_by(|left, right| left.plugin.cmp(&right.plugin));
+        candidates
     }
 
     /// What one installed plugin offers for debugging, or `None` when it is not a debug provider.

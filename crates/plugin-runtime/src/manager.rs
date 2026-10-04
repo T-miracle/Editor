@@ -22,7 +22,8 @@ mod recovery;
 pub use data_updates::PreparedInstallation;
 pub use debug_services::{
     DebugAbilities, DebugAnswer, DebugBreakpoint, DebugFrame, DebugSession, DebugState,
-    DebugVariable, MAX_DEBUG_FRAMES, MAX_DEBUG_VARIABLES, frames_from_value, variables_from_value,
+    DebugVariable, MAX_DEBUG_FRAMES, MAX_DEBUG_VARIABLES, debug_dependency_for_test,
+    frames_from_value, variables_from_value,
 };
 pub use host_services::{
     DEBUG_BREAKPOINT_TIMEOUT_MS, DEBUG_CONTRACT, DEBUG_CONTROL_TIMEOUT_MS, DEBUG_START_TIMEOUT_MS,

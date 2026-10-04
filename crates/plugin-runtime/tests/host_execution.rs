@@ -553,6 +553,71 @@ fn shutdown_with_no_sessions_is_immediate() {
     );
 }
 
+/// A package's declared abilities are read from its own declaration, never assumed from its presence.
+#[test]
+#[ignore = "build terminal and capability-example through the public SDK first"]
+fn a_debug_package_offers_exactly_what_it_declares() {
+    let root = tempfile::tempdir().unwrap();
+    let mut manager = manager(root.path());
+    // One provider declares the whole contract, another omits stepping and inspection.
+    for package in [
+        packages::debug_provider("debug-full", &[]),
+        packages::debug_provider("debug-partial", &["step", "frames", "variables"]),
+    ] {
+        let grants = package.manifest.permissions.clone();
+        manager.install(&package, grants).unwrap();
+    }
+
+    // Both are debug providers, because a session can exist without stepping or inspecting: a missing
+    // ability is reported where the control that needs it is, not by withdrawing the provider.
+    let providers = manager.debug_providers();
+    assert_eq!(
+        providers
+            .iter()
+            .map(|candidate| candidate.plugin.as_str())
+            .collect::<Vec<_>>(),
+        vec!["debug-full", "debug-partial"],
+        "{providers:?}"
+    );
+    // A package that declares the required methods is usable, and one that omits an optional ability
+    // still offers the abilities it did declare.
+    assert!(
+        providers
+            .iter()
+            .all(|candidate| candidate.unavailable.is_none()),
+        "both packages can serve a session: {providers:?}"
+    );
+    let full = manager
+        .debug_abilities("debug-full")
+        .expect("the full provider is installed");
+    assert_eq!(
+        full,
+        plugin_runtime::DebugAbilities {
+            breakpoints: true,
+            resume_pause: true,
+            step: true,
+            inspect: true,
+        }
+    );
+    let partial = manager
+        .debug_abilities("debug-partial")
+        .expect("the partial provider is installed");
+    assert!(!partial.step && !partial.inspect);
+    assert!(
+        partial.breakpoints && partial.resume_pause,
+        "the abilities it did declare are still offered: {partial:?}"
+    );
+    // A package that is not a debug provider at all has no abilities to report.
+    assert!(manager.debug_abilities("nobody").is_none());
+
+    // With more than one usable provider and no choice made, the host refuses to pick one rather than
+    // guessing, because either could serve the session.
+    let refusal = manager
+        .debug_availability()
+        .expect_err("an ambiguous choice is not made for the user");
+    assert!(refusal.contains("请先选择"), "{refusal}");
+}
+
 /// A session's end is observed through its provider, never predicted from elapsed time.
 #[test]
 #[ignore = "build terminal and capability-example through the public SDK first"]
