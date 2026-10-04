@@ -367,6 +367,20 @@ Run and debug startup smoke passed: no program was left behind by shutdown.
 
 **结论**：修复的是**代码与它自己的注释不一致**（以及一处死代码），**不是**一个可观察的缺陷；**没有测试能区分有无这次调用**，这一点如实记录，不把它算作「修好了一个 bug」。
 
+### 一处更大的真实缺陷：检查视图从未被请求（本轮修复）
+
+接着读**死代码警告**（正是上一轮发现缺陷的方法），发现一个更大的问题：**`DebugMethod::Frames` 与 `DebugMethod::Variables` 在测试之外从未被构造**——也就是说**编辑器从不向任何提供者请求调用栈或某帧的变量**。面板会渲染栈帧与变量、答案处理会应用它们、worker 会派发它们，**但没有任何代码发起请求**：工单 10 的检查视图在真实运行的编辑器里**不可能显示任何东西**。
+
+链路断了三处，现已接通：
+
+1. **`DebugCapabilities` 缺少 `inspect`**，而宿主的 `DebugAbilities` 有——编辑器对「提供者声明」的镜像**丢掉了检查视图所依赖的那项能力**；
+2. **worker 从不发布提供者的能力**，因此 `debug_capabilities` 一直是全 false 的默认值，`note_debug_capabilities` **只在测试里被调用过**；
+3. **暂停开始时没有任何代码发起 frames 或 variables 请求**。
+
+现在：宿主以**同一个提供者**的一次回答给出「能否在此启动会话，以及它能做什么」；worker 发布它；编辑器翻译它；暂停时按该能力**发起面板所需的那两个请求**——因此**不能描述目标的提供者永远不会被请求**。两条死代码警告随之消失（变体现在真的被应用构造）。
+
+**这不等于让视图端到端显示真实数据**：那需要一个调试提供者与真实目标，属本工单已记录的环境受限项。
+
 ## 未覆盖与限制
 
 - **`editor-app` 整二进制全量运行不可作为判据**（本任务开始前即如此）：`cargo test -p editor-app --bin editor-app` 会让不同用例互相污染宿主内的共享注册表，出现一批失败。**实测对照**：在提交 `3a50511`（本轮工作之前）上单跑 `app::plugins` 已是 `18 passed; 2 failed`，当前为 `19 passed; 1 failed`；且每个失败用例单独运行时都通过（`app::plugins::tests::restricting_startup_withdraws_declarations_before_worker_publication` 单独跑 `ok`）。因此按仓库验证约定使用**按模块过滤**的针对性运行：`run::` 59 项、`extensions::worker` 11 项、`language::code_highlighting` 12 项、`extensions::markdown_tests` 1 项（其余为 ignored）在本轮全绿。这不是本任务引入的缺陷，也不据它宣称通过。
