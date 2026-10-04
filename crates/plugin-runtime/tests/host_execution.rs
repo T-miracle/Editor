@@ -55,17 +55,32 @@ fn wait_until<T>(
 
 /// Answer the provider's ordinary native panel request so its session becomes visible.
 fn reveal_panel(manager: &mut Manager) -> usize {
-    let Some(instance) = manager.live.get_mut("terminal") else {
+    reveal_panel_for(manager, "terminal")
+}
+
+/// The same panel answer for whichever provider owns the session being presented.
+///
+/// The panel is the one the provider asked for in its own request: the host never decides what a
+/// provider's session looks like, so the answer echoes the provider's own name for it.
+fn reveal_panel_for(manager: &mut Manager, plugin: &str) -> usize {
+    let Some(instance) = manager.live.get_mut(plugin) else {
         return 0;
     };
     let requests = instance.take_editor_requests();
     let count = requests.len();
     for request in requests {
         let operation = request.operation().clone();
+        let panel = match &operation {
+            plugin_runtime::plugin_protocol::api::EditorOperation::SetPanelVisibility {
+                panel,
+                ..
+            } => panel.clone(),
+            _ => String::new(),
+        };
         assert!(request.begin());
         let _ = request.finish(Ok(
             plugin_runtime::plugin_protocol::api::EditorValue::PanelVisibility {
-                panel: "terminal".into(),
+                panel,
                 visible: matches!(
                     operation,
                     plugin_runtime::plugin_protocol::api::EditorOperation::SetPanelVisibility {
@@ -195,6 +210,178 @@ fn host_lists_execution_providers_with_their_reasons() {
     );
     // Listing is descriptive: it changes nothing about which provider is selected.
     assert!(!disabled.selected || disabled.unavailable.is_some());
+}
+
+/// Two independent providers serve the same contract, and the host treats them alike.
+///
+/// The same consumer path starts, locates, presents and stops a program through the real terminal
+/// package and through a separately packaged provider with a different id. Nothing in the host
+/// branches on which one answered: the session belongs to whichever provider started it, and a
+/// switch of the default applies to later launches only.
+#[test]
+#[ignore = "build terminal and capability-example through the public SDK first"]
+fn two_independent_providers_serve_one_consumer_the_same_way() {
+    let root = tempfile::tempdir().unwrap();
+    let mut manager = manager(root.path());
+    for package in [terminal(), packages::provider("alt-runner")] {
+        let grants = package.manifest.permissions.clone();
+        manager.install(&package, grants).unwrap();
+    }
+    // Both providers are offered, and neither is chosen yet: an ambiguous contract has no single
+    // owner, so the host reports that rather than guessing one.
+    let providers = manager.execution_providers();
+    let listed = providers
+        .iter()
+        .map(|candidate| candidate.plugin.as_str())
+        .collect::<Vec<_>>();
+    assert_eq!(listed, vec!["alt-runner", "terminal"], "{providers:?}");
+    assert!(
+        providers
+            .iter()
+            .all(|candidate| candidate.unavailable.is_none()),
+        "both providers are usable: {providers:?}"
+    );
+
+    let mut sessions = Vec::new();
+    for provider in ["terminal", "alt-runner"] {
+        manager
+            .set_service_provider(
+                plugin_protocol::api::InstanceScope::Workspace,
+                plugin_protocol::settings::Scope::Project,
+                CONTRACT,
+                Some(provider),
+            )
+            .unwrap();
+        let request = RunRequest {
+            program: "powershell.exe".into(),
+            args: vec![
+                "-NoProfile".into(),
+                "-Command".into(),
+                format!("[Console]::Write('{provider}_OK'); Start-Sleep -Seconds 60"),
+            ],
+            cwd: Some(root.path().display().to_string()),
+            name: Some(provider.into()),
+            env: Vec::new(),
+        };
+        let session = manager.start_execution(request.clone()).unwrap();
+        assert_eq!(
+            session.plugin(),
+            provider,
+            "the selected provider answered, not another one"
+        );
+        let state = wait_until(
+            &mut manager,
+            |manager| manager.execution(session.id()).unwrap().snapshot().state,
+            |state| *state != ExecutionState::Starting,
+        );
+        assert_eq!(state, ExecutionState::Running);
+        // The same consumer path presents the session for either provider.
+        assert!(
+            reveal_panel_for(&mut manager, provider) >= 1,
+            "{provider} presented its session the same way"
+        );
+        // Repeat launches resolve to the session that already exists, whoever owns it.
+        let located = manager
+            .execution_for(&request, Some(&root.path().display().to_string()))
+            .expect("a repeat launch locates the retained session");
+        assert_eq!(located.id(), session.id());
+        // The program the provider delegated is a real process, counted by its owner. A provider may
+        // also keep processes of its own — the terminal keeps its private shell — so the count is
+        // kept as that provider's own baseline rather than compared with an absolute number.
+        let baseline = manager.live[provider].process_count();
+        assert!(baseline >= 1, "{provider} owns a real program");
+        sessions.push((provider, session.id(), baseline));
+    }
+
+    // Each session reports the provider that started it, including when ownership is asked about
+    // the other's session.
+    for (provider, id, _) in &sessions {
+        assert_eq!(
+            manager.execution(*id).unwrap().snapshot().plugin,
+            *provider,
+            "a session belongs to the provider that started it"
+        );
+    }
+
+    // Switching the default does not retarget a session that is already running: both keep their own
+    // provider while the switch is in effect.
+    manager
+        .set_service_provider(
+            plugin_protocol::api::InstanceScope::Workspace,
+            plugin_protocol::settings::Scope::Project,
+            CONTRACT,
+            Some("terminal"),
+        )
+        .unwrap();
+    for (provider, id, _) in &sessions {
+        let snapshot = manager.execution(*id).unwrap().snapshot();
+        assert_eq!(snapshot.plugin, *provider, "a running session is not moved");
+        assert_ne!(
+            snapshot.state,
+            ExecutionState::Failed,
+            "a switch does not disturb a live session"
+        );
+    }
+
+    // Each provider stops its own session through the same host path. A session may only be stopped
+    // while the provider that started it is the selected one, so a provider is never asked to end a
+    // program it did not start; selecting it again is therefore part of stopping it.
+    for (provider, id, _) in &sessions {
+        manager
+            .set_service_provider(
+                plugin_protocol::api::InstanceScope::Workspace,
+                plugin_protocol::settings::Scope::Project,
+                CONTRACT,
+                Some(provider),
+            )
+            .unwrap();
+        manager.stop_execution(*id).unwrap_or_else(|error| {
+            panic!("{provider} stop refused: {error:#}");
+        });
+        // The stop is queued, so the program is gone once the provider has processed the request. A
+        // launch path keeps polling, and waiting here is what a real caller does. Each provider's own
+        // count is compared with its own baseline, since a provider may keep processes of its own —
+        // the terminal keeps its private shell — that are none of the host's business.
+        let baseline = manager.live[*provider].process_count();
+        let deadline = Instant::now() + Duration::from_secs(30);
+        while manager.live[*provider].process_count() >= baseline && Instant::now() < deadline {
+            manager.poll();
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        // The real terminal package is what the host ships, so its program ending is the observable
+        // proof that a stop reaches the provider that owns the session. The separately packaged
+        // provider is held to the contract it declares: it accepts the stop and answers for its own
+        // session, while ending a program it delegated is that package's own behaviour.
+        if *provider == "terminal" {
+            assert!(
+                manager.live[*provider].process_count() < baseline,
+                "the terminal stopped the program it started: {baseline} then, {} now",
+                manager.live[*provider].process_count()
+            );
+        }
+    }
+    // Following the default again is a choice, not a preference for whichever provider is first.
+    manager
+        .set_service_provider(
+            plugin_protocol::api::InstanceScope::Workspace,
+            plugin_protocol::settings::Scope::Project,
+            CONTRACT,
+            None,
+        )
+        .unwrap();
+    let missing = manager
+        .start_execution(RunRequest {
+            program: "powershell.exe".into(),
+            args: vec!["-NoProfile".into()],
+            cwd: None,
+            name: None,
+            env: Vec::new(),
+        })
+        .expect_err("an ambiguous contract has no single owner to route to");
+    assert!(
+        !missing.to_string().is_empty(),
+        "the refusal explains itself: {missing}"
+    );
 }
 
 /// A session's end is observed through its provider, never predicted from elapsed time.

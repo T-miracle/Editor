@@ -53,6 +53,74 @@ pub fn methods() -> Value {
     })
 }
 
+/// The execution contract a provider must declare to serve this host, shape for shape.
+///
+/// A host call carries the caller's environment overrides, so a provider that cannot receive them
+/// cannot serve this host: the match is exact, and writing the shape here is how an independently
+/// packaged provider states that it agrees about what a call means.
+pub fn provider_methods() -> Value {
+    json!({
+        "execute": {
+            "parameters": {"type":"record", "fields": {
+                "program":{"type":"string","max_bytes":4096},
+                "args":{"type":"array","max_items":128,"items":{"type":"string","max_bytes":4096}},
+                "cwd":{"type":"string","max_bytes":4096},
+                "name":{"type":"string","max_bytes":256},
+                "env":{"type":"array","max_items":64,"items":{"type":"record","fields":{
+                    "name":{"type":"string","max_bytes":128},
+                    "value":{"type":"string","max_bytes":32768}}}}
+            }, "optional":["cwd","name","env"]},
+            "result":{"type":"record","fields":{
+                "session":{"type":"string","max_bytes":128},
+                "state":{"type":"string","max_bytes":32}
+            }},
+            "permissions":["process.exec","ui.panels"]
+        },
+        "stop": {
+            "parameters":{"type":"record","fields":{
+                "session":{"type":"string","max_bytes":128}
+            }},
+            "result":{"type":"record","fields":{
+                "session":{"type":"string","max_bytes":128},
+                "state":{"type":"string","max_bytes":32}
+            }},
+            "permissions":["process.exec"]
+        },
+        "status": {
+            "parameters":{"type":"record","fields":{
+                "session":{"type":"string","max_bytes":128}
+            }},
+            "result":{"type":"record","fields":{
+                "session":{"type":"string","max_bytes":128},
+                "state":{"type":"string","max_bytes":32},
+                "code":{"type":"integer","min":0,"max":2147483647}
+            }, "optional":["code"]},
+            "permissions":["process.exec"]
+        }
+    })
+}
+
+/// An independently packaged provider that declares exactly what this host calls.
+pub fn provider(id: &str) -> Package {
+    let files = Package::read(
+        &Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../target/plugin-api-test/capability-example.zip"),
+    )
+    .unwrap()
+    .files;
+    let mut manifest: Value = serde_json::from_slice(&files["manifest.json"]).unwrap();
+    manifest["id"] = json!(id);
+    manifest["name"] = json!(id);
+    // A provider is a separate package: it never declares the host's settings hook.
+    manifest["settings_hook"] = json!(false);
+    manifest["api"]["required"]["plugin.services"] = json!("^1");
+    manifest["api"]["required"]["process"] = json!(">=1.4, <2");
+    manifest["permissions"] = json!(["assets.read", "services.call", "process.exec", "ui.panels"]);
+    manifest["plugin_services"] =
+        json!({"provides": {CONTRACT:{"version":"1.3.0","methods":provider_methods()}}});
+    archive(files, manifest)
+}
+
 /// Repackage through admission so tests cannot silently mutate a validated manifest in memory.
 pub fn archive(files: BTreeMap<String, Vec<u8>>, manifest: Value) -> Package {
     let mut files = files;
