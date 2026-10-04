@@ -80,6 +80,12 @@ pub struct DebugCapabilities {
     pub breakpoints: bool,
     pub resume_pause: bool,
     pub step: bool,
+    /// Whether the provider can describe a paused target: its frames and their variables.
+    ///
+    /// One ability rather than two, because the panel needs both to show anything: a frame list with
+    /// no variables is not an inspection view. The host derives it from the provider's own declaration
+    /// the same way, so an editor that dropped it would render a view nothing could ever fill.
+    pub inspect: bool,
 }
 
 /// The debug actions a panel may offer right now, each with the reason it is unavailable.

@@ -294,6 +294,12 @@ pub(super) struct Published {
     /// answers "can a debug session start here at all", which is what an entry point must know before
     /// it offers debugging.
     pub debug_availability: Option<Result<String, String>>,
+    /// What the debug provider that would serve a session says it can do.
+    ///
+    /// Availability answers whether a session can start; this answers what it can do once paused, which
+    /// is what decides whether the panel may ask for a stack at all. Both come from the same selected
+    /// provider, so a control and the call it stages cannot disagree about whether the call is offered.
+    pub debug_abilities: Option<plugin_runtime::DebugAbilities>,
     /// Answers to debug calls this editor made, keyed by the request that asked.
     ///
     /// A failed call is reported as a failure rather than as an empty answer: a provider that could

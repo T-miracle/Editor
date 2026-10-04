@@ -1055,6 +1055,7 @@ fn debug_controls_follow_the_session_state() {
         breakpoints: true,
         resume_pause: true,
         step: true,
+        inspect: true,
     });
     // Confirmed and idle: starting is offered and stopping is not.
     assert!(controls.debug_controls().can_start());
@@ -1788,6 +1789,7 @@ fn a_control_action_is_awaited_before_the_next_one() {
         breakpoints: true,
         resume_pause: true,
         step: true,
+        inspect: true,
     });
     controls.note_debug_state(
         "run-1",

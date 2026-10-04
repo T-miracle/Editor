@@ -427,6 +427,11 @@ impl EditorApp {
         if let Some(availability) = self.extensions.read(cx).debug_availability() {
             self.run_controls.note_debug_availability(availability);
         }
+        // The abilities are what the panel may offer. Without them every capability defaults to false,
+        // which is right for an unknown provider but wrong for a known one.
+        if let Some(capabilities) = self.extensions.read(cx).debug_capabilities() {
+            self.run_controls.note_debug_capabilities(capabilities);
+        }
         // Debug answers arrive like every other host publication, and are applied to the pause they
         // were asked about: a late one is reported rather than replacing a newer view.
         for (request, answer) in self.extensions.read(cx).take_debug_answers() {
@@ -516,6 +521,9 @@ impl EditorApp {
                 self.status = reason.to_string();
             }
         }
+        // A pause is where the user wants to see the stack, so the editor asks for it. Without this
+        // the panel renders frames and variables that nobody ever requested.
+        self.fetch_debug_inspection(cx);
 
         self.run_controls.reconcile(&executions);
         // A step's session belongs to its preparation as soon as the runtime publishes it, so the
@@ -1199,6 +1207,64 @@ impl EditorApp {
             self.status = "插件后台服务不可用，无法执行调试操作".into();
         }
         cx.notify();
+    }
+
+    /// Ask the provider for the stack of the pause being inspected, and for the selected frame's
+    /// variables.
+    ///
+    /// Two requests are staged at most, and only when the provider declared both abilities and the
+    /// target is stopped in a described pause: a session that cannot report frames is not asked, and a
+    /// pause that has not begun has nothing to describe. Each request carries the pause it belongs to,
+    /// so an answer that arrives after the target moved on is refused instead of showing a stack from a
+    /// moment that is over. Asking twice for the same pause is left to `begin_debug_request`, which
+    /// refuses the duplicate rather than sending two calls whose answers would race.
+    fn fetch_debug_inspection(&mut self, cx: &mut Context<Self>) {
+        if !matches!(
+            self.run_controls.debug_state(),
+            editor_core::DebugSessionState::Paused { .. }
+        ) {
+            return;
+        }
+        let capabilities = self.run_controls.debug_capabilities;
+        let Some(provider_session) = self.run_controls.debug_provider_session() else {
+            return;
+        };
+        // The frame a variable request asks about is the one the panel has selected.
+        let frame = self.run_controls.selected_debug_frame();
+        let mut staged = Vec::new();
+        if capabilities.inspect
+            && let Some(request) = self
+                .run_controls
+                .begin_debug_request(crate::run::DebugMethod::Frames, None)
+        {
+            staged.push((
+                request,
+                "frames",
+                serde_json::json!({ "session": provider_session }),
+            ));
+        }
+        if capabilities.inspect
+            && let Some(frame) = frame
+            && let Some(request) = self
+                .run_controls
+                .begin_debug_request(crate::run::DebugMethod::Variables, Some(frame))
+        {
+            staged.push((
+                request,
+                "variables",
+                serde_json::json!({ "session": provider_session, "frame": frame }),
+            ));
+        }
+        for (request, method, arguments) in staged {
+            if !self
+                .extensions
+                .read(cx)
+                .stage_debug_call(request, method, arguments)
+            {
+                // The request is released rather than awaited forever: nothing will answer it.
+                self.run_controls.abandon_debug_request(request);
+            }
+        }
     }
 
     /// Ask the provider to step the paused target, and remember which pause the answer describes.

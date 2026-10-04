@@ -7,6 +7,7 @@ fn all_abilities() -> DebugCapabilities {
         breakpoints: true,
         resume_pause: true,
         step: true,
+        inspect: true,
     }
 }
 

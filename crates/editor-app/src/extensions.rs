@@ -1049,6 +1049,23 @@ impl ExtensionPanel {
         self.worker.state.lock().unwrap().debug_availability.clone()
     }
 
+    /// What the provider that would serve a debug session says it can do, in the editor's own words.
+    ///
+    /// The host's ability names are translated here rather than at each control, so the panel and the
+    /// calls it stages read one value. A missing answer stays `None`, which leaves every ability
+    /// disabled with a reason: an ability the editor has not been told about is not one it may offer.
+    pub(crate) fn debug_capabilities(&self) -> Option<editor_core::DebugCapabilities> {
+        let abilities = self.worker.state.lock().unwrap().debug_abilities.clone()?;
+        Some(editor_core::DebugCapabilities {
+            breakpoints: abilities.breakpoints,
+            resume_pause: abilities.resume_pause,
+            step: abilities.step,
+            // The host states inspection as one ability, because a frame list without variables is not
+            // an inspection view; the editor mirrors that rather than inventing a split.
+            inspect: abilities.inspect,
+        })
+    }
+
     /// Published host sessions, start refusals and stop answers reported by the worker.
     ///
     /// Reading drains the answer lists, so each outcome is explained exactly once.

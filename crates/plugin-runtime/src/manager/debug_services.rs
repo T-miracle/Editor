@@ -563,6 +563,16 @@ impl Manager {
             )),
         }
     }
+
+    /// What the provider that would serve a session can do, or `None` when none would.
+    ///
+    /// The abilities belong to the same provider the availability answer names, so a panel that offers
+    /// a control and the call that control stages cannot disagree. An unavailable provider reports no
+    /// abilities rather than its declaration: nothing will be asked of it either way.
+    pub fn debug_service_abilities(&self) -> Option<DebugAbilities> {
+        let provider = self.debug_availability().ok()?;
+        self.debug_abilities(&provider)
+    }
 }
 
 /// One answered debug call, and the session identity it belongs to.

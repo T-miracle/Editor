@@ -215,9 +215,13 @@ impl Worker {
                         Some(Work::ListRunProviders) => {
                             let providers = manager.execution_providers();
                             let debug = manager.debug_availability();
+                            // The abilities come from the same provider the availability answer names,
+                            // so what the panel offers and what it may ask for are one fact.
+                            let abilities = manager.debug_service_abilities();
                             let mut published = output.lock().unwrap();
                             published.run_providers = Some(providers);
                             published.debug_availability = Some(debug);
+                            published.debug_abilities = abilities;
                             Ok(())
                         }
                         Some(Work::SetRunProvider { provider }) => {
