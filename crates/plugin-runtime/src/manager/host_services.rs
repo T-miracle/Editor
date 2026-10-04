@@ -741,6 +741,36 @@ impl Manager {
         }
     }
 
+    /// Ask every session that still owns a program to stop it, before the runtime goes away.
+    ///
+    /// Shutting down must not silently abandon programs, so each active session is asked through the
+    /// provider that started it, and each answer is given a short window rather than waited on
+    /// forever: a provider that cannot acknowledge promptly still must not hold up closing the
+    /// window. Nothing is retried and nothing is claimed — the request means "terminate", never "it
+    /// has exited" — so a provider that does not answer leaves its program's fate where it was.
+    ///
+    /// This covers the target a session owns. A debugger or adapter a provider started for itself is
+    /// the provider's own process and is released with the provider's instance, which shutdown stops
+    /// immediately afterwards.
+    pub(super) fn stop_owned_programs(&mut self) {
+        let active = self
+            .host_sessions
+            .iter()
+            .filter(|execution| execution.stoppable())
+            .map(|execution| execution.id)
+            .collect::<Vec<_>>();
+        for session in active {
+            if self.stop_execution(session).is_err() {
+                continue;
+            }
+            let deadline = std::time::Instant::now() + std::time::Duration::from_millis(200);
+            while std::time::Instant::now() < deadline {
+                self.poll();
+                std::thread::sleep(std::time::Duration::from_millis(2));
+            }
+        }
+    }
+
     /// Every installed plugin that declares a run execution contract, with its availability.
     ///
     /// This is descriptive: it never changes which provider is selected and holds no session.

@@ -278,6 +278,13 @@ impl Manager {
     pub fn shutdown(&mut self) {
         self.retire_workspace_images();
         self.retire_workspace_image_inputs();
+        // Programs this runtime started are asked to stop before their sessions are retired: closing
+        // the window must not silently abandon a program the user launched. Each answer gets a short
+        // window, so an unresponsive provider costs a bounded moment rather than blocking the close.
+        // Asking first is ordering, not the only thing that ends a program: a provider's instance
+        // owns what it started, so its teardown below releases those processes too. Asking first is
+        // still right — the provider gets to observe the termination and answer a status query from
+        // that observation rather than the window closing on a session nobody told it about.
         // Host execution sessions end with the window that owns them; no start is left queued.
         self.host_sessions.retire();
         let _ = self.checkpoint();

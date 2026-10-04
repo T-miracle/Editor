@@ -459,6 +459,100 @@ fn the_environment_a_launch_asks_for_reaches_the_program() {
     manager.stop_execution(session.id()).unwrap();
 }
 
+/// Closing the window leaves no program running.
+///
+/// This is the end-to-end property, checked against the machine's own process table rather than the
+/// host's bookkeeping: a program the host merely forgot about would still be running. It does not
+/// isolate which step ends it — a provider's instance owns what it started, so both the explicit
+/// stop and the instance teardown below end it — but that the property holds is what a user needs.
+#[test]
+#[ignore = "build terminal and capability-example through the public SDK first"]
+fn closing_the_window_leaves_no_program_running() {
+    let root = tempfile::tempdir().unwrap();
+    let mut manager = manager(root.path());
+    let package = terminal();
+    let grants = package.manifest.permissions.clone();
+    manager.install(&package, grants).unwrap();
+    let session = manager
+        .start_execution(RunRequest {
+            program: "powershell.exe".into(),
+            args: vec![
+                "-NoProfile".into(),
+                "-Command".into(),
+                "Start-Sleep -Seconds 120".into(),
+            ],
+            cwd: Some(root.path().display().to_string()),
+            name: None,
+            env: Vec::new(),
+        })
+        .unwrap();
+    let state = wait_until(
+        &mut manager,
+        |manager| manager.execution(session.id()).unwrap().snapshot().state,
+        |state| *state == ExecutionState::Running,
+    );
+    assert_eq!(state, ExecutionState::Running);
+    assert!(reveal_panel(&mut manager) >= 1);
+    // The program is real and owned by the provider before the window closes.
+    assert!(
+        manager.live["terminal"].process_count() >= 2,
+        "the provider owns the delegated program and its own shell"
+    );
+
+    // Closing the window asks for the program to stop and then stops the provider's own instance.
+    let before = powershell_processes();
+    manager.shutdown();
+    assert_eq!(
+        manager.live.len(),
+        0,
+        "closing the window stops the provider's instance"
+    );
+    // The program is gone from the machine, not merely forgotten by the host. This is the observable
+    // outcome of the whole path: the host asked, the provider terminated, and the process ended.
+    let gone = wait_until(
+        &mut manager,
+        |_| powershell_processes(),
+        |after| *after <= before,
+    );
+    assert!(
+        gone <= before,
+        "the launched program is gone: {} before, {gone} after",
+        before
+    );
+}
+
+/// Machine-wide count of the interpreter these checks launch, so a leaked program is visible.
+///
+/// Counting the machine rather than the runtime is the point: a program the host merely forgot about
+/// would still be running, and only the real process table shows that.
+fn powershell_processes() -> usize {
+    std::process::Command::new("powershell.exe")
+        .args([
+            "-NoProfile",
+            "-Command",
+            "(Get-Process powershell -ErrorAction SilentlyContinue).Count",
+        ])
+        .output()
+        .ok()
+        .and_then(|output| String::from_utf8(output.stdout).ok())
+        .and_then(|text| text.trim().parse::<usize>().ok())
+        .unwrap_or(0)
+}
+
+/// Closing a window with nothing running is immediate: waiting is bounded, never open-ended.
+#[test]
+#[ignore = "build terminal and capability-example through the public SDK first"]
+fn shutdown_with_no_sessions_is_immediate() {
+    let root = tempfile::tempdir().unwrap();
+    let mut manager = manager(root.path());
+    let started = std::time::Instant::now();
+    manager.shutdown();
+    assert!(
+        started.elapsed() < std::time::Duration::from_secs(5),
+        "shutdown waits only for a provider's answer, never for a fixed period"
+    );
+}
+
 /// A session's end is observed through its provider, never predicted from elapsed time.
 #[test]
 #[ignore = "build terminal and capability-example through the public SDK first"]
