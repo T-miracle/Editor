@@ -65,11 +65,6 @@ pub struct RunPlan {
 }
 
 impl RunPlan {
-    /// The step at this position, if the sequence still has one.
-    pub fn step(&self, index: usize) -> Option<&PreparedStep> {
-        self.steps.get(index)
-    }
-
     /// Whether this plan starts a program at the end of its sequence.
     pub fn launches_program(&self) -> bool {
         self.steps
@@ -334,6 +329,13 @@ pub struct DiscoveryReport {
 pub struct PendingPoll {
     pub config: String,
     pub index: usize,
+    /// The session the query is about.
+    ///
+    /// Stored rather than derived: a poll is recorded before the provider answers, and this is what
+    /// identifies the program the answer describes if the sequence's own bookkeeping moves on in the
+    /// meantime. Nothing reads it today — the step is matched by request identity instead — and it is
+    /// kept because a status query without its subject is not a description of anything.
+    #[allow(dead_code)]
     pub session: u64,
     pub request_id: u64,
 }
