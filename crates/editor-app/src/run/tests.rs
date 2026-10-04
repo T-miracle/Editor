@@ -732,6 +732,14 @@ fn a_discovery_reports_what_changed_without_changing_the_users_work() {
     );
     assert!(controls.configuration("run-1").is_some());
     assert!(controls.target_missing("run-1"));
+    // The list a caller acts on names the same configuration the report did, and names only that one.
+    // Without this the empty case above would be the method's only coverage, and a method that never
+    // reports anything would look tested.
+    assert_eq!(
+        controls.invalid_targets(),
+        vec![("run-1".to_owned(), "我的程序".to_owned())],
+        "the lost target is reported with the name the user knows"
+    );
     assert!(
         !controls.target_missing("run-2"),
         "a hand-written configuration has no target to lose"
