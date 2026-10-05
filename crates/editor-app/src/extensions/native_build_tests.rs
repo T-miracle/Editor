@@ -514,7 +514,11 @@ fn stopping_during_preparation_never_starts_the_program(cx: &mut TestAppContext)
             continue;
         }
         if requested.is_none() {
-            // The sequence's next action is the stop of the session it owns.
+            // The request the editor staged, read so the check can state which session it addressed. The
+            // stop itself is performed by the harness inside `frame`, the way the production worker
+            // performs it — this used to call `manager.stop_execution` as well, which took the work item
+            // out of the queue before the harness could perform it, so no answer was ever published and
+            // the editor could not learn that the program had ended.
             requested = cx.update(|_, cx| {
                 app.read(cx)
                     .extensions
@@ -529,10 +533,6 @@ fn stopping_during_preparation_never_starts_the_program(cx: &mut TestAppContext)
                         _ => None,
                     })
             });
-            if let Some(session) = requested {
-                // The provider ends the owned program through the public contract.
-                manager.stop_execution(session).unwrap();
-            }
             continue;
         }
         let blocked = cx.update(|_, cx| app.read(cx).run_controls.preparation_blocked(&id));

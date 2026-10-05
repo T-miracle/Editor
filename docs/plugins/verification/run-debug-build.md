@@ -546,6 +546,25 @@ probe reconcile_stops published=0 outstanding=[]
 
 **给下一步的具体建议**：**先用一次打印把这三件事放在同一时刻取**（`self.stops` 的内容、`next_action` 的返回值、`stop_preparation_step` 是否进入），**而不是分别在不同位置打印**——本轮正是分处打印造成了这个矛盾。**在此之前，这个用例的失败原因仍未被确定。**
 
+### 同刻测量：矛盾消失了，答案只剩一个
+
+本轮按上面的建议做了**同刻打印**（在 `drive_preparation` 的 `Stop` 分支里一次取全），**矛盾随即消失**，读数自洽：
+
+```
+probe stop config=<cfg> session=1 is_stopping=false outstanding=[]          ← 第一帧：尚无待处理项
+probe stop config=<cfg> session=1 is_stopping=true  outstanding=[(<cfg>, 4, 1)]  ← 之后每一帧
+```
+
+**即：第一帧发出停止（登记为请求 4），此后每一帧都命中守卫而不再发送。** 结合整轮的 `reconcile` 打印（916 行，**每一行都是 `published=[]`**），得到一个**自洽**的结论：
+
+**停止请求确实发出并登记（请求 4），但它的应答从未产生——因此序列永远等不到「已停止」，也就永远不阻塞。**
+
+**这也解释了为什么前十二次改动全部无效**：它们都在改「应答到达之后」的逻辑，而**应答从未产生**。
+
+**本轮同时改掉了一处让用例无法自证的地方**：该用例原先在读取到 `Work::StopRun` 后**又自己调用 `manager.stop_execution(session)`**，这在夹具里**把那个工作项从队列中取走**，于是 `pump_recording`（本应在 `frame` 内按生产路径执行它）**永远拿不到它**。**现在用例不再自己执行停止**，改由夹具按生产路径执行——**读数因此变得可信**（`requested=Some(1)` 的断言仍在，且仍通过）。
+
+**用例仍未通过**（失败点后移到 `preparation_blocked` 的断言），**但失败原因现在被限定为一处**：**夹具执行 `Work::StopRun` 之后，`stop_results` 没有到达编辑器的 `reconcile_stops`**。**这是下一步唯一的入口。**
+
 因此**序列无从得知它拥有的步骤已经结束**：`preparation_blocked` 需要 `!is_active()`，而序列既没收到「停止已应答」（测试是直接调 manager、没走 UI 的 StopRun 应答路径），也**收不到「会话已结束」**——**因为编辑器从未把 `stop_execution` 的结果映射成会话的终态**。
 
 **这就是那条缺失的连线，而且它比本文件先前猜测的「停止请求的所有权」更靠下**：**问题不在谁有权发停止，而在「程序已经结束」这个事实从未到达 `RunControls`**。`RunSession::is_active()` 只在状态为 `Failed` 时返回 false，而 `stop_execution` 之后状态并未变为 `Failed`（仍是 `Running`）。
