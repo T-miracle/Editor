@@ -276,13 +276,23 @@ Run and debug startup smoke passed: no program was left behind by shutdown.
 | 验收项 | 判定 | 依据 |
 | --- | --- | --- |
 | 默认不改项目文件 | 已通过 | `a_shared_configuration_starts_a_real_program_with_local_values` 断言本机值未写入项目文件 |
-| 共享不泄露个人路径、密钥或授权 | 已通过 | 共享条目只含可移植一半（环境与工具目录留本机）；`two_workspaces_resolve_one_shared_configuration_separately`、`removing_a_shared_configuration_removes_it_from_the_project` |
+| 保存去向默认仅本机；选项目共享后写入版本化格式；取消不产生共享文件 | 已通过 | `sharing_writes_the_project_file_and_keeps_local_values_local`、保存去向控件用例 |
+| 名称/目标/参数/脚本/构建/启动前步骤可往返；可移植值与本机覆盖分开 | 已通过 | `sharing_writes_the_project_file_and_keeps_local_values_local`（SECRET 留本机）、共享条目字段集核对 |
+| **同一个共享声明不能替用户指定已授权提供者、工具信任或权限** | **本轮已补用例** | `a_shared_file_cannot_grant_authorization`：手写带 `provider`/`trusted`/`permissions`/`tool_paths` 的共享文件必须**被拒**而非被静默过滤；**去掉 `SharedConfig` 的 `deny_unknown_fields` 后该用例失败**。**按构造成立**：共享条目的字段里没有这些可写 |
+| 两个隔离工作区解析到各自项目 | 已通过 | `two_workspaces_resolve_one_shared_configuration_separately` |
+| 活动会话继续使用启动快照；保存或文件变化只作用于后续执行 | 已通过 | `run::tests::a_running_session_keeps_the_snapshot_it_started_with` |
+| 手工修改共享文件后重开按同一验证契约处理 | 已通过 | `a_broken_shared_file_is_reported_without_losing_local_work`（手工写坏、报出所违反的规则、不覆盖本机配置） |
+| 共享不泄露个人路径、密钥或授权 | 已通过 | 共享条目只含可移植一半（环境与工具目录留本机）；`removing_a_shared_configuration_removes_it_from_the_project` |
 | 文件编辑与表单含义一致 | 已通过 | `breakpoints_round_trip_through_the_edit_form`（渲染与解析互为逆运算）、`project_only_language_survives_registry_refresh` 等 |
 | 编辑器控件直接启动真实程序 | **本轮已通过** | `a_shared_configuration_starts_a_real_program_with_local_values`（真实终端提供者运行共享定义的程序，输出含本机环境值） |
 
 ### 08 — 执行提供者与插件调用（#56）
 
-七条验收项**全部有证据**，逐条见本轮结论与 `interactive_execution`／`host_execution`／`scoped_instances` 的用例。唯一**未验证**项是 `session.host` 的**伪造宿主身份拒绝**：检查在代码中，但构造伪造 `Reference` 需要其私有 `revision` 字段，为让测试能伪造而放开它恰好移除被测保护，因此**删掉的是测试而不是不变量**。
+**本条原写「七条验收项全部有证据」，此后逐字核对工单正文时发现不成立，故更正**：第 3 条含「**订阅输出与状态**」，而 `session.host` 只有四个操作（`start`/`list`/`status`/`stop`），**没有订阅**——**那是缺能力，不是缺用例**。该条其余的「查询」「定位展示」「停止」中，**查询与停止本轮已补真实包用例**（`a_consumer_queries_and_stops_its_session_through_the_host`，去掉宿主的实际停止后会失败），**定位展示由「重复启动定位同一会话」覆盖**。
+
+**逐条现状**：第 1、2、4、5、6、7 条有证据；**第 3 条除「订阅」外有证据**；**「订阅」需维护者决定**（按现有四个操作改判据，或新增会话订阅能力）。
+
+唯一**未验证**的另一项是 `session.host` 的**伪造宿主身份拒绝**：检查在代码中，但构造伪造 `Reference` 需要其私有 `revision` 字段，为让测试能伪造而放开它恰好移除被测保护，因此**删掉的是测试而不是不变量**。
 
 ### 09 — Rust 启动调试与源码断点（#57）
 
@@ -334,7 +344,9 @@ Run and debug startup smoke passed: no program was left behind by shutdown.
 | **读者文档与协议正文只写入读者文档工作面** | **未验证（外部阻塞）** | `website/` 在本机不存在（静态站点是另一批待实施议题），无可写入目标；已记于本文件 |
 | 验收通过后才标记整批完成 | 遵循 | 本批未标记完成 |
 
-**结论**：七张工单中，**#56 与 #60 的验收项除一项外部阻塞外全部有证据**；其余各张的剩余项**全部是环境受限项**（无 PDB 调试器、无原生输入法实测）或**与其直接相关的部分项**。
+**结论（已就此行作过一次更正，此处再更正一次）**：当时写的是「七张工单中，#56 与 #60 的验收项除一项外部阻塞外全部有证据」。**逐字核对工单正文后，该说法对 #56 不成立**：**第 3 条含「订阅输出与状态」，而该能力不存在**（见「#56 的订阅是一条缺能力」一节）。**#60 的表述基本成立**，但其第 7 条同样是外部阻塞。
+
+**当前准确的表述**是下面那张「以议题正文逐条复核」表：**各工单剩余项已逐条定位为环境受限、外部阻塞，或需维护者决定的能力边界；没有一项是「实现缺失」**（五处实现缺失已修，一处假缺陷已澄清为用例自身问题）。
 
 **上句原文为「没有任何一项是『实现缺失』」，此处更正。** 那句话在本文件写下时是真的，但它**低估了**事实：此后继续核对**死代码警告**（一个当时未被使用的判据）时，找到的**不是环境受限，而是四处功能没接上**：
 
