@@ -50,7 +50,7 @@ cargo run -p editor-app -- C:\path\to\project\src\main.rs
 打包为正式包：
 
 ```powershell
-# 构建正式编辑器、八个独立插件包及首次提供索引。
+# 构建正式编辑器、内置插件包及首次提供索引。
 .\scripts\package-editor.ps1
 ```
 

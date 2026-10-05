@@ -1,8 +1,10 @@
 # 运行、调试与构建 验收记录
 
+> 当前接手终验与工单处置见 [2026-10-06 终验记录](run-debug-build-completion-2026-10-06.md)；[2026-10-05 整批审查](run-debug-build-review-2026-10-05.md)和下文均为历史记录。历史的通过、未验证、阻塞及关闭建议不代表当前判定。`Editor-run-debug-build` 的修改留在独立分支与工作区，未合并主工作区。
+
 本文件记录运行、调试与构建方案各工单的实际验收证据与实现期确认的决策。**父设计依据是跟踪器上的议题 [#48](https://github.com/T-miracle/Editor/issues/48)**（标题「[Spec] 运行、调试与构建总方案」），其正文在议题上，**本批从未改动它**。
 
-**本文件早期版本把 `docs/plugins/specs/run-debug-build.md` 写成了父设计的路径，该文件并不存在**（已核对：`docs/plugins/specs/` 下只有 `plugin-management-logs.md`）。**本批新增的 `docs/run-debug-build.md` 是面向使用者的能力文档，不是设计依据**——两者的区别见下文「一处引用更正」。实现与提交在当前分支 `codex/run-debug-build`。
+**本文件早期版本把 `docs/plugins/specs/run-debug-build.md` 写成了父设计的路径，该文件并不存在**（已核对：`docs/plugins/specs/` 下只有 `plugin-management-logs.md`）。**本批新增的 `docs/run-debug-build.md` 是面向使用者的能力文档，不是设计依据**——两者的区别见下文「一处引用更正」。历史实现提交来自 `codex/run-debug-build`；当前本地分支为 `Editor-run-debug-build`。
 
 ## 实现期决策
 
