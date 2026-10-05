@@ -694,6 +694,12 @@ probe stop config=<cfg> session=1 is_stopping=true  outstanding=[(<cfg>, 4, 1)] 
 
 **「键盘选择」本轮试过并退回**：把之前那条用例从「发出 `DismissEvent`」改为**经窗口派发真实 `escape`** 后，**先要在用例里断言弹层已获焦，而弹层在该夹具中报 `contains_focused == false`**（`menu.rs` 用 `track_focus` + `capture_key_down`，`focusable(false)` 的是**条目**而非容器）。**尝试显式 `focus()` 并在其前加一次渲染与 `refresh()`，仍未获焦**，因此**退回原用例**（它测的是「关闭的后果」，不是按键处理器本身），**并在用例与记录中写明这一限制**。**这条不是「忘了做」，而是「试过后确认夹具层面有障碍」**——**下一步需要先弄清 `gpui_kit` 弹层在 `VisualTestContext` 中的焦点语义**。
 
+**障碍已查明（本轮）：弹层在该夹具中没有被绘制。** 具体读数：调用 `open_run_menu` 并 settle 之后，**菜单状态存在**（`run_menu.is_some()`），但 **`cx.debug_bounds("native-popup-menu")` 找不到任何东西**——即**带 `track_focus` 与 `capture_key_down` 的那层覆盖物从未进入元素树**。**因此在这个夹具里没有任何东西能持有它的焦点，派发按键也就无法到达其处理器。**
+
+**已把这条障碍写成断言**（`run::run_ui_tests::the_dropdown_overlay_is_not_reachable_for_keystrokes_in_this_harness`）：打开菜单 → 断言状态存在 → **断言弹层不存在**，并在断言消息里写明「**若此断言将来失败，说明弹层变得可绘制，那时就可以写 #51 的按键检查**」。**这样下一个人拿到的是一堵有标记的墙，而不是一个空位。**
+
+**该条目的覆盖现状**：菜单**条目**由 `the_selector_opens_the_unified_dropdown` 覆盖，**关闭**由 `the_run_surface_answers_dismissal_and_the_theme_toggle` 覆盖；**唯独弹层自己的按键处理器（上下移动与 Enter 选择）在任何地方都未被驱动**。
+
 ### 读者正文的落位：与约定不符，已标明为搁置（本轮）
 
 **#60 第 7 条要求「读者使用说明…只写入读者文档工作面」。本批没有做到，原因不是遗漏而是没有目标**：**本仓库当前没有 `website/`**（静态站点是另一批待实施议题）。
