@@ -111,6 +111,7 @@ fn svg_preview_follows_open_documents_and_unsaved_edits(cx: &mut TestAppContext)
                 enabled: true,
                 project_enabled: Default::default(),
                 global_enabled: None,
+                retired_ui_contract: false,
                 error: None,
             }];
             state.views.insert(

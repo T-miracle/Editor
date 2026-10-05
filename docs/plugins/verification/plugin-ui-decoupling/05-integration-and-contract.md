@@ -65,7 +65,7 @@ PNG 故障保留 Tab、撤销图片资源，实际“重试”按钮经标准生
 | 最终检查 | 实际结果 |
 | --- | --- |
 | `cargo fmt --check` 与 `git diff --check` | 通过 |
-| 非 UI workspace | 126 passed，119 ignored；不把跳过用例计作通过 |
+| 非 UI workspace | 初始 126 passed／119 ignored；补充旧注册表回归后 128 passed／120 ignored，不把跳过用例计作通过 |
 | `cargo check --workspace` | 通过；既有 unused／Wasmtime 链接提示没有新增失败 |
 | 应用完整串行基线 | 249 passed，107 ignored；实际 WASM 包对应原生用例单独显式执行 |
 | 实际 SDK 包运行时组合 | 13 passed、0 ignored：布局 1、文件 1、工具 5、SDK 包 1、终端 1、图标 1、迁移插件 3 |
@@ -75,6 +75,9 @@ PNG 故障保留 Tab、撤销图片资源，实际“重试”按钮经标准生
 | 原生两组底栏 | 1 passed、0 ignored：实际窗口／文件目标、共享意图、键盘、独立溢出、主题及 DPI |
 | 真实插件原生迁移 | 4 passed、0 ignored：Markdown 旧偏好及重启、Image 的 SVG／PNG 边界、Terminal 显隐／功能、持续输入 |
 | 实际 UI 包与语言切换 | 各 1 passed、0 ignored：示例／Image 原生输入与清理、语言提供者选择／替换／普通回退 |
+| 旧 UI 安装记录 | 2 passed、0 ignored：启动／重开／启用拒绝／当前包更新、设置与私有数据／授权保留，以及未知字段仍拒绝 |
+| 真实 SDK 安装升级 | 1 passed、0 ignored：旧元数据阻止组件运行，当前合法包重新安装后恢复实例并保留私有文件与用户设置 |
+| 历史安装目录迁移 | 1 passed、0 ignored：旧协议含 null 工具字段，两份工作区、原始备份及旧私有数据可恢复；93.24 秒 |
 
 上述检查与 9 项实际包原生场景均有有效通过结果，完整基线中的 ignored 不计为通过。
 日志在隔离工作区 `target/final-*.log`，不提交二进制和完整输出。
@@ -85,6 +88,9 @@ cargo build -p editor-app
 ./scripts/build-layout-example.ps1 -HostExe ./target/debug/editor-app.exe
 ./scripts/verify-plugin-sdk.ps1 -HostExe ./target/debug/editor-app.exe
 cargo test -p plugin-runtime --test retired_ui_contract
+cargo test -p plugin-runtime --test registry_ui_migration --test retired_ui_contract
+cargo test -p plugin-runtime --test registry_ui_migration retired_ui_install_updates_through_sdk_and_preserves_private_data -- --ignored --test-threads=1
+cargo test -p plugin-runtime --test installed_migration -- --ignored --test-threads=1
 cargo test -p plugin-runtime --test sdk_distribution --test composable_layouts --test file_views --test ui_migrations --test tool_artwork --test plugin_tools --test terminal_migration -- --ignored --test-threads=1
 cargo test -p plugin-runtime --test data_migration upgrades_private_data_on_an_isolated_copy -- --ignored --test-threads=1
 cargo test -p plugin-runtime --test data_migration failed_migration_activation_and_commit_preserve_old_data -- --ignored --test-threads=1
@@ -113,6 +119,19 @@ TOML 资源清单；SVG 新布局已携带精确 FileContext，旧断言仍要�
 前者使用现有 TOML 依赖同步两份声明并继续走公共包校验，后者改为精确文件／文本版本及旧图片
 区域不可见的行为断言，没有放宽宿主授权或删除场景。仅重跑受影响布局组合；完整基线后的变化
 限于 `cfg(test)` 夹具和已有版本的 dev dependency，非 UI 基线证据继续有效。
+
+最终候选 `dd10c46` 的双轴审查共同发现一项 P1：旧安装注册表的 `toolbar:null`／
+`toolbar_icon:null` 或 `view_modes` 会在有限迁移前被严格公开类型拒绝，阻断 Manager 启动。
+`final-registry-ui-red.log` 通过公开启动入口真实复现；修复仅在磁盘元数据边界去除三个已知字段，
+保存不可覆盖的 `registry.before-ui-contract.json` 原始备份，并持久化不可执行标记。
+未知当前字段继续报错，新 ZIP 继续严格拒绝旧字段；授权、全局／工作区启用选择、设置和私有数据保留。
+显式启用或重启不能解除标记，只有通过现行 Package 校验的安装成功后才能恢复实例。
+
+事务注册表和历史 `record.json` 共用该导入边界；先完成旧协议／ID 迁移的原始备份，再写入规范化
+注册表，避免两次迁移覆盖证据。真实 SDK 安装／重开为 56.15 秒，历史目录导入为 93.24 秒；
+前者保留私有文件及用户设置，后者保留两份工作区数据、快照和恢复备份。
+记录见 `final-registry-ui-{red,green,sdk,legacy}.log`。补充基础检查为 `final-reviewed-*`，
+非 UI 128 项与完整应用串行 249 项通过；宿主已用最终运行时重建。
 
 ## 实际限制
 

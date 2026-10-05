@@ -40,6 +40,10 @@ pub struct Installed {
     /// Workspace paths whose plugin instance may run despite the global default.
     #[serde(default)]
     pub project_enabled: BTreeSet<String>,
+    /// Disk-only import marker: removed UI fields require a rebuilt package before any component may run.
+    /// Persisted across reopen and rollback; only a successful current package installation clears it.
+    #[serde(default)]
+    pub retired_ui_contract: bool,
     /// UI snapshots distinguish the global preference from effective availability.
     #[serde(skip)]
     pub global_enabled: Option<bool>,
@@ -50,11 +54,15 @@ impl Installed {
     /// Whether this manifest negotiates `id` against the current host; false includes incompatible packages.
     /// This metadata query executes no guest and grants no permission, workspace or instance authority.
     pub fn supports_capability(&self, id: &str) -> bool {
-        crate::capabilities::negotiate(&self.manifest)
-            .is_ok_and(|api| api.capabilities.contains_key(id))
+        !self.retired_ui_contract
+            && crate::capabilities::negotiate(&self.manifest)
+                .is_ok_and(|api| api.capabilities.contains_key(id))
     }
     /// Compatibility is derived without executing guest code or changing the user's enablement preference.
     pub fn compatibility_error(&self) -> Option<String> {
+        if self.retired_ui_contract {
+            return Some("插件使用已退役的 UI 契约，请使用新版 SDK 更新插件".into());
+        }
         crate::capabilities::require_current(&self.manifest)
             .err()
             .map(|error| format!("{error:#}"))
@@ -114,12 +122,30 @@ impl Manager {
     /// Read metadata without starting WASM; first read migrates legacy IDs and preserves private data.
     pub fn read_registry(root: &Path) -> anyhow::Result<BTreeMap<String, Installed>> {
         let _transaction_guard = crate::data_transaction::recover(root)?;
-        let installed = match std::fs::read(root.join("registry.json")) {
-            Ok(bytes) => serde_json::from_slice(&bytes)?,
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => BTreeMap::new(),
+        let (installed, ui_imported) = match std::fs::read(root.join("registry.json")) {
+            Ok(bytes) => {
+                let (installed, changed) = crate::migration::decode_registry(&bytes)?;
+                if changed {
+                    // Back up the original record before normalization; no package or user data is rewritten.
+                    let backup = root.join("registry.before-ui-contract.json");
+                    if !backup.exists() {
+                        atomic_write(&backup, &bytes)?;
+                    }
+                }
+                (installed, changed)
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => (BTreeMap::new(), false),
             Err(e) => return Err(e.into()),
         };
         let mut installed = crate::migration::migrate_registry(root, installed)?;
+        if ui_imported {
+            // The earlier protocol/ID importer must back up the original raw registry before either
+            // migration publishes normalized metadata; their retained evidence composes without loss.
+            atomic_write(
+                &root.join("registry.json"),
+                &serde_json::to_vec_pretty(&installed)?,
+            )?;
+        }
         for entry in installed.values_mut() {
             entry.error = entry.compatibility_error();
         }
@@ -311,6 +337,7 @@ impl Manager {
                 grants,
                 enabled: true,
                 project_enabled: prior_projects,
+                retired_ui_contract: false,
                 global_enabled: None,
                 error: None,
             },
@@ -354,7 +381,9 @@ impl Manager {
             .installed
             .get(id)
             .ok_or_else(|| anyhow::anyhow!("Unknown plugin"))?;
-        crate::capabilities::require_current(&entry.manifest)?;
+        if let Some(error) = entry.compatibility_error() {
+            anyhow::bail!(error);
+        }
         anyhow::ensure!(
             self.trusted && self.workspace_open,
             "Workspace is restricted or closed"
@@ -727,6 +756,7 @@ mod icon_tests {
             grants: BTreeSet::new(),
             enabled: true,
             project_enabled: BTreeSet::new(),
+            retired_ui_contract: false,
             global_enabled: None,
             error: None,
         };
@@ -787,6 +817,7 @@ mod scope_tests {
             grants: BTreeSet::new(),
             enabled: false,
             project_enabled: BTreeSet::from(["project-a".into()]),
+            retired_ui_contract: false,
             global_enabled: None,
             error: None,
         };

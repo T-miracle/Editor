@@ -193,6 +193,7 @@ fn second_market_install_shows_visible_consent(cx: &mut TestAppContext) {
                 enabled: true,
                 project_enabled: Default::default(),
                 global_enabled: Some(true),
+                retired_ui_contract: false,
                 error: None,
             }];
             drop(state);
@@ -408,6 +409,7 @@ fn uninstall_dialog_offers_both_data_choices(cx: &mut TestAppContext) {
                 enabled: false,
                 project_enabled: Default::default(),
                 global_enabled: Some(false),
+                retired_ui_contract: false,
                 error: None,
             }];
             drop(state);
@@ -594,6 +596,7 @@ fn incompatible_plugin_details_keep_preferences_and_update_uninstall_actions(
                 digest: "old".into(),
                 enabled: false,
                 global_enabled: Some(false),
+                retired_ui_contract: false,
                 project_enabled: [project.clone()].into(),
                 error: None,
             }];

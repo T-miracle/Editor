@@ -72,6 +72,7 @@ fn native_input_and_canvas_route_text_to_their_own_nodes_and_hide_reclaims_targe
                 enabled: true,
                 project_enabled: Default::default(),
                 global_enabled: None,
+                retired_ui_contract: false,
                 error: None,
             }];
             state

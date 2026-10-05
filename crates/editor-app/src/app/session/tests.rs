@@ -191,6 +191,7 @@ fn plugin_dock_layout_survives_delayed_startup(cx: &mut TestAppContext) {
         enabled: true,
         project_enabled: Default::default(),
         global_enabled: None,
+        retired_ui_contract: false,
         error: None,
     };
     let registry = workspace.root().join(".runtime-plugin-test");

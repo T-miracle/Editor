@@ -121,6 +121,7 @@ fn incompatible_installed_plugin_preserves_data_without_starting(cx: &mut TestAp
         enabled: true,
         project_enabled: std::collections::BTreeSet::from(["retained-project".into()]),
         global_enabled: None,
+        retired_ui_contract: false,
         error: None,
     };
     std::fs::write(
@@ -291,6 +292,7 @@ fn project_rust_registry(workspace: &Workspace) -> PathBuf {
             .into_iter()
             .collect(),
         global_enabled: None,
+        retired_ui_contract: false,
         error: None,
     };
     std::fs::write(
