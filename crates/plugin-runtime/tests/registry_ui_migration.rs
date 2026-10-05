@@ -1,5 +1,8 @@
 //! Retired UI metadata imports preserve installation preferences without admitting executable old contracts.
-use plugin_runtime::{Manager, Package, plugin_protocol::Environment};
+use plugin_runtime::{
+    Manager, Package,
+    plugin_protocol::{Environment, settings::Scope},
+};
 use serde_json::{Value, json};
 use std::io::{Cursor, Write};
 
@@ -87,6 +90,15 @@ fn retired_ui_registry_preserves_records_data_and_current_peers() {
                 .to_string()
                 .contains("更新插件")
         );
+        // Settings validation also prepares guests, including disabled ones, so it must honor the same gate.
+        assert!(
+            manager
+                .update_setting(id, Scope::User, "label", Some(json!("attempted")))
+                .unwrap_err()
+                .to_string()
+                .contains("更新插件")
+        );
+        assert!(manager.instance_id(id).is_none());
     }
     assert_eq!(std::fs::read(&data).unwrap(), b"opaque user data");
     assert_eq!(
@@ -189,6 +201,17 @@ fn retired_ui_install_updates_through_sdk_and_preserves_private_data() {
     );
     assert!(manager.installed[id].compatibility_error().is_some());
     assert_eq!(manager.installed[id].grants, package.manifest.permissions);
+    assert_eq!(std::fs::read(&private).unwrap(), b"keep opaque content");
+    assert_eq!(std::fs::read(&settings).unwrap(), saved);
+    // A real readable component must remain dormant even when configuration changes request preparation.
+    assert!(
+        manager
+            .update_setting(id, Scope::User, "count", Some(json!(9)))
+            .unwrap_err()
+            .to_string()
+            .contains("更新插件")
+    );
+    assert!(manager.instance_id(id).is_none());
     assert_eq!(std::fs::read(&private).unwrap(), b"keep opaque content");
     assert_eq!(std::fs::read(&settings).unwrap(), saved);
     manager

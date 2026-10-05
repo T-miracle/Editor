@@ -126,6 +126,11 @@ impl Manager {
             .get(id)
             .ok_or_else(|| anyhow::anyhow!("Unknown plugin"))?
             .clone();
+        // Even a disabled guest prepares configuration hooks; retired records must not reach that path.
+        // Reject before changing saved values or reading a component, preserving the user's prior settings.
+        if let Some(error) = entry.compatibility_error() {
+            anyhow::bail!(error);
+        }
         let manifest = &entry.manifest;
         let definition = manifest
             .settings
