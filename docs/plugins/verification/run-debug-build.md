@@ -530,6 +530,22 @@ probe reconcile_stops published=0 outstanding=[]
 
 **下一步入口很具体**：查 `next_action` 走到 `Stop` 所需的条件（步骤处于 `Running` 且 `stopping` 为真），**以及本用例里那个步骤是否真的到达过 `Running`**。**这也解释了前十次改动为何全部无效：它们改的都是这条分支之后的逻辑，而这条分支从未被进入。**
 
+### 条件核对的结果：两条实测互相矛盾，先记下来而不是继续改
+
+本轮按上面的入口查了条件，**得到的不是答案，而是两条彼此矛盾的读数**：
+
+| 探针位置 | 读数 |
+| --- | --- |
+| `drive_preparation` 的动作 | **确实走到 `Stop(1)`**，而且**连续多帧都是 `Stop(1)`**（`next_action` 返回 `Stop` 的条件**满足**） |
+| 用例结束时的状态 | `requested=Some(1)`、`stopped_session=Some(1)`、**`is_stopping=true`**、`active=[1]` |
+| `reconcile_stops` 入口（每一帧） | **`published=0 outstanding=[]`**——意思是**每一帧都没有待处理停止、也没有已发布的停止结果** |
+
+**这三条无法同时成立**：若 `is_stopping=true`，`self.stops` 就不为空；而 `reconcile_stops` 每帧打印的 `outstanding` 却是空的。**因此至少有一个读数不是我以为的那个东西**（最可能是 `outstanding` 的打印口径，或 `reconcile_stops` 被调用时 `stops` 已被同一帧更早的一步取走）。
+
+**我本轮不再据此改任何代码**。理由很直接：**前十二次改动都是在这样的矛盾读数上做的，而它们全部无效**；**在读数自相矛盾时继续改，只会再增加一次无效改动**。
+
+**给下一步的具体建议**：**先用一次打印把这三件事放在同一时刻取**（`self.stops` 的内容、`next_action` 的返回值、`stop_preparation_step` 是否进入），**而不是分别在不同位置打印**——本轮正是分处打印造成了这个矛盾。**在此之前，这个用例的失败原因仍未被确定。**
+
 因此**序列无从得知它拥有的步骤已经结束**：`preparation_blocked` 需要 `!is_active()`，而序列既没收到「停止已应答」（测试是直接调 manager、没走 UI 的 StopRun 应答路径），也**收不到「会话已结束」**——**因为编辑器从未把 `stop_execution` 的结果映射成会话的终态**。
 
 **这就是那条缺失的连线，而且它比本文件先前猜测的「停止请求的所有权」更靠下**：**问题不在谁有权发停止，而在「程序已经结束」这个事实从未到达 `RunControls`**。`RunSession::is_active()` 只在状态为 `Failed` 时返回 false，而 `stop_execution` 之后状态并未变为 `Failed`（仍是 `Running`）。
