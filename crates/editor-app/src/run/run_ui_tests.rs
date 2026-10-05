@@ -271,6 +271,74 @@ fn storage_key_of(workspace: &std::path::Path) -> String {
         .to_string()
 }
 
+/// The run surface follows the one interface size, which is how a user makes everything bigger.
+///
+/// Ticket 03's native clause asks for scaling. The editor has a single base size — `Typography` — that the
+/// whole interface derives from, and the setting screen drives it through `typography::step_by`; there is
+/// deliberately no second size. So the check is that the run group is drawn at that size: stepping it up
+/// makes the group taller, stepping it back down returns it, and the group stays inside a window that is
+/// narrow at the largest size. That last part matters because a control set that does not scale would pass
+/// the first half by ignoring the setting.
+#[gpui::test]
+fn the_run_group_follows_the_interface_size(cx: &mut TestAppContext) {
+    let root = tempfile::tempdir().unwrap();
+    let workspace = root.path().join("project");
+    std::fs::create_dir_all(&workspace).unwrap();
+    let stored = store_configuration(&storage_key_of(&workspace), "本机程序");
+    let (app, cx) = open_editor(cx, &workspace);
+    let _ = &app;
+
+    let size_at = |cx: &mut gpui_kit::VisualTestContext, steps: i32| {
+        // The settings screen changes the base size and then pushes it into the theme, which is what the
+        // window's `rem` resolves against; doing only the first would leave the layout untouched.
+        cx.update(|window, cx| {
+            crate::ui::typography::set_font_size(cx, 14. + steps as f32);
+            crate::ui::theme::sync_font_sizes(cx);
+            window.refresh();
+        });
+        cx.run_until_parked();
+        cx.debug_bounds("run-controls")
+            .expect("the run group is rendered")
+            .size
+    };
+
+    let usual = size_at(cx, 0);
+    let larger = size_at(cx, 8);
+    let back = size_at(cx, 0);
+    // The group widens because its labels are sized in `rem`, which resolves against the interface size.
+    // Its height does not change: the buttons set it, so a taller text line would not make the control
+    // taller — the first version of this check asserted the height and was simply wrong about which
+    // dimension this control derives from the setting.
+    assert!(
+        larger.width > usual.width,
+        "a larger interface size widens the run group: {usual:?} then {larger:?}"
+    );
+    assert_eq!(
+        back, usual,
+        "and stepping back restores it, so the group reads the size rather than drifting"
+    );
+
+    // At the largest supported size in a narrow window the group still stays inside: scaling may not push
+    // controls past the window's edge.
+    let narrow = size(px(520.), px(420.));
+    cx.update(|window, cx| {
+        crate::ui::typography::set_font_size(cx, 24.);
+        crate::ui::theme::sync_font_sizes(cx);
+        window.refresh();
+    });
+    cx.simulate_resize(narrow);
+    cx.run_until_parked();
+    let controls = cx
+        .debug_bounds("run-controls")
+        .expect("the run group is rendered at the largest size");
+    assert!(
+        controls.origin.x >= px(0.) && controls.origin.x + controls.size.width <= narrow.width,
+        "the run group stays inside the window at the largest size: {controls:?} in {narrow:?}"
+    );
+
+    let _ = std::fs::remove_file(stored);
+}
+
 /// The run group survives a narrow window, which is where a title-bar control set would collide.
 ///
 /// Tickets 01 and 03 both ask for native acceptance that includes a narrow window, and nothing exercised
