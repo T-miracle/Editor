@@ -522,17 +522,18 @@ fn stopping_during_preparation_never_starts_the_program(cx: &mut TestAppContext)
         }
     }
     let stopped_session = stopped_session.expect("the step was running when it was stopped");
-    // The runtime's own session state is deliberately not asserted here. It still reads `Running` after
-    // the provider was asked to stop, because that provider acknowledges a stop when termination has been
-    // *issued* — the distinction the design draws when it says an accepted stop is not the program having
-    // ended. What the case is about is that the editor learned the preparation was stopped and therefore
-    // never launched the program, which the two assertions below state.
-    let _ = stopped_session;
+    // Stopping admission cannot release this preparation barrier. Its blocked result must follow
+    // observed native exit; the provider's independent interactive shell remains alive.
+    assert_eq!(
+        manager.execution(stopped_session).unwrap().snapshot().state,
+        plugin_runtime::ExecutionState::Exited,
+    );
+    assert_eq!(manager.live["terminal"].process_count(), 1);
     let reason = cx.update(|_, cx| app.read(cx).run_controls.preparation_blocked(&id));
     assert!(
-        reason
-            .as_deref()
-            .is_some_and(|reason| reason.contains("停止")),
+        reason.as_deref().is_some_and(|reason| {
+            reason.contains(&rust_i18n::t!("run.preparation_stopped").to_string())
+        }),
         "a stopped preparation reports why: {reason:?}"
     );
     assert!(
@@ -711,6 +712,10 @@ fn build_reports_why_it_is_unavailable() {
             tool_paths: String::new(),
             source: editor_core::RunConfigSource::Local,
             from_target: None,
+            provided: None,
+            provider_build: vec![],
+            provider_prelaunch: vec![],
+            original_arguments: None,
             provider: None,
             breakpoints: String::new(),
             share: false,
@@ -729,5 +734,8 @@ fn build_reports_why_it_is_unavailable() {
     let reason = controls
         .preparation_error(&id)
         .expect("a configuration without build actions cannot build");
-    assert!(reason.contains("没有构建操作"), "{reason}");
+    assert!(
+        reason.contains("没有构建操作") || reason.contains("no build actions"),
+        "{reason}"
+    );
 }

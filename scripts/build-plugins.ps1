@@ -3,9 +3,9 @@ param(
     [string]$Output = "$PSScriptRoot/../dist/plugins",
     [string]$HostExe = '',
     # Restrict verification to named packages without rebuilding unrelated components.
-    [ValidateSet('terminal', 'example', 'svg', 'rust', 'toml', 'html', 'javascript', 'markdown')]
+    [ValidateSet('terminal', 'example', 'svg', 'rust', 'rust-debugger', 'run-target-example', 'toml', 'html', 'javascript', 'markdown')]
     # Default and release packaging include every bundled plugin; the host must provide their SDK capabilities.
-    [string[]]$Packages = @('terminal', 'example', 'svg', 'rust', 'toml', 'html', 'javascript', 'markdown')
+    [string[]]$Packages = @('terminal', 'example', 'svg', 'rust', 'rust-debugger', 'run-target-example', 'toml', 'html', 'javascript', 'markdown')
 )
 $ErrorActionPreference = 'Stop'
 $projectRoot = (Resolve-Path "$PSScriptRoot/..").Path
@@ -88,7 +88,11 @@ try {
     } finally { $archive.Dispose(); $stream.Dispose() }
     Write-Output $destination
     }
-    foreach ($name in @('rust', 'toml', 'html', 'javascript', 'markdown')) {
+    if ($Packages -contains 'rust-debugger') {
+        # Local and release distributions use the same independent SDK and fixed byte bridge.
+        & "$PSScriptRoot/build-rust-debugger.ps1" -HostExe $hostPath -Output $Output
+    }
+    foreach ($name in @('rust', 'run-target-example', 'toml', 'html', 'javascript', 'markdown')) {
         if ($Packages -notcontains $name) { continue }
         # Rust and Markdown include guest components; the remaining language packages are resource-only.
         $destination = [IO.Path]::GetFullPath((Join-Path $Output "$name.zip"))
@@ -104,7 +108,9 @@ try {
             if (Test-Path -LiteralPath (Join-Path $pluginRoot 'icons.json')) {
                 $packageFiles += ,@('icons.json', (Join-Path $pluginRoot 'icons.json'))
             }
-            foreach ($directory in @('grammar', 'queries', 'icons')) {
+            foreach ($directory in @('grammar', 'queries', 'icons', 'run-targets')) {
+                # Resource-only examples and dynamic providers may legitimately omit these roots.
+                if (-not (Test-Path -LiteralPath (Join-Path $pluginRoot $directory))) { continue }
                 foreach ($file in Get-ChildItem -LiteralPath (Join-Path $pluginRoot $directory) -Recurse -File | Sort-Object FullName) {
                     # Windows PowerShell 5.1 lacks Path.GetRelativePath. Enumeration is rooted
                     # in this plugin, so remove its normalized prefix and retain the ZIP separators.

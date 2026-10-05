@@ -21,6 +21,7 @@ impl Worker {
             let resources = plugin_runtime::HostResources {
                 sdk: Some(crate::sdk_export::descriptor().map_err(|error| format!("{error:#}"))),
                 logs: output.lock().unwrap().logs.clone(),
+                ..Default::default()
             };
             let mut manager =
                 match Manager::open_with_resources(root, environment, trusted, resources) {
@@ -44,7 +45,17 @@ impl Worker {
             let mut instance_ids = BTreeMap::<String, String>::new();
             // Host session identity joined to the configuration and launch that requested it.
             let mut run_requests = BTreeMap::<u64, (String, u64)>::new();
+            // Real adapter handshakes and inspections remain pending while the actor serves other work.
+            let mut debug_requests = BTreeMap::<u64, (String, plugin_runtime::DebugRequest)>::new();
+            // A slow status reply stays pending until its own deadline; 500 ms is never an outcome.
+            let mut run_polls =
+                BTreeMap::<(String, u64), plugin_runtime::Completion<serde_json::Value>>::new();
+            // Repeated selection shares one pending location per session, bounded independently of polling.
+            let mut run_locations =
+                BTreeMap::<(u64, u64), plugin_runtime::Completion<serde_json::Value>>::new();
+            let mut target_calls = super::targets::TargetCalls::default();
             loop {
+                // Target calls use their own bounded roots and never block the actor on build output.
                 // Only the candidate travels between threads. Cutover remains serialized with live dispatch.
                 let completed = preparation
                     .as_mut()
@@ -169,61 +180,69 @@ impl Worker {
                     })
                 } else {
                     match work {
+                        Some(
+                            work @ (Work::PrepareTarget { .. }
+                            | Work::CancelTarget { .. }
+                            | Work::DiscoverTargets { .. }),
+                        ) => {
+                            target_calls.dispatch(work, &mut manager, &output);
+                            Ok(())
+                        }
                         // A debug call is answered by the provider and published as what it said,
                         // never as a state the host inferred.
                         Some(Work::DebugCall {
                             request,
+                            configuration,
                             method,
                             arguments,
                         }) => {
-                            let answer = match method.as_str() {
-                                "frames" => manager
-                                    .debug_call(&method, arguments)
-                                    .and_then(|answer| {
-                                        plugin_runtime::frames_from_value(&answer.result)
-                                            .map_err(|error| anyhow::anyhow!("{}", error.message))
-                                    })
-                                    .map(DebugAnswerMessage::Frames),
-                                "variables" => manager
-                                    .debug_call(&method, arguments)
-                                    .and_then(|answer| {
-                                        plugin_runtime::variables_from_value(&answer.result)
-                                            .map_err(|error| anyhow::anyhow!("{}", error.message))
-                                    })
-                                    .map(DebugAnswerMessage::Variables),
-                                // A step is answered by the session's new state, which the editor
-                                // applies as a state and never as a view of a pause.
-                                "step" => manager
-                                    .debug_call(&method, arguments)
-                                    .and_then(|answer| {
-                                        plugin_runtime::DebugSession::from_value(&answer.result)
-                                            .map_err(|error| anyhow::anyhow!("{:?}", error.message))
-                                    })
-                                    .map(DebugAnswerMessage::State),
-                                // Setting breakpoints is answered by the positions the provider could
-                                // bind, which is what makes an unverified one visible instead of
-                                // looking like a breakpoint that is merely waiting.
-                                "set_breakpoints" => manager
-                                    .debug_call(&method, arguments)
-                                    .and_then(|answer| {
-                                        plugin_runtime::DebugBreakpoint::list_from_value(
-                                            &answer.result,
-                                        )
-                                        .map_err(|error| anyhow::anyhow!("{}", error.message))
-                                    })
-                                    .map(DebugAnswerMessage::Breakpoints),
-                                // A method this worker does not carry is refused rather than sent
-                                // without the reading its answer would need.
-                                other => Err(anyhow::anyhow!("{other} 不是本编辑器发出的调试调用")),
+                            let result = if debug_requests.len() >= 128
+                                || debug_requests.contains_key(&request)
+                            {
+                                Err(anyhow::anyhow!(
+                                    "Debug request quota exhausted or duplicate identity"
+                                ))
+                            } else {
+                                manager.begin_configured_debug_call(
+                                    configuration.as_deref(),
+                                    &method,
+                                    arguments,
+                                )
+                            };
+                            match result {
+                                Ok(pending) => {
+                                    if method == "start" {
+                                        output.lock().unwrap().debug_answers.push((
+                                            request,
+                                            DebugAnswerMessage::Connecting(
+                                                pending.session().into(),
+                                            ),
+                                        ));
+                                    }
+                                    debug_requests.insert(request, (method, pending));
+                                }
+                                Err(error) => output.lock().unwrap().debug_answers.push((
+                                    request,
+                                    DebugAnswerMessage::Failed(format!("{error:#}")),
+                                )),
                             }
-                            .unwrap_or_else(|error| {
-                                DebugAnswerMessage::Failed(format!("{error:#}"))
-                            });
-                            output.lock().unwrap().debug_answers.push((request, answer));
                             Ok(())
                         }
                         // Reading the provider list holds no session and changes no selection, so it
                         // is safe to ask whenever the page that shows providers is opened.
+                        Some(Work::ForceDebug { session, request }) => {
+                            // Force follows the same asynchronous actual-exit receipt as normal Stop.
+                            match manager.force_debug_session(&session) {
+                                Ok(pending) => {
+                                    debug_requests.insert(request, ("stop".into(), pending));
+                                }
+                                Err(error) => output.lock().unwrap().debug_answers.push((
+                                    request,
+                                    DebugAnswerMessage::Failed(format!("{error:#}")),
+                                )),
+                            }
+                            Ok(())
+                        }
                         Some(Work::ListRunProviders) => {
                             let providers = manager.execution_providers();
                             let debug = manager.debug_availability();
@@ -234,6 +253,7 @@ impl Worker {
                             published.run_providers = Some(providers);
                             published.debug_availability = Some(debug);
                             published.debug_abilities = abilities;
+                            published.debug_provider_abilities = manager.all_debug_abilities();
                             Ok(())
                         }
                         Some(Work::SetRunProvider { provider }) => {
@@ -308,10 +328,12 @@ impl Worker {
                         }) => {
                             // The runtime selects a compatible provider by contract and scope; a
                             // missing or ambiguous provider is reported instead of being guessed at.
-                            let result = manager.start_execution(request).map(|session| {
-                                // Remember which launch produced this session before it is published.
-                                run_requests.insert(session.id(), (config.clone(), request_id));
-                            });
+                            let result = manager
+                                .start_configuration_execution(&config, request)
+                                .map(|session| {
+                                    // Remember which launch produced this session before it is published.
+                                    run_requests.insert(session.id(), (config.clone(), request_id));
+                                });
                             if let Err(error) = &result {
                                 let mut published = output.lock().unwrap();
                                 published.run_errors.push((
@@ -328,36 +350,65 @@ impl Worker {
                             config,
                             request_id,
                         }) => {
-                            // The session's own provider answers; a provider that cannot be asked is
-                            // reported as unknown rather than assumed to have finished.
-                            let status = match manager.query_execution(session) {
-                                Ok(completion) => {
-                                    manager.poll_request(&completion);
-                                    match completion.status() {
-                                        api::RequestUpdate::Completed { result: Ok(value) } => {
-                                            super::RunStatus::from_value(&value)
-                                        }
-                                        _ => super::RunStatus::Unknown,
-                                    }
+                            // The ordinary actor poll drives this query without delaying other work.
+                            match manager.query_execution(session) {
+                                Ok(completion) if run_polls.len() < 128 => {
+                                    run_polls.insert((config, request_id), completion);
                                 }
-                                Err(_) => super::RunStatus::Unknown,
+                                _ => {
+                                    let mut published = output.lock().unwrap();
+                                    published.run_status.push((
+                                        config,
+                                        request_id,
+                                        super::RunStatus::Unknown,
+                                    ));
+                                    published.configuration_revision += 1;
+                                }
+                            }
+                            Ok(())
+                        }
+                        Some(Work::LocateRun { session, request }) => {
+                            let result = if run_locations.contains_key(&(session, request)) {
+                                Ok(None)
+                            } else if run_locations.len() >= 128 {
+                                Err("Too many pending session locations".to_owned())
+                            } else {
+                                manager
+                                    .locate_execution(session)
+                                    .map(Some)
+                                    .map_err(|error| format!("{error:#}"))
                             };
-                            let mut published = output.lock().unwrap();
-                            published
-                                .run_status
-                                .push((config.clone(), request_id, status));
-                            published.configuration_revision += 1;
+                            match result {
+                                Ok(Some(completion)) => {
+                                    run_locations.insert((session, request), completion);
+                                }
+                                Ok(None) => {}
+                                Err(error) => {
+                                    output.lock().unwrap().locate_results.push((
+                                        session,
+                                        request,
+                                        Err(error),
+                                    ));
+                                }
+                            }
                             Ok(())
                         }
                         Some(Work::StopRun {
                             session,
                             config,
+                            mode,
                             request_id,
                         }) => {
                             // The runtime asks the session's own provider; the worker never holds a
                             // provider-private handle and never terminates a program directly.
                             let result = manager
-                                .stop_execution(session)
+                                .stop_execution_with(
+                                    session,
+                                    plugin_runtime::StopOptions {
+                                        mode,
+                                        ..Default::default()
+                                    },
+                                )
                                 .map_err(|error| format!("{error:#}"));
                             let mut published = output.lock().unwrap();
                             published
@@ -563,8 +614,63 @@ impl Worker {
                     Err(error) => manager.document_events_failed(error),
                 }
                 manager.poll();
+                target_calls.poll(&manager, &output);
+                debug_requests.retain(|request, (method, pending)| {
+                    let result = match pending.status() {
+                        api::RequestUpdate::Accepted | api::RequestUpdate::Progress { .. } => {
+                            return true;
+                        }
+                        api::RequestUpdate::Completed { result } => {
+                            result.map_err(|error| error.message)
+                        }
+                        api::RequestUpdate::Cancelled { reason, .. } => Err(format!("{reason:?}")),
+                    };
+                    let answer = super::debug_answer(method, result);
+                    output
+                        .lock()
+                        .unwrap()
+                        .debug_answers
+                        .push((*request, answer));
+                    false
+                });
+                output.lock().unwrap().debug_observations = manager.debug_observations();
                 let mut views = BTreeMap::new();
+                // Publish only a real terminal reply or an actual query failure/timeout.
+                run_polls.retain(|(config, request), completion| {
+                    let status = match completion.status() {
+                        api::RequestUpdate::Accepted | api::RequestUpdate::Progress { .. } => {
+                            return true;
+                        }
+                        api::RequestUpdate::Completed { result: Ok(value) } => {
+                            super::RunStatus::from_value(&value)
+                        }
+                        _ => super::RunStatus::Unknown,
+                    };
+                    let mut published = output.lock().unwrap();
+                    published
+                        .run_status
+                        .push((config.clone(), *request, status));
+                    published.configuration_revision += 1;
+                    false
+                });
                 let mut processes = BTreeMap::new();
+                run_locations.retain(|(session, request), completion| {
+                    let result = match completion.status() {
+                        api::RequestUpdate::Accepted | api::RequestUpdate::Progress { .. } => {
+                            return true;
+                        }
+                        api::RequestUpdate::Completed { result } => {
+                            result.map(|_| ()).map_err(|error| error.message)
+                        }
+                        api::RequestUpdate::Cancelled { reason, .. } => Err(format!("{reason:?}")),
+                    };
+                    output
+                        .lock()
+                        .unwrap()
+                        .locate_results
+                        .push((*session, *request, result));
+                    false
+                });
                 let mut editor_requests = Vec::new();
                 for (id, instance) in &mut manager.live {
                     editor_requests.extend(
@@ -611,6 +717,10 @@ impl Worker {
                 }
                 let plugin_service_choices = manager.service_choices();
                 let mut published = output.lock().unwrap();
+                // Top-level Debug and the configuration page both follow the current actual registry.
+                published.debug_availability = Some(manager.debug_availability());
+                published.debug_abilities = manager.debug_service_abilities();
+                published.debug_provider_abilities = manager.all_debug_abilities();
                 if published.plugin_service_choices != plugin_service_choices {
                     published.plugin_service_choices = plugin_service_choices;
                     published.configuration_revision += 1;
@@ -798,24 +908,7 @@ impl Worker {
                     retire_publication(&mut published, id);
                 }
                 instance_ids = next_instances;
-                let entries = manager.published_entries();
-                for entry in &entries {
-                    let previous = published
-                        .entries
-                        .iter()
-                        .find(|old| old.manifest.id == entry.manifest.id);
-                    if entry.error.is_some()
-                        && previous.and_then(|old| old.error.as_ref()) != entry.error.as_ref()
-                    {
-                        published.logs.append(
-                            &entry.manifest.id,
-                            plugin_runtime::logs::LogLevel::Error,
-                            "host.plugin",
-                            entry.error.clone().unwrap(),
-                        );
-                    }
-                }
-                published.entries = entries;
+                published.publish_entries(manager.published_entries());
                 published.ready = true;
                 published.diagnostics = manager
                     .installed

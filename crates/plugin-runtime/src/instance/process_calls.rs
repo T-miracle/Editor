@@ -5,6 +5,23 @@ use plugin_protocol::process::{Operation, Service, Transport, Update};
 use resource_roots::RootKind;
 
 impl State {
+    /// Quiescing must capture observation before the service table is cleared during an update.
+    pub(super) fn retire_native_processes(&mut self) {
+        for (id, (handle, _)) in self.process_handles.clone() {
+            let observer =
+                if let Some((_, context)) = self.plugin_services.resources.get(&handle.resource) {
+                    self.host_resources
+                        .preparations
+                        .closing(&context.lifetimes, &handle)
+                } else {
+                    Box::new(|_| {})
+                };
+            if let Err(error) = self.processes.close_observed(id, observer) {
+                eprintln!("Native revocation failed: {error:#}");
+            }
+        }
+    }
+
     /// Negotiation does not imply consent, and preparation never starts native programs.
     fn process_authority(&self, permission: &str) -> Result<(), Failure> {
         if !self.active || self.roots.retired {
@@ -32,6 +49,8 @@ impl State {
     pub(super) fn process_request(&mut self, operation: Operation) -> Result<Value, Failure> {
         match operation {
             Operation::StartService { service } => {
+                // Delegated creation additionally requires the original caller's process.exec.
+                // This installed service grant approves fixed bytes/argv; callers cannot override it.
                 let permission = format!("process.service.{service}");
                 self.process_authority(&permission)?;
                 let command = self
@@ -105,10 +124,52 @@ impl State {
                     .map_err(process_failure)?;
                 Ok(Value::Unit)
             }
+            Operation::RequestExit { handle, mode } => {
+                let id = self.process_id(&handle)?;
+                if !self
+                    .api
+                    .capabilities
+                    .get("process")
+                    .is_some_and(|version| *version >= semver::Version::new(1, 5, 0))
+                {
+                    return Err(Failure::new(
+                        ErrorCode::CapabilityUnavailable,
+                        "process 1.5 is required for observed exit",
+                    ));
+                }
+                match mode {
+                    plugin_protocol::process::ExitMode::Graceful => {
+                        if !self.processes.request_exit(id).map_err(process_failure)? {
+                            return Err(Failure::new(
+                                ErrorCode::UnsupportedOperation,
+                                "This transport has no normal-exit operation",
+                            ));
+                        }
+                    }
+                    plugin_protocol::process::ExitMode::Force => {
+                        self.processes.terminate(id).map_err(process_failure)?;
+                    }
+                }
+                // Ownership and pending output survive this admission acknowledgement. The native
+                // completion event is the only evidence on which a caller may start a replacement.
+                Ok(Value::Unit)
+            }
             Operation::Terminate { handle } => {
                 let id = self.process_id(&handle)?;
-                // A natural exit may already be queued; explicit close still retires pending delivery.
-                let _ = self.processes.close(id);
+                // Resource release revokes guest delivery, while the original preparation waits for
+                // the real tree/EOF receipt and retains tail output through its authenticated reaper.
+                let observer = if let Some((_, context)) =
+                    self.plugin_services.resources.get(&handle.resource)
+                {
+                    self.host_resources
+                        .preparations
+                        .closing(&context.lifetimes, &handle)
+                } else {
+                    Box::new(|_| {})
+                };
+                self.processes
+                    .close_observed(id, observer)
+                    .map_err(process_failure)?;
                 self.process_handles.remove(&id);
                 self.process_dependencies.remove(&id);
                 self.plugin_services.resources.remove(&handle.resource);
@@ -202,6 +263,24 @@ impl State {
             })
             .transpose()
             .map_err(process_failure)?;
+        let mut command = command;
+        if permission == "process.exec"
+            && !Path::new(&command.program).is_absolute()
+            && let Some(path) = env.get("PATH").or_else(|| env.get("Path"))
+        {
+            // Explicit granted environment overrides also choose the executable, before host PATH.
+            // Relative directories remain excluded so project files cannot become implicit tools.
+            let name = if cfg!(windows) && Path::new(&command.program).extension().is_none() {
+                format!("{}.exe", command.program)
+            } else {
+                command.program.clone()
+            };
+            command.search_paths = std::env::split_paths(path)
+                .filter(|directory| directory.is_absolute())
+                .take(32)
+                .map(|directory| directory.join(&name).display().to_string())
+                .collect();
+        }
         let program = if let Some(prepared) = &prepared {
             prepared.program.clone()
         } else {
@@ -242,7 +321,7 @@ impl State {
             None => self.workspace.clone(),
         };
         let id = match transport {
-            Transport::Stdio => self.processes.spawn_stdio(&program, &args, &cwd),
+            Transport::Stdio => self.processes.spawn_stdio(&program, &args, &cwd, &env),
             Transport::Pty {
                 columns,
                 rows,
@@ -281,9 +360,36 @@ impl State {
 
     /// Native output is drained before exit, and notifications expose no transferable OS handles.
     pub(super) fn poll_processes(&mut self) -> anyhow::Result<Vec<api::Notification>> {
+        let controls = self
+            .process_handles
+            .iter()
+            .filter_map(|(id, (handle, _))| {
+                let (_, context) = self.plugin_services.resources.get(&handle.resource)?;
+                self.host_resources
+                    .preparations
+                    .control(&context.lifetimes, handle)
+                    .map(|mode| (*id, mode, context.lifetimes.clone()))
+            })
+            .collect::<Vec<_>>();
+        for (id, mode, lifetimes) in controls {
+            match mode {
+                process::ExitMode::Graceful => {
+                    if !self.processes.request_exit(id).unwrap_or(false) {
+                        self.host_resources.preparations.escalate(&lifetimes);
+                        self.processes.terminate(id)?;
+                    }
+                }
+                process::ExitMode::Force => self.processes.terminate(id)?,
+            }
+        }
         let mut events = Vec::new();
         for (id, update) in self.processes.poll_native()? {
             if let Some((handle, _)) = self.process_handles.get(&id).cloned() {
+                if let Some((_, context)) = self.plugin_services.resources.get(&handle.resource) {
+                    self.host_resources
+                        .preparations
+                        .update(&context.lifetimes, &handle, &update);
+                }
                 events.push(api::Notification::Process { handle, update });
             }
         }

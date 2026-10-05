@@ -1,0 +1,105 @@
+{
+  "version": "1.0.0",
+  "methods": {
+    "discover": {
+      "parameters": {
+        "type": "record",
+        "fields": {
+          "workspace": {
+            "type": "string",
+            "max_bytes": 4096
+          }
+        }
+      },
+      "result": {
+        "type": "record",
+        "fields": {
+          "targets": {
+            "type": "array",
+            "items": {
+              "type": "record",
+              "fields": {
+                "identity": {
+                  "type": "string",
+                  "max_bytes": 256
+                },
+                "label": {
+                  "type": "string",
+                  "max_bytes": 256
+                },
+                "source": {
+                  "type": "string",
+                  "max_bytes": 4096
+                },
+                "target_type": {
+                  "type": "string",
+                  "max_bytes": 128
+                },
+                "type_version": {
+                  "type": "integer",
+                  "min": 1,
+                  "max": 2147483647
+                },
+                "binding": {
+                  "type": "string",
+                  "max_bytes": 4096
+                }
+              }
+            },
+            "max_items": 128
+          }
+        }
+      },
+      "permissions": [
+        "workspace.read",
+        "process.exec"
+      ]
+    },
+    "prepare": {
+      "parameters": {
+        "type": "record",
+        "fields": {
+          "workspace": {
+            "type": "string",
+            "max_bytes": 4096
+          },
+          "binding": {
+            "type": "string",
+            "max_bytes": 4096
+          },
+          "env": {
+            "type": "array",
+            "items": {
+              "type": "record",
+              "fields": {
+                "name": {
+                  "type": "string",
+                  "max_bytes": 128
+                },
+                "value": {
+                  "type": "string",
+                  "max_bytes": 32768
+                }
+              }
+            },
+            "max_items": 64
+          }
+        }
+      },
+      "result": {
+        "type": "record",
+        "fields": {
+          "program": {
+            "type": "string",
+            "max_bytes": 4096
+          }
+        }
+      },
+      "permissions": [
+        "workspace.read",
+        "process.exec",
+        "ui.panels"
+      ]
+    }
+  }
+}

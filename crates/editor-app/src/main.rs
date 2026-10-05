@@ -196,11 +196,12 @@ struct EditorApp {
     session_state: SessionState,
     /// Saved run configurations and the sessions this editor launched from them.
     run_controls: run::RunControls,
-    /// The B1 configuration dialog's draft, retained while its modal window is open.
+    /// Local presentation state; all debug targets and inspection data remain in RunControls.
+    debug_panel: run::ui::panel::DebugPanelState,
+    /// The B1 configuration draft stays alive while its same-window modal is open.
     run_form: Option<Entity<run::RunConfigForm>>,
-    /// Native configuration window handle and its close subscription.
-    run_dialog: Option<(Entity<app_dialog::AppDialog>, WindowHandle<Root>)>,
-    _run_dialog_closed: Option<Subscription>,
+    /// Focus owner for B1's modal layer in the existing native window.
+    run_dialog: Option<Entity<crate::run::ui::RunConfigModal>>,
     /// Editor window handle, used to continue a close the user has confirmed.
     ///
     /// The platform reports an untyped handle, which is downcast only where the close continues.
@@ -452,9 +453,9 @@ impl EditorApp {
             dark_theme: false,
             session_state,
             run_controls,
+            debug_panel: run::ui::panel::DebugPanelState::new(cx),
             run_form: None,
             run_dialog: None,
-            _run_dialog_closed: None,
             main_window: None,
             leave_confirmed: false,
             leave_confirm: None,

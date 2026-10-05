@@ -4,6 +4,7 @@
 //! separating rule, which controls are present, and that the configuration dialog exposes the
 //! approved B1 structure.
 #![cfg(windows)]
+mod modal;
 use crate::ui::controls::DialogContent;
 use crate::*;
 use gpui_kit::test::TestWindowExt as _;
@@ -263,90 +264,66 @@ fn the_run_surface_answers_dismissal_and_the_theme_toggle(cx: &mut TestAppContex
     let _ = std::fs::remove_file(stored);
 }
 
-/// What the dropdown's keyboard check reaches, and the one step it does not.
-///
-/// Ticket 03's native clause asks for keyboard selection on the unified dropdown. Reaching its key handler
-/// needs the overlay drawn and the popup focused. Drawing is the part I had wrong: the checks in this file
-/// only settled the event loop, while the plugin-status checks that drive keys call `window.draw` — and
-/// with two draws the overlay is in the tree and `debug_bounds("run-menu")` finds it. So there is no harness
-/// wall, and that much is asserted here.
-///
-/// What remains is focus: the popup's handle does not take focus, even after `focus()` and further draws,
-/// so a dispatched Escape never reaches its handler and the menu stays open. That is recorded as an
-/// assertion about the obstacle rather than a passing claim: when this flips, the handler is reachable and
-/// the case becomes ticket 03's keystroke acceptance. The next step is concrete — how `KitPopupMenu`
-/// acquires focus, against the plugin-status popup whose `contains_focused` does pass after `tab`.
+/// Real arrow/Enter selection and Escape dismissal work in narrow windows in both themes.
 #[gpui::test]
-fn the_dropdown_overlay_draws_but_its_popup_does_not_take_focus(cx: &mut TestAppContext) {
+fn the_run_dropdown_accepts_keyboard_selection_and_escape(cx: &mut TestAppContext) {
     let root = tempfile::tempdir().unwrap();
     let workspace = root.path().join("project");
     std::fs::create_dir_all(&workspace).unwrap();
-    let stored = store_configuration(&storage_key_of(&workspace), "本机程序");
+    let stored = store_configuration(&storage_key_of(&workspace), "First program");
     let (app, cx) = open_editor(cx, &workspace);
-
-    cx.update(|window, cx| {
-        app.update(cx, |app, cx| {
-            app.open_run_menu(gpui_kit::point(px(320.), px(30.)), window, cx);
+    cx.update(|_, cx| {
+        app.update(cx, |app, _| {
+            let key = app.workspace_key();
+            let mut config = app.run_controls.selected().unwrap().clone();
+            config.id = "keyboard-second".into();
+            config.name = "Second program".into();
+            app.run_controls.upsert(config, &key).unwrap();
+        })
+    });
+    for dark in [false, true] {
+        cx.update(|_, cx| apply_theme(builtin_theme(dark), cx));
+        cx.simulate_resize(size(px(520.), px(420.)));
+        cx.update(|window, cx| {
+            app.update(cx, |app, cx| {
+                let key = app.workspace_key();
+                let first = app.run_controls.configurations()[0].id.clone();
+                app.run_controls.select(&first, &key);
+                app.open_run_menu(gpui_kit::point(px(320.), px(30.)), window, cx);
+            })
         });
-    });
-    // Two draws, as the plugin-status checks do: this is what puts the shell's overlay in the tree, and the
-    // element a check can point at is the overlay rather than the popup deferred inside it.
-    for _ in 0..2 {
-        cx.run_until_parked();
-        cx.update(|window, cx| window.draw(cx).clear(cx));
-    }
-    cx.run_until_parked();
-    assert!(
-        cx.debug_bounds("run-menu").is_some(),
-        "the dropdown's overlay is in the tree once the window draws"
-    );
-
-    let popup = cx.update(|_, cx| {
-        app.read(cx)
-            .run_menu
-            .as_ref()
-            .map(|menu| menu.popup.clone())
-            .expect("the selector opened the dropdown")
-    });
-    cx.update(|window, cx| {
-        popup.update(cx, |_, cx| cx.focus_handle().focus(window, cx));
-    });
-    for _ in 0..2 {
-        cx.run_until_parked();
-        cx.update(|window, cx| window.draw(cx).clear(cx));
-    }
-    cx.run_until_parked();
-    // Failing a direct focus call, the plugin-status checks move focus in with a keystroke instead — `tab`
-    // is how a keyboard reaches a popup at all — so that path is tried before concluding anything about it.
-    let direct = cx.update(|window, cx| {
-        popup.update(cx, |_, cx| cx.focus_handle().contains_focused(window, cx))
-    });
-    if !direct {
-        cx.simulate_keystrokes("tab");
         for _ in 0..2 {
             cx.run_until_parked();
             cx.update(|window, cx| window.draw(cx).clear(cx));
         }
+        assert!(cx.debug_bounds("run-menu").is_some());
+        // Focus stays on the popup's retained handle; creating a fresh Context::focus_handle here
+        // would steal it and accidentally turn this into an assertion about a test-created handle.
+        cx.simulate_keystrokes("down enter");
         cx.run_until_parked();
+        assert_eq!(
+            cx.update(|_, cx| app.read(cx).run_controls.selected().unwrap().id.clone()),
+            "keyboard-second"
+        );
+        assert!(cx.update(|_, cx| app.read(cx).run_menu.is_none()));
+        cx.update(|window, cx| {
+            app.update(cx, |app, cx| {
+                app.open_run_menu(gpui_kit::point(px(320.), px(30.)), window, cx)
+            })
+        });
+        for _ in 0..2 {
+            cx.run_until_parked();
+            cx.update(|window, cx| window.draw(cx).clear(cx));
+        }
+        cx.simulate_keystrokes("escape");
+        cx.run_until_parked();
+        assert!(
+            cx.update(|_, cx| app.read(cx).run_menu.is_none()),
+            "the actual Escape key must dismiss the menu"
+        );
     }
-    let focused = cx.update(|window, cx| {
-        popup.update(cx, |_, cx| cx.focus_handle().contains_focused(window, cx))
-    });
-    cx.simulate_keystrokes("escape");
-    cx.run_until_parked();
-    let closed = cx.update(|_, cx| app.read(cx).run_menu.is_none());
-    // One assertion covering the state of the obstacle, so this file cannot report a keystroke acceptance
-    // it does not have and cannot silently keep a stale one either.
-    assert!(
-        !focused && !closed,
-        "the popup does not take focus here, so the dispatched key never reaches its handler \
-         (popup focused: {focused}, menu closed: {closed}); when focus starts working, the key reaches the \
-         handler and this case becomes ticket 03's keystroke acceptance"
-    );
-
     let _ = std::fs::remove_file(stored);
 }
-
 /// The workspace key for a path, canonicalized the way the editor's own key is.
 fn storage_key_of(workspace: &std::path::Path) -> String {
     std::fs::canonicalize(workspace)
@@ -506,6 +483,10 @@ fn the_build_page_edits_prepared_actions_row_by_row(cx: &mut TestAppContext) {
             tool_paths: String::new(),
             source: editor_core::RunConfigSource::Local,
             from_target: None,
+            provided: None,
+            provider_build: vec![],
+            provider_prelaunch: vec![],
+            original_arguments: None,
             provider: None,
             breakpoints: String::new(),
             share: false,
@@ -599,8 +580,15 @@ fn the_build_page_edits_prepared_actions_row_by_row(cx: &mut TestAppContext) {
         "one action was removed and a template row was added"
     );
     assert_eq!(
-        after.1, "一 = cargo.exe | build\n# 名称 = 程序 | 参数",
-        "the template row is a comment until it is turned into an action"
+        after.1.lines().next(),
+        Some("一 = cargo.exe | build"),
+        "the existing action remains literal when a template is added"
+    );
+    assert!(
+        after.1.lines().last().is_some_and(
+            |line| line == "# 名称 = 程序 | 参数" || line == "# Name = program | arguments"
+        ),
+        "the template is a localized comment, never an executable action"
     );
     // The pre-launch list is edited on its own; the build list is untouched by it.
     cx.update(|window, cx| {
@@ -690,7 +678,7 @@ fn the_run_configuration_dialog_owns_a_b1_draft(cx: &mut TestAppContext) {
             )
         })
     });
-    // The four tabs the prototype promises exist; the debug page is still to come.
+    // All four retained pages are available, with labels from the active UI locale.
     let tabs = cx.update(|window, cx| {
         let _ = window;
         form.read(cx)
@@ -702,42 +690,36 @@ fn the_run_configuration_dialog_owns_a_b1_draft(cx: &mut TestAppContext) {
     assert_eq!(
         tabs,
         vec![
-            ("基本".to_owned(), true),
+            (t!("run.form_basic").to_string(), true),
             // The build page edits the same stored configuration, so this slice implements it.
-            ("构建".to_owned(), true),
+            (t!("run.form_build").to_string(), true),
             // The debug page chooses the execution provider for this configuration.
-            ("调试".to_owned(), true),
+            (t!("run.form_debug").to_string(), true),
             // The environment page edits the same stored configuration, so this slice implements it.
-            ("环境".to_owned(), true),
+            (t!("run.form_environment").to_string(), true),
         ]
     );
     // One field per setting, with arguments, environment entries and tool directories each kept
     // one per line.
     let fields = cx.update(|window, cx| {
         let _ = window;
-        form.read(cx)
-            .field_labels()
-            .into_iter()
-            .map(str::to_owned)
-            .collect::<Vec<_>>()
+        form.read(cx).field_labels()
     });
     assert_eq!(
         fields,
         vec![
-            "名称",
-            "程序",
-            "参数（每行一个）",
-            "脚本文本",
-            "工作目录",
-            "环境变量（每行 名称=值）",
-            "本机工具路径（每行一个目录，优先于继承的 PATH）",
-            "构建操作（每行 名称 = 程序 | 参数）",
-            "启动前步骤（每行 名称 = 程序 | 参数，顺序执行）",
-            // The debug page edits the breakpoint list, one location per line.
-            "断点（每行 源文件:行号）"
+            t!("run.field_name").to_string(),
+            t!("run.field_program").to_string(),
+            t!("run.field_arguments").to_string(),
+            t!("run.field_script").to_string(),
+            t!("run.field_directory").to_string(),
+            t!("run.field_environment").to_string(),
+            t!("run.field_tool_paths").to_string(),
+            t!("run.field_build").to_string(),
+            t!("run.field_prelaunch").to_string(),
+            t!("run.field_breakpoints").to_string()
         ]
-    );
-    // A new draft starts empty, on the basic page, with nothing to report yet.
+    ); // A new draft starts empty, on the basic page, with nothing to report yet.
     cx.update(|window, cx| {
         let _ = window;
         let form = form.read(cx);
@@ -1132,4 +1114,17 @@ fn a_saved_configuration_becomes_the_selected_target(cx: &mut TestAppContext) {
     assert!(cx.debug_bounds("run-start").is_some());
 
     let _ = std::fs::remove_file(stored);
+}
+
+/// An explicit force action remains visible alongside ordinary Stop, with state deciding enablement.
+#[gpui::test]
+fn the_run_group_exposes_an_immediate_termination_action(cx: &mut TestAppContext) {
+    let root = tempfile::tempdir().unwrap();
+    let workspace = root.path().join("project");
+    std::fs::create_dir_all(&workspace).unwrap();
+    let (_, cx) = open_editor(cx, &workspace);
+    assert!(
+        cx.debug_bounds("run-terminate").is_some(),
+        "users need a separate immediate force action"
+    );
 }

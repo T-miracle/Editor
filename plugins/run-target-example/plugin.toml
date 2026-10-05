@@ -1,0 +1,10 @@
+# Resource-only contributors need no empty WASM component or language-specific host branch.
+[plugin]
+id = "run-target-example"
+name = "Run target example"
+version = "0.1.0"
+host_version = ">=0.1.0"
+
+[[run_targets]]
+id = "native-tool"
+file = "run-targets/native-tool.json"

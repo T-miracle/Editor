@@ -8,6 +8,278 @@ use super::composable_tests::{publish, publish_with_launches, pump_recording};
 use super::*;
 use gpui_kit::{TestAppContext, gpui};
 
+// Debug acceptance shares this native workspace fixture, while its deferred driver stays separate.
+mod debugging;
+mod sharing;
+
+/// Rerun waits for actual old-program exit, then follows the ordinary save and preparation path once.
+#[gpui::test]
+#[ignore = "build the terminal package with the current public SDK first"]
+fn native_rerun_replaces_the_old_program_only_after_it_ends(cx: &mut TestAppContext) {
+    let root = tempfile::tempdir().unwrap();
+    let (mut manager, app, cx) = fixture(
+        cx,
+        root.path(),
+        "powershell.exe",
+        vec![
+            "-NoProfile".into(),
+            "-Command".into(),
+            "Start-Sleep -Seconds 60".into(),
+        ],
+    );
+    let mut renderer = images::VectorRenderer::default();
+    let mut launches = Vec::new();
+    cx.update(|window, cx| app.update(cx, |app, cx| app.start_selected_run(window, cx)));
+    for _ in 0..250 {
+        pump_recording(&mut manager, &app, cx, &mut launches);
+        manager.poll();
+        publish_with_launches(&mut manager, &mut renderer, &app, cx, &launches);
+        if launches.first().is_some_and(|(id, _, _)| {
+            manager.execution(*id).unwrap().snapshot().state
+                == plugin_runtime::ExecutionState::Running
+        }) {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    assert_eq!(launches.len(), 1);
+    let original = launches[0].0;
+    cx.update(|window, cx| app.update(cx, |app, cx| app.rerun_selected(window, cx)));
+    // The provider's force-confirmation timeout follows the normal grace period; native painting
+    // also consumes time, so the acceptance deadline covers both bounds rather than counting frames.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+    let mut observations = Vec::new();
+    let mut last = None;
+    while std::time::Instant::now() < deadline {
+        pump_recording(&mut manager, &app, cx, &mut launches);
+        if launches.len() > 1 {
+            assert_eq!(
+                manager.execution(original).unwrap().state(),
+                plugin_runtime::ExecutionState::Exited,
+                "the replacement must never overlap the original program"
+            );
+            break;
+        }
+        manager.poll();
+        let current = (
+            manager.execution(original).unwrap().state(),
+            manager.live["terminal"].process_count(),
+        );
+        if last != Some(current) {
+            let query = manager.query_execution(original).map(|completion| {
+                manager.poll_request(&completion);
+                completion.status()
+            });
+            observations.push(format!("{current:?}: {query:?}"));
+            last = Some(current);
+        }
+        publish_with_launches(&mut manager, &mut renderer, &app, cx, &launches);
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    let visible_status = cx.update(|_, cx| app.read(cx).status.clone());
+    assert_eq!(
+        launches.len(),
+        2,
+        "one explicit rerun must eventually create one replacement; status={visible_status}; original={:?}; native={:?}; observations={observations:?}",
+        manager.execution(original).unwrap().snapshot(),
+        manager.live["terminal"].process_ids()
+    );
+    manager.shutdown();
+}
+
+/// Native session selection restores a hidden tab and displays that program's output, not another tab.
+#[gpui::test]
+#[ignore = "build the terminal package with the current public SDK first"]
+fn native_session_location_selects_the_exact_hidden_program(cx: &mut TestAppContext) {
+    let root = tempfile::tempdir().unwrap();
+    let (mut manager, app, cx) = fixture(
+        cx,
+        root.path(),
+        "powershell.exe",
+        vec![
+            "-NoProfile".into(),
+            "-Command".into(),
+            "[Console]::OutputEncoding=[Text.UTF8Encoding]::new(); Write-Output 'LOCATION_A'; $line=[Console]::ReadLine(); Write-Output ('ECHO_A:'+$line); Start-Sleep -Seconds 60".into(),
+        ],
+    );
+    let first = cx.update(|_, cx| app.read(cx).run_controls.selected().unwrap().id.clone());
+    let second = cx.update(|_, cx| {
+        app.update(cx, |app, _| {
+            let mut config = app.run_controls.selected().unwrap().clone();
+            let key = app.workspace_key();
+            config.id = app.run_controls.generate_id(&key);
+            config.name = "Second location".into();
+            config.target = editor_core::RunTarget::Program {
+                program: "powershell.exe".into(),
+                args: vec![
+                    "-NoProfile".into(),
+                    "-Command".into(),
+                    "[Console]::OutputEncoding=[Text.UTF8Encoding]::new(); Write-Output 'LOCATION_B'; $line=[Console]::ReadLine(); Write-Output ('ECHO_B:'+$line); Start-Sleep -Seconds 60".into(),
+                ],
+            };
+            let id = config.id.clone();
+            app.run_controls.upsert(config, &key).unwrap();
+            id
+        })
+    });
+    let mut renderer = images::VectorRenderer::default();
+    let mut launches = Vec::new();
+    for (config, marker) in [(&first, "LOCATION_A"), (&second, "LOCATION_B")] {
+        cx.update(|window, cx| {
+            app.update(cx, |app, cx| {
+                app.start_configuration_without_environment(config, window, cx)
+            })
+        });
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
+        while std::time::Instant::now() < deadline {
+            pump_recording(&mut manager, &app, cx, &mut launches);
+            manager.poll();
+            publish_with_launches(&mut manager, &mut renderer, &app, cx, &launches);
+            if painted_text(&manager).contains(marker) {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        assert!(painted_text(&manager).contains(marker));
+    }
+    let a = launches
+        .iter()
+        .find(|(_, config, _)| config == &first)
+        .unwrap()
+        .0;
+    let b = launches
+        .iter()
+        .find(|(_, config, _)| config == &second)
+        .unwrap()
+        .0;
+    type_in_native_program(
+        &mut manager,
+        &mut renderer,
+        &app,
+        cx,
+        &mut launches,
+        "中文 B",
+        "ECHO_B:中文B",
+    );
+    let provider_a = manager
+        .execution(a)
+        .unwrap()
+        .snapshot()
+        .provider_session
+        .unwrap();
+    let revision = manager.live["terminal"].views["terminal"].revision;
+    // Close uses the ordinary public native collection event; managed programs hide rather than die.
+    manager
+        .event(
+            "terminal",
+            Some("terminal".into()),
+            protocol::api::Notification::Ui(protocol::ui::UiEvent {
+                revision,
+                node: "sessions".into(),
+                action: protocol::ui::Action::Close(provider_a.clone()),
+            }),
+        )
+        .unwrap();
+    assert!(painted_text(&manager).contains("LOCATION_B"));
+    cx.update(|window, cx| app.update(cx, |app, cx| app.reveal_run_session(a, &first, window, cx)));
+    for _ in 0..30 {
+        pump_recording(&mut manager, &app, cx, &mut launches);
+        manager.poll();
+        publish_with_launches(&mut manager, &mut renderer, &app, cx, &launches);
+        if painted_text(&manager).contains("LOCATION_A") {
+            break;
+        }
+        cx.run_until_parked();
+    }
+    assert!(
+        painted_text(&manager).contains("LOCATION_A"),
+        "native selection must locate the actual retained session"
+    );
+    assert!(!painted_text(&manager).contains("LOCATION_B"));
+    assert_eq!(manager.executions().len(), 2);
+    assert!(
+        manager
+            .executions()
+            .iter()
+            .all(|session| session.state() == plugin_runtime::ExecutionState::Running)
+    );
+    assert!(cx.debug_bounds("plugin-ui-output").is_some());
+    type_in_native_program(
+        &mut manager,
+        &mut renderer,
+        &app,
+        cx,
+        &mut launches,
+        "中文 A",
+        "ECHO_A:中文A",
+    );
+    assert!(
+        !painted_text(&manager).contains("ECHO_B:"),
+        "input/output stays with each independent session"
+    );
+    cx.update(|_, cx| app.update(cx, |app, cx| app.stop_selected_run(cx)));
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
+    while manager.execution(a).unwrap().state().is_active() && std::time::Instant::now() < deadline
+    {
+        pump_recording(&mut manager, &app, cx, &mut launches);
+        manager.poll();
+        publish_with_launches(&mut manager, &mut renderer, &app, cx, &launches);
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    assert_eq!(
+        manager.execution(a).unwrap().state(),
+        plugin_runtime::ExecutionState::Exited
+    );
+    assert_eq!(
+        manager.execution(b).unwrap().state(),
+        plugin_runtime::ExecutionState::Running
+    );
+    cx.update(|window, cx| {
+        app.update(cx, |app, cx| app.reveal_run_session(b, &second, window, cx))
+    });
+    pump_recording(&mut manager, &app, cx, &mut launches);
+    manager.poll();
+    publish_with_launches(&mut manager, &mut renderer, &app, cx, &launches);
+    assert!(
+        painted_text(&manager).contains("ECHO_B:中文B"),
+        "reopened output retains this program's own history"
+    );
+    manager.shutdown();
+}
+
+/// Native typing goes through the currently selected canvas and its public event stream.
+fn type_in_native_program(
+    manager: &mut plugin_runtime::Manager,
+    renderer: &mut images::VectorRenderer,
+    app: &Entity<EditorApp>,
+    cx: &mut gpui_kit::VisualTestContext,
+    launches: &mut Vec<(u64, String, u64)>,
+    text: &str,
+    expected: &str,
+) {
+    let bounds = cx
+        .debug_bounds("plugin-ui-output")
+        .expect("the selected native output is visible");
+    cx.simulate_click(bounds.center(), Default::default());
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+    cx.simulate_input(text);
+    cx.simulate_keystrokes("enter");
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while std::time::Instant::now() < deadline {
+        pump_recording(manager, app, cx, launches);
+        manager.poll();
+        publish_with_launches(manager, renderer, app, cx, launches);
+        if painted_text(manager).contains(expected) {
+            return;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    panic!(
+        "native input did not reach its selected program: expected {expected:?}; painted={:?}",
+        painted_text(manager)
+    );
+}
+
 /// Install the real terminal package and open the editor on a workspace with one saved configuration.
 fn fixture<'a>(
     cx: &'a mut TestAppContext,
@@ -74,6 +346,12 @@ fn fixture<'a>(
         // The configuration is installed through the same store the title bar reads.
         app.update(cx, |app, cx| {
             let key = app.workspace_key();
+            // Keep real acceptance writes under this fixture rather than the user configuration root.
+            app.run_controls = crate::run::RunControls::load_with_project(
+                &key,
+                Some(app.workspace.root().join("private-runs")),
+                Some(app.workspace.root().into()),
+            );
             app.run_controls
                 .upsert(set.configurations[0].clone(), &key)
                 .unwrap();
@@ -88,6 +366,39 @@ fn fixture<'a>(
     let mut renderer = images::VectorRenderer::default();
     publish(&mut manager, &mut renderer, &app, cx);
     (manager, app, cx)
+}
+
+/// Stop through the same native work/publication route and wait for observed process cleanup.
+/// The terminal's private interactive shell remains independent of this run session.
+fn stop_and_observe(
+    manager: &mut plugin_runtime::Manager,
+    app: &Entity<EditorApp>,
+    cx: &mut gpui_kit::VisualTestContext,
+    renderer: &mut images::VectorRenderer,
+    launches: &mut Vec<(u64, String, u64)>,
+    session: u64,
+) {
+    cx.update(|_, cx| app.update(cx, |app, cx| app.stop_selected_run(cx)));
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+    loop {
+        let (statuses, stops) = pump_recording(manager, app, cx, launches);
+        manager.poll();
+        super::composable_tests::publish_frame(
+            manager, renderer, app, cx, launches, statuses, stops,
+        );
+        if manager.execution(session).unwrap().snapshot().state
+            == plugin_runtime::ExecutionState::Exited
+            && manager.live["terminal"].process_count() == 1
+        {
+            break;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "native Stop did not finish cleanup"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    assert_eq!(manager.live["terminal"].process_count(), 1);
 }
 
 /// Run from the title bar produces a real terminal session for the configuration's literal command.
@@ -155,24 +466,8 @@ fn native_run_control_starts_a_real_program_and_shows_its_session(cx: &mut TestA
     assert_eq!(request.name.as_deref(), Some("验收配置"));
 
     // The provider owns its presentation and asks the editor for its ordinary terminal panel.
-    let requests = manager
-        .live
-        .get_mut("terminal")
-        .unwrap()
-        .take_editor_requests();
-    assert!(!requests.is_empty());
-    cx.update(|_, cx| {
-        app.read(cx).extensions.clone().update(cx, |owner, cx| {
-            let mut state = owner.worker.state.lock().unwrap();
-            state.editor_requests.extend(
-                requests
-                    .into_iter()
-                    .map(|request| ("terminal".into(), request)),
-            );
-            drop(state);
-            owner.poll(cx);
-        });
-    });
+    // Publication already delivers the real provider's presentation request, as production does.
+    // Observe its painted result instead of draining the same queue a second time.
     for _ in 0..40 {
         publish(&mut manager, &mut renderer, &app, cx);
         if cx.debug_bounds("plugin-ui-output").is_some() {
@@ -206,45 +501,25 @@ fn native_run_control_starts_a_real_program_and_shows_its_session(cx: &mut TestA
     cx.update(|_, cx| {
         let state = app.read(cx);
         assert_eq!(state.run_controls.sessions().len(), 1);
-        assert!(state.status.contains("定位会话"), "{}", state.status);
+        assert!(
+            state.status.contains("定位会话")
+                || state.status.contains("正在定位")
+                || state.status.contains("Located session")
+                || state.status.contains("Locating session"),
+            "{}",
+            state.status
+        );
     });
 
-    // Stop asks the session's own provider; the host never terminates a program by itself.
-    cx.update(|window, cx| {
-        let _ = window;
-        app.update(cx, |app, cx| app.stop_selected_run(cx));
-    });
-    let stop = cx.update(|_, cx| {
-        let state = app.read(cx);
-        assert!(
-            state.run_controls.is_stopping(&sessions[0].config),
-            "a stop stays pending until its provider answers"
-        );
-        state
-            .extensions
-            .read(cx)
-            .worker
-            .recorded
-            .lock()
-            .unwrap()
-            .try_iter()
-            .find_map(|work| match work {
-                Work::StopRun { session, .. } => Some(session),
-                _ => None,
-            })
-    });
-    let stopped_session = stop.expect("the stop control asked the worker to stop this session");
-    assert_eq!(stopped_session, session);
-    // The provider ends the owned program; its own private shell is not this session's program.
-    manager.stop_execution(stopped_session).unwrap();
-    for _ in 0..60 {
-        manager.poll();
-        if manager.live["terminal"].process_count() <= 1 {
-            break;
-        }
-        std::thread::sleep(std::time::Duration::from_millis(20));
-    }
-    assert_eq!(manager.live["terminal"].process_count(), 1);
+    // Drive normal Stop through the native controller and await the actual owned-program barrier.
+    stop_and_observe(
+        &mut manager,
+        &app,
+        cx,
+        &mut renderer,
+        &mut launches,
+        session,
+    );
     // Replacing a running instance is its own action rather than an effect of clicking Run again.
     assert!(cx.debug_bounds("run-rerun").is_some());
 
@@ -375,24 +650,8 @@ fn hiding_a_session_output_does_not_stop_its_program(cx: &mut TestAppContext) {
     }
     let session = session.expect("one session was started");
     // The provider asked the editor for its ordinary panel; answering is what makes it appear.
-    let requests = manager
-        .live
-        .get_mut("terminal")
-        .unwrap()
-        .take_editor_requests();
-    assert!(!requests.is_empty());
-    cx.update(|_, cx| {
-        app.read(cx).extensions.clone().update(cx, |owner, cx| {
-            let mut state = owner.worker.state.lock().unwrap();
-            state.editor_requests.extend(
-                requests
-                    .into_iter()
-                    .map(|request| ("terminal".into(), request)),
-            );
-            drop(state);
-            owner.poll(cx);
-        });
-    });
+    // Publication already delivers the real provider's presentation request, as production does.
+    // Observe its painted result instead of draining the same queue a second time.
     for _ in 0..20 {
         publish_with_launches(&mut manager, &mut renderer, &app, cx, &launches);
         if cx.debug_bounds("plugin-ui-output").is_some() {
@@ -440,28 +699,39 @@ fn hiding_a_session_output_does_not_stop_its_program(cx: &mut TestAppContext) {
             app.reveal_run_session(session, &sessions[0].config, window, cx);
         });
     });
-    for _ in 0..20 {
+    // Locate is now a public provider operation; deliver it through the worker before expecting
+    // the hidden native panel to reappear. Polling state alone never executes that queued operation.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    loop {
+        let (statuses, stops) = pump_recording(&mut manager, &app, cx, &mut launches);
         manager.poll();
-        publish_with_launches(&mut manager, &mut renderer, &app, cx, &launches);
+        super::composable_tests::publish_frame(
+            &mut manager,
+            &mut renderer,
+            &app,
+            cx,
+            &launches,
+            statuses,
+            stops,
+        );
         if cx.debug_bounds("plugin-ui-output").is_some() {
             break;
         }
-        cx.run_until_parked();
-    }
-    assert!(
-        cx.debug_bounds("plugin-ui-output").is_some(),
-        "the session's output is recoverable from the dropdown"
-    );
-    // Stopping from here still affects only this session, and only through its provider.
-    manager.stop_execution(session).unwrap();
-    for _ in 0..60 {
-        manager.poll();
-        if manager.live["terminal"].process_count() <= 1 {
-            break;
-        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the session's output is recoverable from the dropdown"
+        );
         std::thread::sleep(std::time::Duration::from_millis(20));
     }
-    assert_eq!(manager.live["terminal"].process_count(), 1);
+    // Restoring presentation does not change which owned program the native Stop addresses.
+    stop_and_observe(
+        &mut manager,
+        &app,
+        cx,
+        &mut renderer,
+        &mut launches,
+        session,
+    );
     let stored = cx.update(|_, cx| {
         editor_core::storage_path(&app.read(cx).workspace_key()).expect("host-local path")
     });
@@ -846,6 +1116,10 @@ fn a_shell_configuration_runs_its_script_through_the_named_interpreter(cx: &mut 
                 tool_paths: String::new(),
                 source: editor_core::RunConfigSource::Local,
                 from_target: None,
+                provided: None,
+                provider_build: vec![],
+                provider_prelaunch: vec![],
+                original_arguments: None,
                 provider: None,
                 breakpoints: String::new(),
                 share: false,
@@ -924,7 +1198,11 @@ fn a_restricted_workspace_refuses_to_launch_from_the_run_control(cx: &mut TestAp
     assert!(launches.is_empty(), "a restricted workspace starts nothing");
     cx.update(|_, cx| {
         let state = app.read(cx);
-        assert!(state.status.contains("受限工作区"), "{}", state.status);
+        assert!(
+            state.status.contains("受限工作区") || state.status.contains("restricted workspace"),
+            "{}",
+            state.status
+        );
         assert!(state.run_controls.sessions().is_empty());
     });
 }

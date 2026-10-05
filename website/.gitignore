@@ -1,0 +1,7 @@
+# Build products and local toolchain state for the documentation site.
+#
+# Everything except the sources is reproducible from `pnpm install` and
+# `pnpm build`, so none of it is committed.
+node_modules/
+dist/
+.astro/

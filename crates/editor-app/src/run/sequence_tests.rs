@@ -7,6 +7,7 @@ fn step(kind: StepKind, name: &str) -> PreparedStep {
         kind,
         name: name.to_owned(),
         config: "run-1".to_owned(),
+        preparation: None,
         request: plugin_runtime::RunRequest {
             program: "tool.exe".into(),
             args: Vec::new(),
@@ -112,7 +113,10 @@ fn a_step_with_no_confirmable_end_blocks_instead_of_passing() {
     let SequenceAction::Blocked { reason } = sequence.next_action(|_| false, |_| false) else {
         panic!("an unconfirmed step blocks the sequence");
     };
-    assert!(reason.contains("无法确认"), "{reason}");
+    assert!(
+        reason.contains("无法确认") || reason.contains("could not be confirmed"),
+        "{reason}"
+    );
     assert_eq!(
         sequence.next_action(|_| false, |_| false),
         SequenceAction::Blocked { reason }
@@ -139,7 +143,10 @@ fn stopping_during_preparation_blocks_the_launch_and_the_stop_is_addressed_to_it
     let SequenceAction::Blocked { reason } = sequence.next_action(|_| false, |_| false) else {
         panic!("a stopped preparation blocks the launch");
     };
-    assert!(reason.contains("已停止"), "{reason}");
+    assert!(
+        reason.contains("已停止") || reason.contains("were stopped"),
+        "{reason}"
+    );
     assert!(!sequence.is_active());
     assert_eq!(
         sequence.current_step().map(|step| step.name.as_str()),
@@ -164,15 +171,18 @@ fn a_stop_requested_while_a_step_is_only_queued_still_blocks_the_program() {
 }
 
 #[test]
-fn a_session_that_ends_without_a_result_blocks_the_sequence() {
+fn a_session_that_loses_its_result_source_blocks_the_sequence() {
     let mut sequence = RunSequence::new("run-1", &plan());
     sequence.started(0, 7, Some("1".into()));
-    // The runtime reports the session as finished while the provider has not answered: the step
-    // cannot be called successful, so the launch stops instead of continuing on an assumption.
+    // A known session whose provider can no longer report a result cannot be called successful;
+    // the launch stops instead of continuing on an assumption.
     let SequenceAction::Blocked { reason } = sequence.next_action(|_| true, |_| false) else {
-        panic!("a finished session without a result blocks the sequence");
+        panic!("an unqueryable session without a result blocks the sequence");
     };
-    assert!(reason.contains("未报告结果"), "{reason}");
+    assert!(
+        reason.contains("未报告结果") || reason.contains("without a result"),
+        "{reason}"
+    );
 }
 
 #[test]
@@ -234,5 +244,8 @@ fn a_terminated_step_blocks_even_though_nobody_asked_to_stop() {
     let SequenceAction::Blocked { reason } = sequence.next_action(|_| false, |_| false) else {
         panic!("a terminated preparation step blocks the launch");
     };
-    assert!(reason.contains("已终止"), "{reason}");
+    assert!(
+        reason.contains("已终止") || reason.contains("was terminated"),
+        "{reason}"
+    );
 }

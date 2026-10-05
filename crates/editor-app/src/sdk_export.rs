@@ -1,14 +1,51 @@
 //! Supply the editor's compiled-in contract to independent Cargo plugin projects.
 use anyhow::Context;
 use sha2::{Digest, Sha256};
-use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::{borrow::Cow, io::Write};
 
 const SDK_FILES: &[(&str, &[u8])] = &[
+    // Reader-facing English is the canonical documentation exported with the identical public SDK.
+    (
+        "DEBUG.md",
+        include_bytes!("../../../website/src/content/docs/en/sdk/debug.md"),
+    ),
+    (
+        "TARGETS.md",
+        include_bytes!("../../../website/src/content/docs/en/sdk/targets.md"),
+    ),
+    // Independent target providers use the same exact schemas as the host consumer.
+    (
+        "src/targets.rs",
+        include_bytes!("../../plugin-protocol/src/targets.rs"),
+    ),
+    (
+        "src/run-targets.json",
+        include_bytes!("../../plugin-protocol/src/run-targets.json"),
+    ),
+    // The canonical optional debug signatures are packaged with their Rust SDK accessor.
+    (
+        "src/debug.rs",
+        include_bytes!("../../plugin-protocol/src/debug.rs"),
+    ),
+    (
+        "src/debug-session.json",
+        include_bytes!("../../plugin-protocol/src/debug-session.json"),
+    ),
+    // Independent providers receive the same bounded observation contract as the host.
+    (
+        "src/execution.rs",
+        include_bytes!("../../plugin-protocol/src/execution.rs"),
+    ),
+    // Independent consumers receive the same session contract and migration rules as the host.
+    (
+        "SESSIONS.md",
+        include_bytes!("../../../website/src/content/docs/en/sdk/sessions.md"),
+    ),
     (
         "VIEWPORT.md",
-        include_bytes!("../../plugin-protocol/VIEWPORT.md"),
+        include_bytes!("../../../website/src/content/docs/en/sdk/viewport.md"),
     ),
     (
         "src/api/viewport.rs",
@@ -16,11 +53,11 @@ const SDK_FILES: &[(&str, &[u8])] = &[
     ),
     (
         "CODE_HIGHLIGHTING.md",
-        include_bytes!("../../plugin-protocol/CODE_HIGHLIGHTING.md"),
+        include_bytes!("../../../website/src/content/docs/en/sdk/code-highlighting.md"),
     ),
     (
         "NAVIGATION.md",
-        include_bytes!("../../plugin-protocol/NAVIGATION.md"),
+        include_bytes!("../../../website/src/content/docs/en/sdk/navigation.md"),
     ),
     (
         "src/api/navigation.rs",
@@ -28,15 +65,15 @@ const SDK_FILES: &[(&str, &[u8])] = &[
     ),
     (
         "MIGRATION.md",
-        include_bytes!("../../plugin-protocol/MIGRATION.md"),
+        include_bytes!("../../../website/src/content/docs/en/sdk/migration.md"),
     ),
     (
         "FAULTS.md",
-        include_bytes!("../../plugin-protocol/FAULTS.md"),
+        include_bytes!("../../../website/src/content/docs/en/sdk/faults.md"),
     ),
     (
         "SERVICES.md",
-        include_bytes!("../../plugin-protocol/SERVICES.md"),
+        include_bytes!("../../../website/src/content/docs/en/sdk/services.md"),
     ),
     (
         "src/service.rs",
@@ -52,13 +89,16 @@ const SDK_FILES: &[(&str, &[u8])] = &[
     ),
     (
         "DEPENDENCIES.md",
-        include_bytes!("../../plugin-protocol/DEPENDENCIES.md"),
+        include_bytes!("../../../website/src/content/docs/en/sdk/dependencies.md"),
     ),
     (
         "src/dependencies.rs",
         include_bytes!("../../plugin-protocol/src/dependencies.rs"),
     ),
-    ("LSP.md", include_bytes!("../../plugin-protocol/LSP.md")),
+    (
+        "LSP.md",
+        include_bytes!("../../../website/src/content/docs/en/sdk/lsp.md"),
+    ),
     (
         "src/language.rs",
         include_bytes!("../../plugin-protocol/src/language.rs"),
@@ -89,16 +129,19 @@ const SDK_FILES: &[(&str, &[u8])] = &[
     ),
     (
         "README.md",
-        include_bytes!("../../plugin-protocol/README.md"),
+        include_bytes!("../../../website/src/content/docs/en/sdk/index.md"),
     ),
-    ("UI.md", include_bytes!("../../plugin-protocol/UI.md")),
+    (
+        "UI.md",
+        include_bytes!("../../../website/src/content/docs/en/sdk/ui.md"),
+    ),
     (
         "PROCESSES.md",
-        include_bytes!("../../plugin-protocol/PROCESSES.md"),
+        include_bytes!("../../../website/src/content/docs/en/sdk/processes.md"),
     ),
     (
         "LANGUAGES.md",
-        include_bytes!("../../plugin-protocol/LANGUAGES.md"),
+        include_bytes!("../../../website/src/content/docs/en/sdk/languages.md"),
     ),
     (
         "src/lib.rs",
@@ -218,14 +261,59 @@ pub(crate) fn cargo_config() -> anyhow::Result<PathBuf> {
     Ok(config)
 }
 
+/// Derive offline Markdown from the sole reader source; SDK code and schemas stay byte-identical.
+/// The known documentation routes become package-relative links, including any trailing anchor.
+fn exported_bytes<'a>(relative: &str, bytes: &'a [u8]) -> Cow<'a, [u8]> {
+    if !relative.ends_with(".md") {
+        return Cow::Borrowed(bytes);
+    }
+    let mut document = std::str::from_utf8(bytes)
+        .expect("embedded reader documentation is UTF-8")
+        .replace("\r\n", "\n");
+    // Astro metadata is presentation-only and is omitted from the independent SDK's Markdown.
+    if document.starts_with("---\n")
+        && let Some(end) = document[4..].find("\n---\n")
+    {
+        document = document[(4 + end + 5)..]
+            .trim_start_matches('\n')
+            .to_owned();
+    }
+    for (route, file) in [
+        ("debug", "DEBUG.md"),
+        ("targets", "TARGETS.md"),
+        ("sessions", "SESSIONS.md"),
+        ("viewport", "VIEWPORT.md"),
+        ("code-highlighting", "CODE_HIGHLIGHTING.md"),
+        ("navigation", "NAVIGATION.md"),
+        ("migration", "MIGRATION.md"),
+        ("faults", "FAULTS.md"),
+        ("services", "SERVICES.md"),
+        ("dependencies", "DEPENDENCIES.md"),
+        ("lsp", "LSP.md"),
+        ("ui", "UI.md"),
+        ("processes", "PROCESSES.md"),
+        ("languages", "LANGUAGES.md"),
+        ("", "README.md"),
+    ] {
+        let route = if route.is_empty() {
+            "/en/sdk/".to_owned()
+        } else {
+            format!("/en/sdk/{route}/")
+        };
+        document = document.replace(&format!("]({route}"), &format!("]({file}"));
+    }
+    Cow::Owned(document.into_bytes())
+}
+
 /// Content-addressed caches let different editor versions build plugins independently.
 fn prepare_cache(root: &Path) -> anyhow::Result<PathBuf> {
     let mut digest = Sha256::new();
-    for (name, bytes) in SDK_FILES {
+    for (name, raw) in SDK_FILES {
+        let bytes = exported_bytes(name, raw);
         digest.update((name.len() as u64).to_le_bytes());
         digest.update(name.as_bytes());
         digest.update((bytes.len() as u64).to_le_bytes());
-        digest.update(bytes);
+        digest.update(bytes.as_ref());
     }
     let target = root.join(format!("{:x}", digest.finalize()));
     export(&target)?;
@@ -234,15 +322,16 @@ fn prepare_cache(root: &Path) -> anyhow::Result<PathBuf> {
 
 /// Preserve unchanged files for Cargo freshness and atomically repair incomplete caches.
 pub fn export(target: &Path) -> anyhow::Result<()> {
-    for (relative, bytes) in SDK_FILES {
+    for (relative, raw) in SDK_FILES {
+        let bytes = exported_bytes(relative, raw);
         let path = target.join(relative);
-        if std::fs::read(&path).is_ok_and(|existing| existing == *bytes) {
+        if std::fs::read(&path).is_ok_and(|existing| existing == bytes.as_ref()) {
             continue;
         }
         let parent = path.parent().unwrap();
         std::fs::create_dir_all(parent)?;
         let mut file = tempfile::NamedTempFile::new_in(parent)?;
-        file.write_all(bytes)?;
+        file.write_all(bytes.as_ref())?;
         file.persist(&path)?;
     }
     Ok(())
@@ -252,12 +341,59 @@ pub fn export(target: &Path) -> anyhow::Result<()> {
 mod tests {
     use super::*;
 
+    /// Windows and Unix checkouts export identical plain Markdown with no Astro metadata.
+    #[test]
+    fn reader_export_handles_both_checkout_newlines() {
+        let document =
+            "---\ntitle: Protocol\n---\n\n# Public protocol\n[Services](/en/sdk/services/)\n";
+        let crlf = document.replace('\n', "\r\n");
+        assert_eq!(
+            exported_bytes("README.md", document.as_bytes()),
+            exported_bytes("README.md", crlf.as_bytes())
+        );
+        assert!(exported_bytes("README.md", crlf.as_bytes()).starts_with(b"# Public protocol\n"));
+    }
+
+    /// Exported Markdown must be navigable from the SDK directory without a running website.
+    #[test]
+    fn exported_reader_documents_resolve_all_local_links() {
+        let root = tempfile::tempdir().unwrap();
+        export(root.path()).unwrap();
+        for (relative, _) in SDK_FILES.iter().filter(|(name, _)| name.ends_with(".md")) {
+            let document = std::fs::read_to_string(root.path().join(relative)).unwrap();
+            assert!(
+                !document.contains("](/en/"),
+                "{relative} still contains a site-root link"
+            );
+            for link in document
+                .split("](")
+                .skip(1)
+                .filter_map(|tail| tail.split(')').next())
+            {
+                if link.starts_with("https://")
+                    || link.starts_with("http://")
+                    || link.starts_with('#')
+                {
+                    continue;
+                }
+                let path = link.split('#').next().unwrap();
+                assert!(
+                    root.path().join(path).is_file(),
+                    "{relative} points to missing {path}"
+                );
+            }
+        }
+    }
+
     #[test]
     fn cached_contract_is_complete_reused_and_repairs_corruption() {
         let root = tempfile::tempdir().unwrap();
         let sdk = prepare_cache(root.path()).unwrap();
         for (relative, bytes) in SDK_FILES {
-            assert_eq!(std::fs::read(sdk.join(relative)).unwrap(), *bytes);
+            assert_eq!(
+                std::fs::read(sdk.join(relative)).unwrap(),
+                exported_bytes(relative, bytes).as_ref()
+            );
         }
         let manifest = sdk.join("Cargo.toml");
         let modified = manifest.metadata().unwrap().modified().unwrap();
@@ -267,7 +403,10 @@ mod tests {
         std::fs::remove_file(sdk.join("wit/plugin.wit")).unwrap();
         prepare_cache(root.path()).unwrap();
         for (relative, bytes) in SDK_FILES {
-            assert_eq!(std::fs::read(sdk.join(relative)).unwrap(), *bytes);
+            assert_eq!(
+                std::fs::read(sdk.join(relative)).unwrap(),
+                exported_bytes(relative, bytes).as_ref()
+            );
         }
     }
 }

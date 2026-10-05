@@ -11,7 +11,9 @@ mod debug_state;
 mod discovery;
 mod inspection;
 mod sessions;
-pub use debug_state::{DebugCapabilities, DebugControls, DebugSessionState, DebugStep};
+pub use debug_state::{
+    DebugCapabilities, DebugControlReason, DebugControls, DebugSessionState, DebugStep,
+};
 pub use inspection::{DebugVariable, InspectionError, PauseData, PauseScope, StackFrame};
 pub use sessions::{DebugSession, DebugSessions};
 mod shared;
@@ -32,7 +34,7 @@ pub use store::{RunStoreError, default_root, load, save, storage_path};
 mod tests;
 
 /// Current stored format. A newer file is refused instead of being read with missing fields.
-pub const RUN_CONFIG_VERSION: u32 = 1;
+pub const RUN_CONFIG_VERSION: u32 = 2;
 /// Bound on saved configurations per workspace; the menu is not an unbounded list.
 pub const MAX_RUN_CONFIGS: usize = 128;
 /// Arguments are a literal vector, bounded exactly like the execution contract they become.
@@ -53,6 +55,14 @@ const MAX_ENV_VALUE_BYTES: usize = 32 * 1024;
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "mode", rename_all = "snake_case", deny_unknown_fields)]
 pub enum RunTarget {
+    /// Portable provider binding; a successful build receipt resolves the executable for one launch.
+    Provided {
+        provider: String,
+        binding: String,
+        label: String,
+        #[serde(default)]
+        args: Vec<String>,
+    },
     Program {
         program: String,
         #[serde(default)]
@@ -71,6 +81,7 @@ impl RunTarget {
     /// The executable the execution provider is asked to start.
     pub fn executable(&self) -> &str {
         match self {
+            Self::Provided { label, .. } => label,
             Self::Program { program, .. } => program,
             Self::Script { interpreter, .. } => interpreter,
         }
@@ -80,6 +91,7 @@ impl RunTarget {
     /// Public so a caller can show or store exactly what will be passed, without re-deriving it.
     pub fn arguments(&self) -> Vec<&str> {
         match self {
+            Self::Provided { args, .. } => args.iter().map(String::as_str).collect(),
             Self::Program { args, .. } => args.iter().map(String::as_str).collect(),
             Self::Script { args, script, .. } => args
                 .iter()
@@ -247,6 +259,22 @@ impl RunStep {
 /// This is public to the crate because the project's shared file holds the same targets without the
 /// machine-specific parts of a configuration, and both files must be refused for the same reasons.
 pub(crate) fn validate_target(target: &RunTarget) -> Result<(), RunConfigError> {
+    if let RunTarget::Provided {
+        provider, binding, ..
+    } = target
+    {
+        if provider.is_empty()
+            || provider.len() > 128
+            || !provider
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_'))
+            || binding.is_empty()
+            || binding.len() > 4096
+            || serde_json::from_str::<serde_json::Value>(binding).is_err()
+        {
+            return Err(RunConfigError::ProgramTooLong);
+        }
+    }
     let executable = target.executable();
     if executable.trim().is_empty() {
         return Err(RunConfigError::EmptyProgram);
@@ -323,6 +351,12 @@ pub enum RunConfigError {
     TooManyArguments,
     DirectoryNotAbsolute,
     DirectoryTooLong,
+    /// A shared path cannot be resolved portably inside the selected project.
+    InvalidSharedPath {
+        path: String,
+    },
+    /// A hand-edited stop location must obey the same bounds as one entered in the form.
+    InvalidBreakpoint(BreakpointError),
     /// More environment entries than one launch may carry.
     TooManyEnvEntries,
     /// An entry whose name or value could not be passed to a native program.
@@ -368,6 +402,11 @@ impl std::fmt::Display for RunConfigError {
                 "Working directory must be absolute; relative paths are resolved from the workspace"
             ),
             Self::DirectoryTooLong => write!(formatter, "Working directory is too long"),
+            Self::InvalidSharedPath { path } => write!(
+                formatter,
+                "Shared path must be project-relative or use ${{workspace}}: {path}"
+            ),
+            Self::InvalidBreakpoint(error) => write!(formatter, "Invalid breakpoint: {error}"),
             Self::TooManyEnvEntries => {
                 write!(
                     formatter,
@@ -411,6 +450,9 @@ impl RunConfig {
             return Err(RunConfigError::NameTooLong);
         }
         validate_target(&self.target)?;
+        self.breakpoints
+            .validate()
+            .map_err(RunConfigError::InvalidBreakpoint)?;
         if self.build.len() > MAX_RUN_STEPS || self.prelaunch.len() > MAX_RUN_STEPS {
             return Err(RunConfigError::TooManySteps);
         }
@@ -541,6 +583,8 @@ impl RunConfigSet {
     /// Save or replace one configuration, keeping its identity and the current selection.
     pub fn upsert(&mut self, configuration: RunConfig) -> Result<(), RunConfigError> {
         configuration.validate()?;
+        // The first successful write migrates an older readable document to the current format.
+        self.version = RUN_CONFIG_VERSION;
         match self
             .configurations
             .iter_mut()
@@ -621,6 +665,7 @@ impl RunConfigSet {
             let key = match configuration.target {
                 RunTarget::Program { .. } => "program",
                 RunTarget::Script { .. } => "script",
+                RunTarget::Provided { .. } => "provided",
             };
             *counts.entry(key).or_insert(0) += 1;
         }

@@ -1,0 +1,42 @@
+---
+/**
+ * Route every documentation entry in the content collection.
+ *
+ * One file covers the whole site: the collection already encodes locale, section
+ * and slug, so adding a Markdown page publishes a route without touching this
+ * component. The entry id keeps its locale prefix, which is why the locale is
+ * taken from the id rather than from a route parameter.
+ */
+import { getCollection, render } from 'astro:content';
+import BaseLayout from '../layouts/BaseLayout.astro';
+import type { Locale } from '../lib/nav';
+
+export async function getStaticPaths() {
+  const entries = await getCollection('docs');
+  return entries
+    // Draft pages record an owed translation; they must never reach a reader.
+    .filter((entry) => entry.data.draft !== true)
+    .map((entry) => ({
+      // `index` marks a directory page, so its route stops at the directory.
+      params: { slug: entry.id.replace(/\/index$/, '') },
+      props: { entry },
+    }));
+}
+
+const { entry } = Astro.props;
+const { Content } = await render(entry);
+
+const locale = entry.id.split('/')[0] as Locale;
+const currentPath = `${Astro.url.pathname}${Astro.url.pathname.endsWith('/') ? '' : '/'}`;
+---
+
+<BaseLayout
+  title={entry.data.title}
+  description={entry.data.description}
+  locale={locale}
+  alternate={entry.data.alternate}
+  currentPath={currentPath}
+>
+  <h1>{entry.data.title}</h1>
+  <Content />
+</BaseLayout>

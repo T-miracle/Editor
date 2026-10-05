@@ -15,6 +15,10 @@ use plugin_protocol::{
 };
 use serde_json::Value;
 
+mod sessions;
+pub use sessions::DebugRequest;
+pub(super) use sessions::Sessions;
+
 #[cfg(test)]
 #[path = "debug_services_tests.rs"]
 mod tests;
@@ -34,6 +38,8 @@ pub enum DebugState {
     Paused,
     /// The target is gone and the session is over.
     Exited,
+    /// The owning provider or target could no longer answer; the retained reason is visible.
+    Failed,
 }
 
 impl DebugState {
@@ -47,6 +53,7 @@ impl DebugState {
             "running" | "continued" => Some(Self::Running),
             "paused" | "stopped" | "breakpoint" => Some(Self::Paused),
             "exited" | "terminated" | "ended" => Some(Self::Exited),
+            "failed" => Some(Self::Failed),
             _ => None,
         }
     }
@@ -64,6 +71,10 @@ pub struct DebugSession {
     pub source: Option<String>,
     /// One-based line of the stop.
     pub line: Option<u32>,
+    /// Monotonic debug.session 1.1 epoch changes on continued/stopped events, even at the same line.
+    pub pause: Option<u64>,
+    /// Host publication metadata names the pinned owner; it is never an extra guest result field.
+    pub provider: Option<String>,
 }
 
 impl DebugSession {
@@ -82,6 +93,8 @@ impl DebugSession {
             session: session.to_owned(),
             state,
             reason: text(value, "reason"),
+            provider: None,
+            pause: value.get("pause").and_then(Value::as_u64),
             source: text(value, "source"),
             line: value
                 .get("line")
@@ -264,13 +277,14 @@ pub fn debug_dependency_for_test() -> Result<plugin_protocol::service::Dependenc
 /// exactly, but that check belongs where a call is resolved: a provider that cannot step is still a
 /// debug provider, and reporting it unusable would take away the abilities it does offer.
 pub(super) fn debug_contract_is_usable(declaration: &plugin_protocol::service::Contract) -> bool {
-    let version = ">=1, <2"
+    let version = ">=1.1, <2"
         .parse::<semver::VersionReq>()
         .expect("the host's own version requirement is valid");
     version.matches(&declaration.version)
-        && DEBUG_REQUIRED_METHODS
-            .iter()
-            .all(|method| declaration.methods.contains_key(*method))
+        && DEBUG_REQUIRED_METHODS.iter().all(|method| {
+            declaration.methods.get(*method)
+                == plugin_protocol::debug::declaration().methods.get(*method)
+        })
 }
 
 /// The methods every debug provider must declare, whatever else it offers.
@@ -328,7 +342,7 @@ pub(crate) fn debug_dependency() -> Result<Dependency, Failure> {
     dependency_from_declaration(
         debug_declaration(),
         &DEBUG_REQUIRED_METHODS,
-        ">=1, <2",
+        ">=1.1, <2",
         "Debug contract is incomplete",
     )
 }
@@ -355,100 +369,8 @@ pub(super) fn debug_abilities(declaration: &plugin_protocol::service::Contract) 
 
 /// The host's own debug declaration, as one value.
 fn debug_declaration() -> Value {
-    serde_json::from_str(
-        r#"{"version":"1.0.0","methods":{
-            "start":{
-                "parameters":{"type":"record","fields":{
-                    "program":{"type":"string","max_bytes":4096},
-                    "args":{"type":"array","max_items":128,"items":{"type":"string","max_bytes":4096}},
-                    "cwd":{"type":"string","max_bytes":4096},
-                    "name":{"type":"string","max_bytes":256},
-                    "env":{"type":"array","max_items":64,"items":{"type":"record","fields":{
-                        "name":{"type":"string","max_bytes":128},
-                        "value":{"type":"string","max_bytes":32768}}}},
-                    "breakpoints":{"type":"array","max_items":512,"items":{"type":"record","fields":{
-                        "source":{"type":"string","max_bytes":4096},
-                        "line":{"type":"integer","min":1,"max":2147483647}}}},
-                    "stop_on_entry":{"type":"boolean"}},
-                    "optional":["cwd","name","env","breakpoints","stop_on_entry"]},
-                "result":{"type":"record","fields":{
-                    "session":{"type":"string","max_bytes":128},
-                    "state":{"type":"string","max_bytes":32}}},
-                "permissions":["process.exec","ui.panels"]},
-            "set_breakpoints":{
-                "parameters":{"type":"record","fields":{
-                    "session":{"type":"string","max_bytes":128},
-                    "breakpoints":{"type":"array","max_items":512,"items":{"type":"record","fields":{
-                        "source":{"type":"string","max_bytes":4096},
-                        "line":{"type":"integer","min":1,"max":2147483647}}}}}},
-                "result":{"type":"record","fields":{
-                    "breakpoints":{"type":"array","max_items":512,"items":{"type":"record","fields":{
-                        "source":{"type":"string","max_bytes":4096},
-                        "line":{"type":"integer","min":1,"max":2147483647},
-                        "verified":{"type":"boolean"}}}}}},
-                "permissions":["process.exec"]},
-            "resume":{
-                "parameters":{"type":"record","fields":{
-                    "session":{"type":"string","max_bytes":128}}},
-                "result":{"type":"record","fields":{
-                    "session":{"type":"string","max_bytes":128},
-                    "state":{"type":"string","max_bytes":32}}},
-                "permissions":["process.exec"]},
-            "pause":{
-                "parameters":{"type":"record","fields":{
-                    "session":{"type":"string","max_bytes":128}}},
-                "result":{"type":"record","fields":{
-                    "session":{"type":"string","max_bytes":128},
-                    "state":{"type":"string","max_bytes":32}}},
-                "permissions":["process.exec"]},
-            "step":{
-                "parameters":{"type":"record","fields":{
-                    "session":{"type":"string","max_bytes":128},
-                    "kind":{"type":"string","max_bytes":32}}},
-                "result":{"type":"record","fields":{
-                    "session":{"type":"string","max_bytes":128},
-                    "state":{"type":"string","max_bytes":32}}},
-                "permissions":["process.exec"]},
-            "frames":{
-                "parameters":{"type":"record","fields":{
-                    "session":{"type":"string","max_bytes":128}}},
-                "result":{"type":"record","fields":{
-                    "frames":{"type":"array","max_items":256,"items":{"type":"record","fields":{
-                        "id":{"type":"integer","min":0,"max":2147483647},
-                        "name":{"type":"string","max_bytes":512},
-                        "source":{"type":"string","max_bytes":4096},
-                        "line":{"type":"integer","min":1,"max":2147483647}}}}}},
-                "permissions":["process.exec"]},
-            "variables":{
-                "parameters":{"type":"record","fields":{
-                    "session":{"type":"string","max_bytes":128},
-                    "frame":{"type":"integer","min":0,"max":2147483647}}},
-                "result":{"type":"record","fields":{
-                    "variables":{"type":"array","max_items":512,"items":{"type":"record","fields":{
-                        "name":{"type":"string","max_bytes":512},
-                        "value":{"type":"string","max_bytes":4096}}}}}},
-                "permissions":["process.exec"]},
-            "status":{
-                "parameters":{"type":"record","fields":{
-                    "session":{"type":"string","max_bytes":128}}},
-                "result":{"type":"record","fields":{
-                    "session":{"type":"string","max_bytes":128},
-                    "state":{"type":"string","max_bytes":32},
-                    "reason":{"type":"string","max_bytes":64},
-                    "source":{"type":"string","max_bytes":4096},
-                    "line":{"type":"integer","min":1,"max":2147483647}},
-                    "optional":["reason","source","line"]},
-                "permissions":["process.exec"]},
-            "stop":{
-                "parameters":{"type":"record","fields":{
-                    "session":{"type":"string","max_bytes":128}}},
-                "result":{"type":"record","fields":{
-                    "session":{"type":"string","max_bytes":128},
-                    "state":{"type":"string","max_bytes":32}}},
-                "permissions":["process.exec"]}
-        }}"#,
-    )
-    .expect("the host's own debug declaration is valid")
+    serde_json::to_value(plugin_protocol::debug::declaration())
+        .expect("the published debug.session contract is serializable")
 }
 
 /// The timeout one debug method is allowed, or `None` for a method the host does not call.
@@ -523,6 +445,17 @@ impl Manager {
             .provides
             .get(DEBUG_CONTRACT)?;
         Some(debug_abilities(declaration))
+    }
+
+    /// Publish every live provider, so changing the start default never changes a pinned target's UI.
+    pub fn all_debug_abilities(&self) -> std::collections::BTreeMap<String, DebugAbilities> {
+        self.live
+            .keys()
+            .filter_map(|plugin| {
+                self.debug_abilities(plugin)
+                    .map(|abilities| (plugin.clone(), abilities))
+            })
+            .collect()
     }
 
     /// Whether a debug session could start here, and if not, why not.
@@ -602,61 +535,27 @@ impl Manager {
     /// `session` is the provider's own session identity. A missing or unusable provider fails before
     /// anything is sent, and an unanswered call is reported instead of being retried blindly.
     pub fn debug_call(&mut self, method: &str, arguments: Value) -> anyhow::Result<DebugAnswer> {
-        let dependency = debug_dependency().map_err(start_failure)?;
-        let timeout = debug_timeout_ms(method)
-            .ok_or_else(|| anyhow::anyhow!("{method} is not a method this host may call"))?;
-        let scope = self.host_scope();
-        // The host is the caller, so the authority a provider may exercise is the host's own set and
-        // never a plugin's.
-        let caller = host_caller(&scope);
-        self.refresh_services();
-        let reference = self
-            .plugin_services
-            .lock()
-            .unwrap()
-            .resolve(&caller, DEBUG_CONTRACT, &dependency)
-            .map_err(start_failure)?;
-        let expected = reference.provider.caller.plugin.clone();
-        let completion = Completion::new(timeout);
-        let call = host_method_call(
-            &caller,
-            reference,
-            method,
-            arguments,
-            &dependency,
-            completion.clone(),
-            self.host_alive.clone(),
-        )
-        .map_err(start_failure)?;
-        self.plugin_services
-            .lock()
-            .unwrap()
-            .enqueue(call)
-            .map_err(start_failure)?;
-        self.poll_request(&completion);
-        // An unanswered call is reported rather than retried: a provider that cannot answer promptly
-        // has not answered, and the host does not act as if it had.
-        let value = match completion.status() {
-            plugin_protocol::api::RequestUpdate::Completed { result } => {
-                result.map_err(start_failure)?
+        let request = self.begin_debug_call(method, arguments)?;
+        // Compatibility convenience for non-UI callers. The actor uses the nonblocking request
+        // directly; this wait honors its real method deadline and never substitutes a 500 ms result.
+        loop {
+            match request.status() {
+                plugin_protocol::api::RequestUpdate::Completed { result } => {
+                    let result = result.map_err(start_failure)?;
+                    return Ok(DebugAnswer {
+                        session: request.session().to_owned(),
+                        result,
+                    });
+                }
+                plugin_protocol::api::RequestUpdate::Cancelled { reason, .. } => {
+                    return Err(anyhow::anyhow!("Debug request ended: {reason:?}"));
+                }
+                _ => {
+                    self.poll();
+                    std::thread::sleep(std::time::Duration::from_millis(2));
+                }
             }
-            _ => {
-                return Err(anyhow::anyhow!(
-                    "{method} was not answered by the debug provider within its window"
-                ));
-            }
-        };
-        // The provider that answered is the one this call was routed to, which is what makes the
-        // answer attributable when several providers are installed.
-        let _ = expected;
-        Ok(DebugAnswer {
-            session: value
-                .get("session")
-                .and_then(Value::as_str)
-                .unwrap_or_default()
-                .to_owned(),
-            result: value,
-        })
+        }
     }
 
     /// Ask a debug session what it is, which is the one call whose answer is also a state.
@@ -665,21 +564,25 @@ impl Manager {
         DebugSession::from_value(&answer.result).map_err(|error| anyhow::anyhow!("{error:?}"))
     }
 
-    /// Ask a debug session for the frames of its current pause.
-    pub fn debug_frames(&mut self, session: &str) -> anyhow::Result<Vec<DebugFrame>> {
-        let answer = self.debug_call("frames", serde_json::json!({ "session": session }))?;
+    /// Ask for frames at the observed pause epoch; stale epochs fail before inspecting a new stop.
+    pub fn debug_frames(&mut self, session: &str, pause: u64) -> anyhow::Result<Vec<DebugFrame>> {
+        let answer = self.debug_call(
+            "frames",
+            serde_json::json!({ "session": session, "pause":pause }),
+        )?;
         frames_from_value(&answer.result).map_err(|error| anyhow::anyhow!("{error:?}"))
     }
 
-    /// Ask a debug session for one frame's variables.
+    /// Ask for variables of a frame from the same observed pause, even when DAP reuses its frame ID.
     pub fn debug_variables(
         &mut self,
         session: &str,
+        pause: u64,
         frame: u32,
     ) -> anyhow::Result<Vec<DebugVariable>> {
         let answer = self.debug_call(
             "variables",
-            serde_json::json!({ "session": session, "frame": frame }),
+            serde_json::json!({ "session": session, "pause":pause, "frame": frame }),
         )?;
         variables_from_value(&answer.result).map_err(|error| anyhow::anyhow!("{error:?}"))
     }

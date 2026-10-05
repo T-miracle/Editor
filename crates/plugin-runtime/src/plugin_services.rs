@@ -28,6 +28,8 @@ pub(crate) struct Reference {
     pub contract: String,
     pub dependency: Dependency,
     revision: u64,
+    /// A live session keeps its provider after the user's choice changes for future launches.
+    pinned: bool,
 }
 /// A selection revision never rolls back when a provider is removed and later selected again.
 #[derive(Default)]
@@ -43,6 +45,36 @@ pub(crate) struct Context {
     pub caller: Caller,
     pub ancestry: Vec<String>,
     pub permissions: BTreeSet<String>,
+}
+impl Context {
+    /// Each hop keeps the original owner, shrinks authority and adds the target's revocation boundary.
+    pub(crate) fn delegate(
+        &self,
+        provider: &Provider,
+        signature: &Method,
+    ) -> Result<Self, Failure> {
+        if self.ancestry.len() >= 8 || self.ancestry.contains(&provider.caller.instance) {
+            return Err(Failure::new(
+                ErrorCode::Conflict,
+                "Service call cycle or depth limit detected",
+            ));
+        }
+        if !signature.permissions.is_subset(&self.permissions)
+            || !signature
+                .permissions
+                .is_subset(&provider.caller.permissions)
+        {
+            return Err(Failure::new(
+                ErrorCode::PermissionDenied,
+                "Caller and provider must both authorize the service method",
+            ));
+        }
+        let mut next = self.clone();
+        next.permissions = signature.permissions.clone();
+        next.ancestry.push(provider.caller.instance.clone());
+        next.lifetimes.push(provider.alive.clone());
+        Ok(next)
+    }
 }
 #[derive(Clone)]
 pub(crate) struct Call {
@@ -72,10 +104,52 @@ pub(crate) struct Preferences {
 pub(crate) struct Broker {
     providers: BTreeMap<String, Provider>,
     queue: VecDeque<Call>,
+    /// Deferred callbacks are observed by the manager on its next tick, outside the guest's lock.
+    completed: VecDeque<(Call, Result<Value, Failure>)>,
     pub preferences: Preferences,
     selections: BTreeMap<(String, String), Selection>,
 }
 impl Broker {
+    /// Reply admission validates unchanged source authority, original shape and the 64 KiB bound.
+    pub(crate) fn complete_deferred(
+        &mut self,
+        call: Call,
+        result: Result<Value, Failure>,
+    ) -> Result<(), Failure> {
+        if !self.context_alive(&call.context) || call.completion.status().is_terminal() {
+            return Err(Failure::new(
+                ErrorCode::InvalidHandle,
+                "Invocation source or deadline ended",
+            ));
+        }
+        if self.completed.len() >= 128
+            || serde_json::to_vec(&result).map_or(true, |bytes| bytes.len() > 65536)
+        {
+            return Err(Failure::new(
+                ErrorCode::LimitExceeded,
+                "Deferred reply quota exceeded",
+            ));
+        }
+        if let Ok(value) = &result {
+            call.signature.result.accepts(value)?;
+        }
+        call.completion.finish(result.clone());
+        if !matches!(
+            call.completion.status(),
+            plugin_protocol::api::RequestUpdate::Completed { .. }
+        ) {
+            return Err(Failure::new(
+                ErrorCode::InvalidHandle,
+                "Invocation was cancelled before completion",
+            ));
+        }
+        self.completed.push_back((call, result));
+        Ok(())
+    }
+    /// Manager observations are delivered once, without holding a guest store under the broker lock.
+    pub(crate) fn take_completed(&mut self) -> Vec<(Call, Result<Value, Failure>)> {
+        self.completed.drain(..).collect()
+    }
     /// Every delegation hop must still be the exact active incarnation that authorized the work.
     pub fn context_alive(&self, context: &Context) -> bool {
         context
@@ -224,6 +298,40 @@ impl Broker {
                 .selections
                 .get(&(caller.scope.clone(), contract.into()))
                 .map_or(0, |selection| selection.revision),
+            pinned: false,
+        })
+    }
+    /// Resolve an existing session's exact incarnation without consulting future-launch preferences.
+    pub fn resolve_pinned(
+        &self,
+        caller: &Caller,
+        contract: &str,
+        dependency: &Dependency,
+        instance: &str,
+    ) -> Result<Reference, Failure> {
+        let provider = self
+            .providers
+            .get(instance)
+            .filter(|provider| {
+                provider.caller.scope == caller.scope
+                    && provider.alive.load(Ordering::Acquire)
+                    && provider
+                        .contracts
+                        .get(contract)
+                        .is_some_and(|shape| dependency.matches(shape))
+            })
+            .ok_or_else(|| {
+                Failure::new(
+                    ErrorCode::InvalidHandle,
+                    "Session provider exited or changed its contract",
+                )
+            })?;
+        Ok(Reference {
+            provider: provider.clone(),
+            contract: contract.into(),
+            dependency: dependency.clone(),
+            revision: 0,
+            pinned: true,
         })
     }
     /// Open references retain their provider incarnation; changed user choices cannot retarget them.
@@ -232,6 +340,15 @@ impl Broker {
         caller: &Caller,
         reference: &Reference,
     ) -> Result<(), Failure> {
+        if reference.pinned {
+            self.resolve_pinned(
+                caller,
+                &reference.contract,
+                &reference.dependency,
+                &reference.provider.caller.instance,
+            )?;
+            return Ok(());
+        }
         let current = self
             .resolve(caller, &reference.contract, &reference.dependency)
             .map_err(|_| {

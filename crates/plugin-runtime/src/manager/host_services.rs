@@ -17,7 +17,7 @@ use std::{
     collections::{BTreeMap, hash_map::DefaultHasher},
     hash::{Hash, Hasher},
     sync::{
-        Arc,
+        Arc, Mutex,
         atomic::{AtomicBool, Ordering},
     },
 };
@@ -33,9 +33,8 @@ pub const EXECUTION_CONTRACT: &str = "interactive.execute";
 /// points therefore reach the same table and the same deduplication rule, and neither has to know
 /// which provider answers.
 pub const SESSION_CONTRACT: &str = "session.host";
-/// The host's session contract version. A consumer requires a family of it, such as `^1`, so the
-pub const SESSION_CONTRACT_VERSION: &str = "1.0.0";
-/// host can answer a later compatible revision without every consumer changing.
+/// Version 2 requires the source's execution authority; older method declarations are refused.
+pub const SESSION_CONTRACT_VERSION: &str = "2.0.0";
 /// The only debug contract the host consumes directly.
 ///
 /// Debugging is a provider contract like execution, so the host never learns which debugger answers,
@@ -55,6 +54,17 @@ pub const EXECUTION_STOP_TIMEOUT_MS: u32 = 10_000;
 pub const EXECUTION_STATUS_TIMEOUT_MS: u32 = 5_000;
 /// Bound on retained host sessions for one workspace; ordinary work never approaches this.
 const MAX_HOST_EXECUTIONS: usize = 64;
+
+#[path = "host_services/lifecycle.rs"]
+mod lifecycle;
+#[path = "host_services/stop.rs"]
+mod stop;
+#[path = "host_services/subscriptions.rs"]
+mod subscriptions;
+pub use stop::{DEFAULT_STOP_GRACE_MS, StopOptions};
+#[cfg(test)]
+#[path = "host_services/regression_tests.rs"]
+mod regression_tests;
 
 /// How one provider stands with respect to the contract a caller needs.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -188,8 +198,14 @@ pub enum ExecutionState {
     Starting,
     /// The provider confirmed program creation; this is not evidence that the program has exited.
     Running,
+    /// A normal-exit request is outstanding; the program and all output remain owned.
+    Stopping,
+    /// The stop deadline expired or force was explicitly requested; actual exit is still awaited.
+    Terminating,
     /// The request was refused, timed out, or its provider retired before answering.
     Failed,
+    /// The provider observed that the owned program has ended, independently of its start request.
+    Exited,
 }
 
 impl ExecutionState {
@@ -198,8 +214,18 @@ impl ExecutionState {
         match self {
             Self::Starting => "starting",
             Self::Running => "running",
+            Self::Stopping => "stopping",
+            Self::Terminating => "terminating",
             Self::Failed => "failed",
+            Self::Exited => "exited",
         }
+    }
+    /// Active ownership includes creation and both exit-request phases until an actual final result.
+    pub fn is_active(self) -> bool {
+        matches!(
+            self,
+            Self::Starting | Self::Running | Self::Stopping | Self::Terminating
+        )
     }
 }
 
@@ -228,6 +254,16 @@ pub struct ExecutionSnapshot {
 #[derive(Clone)]
 pub struct HostExecution {
     id: u64,
+    /// The original caller and delegation chain own this execution for its entire lifetime.
+    origin: CallContext,
+    /// Only a validated observation from the pinned provider can release active-session capacity.
+    ended: Arc<AtomicBool>,
+    /// A provider that lost its session cannot keep consuming capacity through failing status polls.
+    observation_failure: Arc<Mutex<Option<ExecutionFailure>>>,
+    /// Independent revocation prevents one failed stop from killing another session of this source.
+    execution_alive: Arc<AtomicBool>,
+    /// Stop admission, deadline and force escalation never replace the observed final result.
+    stop: Arc<Mutex<Option<stop::StopState>>>,
     plugin: String,
     /// Exact provider incarnation pinned at start time; its retirement fails this session.
     provider_instance: String,
@@ -235,6 +271,8 @@ pub struct HostExecution {
     dedup_key: String,
     request: RunRequest,
     completion: Completion<Value>,
+    /// The caller's cancelled wait is separate from the receipt needed to manage its native program.
+    cancelled_wait: Arc<Mutex<Option<plugin_protocol::api::CancellationEffect>>>,
     /// Set when the pinned provider retired or was replaced after the session had started.
     provider_retired: Arc<AtomicBool>,
 }
@@ -272,7 +310,14 @@ impl HostExecution {
     }
     /// Current provider answer; a non-terminal update is an accepted, not a finished, execution.
     pub fn update(&self) -> RequestUpdate<Value> {
-        self.completion.status()
+        if let Some(effect) = *self.cancelled_wait.lock().unwrap() {
+            RequestUpdate::Cancelled {
+                reason: ErrorCode::Cancelled,
+                effect,
+            }
+        } else {
+            self.completion.status()
+        }
     }
     /// The provider incarnation this session is bound to; later selections never retarget it.
     pub fn provider_instance(&self) -> &str {
@@ -282,6 +327,17 @@ impl HostExecution {
     pub fn provider_active(&self) -> bool {
         self.provider_alive.load(Ordering::Acquire)
             && !self.provider_retired.load(Ordering::Acquire)
+            && self
+                .origin
+                .lifetimes
+                .iter()
+                .all(|alive| alive.load(Ordering::Acquire))
+    }
+    /// The trusted window can manage its workspace; a plugin can address only its own incarnation's work.
+    fn visible_to(&self, caller: &Caller) -> bool {
+        self.origin.caller.scope == caller.scope
+            && (caller.instance == host_caller(&caller.scope).instance
+                || self.origin.caller.instance == caller.instance)
     }
     /// The provider incarnation this session is pinned to, for diagnostics and host publications.
     pub fn provider_identity(&self) -> (&str, &str) {
@@ -289,11 +345,15 @@ impl HostExecution {
     }
     /// Publishable view for the run controls; derived without mutating the session.
     pub fn snapshot(&self) -> ExecutionSnapshot {
-        let (mut state, provider_session, failure) = self.lifecycle();
+        let (mut state, provider_session, mut failure) = self.lifecycle();
         // A session outlives its provider only as a visible result: the program it started is no
         // longer managed by this runtime, so it is never reported as still running.
-        if state == ExecutionState::Running && !self.provider_active() {
+        if state.is_active() && !self.provider_active() {
             state = ExecutionState::Failed;
+            failure = Some(ExecutionFailure {
+                code: ErrorCode::InvalidHandle,
+                message: "Execution owner or provider retired".into(),
+            });
         }
         ExecutionSnapshot {
             id: self.id,
@@ -307,16 +367,39 @@ impl HostExecution {
     }
     /// Provider-reported lifecycle, independent of whether that provider is still present.
     fn lifecycle(&self) -> (ExecutionState, Option<String>, Option<ExecutionFailure>) {
+        if let Some(failure) = self.observation_failure.lock().unwrap().clone() {
+            let provider_session = match self.completion.status() {
+                RequestUpdate::Completed { result: Ok(value) } => provider_session_of(&value),
+                _ => None,
+            };
+            return (ExecutionState::Failed, provider_session, Some(failure));
+        }
         match self.completion.status() {
             RequestUpdate::Accepted | RequestUpdate::Progress { .. } => {
-                (ExecutionState::Starting, None, None)
+                let state = self
+                    .stop
+                    .lock()
+                    .unwrap()
+                    .as_ref()
+                    .map_or(ExecutionState::Starting, |stop| stop.phase());
+                (state, None, None)
             }
-            RequestUpdate::Completed { result: Ok(value) } => (
-                // The provider already confirmed program creation; the host adds no stronger claim.
-                ExecutionState::Running,
-                provider_session_of(&value),
-                None,
-            ),
+            RequestUpdate::Completed { result: Ok(value) } => {
+                let failure = self.observation_failure.lock().unwrap().clone();
+                let state = if failure.is_some() {
+                    ExecutionState::Failed
+                } else if self.ended.load(Ordering::Acquire) {
+                    ExecutionState::Exited
+                } else {
+                    // Creation is only an acknowledgement; a later status must confirm exit.
+                    self.stop
+                        .lock()
+                        .unwrap()
+                        .as_ref()
+                        .map_or(ExecutionState::Running, |stop| stop.phase())
+                };
+                (state, provider_session_of(&value), failure)
+            }
             RequestUpdate::Completed { result: Err(error) } => (
                 ExecutionState::Failed,
                 None,
@@ -337,15 +420,17 @@ impl HostExecution {
     }
     /// Abandon the wait without claiming that an already created program stopped.
     pub fn cancel(&self) {
-        let _ = self.completion.cancel(
-            plugin_protocol::api::CancelMode::TryTerminate,
-            ErrorCode::Cancelled,
-        );
+        let mut wait = self.cancelled_wait.lock().unwrap();
+        if wait.is_none() {
+            if let Ok(effect) = self.completion.detach_wait() {
+                *wait = Some(effect);
+            }
+        }
     }
 
     /// Whether a stop is meaningful: the provider confirmed a program and is still present.
     pub fn stoppable(&self) -> bool {
-        self.state() == ExecutionState::Running && self.provider_active()
+        self.state().is_active() && self.provider_active()
     }
 
     /// Lifecycle as recorded by the provider, ignoring whether that provider is still present.
@@ -361,6 +446,16 @@ pub(crate) struct HostSessions {
     entries: BTreeMap<u64, HostExecution>,
     /// Cleared when this runtime retires so queued starts cannot outlive their owning window.
     alive: Arc<AtomicBool>,
+    /// One outstanding observation per execution, shared by every public snapshot reader.
+    observations: BTreeMap<u64, Completion<Value>>,
+    /// Bound polling frequency independently of UI frames and plugin query frequency.
+    last_observation: Option<std::time::Instant>,
+    /// Subscription identities are never reused across source incarnations.
+    next_subscription: u64,
+    subscriptions: BTreeMap<u64, subscriptions::Subscription>,
+    /// At most 128 gateway forwards wait on real provider results without blocking the actor.
+    next_operation: u64,
+    operations: BTreeMap<u64, subscriptions::Forwarded>,
 }
 
 impl HostSessions {
@@ -369,13 +464,30 @@ impl HostSessions {
             next_id: 1,
             entries: BTreeMap::new(),
             alive,
+            observations: BTreeMap::new(),
+            last_observation: None,
+            next_subscription: 1,
+            subscriptions: Default::default(),
+            next_operation: 1,
+            operations: Default::default(),
         }
     }
     /// A session for the same literal command, if one is retained for this scope.
-    pub(crate) fn find(&self, dedup_key: &str) -> Option<HostExecution> {
+    pub(crate) fn find(&self, dedup_key: &str, caller: &Caller) -> Option<HostExecution> {
         self.entries
             .values()
-            .find(|entry| entry.dedup_key == dedup_key)
+            .find(|entry| {
+                entry.dedup_key == dedup_key
+                    && entry.origin.caller.instance == caller.instance
+                    && entry.origin.caller.scope == caller.scope
+                    && matches!(
+                        entry.snapshot().state,
+                        ExecutionState::Starting
+                            | ExecutionState::Running
+                            | ExecutionState::Stopping
+                            | ExecutionState::Terminating
+                    )
+            })
             .cloned()
     }
     pub(crate) fn get(&self, id: u64) -> Option<HostExecution> {
@@ -391,35 +503,112 @@ impl HostSessions {
         request: RunRequest,
         dedup_key: String,
         completion: Completion<Value>,
-    ) -> HostExecution {
-        // Only finished entries are evicted; a program that is still active is never dropped silently.
-        while self.entries.len() >= MAX_HOST_EXECUTIONS {
-            let candidate = self
-                .entries
-                .iter()
-                .find(|(_, entry)| entry.snapshot().state != ExecutionState::Starting)
-                .map(|(id, _)| *id);
-            match candidate {
-                Some(id) => {
-                    self.entries.remove(&id);
-                }
-                None => break,
-            }
-        }
+        mut origin: CallContext,
+    ) -> Result<HostExecution, Failure> {
+        self.reserve_capacity()?;
         let id = self.next_id;
         self.next_id += 1;
+        // The provider sees this token in every resource it creates for this invocation. Only this
+        // execution's stop failure or retirement may revoke it; other work by the same caller survives.
+        let execution_alive = Arc::new(AtomicBool::new(true));
+        origin.lifetimes.push(execution_alive.clone());
         let execution = HostExecution {
             id,
+            origin,
+            ended: Arc::new(AtomicBool::new(false)),
+            observation_failure: Arc::new(Mutex::new(None)),
+            execution_alive,
+            stop: Arc::new(Mutex::new(None)),
             plugin: provider.caller.plugin.clone(),
             provider_instance: provider.caller.instance.clone(),
             provider_alive: provider.alive.clone(),
             dedup_key,
             request,
             completion,
+            cancelled_wait: Arc::new(Mutex::new(None)),
             provider_retired: Arc::new(AtomicBool::new(false)),
         };
         self.entries.insert(id, execution.clone());
-        execution
+        Ok(execution)
+    }
+    /// Reserve space before enqueueing any side effect. Start acknowledgement is never an eviction signal.
+    fn reserve_capacity(&mut self) -> Result<(), Failure> {
+        while self.entries.len() >= MAX_HOST_EXECUTIONS {
+            let candidate = self
+                .entries
+                .iter()
+                .find(|(_, entry)| {
+                    matches!(
+                        entry.snapshot().state,
+                        ExecutionState::Failed | ExecutionState::Exited
+                    )
+                })
+                .map(|(id, _)| *id);
+            match candidate {
+                Some(id) => {
+                    self.entries.remove(&id);
+                    self.observations.remove(&id);
+                }
+                None => {
+                    return Err(Failure::new(
+                        ErrorCode::LimitExceeded,
+                        "Execution session capacity reached",
+                    ));
+                }
+            }
+        }
+        Ok(())
+    }
+    /// Apply status only to the session owned by the original caller and the pinned incarnation.
+    pub(crate) fn observe_status(&self, call: &Call, value: &Value) {
+        // A stop acknowledgement says termination was issued. Only a status observation says
+        // the program actually ended, so it is the only result that releases active capacity.
+        if call.reference.contract != EXECUTION_CONTRACT || call.method != "status" {
+            return;
+        }
+        let Some(session) = call.arguments.get("session").and_then(Value::as_str) else {
+            return;
+        };
+        if value.get("session").and_then(Value::as_str) != Some(session) {
+            return;
+        }
+        if !matches!(
+            value.get("state").and_then(Value::as_str),
+            Some("exited" | "ended" | "stopped" | "terminated")
+        ) {
+            return;
+        }
+        for entry in self.entries.values().filter(|entry| {
+            entry.provider_instance == call.reference.provider.caller.instance
+                && entry.origin.caller.instance == call.context.caller.instance
+                && entry.snapshot().provider_session.as_deref() == Some(session)
+        }) {
+            entry.ended.store(true, Ordering::Release);
+        }
+    }
+    /// A pinned provider's permanent session loss is a failure, never a successful program exit.
+    pub(crate) fn observe_error(&self, call: &Call, failure: &Failure) {
+        if call.reference.contract != EXECUTION_CONTRACT
+            || call.method != "status"
+            || failure.code != ErrorCode::InvalidHandle
+        {
+            // Transient query failures say nothing about whether the program is still running.
+            return;
+        }
+        let Some(session) = call.arguments.get("session").and_then(Value::as_str) else {
+            return;
+        };
+        for entry in self.entries.values().filter(|entry| {
+            entry.provider_instance == call.reference.provider.caller.instance
+                && entry.origin.caller.instance == call.context.caller.instance
+                && entry.snapshot().provider_session.as_deref() == Some(session)
+                && entry.snapshot().state.is_active()
+        }) {
+            *entry.observation_failure.lock().unwrap() = Some(ExecutionFailure {
+                code: failure.code,
+                message: failure.message.clone(),
+            });
+        }
     }
     /// A retired or replaced provider ends its sessions' active state without replaying any command.
     ///
@@ -438,10 +627,37 @@ impl HostSessions {
         for entry in self.entries.values() {
             entry.completion.retire();
         }
+        for observation in self.observations.values() {
+            observation.retire();
+        }
+        self.observations.clear();
+        self.subscriptions.clear();
+        for operation in self.operations.values() {
+            operation.completion.retire();
+            operation.call.completion.retire();
+        }
+        self.operations.clear();
     }
 }
 
 /// Extract a provider-reported session identity without imposing a provider-specific result shape.
+/// Configuration IDs share one active launch for each source; literal starts have a separate key space.
+fn execution_identity(
+    request: &RunRequest,
+    configuration: Option<&str>,
+) -> Result<String, Failure> {
+    match configuration {
+        Some(id) if !id.is_empty() && id.len() <= 256 && !id.chars().any(char::is_control) => {
+            Ok(format!("configuration:{id}"))
+        }
+        Some(_) => Err(Failure::new(
+            ErrorCode::InvalidRequest,
+            "Invalid configuration identity",
+        )),
+        None => Ok(request.dedup_key(None)),
+    }
+}
+
 fn provider_session_of(value: &Value) -> Option<String> {
     let object = value.as_object()?;
     for key in ["session", "id", "handle"] {
@@ -490,7 +706,7 @@ pub(crate) fn dependency_from_declaration(
 
 pub(crate) fn execution_dependency() -> Result<Dependency, Failure> {
     let declaration: Value = serde_json::from_str(
-        r#"{"version":"1.3.0","methods":{
+        r#"{"version":"2.0.0","methods":{
             "execute":{
                 "parameters":{"type":"record","fields":{
                     "program":{"type":"string","max_bytes":4096},
@@ -507,7 +723,8 @@ pub(crate) fn execution_dependency() -> Result<Dependency, Failure> {
                 "permissions":["process.exec","ui.panels"]},
             "stop":{
                 "parameters":{"type":"record","fields":{
-                    "session":{"type":"string","max_bytes":128}}},
+                    "session":{"type":"string","max_bytes":128},
+                    "mode":{"type":"string","max_bytes":16}},"optional":["mode"]},
                 "result":{"type":"record","fields":{
                     "session":{"type":"string","max_bytes":128},
                     "state":{"type":"string","max_bytes":32}}},
@@ -518,14 +735,15 @@ pub(crate) fn execution_dependency() -> Result<Dependency, Failure> {
                 "result":{"type":"record","fields":{
                     "session":{"type":"string","max_bytes":128},
                     "state":{"type":"string","max_bytes":32},
-                    "code":{"type":"integer","min":0,"max":2147483647}},
+                    "code":{"type":"integer","min":0,"max":4294967295}},
                     "optional":["code"]},
                 "permissions":["process.exec"]}}}"#,
     )
     .expect("execution contract declaration is valid JSON");
     let contract: plugin_protocol::service::Contract = serde_json::from_value(declaration)
         .map_err(|error| Failure::new(ErrorCode::OperationFailed, error.to_string()))?;
-    let methods = contract.methods;
+    let mut methods = contract.methods;
+    methods.extend(plugin_protocol::execution::observation_methods());
     if !methods.contains_key("execute")
         || !methods.contains_key("stop")
         || !methods.contains_key("status")
@@ -537,7 +755,7 @@ pub(crate) fn execution_dependency() -> Result<Dependency, Failure> {
     }
     Ok(Dependency {
         // A newer provider may add methods, but these two must keep their exact shape.
-        version: ">=1.3, <2"
+        version: "^2"
             .parse()
             .expect("execution version requirement is valid"),
         optional: false,
@@ -577,7 +795,15 @@ pub(crate) fn session_provider(
             Method {
                 parameters: serde_json::from_str(parameters).expect("session schema is valid"),
                 result: serde_json::from_str(result).expect("session schema is valid"),
-                permissions: std::collections::BTreeSet::new(),
+                // Delegation never grants authority: the caller must authorize every effect.
+                permissions: match name {
+                    "start" => ["process.exec", "ui.panels"]
+                        .into_iter()
+                        .map(str::to_owned)
+                        .collect(),
+                    "stop" => ["process.exec"].into_iter().map(str::to_owned).collect(),
+                    _ => Default::default(),
+                },
             },
         );
     };
@@ -588,10 +814,11 @@ pub(crate) fn session_provider(
             "args":{"type":"array","max_items":128,"items":{"type":"string","max_bytes":4096}},
             "cwd":{"type":"string","max_bytes":4096},
             "name":{"type":"string","max_bytes":256},
+            "configuration":{"type":"string","max_bytes":256},
             "env":{"type":"array","max_items":64,"items":{"type":"record","fields":{
                 "name":{"type":"string","max_bytes":128},
                 "value":{"type":"string","max_bytes":32768}}}}},
-            "optional":["cwd","name","env"]}"#,
+            "optional":["cwd","name","env","configuration"]}"#,
         r#"{"type":"record","fields":{
             "session":{"type":"string","max_bytes":128},
             "state":{"type":"string","max_bytes":32},
@@ -614,11 +841,15 @@ pub(crate) fn session_provider(
     );
     declare(
         "stop",
-        r#"{"type":"record","fields":{"session":{"type":"string","max_bytes":128}}}"#,
+        r#"{"type":"record","fields":{
+            "session":{"type":"string","max_bytes":128},
+            "mode":{"type":"string","max_bytes":16},
+            "grace_ms":{"type":"integer","min":1,"max":60000}},"optional":["mode","grace_ms"]}"#,
         r#"{"type":"record","fields":{
             "session":{"type":"string","max_bytes":128},
             "state":{"type":"string","max_bytes":32}}}"#,
     );
+    methods.extend(subscriptions::methods());
     crate::plugin_services::Provider {
         alive,
         caller: host_caller(scope),
@@ -646,7 +877,17 @@ pub(crate) fn start_failure(error: Failure) -> anyhow::Error {
 /// Only checks name them for now: a consumer learns them from the declaration it opens rather than
 /// from a list here, so this exists to assert that the declaration and the answer agree.
 #[cfg(test)]
-const SESSION_METHODS: [&str; 4] = ["start", "list", "status", "stop"];
+const SESSION_METHODS: [&str; 9] = [
+    "start",
+    "list",
+    "status",
+    "stop",
+    "input",
+    "locate",
+    "subscribe",
+    "next",
+    "unsubscribe",
+];
 
 /// What a consumer requires of the host's session contract.
 ///
@@ -686,7 +927,7 @@ pub(crate) fn session_dependency() -> Result<Dependency, Failure> {
 /// is refused once that incarnation is gone.
 pub(crate) fn session_answer(
     manager: &mut Manager,
-    caller_scope: &str,
+    context: &CallContext,
     method: &str,
     arguments: &Value,
 ) -> Result<Value, Failure> {
@@ -707,25 +948,51 @@ pub(crate) fn session_answer(
         manager
             .host_sessions
             .get(id)
-            .ok_or_else(|| Failure::new(ErrorCode::InvalidHandle, "Unknown session"))
+            .filter(|session| session.visible_to(&context.caller))
+            .ok_or_else(|| Failure::new(ErrorCode::InvalidHandle, "Unknown or foreign session"))
     };
     // A caller may only address the workspace it is scoped to; two workspaces never share a table.
-    if caller_scope != manager.host_scope() {
+    if context.caller.scope != manager.host_scope() {
         return Err(Failure::new(
             ErrorCode::PermissionDenied,
             "Session belongs to another workspace",
         ));
     }
+    if !context
+        .lifetimes
+        .iter()
+        .all(|alive| alive.load(Ordering::Acquire))
+    {
+        return Err(Failure::new(
+            ErrorCode::InvalidHandle,
+            "Session source has retired",
+        ));
+    }
+    // Recheck at dispatch as well as at the guest boundary, including queued calls from older declarations.
+    let required: &[&str] = match method {
+        "start" => &["process.exec", "ui.panels"],
+        "stop" => &["process.exec"],
+        _ => &[],
+    };
+    if required
+        .iter()
+        .any(|permission| !context.permissions.contains(*permission))
+    {
+        return Err(Failure::new(
+            ErrorCode::PermissionDenied,
+            "Session operation requires delegated authority",
+        ));
+    }
     match method {
         "start" => {
-            let request: RunRequest = serde_json::from_value(arguments.clone())
+            let mut launch = arguments.clone();
+            let configuration = launch.as_object_mut().unwrap().remove("configuration");
+            let configuration = configuration.as_ref().and_then(Value::as_str);
+            let request: RunRequest = serde_json::from_value(launch)
                 .map_err(|error| Failure::new(ErrorCode::InvalidRequest, error.to_string()))?;
-            request
-                .validate()
-                .map_err(|error| Failure::new(ErrorCode::InvalidRequest, error.message))?;
             // The rule the title bar follows: a launch that is already known locates its session.
-            let dedup_key = request.dedup_key(None);
-            if let Some(existing) = manager.host_sessions.find(&dedup_key) {
+            let dedup_key = execution_identity(&request, configuration)?;
+            if let Some(existing) = manager.host_sessions.find(&dedup_key, &context.caller) {
                 let snapshot = existing.snapshot();
                 return Ok(serde_json::json!({
                     "session": snapshot.id.to_string(),
@@ -747,7 +1014,7 @@ pub(crate) fn session_answer(
                 ));
             }
             let session = manager
-                .start_execution(request)
+                .start_execution_from(request, context.clone(), configuration)
                 .map_err(|error| Failure::new(ErrorCode::OperationFailed, format!("{error:#}")))?;
             let snapshot = session.snapshot();
             Ok(serde_json::json!({
@@ -760,6 +1027,7 @@ pub(crate) fn session_answer(
             let sessions = manager
                 .host_sessions
                 .iter()
+                .filter(|session| session.visible_to(&context.caller))
                 .map(|session| {
                     let snapshot = session.snapshot();
                     serde_json::json!({
@@ -777,10 +1045,20 @@ pub(crate) fn session_answer(
                 "state": snapshot.state.as_str(),
             }))
         }
+        "subscribe" => {
+            let session = session_of(manager, arguments)?;
+            manager.subscribe_execution(context, session.id())
+        }
+        "unsubscribe" => manager.unsubscribe_execution(context, arguments),
         "stop" => {
             let session = session_of(manager, arguments)?;
+            // Control options cannot change the session identity, authority or provider ownership.
+            let mut options = arguments.clone();
+            options.as_object_mut().unwrap().remove("session");
+            let options: StopOptions = serde_json::from_value(options)
+                .map_err(|error| Failure::new(ErrorCode::InvalidRequest, error.to_string()))?;
             manager
-                .stop_execution(session.id())
+                .stop_execution_with(session.id(), options)
                 .map_err(|error| Failure::new(ErrorCode::OperationFailed, format!("{error:#}")))?;
             let snapshot = session.snapshot();
             Ok(serde_json::json!({
@@ -847,7 +1125,9 @@ pub(crate) fn host_method_call(
         caller: caller.clone(),
         ancestry: Vec::new(),
         permissions: caller.permissions.clone(),
-    };
+    }
+    .delegate(&reference.provider, &signature)?;
+    signature.parameters.accepts(&arguments)?;
     Ok(Call {
         handle,
         reference,
@@ -870,15 +1150,23 @@ impl Manager {
     }
     /// Every retained host session, newest identity last; finished sessions stay locatable by key.
     pub fn executions(&self) -> Vec<HostExecution> {
-        self.host_sessions.iter().cloned().collect()
+        let caller = host_caller(&self.host_scope());
+        self.host_sessions
+            .iter()
+            .filter(|entry| entry.visible_to(&caller))
+            .cloned()
+            .collect()
     }
     /// Look up one session by host identity, including one that has already finished.
     pub fn execution(&self, id: u64) -> Option<HostExecution> {
-        self.host_sessions.get(id)
+        self.host_sessions
+            .get(id)
+            .filter(|entry| entry.visible_to(&host_caller(&self.host_scope())))
     }
     /// A retained session for the same literal command, so repeat clicks reveal instead of duplicating.
     pub fn execution_for(&self, request: &RunRequest, cwd: Option<&str>) -> Option<HostExecution> {
-        self.host_sessions.find(&request.dedup_key(cwd))
+        self.host_sessions
+            .find(&request.dedup_key(cwd), &host_caller(&self.host_scope()))
     }
     /// Begin one execution through the selected compatible provider.
     ///
@@ -886,10 +1174,48 @@ impl Manager {
     /// process exit. Provider selection is by contract and scope, so no language or tool identity
     /// enters host code, and a missing or ambiguous provider fails before anything is started.
     pub fn start_execution(&mut self, request: RunRequest) -> anyhow::Result<HostExecution> {
+        let caller = host_caller(&self.host_scope());
+        let context = CallContext {
+            lifetimes: vec![self.host_alive.clone()],
+            permissions: caller.permissions.clone(),
+            caller,
+            ancestry: Vec::new(),
+        };
+        self.start_execution_from(request, context, None)
+    }
+    /// A saved configuration owns one active launch even after its literal command is edited.
+    /// Different IDs remain independent; an ID does not grant extra source authority.
+    pub fn start_configuration_execution(
+        &mut self,
+        configuration: &str,
+        request: RunRequest,
+    ) -> anyhow::Result<HostExecution> {
+        let caller = host_caller(&self.host_scope());
+        let context = CallContext {
+            lifetimes: vec![self.host_alive.clone()],
+            permissions: caller.permissions.clone(),
+            caller,
+            ancestry: Vec::new(),
+        };
+        self.start_execution_from(request, context, Some(configuration))
+    }
+    /// Forward the source's shrinking authority and lifetime through the host gateway.
+    fn start_execution_from(
+        &mut self,
+        request: RunRequest,
+        context: CallContext,
+        configuration: Option<&str>,
+    ) -> anyhow::Result<HostExecution> {
+        let dedup_key = execution_identity(&request, configuration).map_err(start_failure)?;
+        if let Some(existing) = self.host_sessions.find(&dedup_key, &context.caller) {
+            return Ok(existing);
+        }
         request.validate().map_err(start_failure)?;
+        self.host_sessions
+            .reserve_capacity()
+            .map_err(start_failure)?;
         let dependency = execution_dependency().map_err(start_failure)?;
-        let scope = self.host_scope();
-        let caller = host_caller(&scope);
+        let caller = &context.caller;
         self.refresh_services();
         let (reference, provider) = {
             let broker = self.plugin_services.lock().unwrap();
@@ -899,81 +1225,45 @@ impl Manager {
             let provider = reference.provider.clone();
             (reference, provider)
         };
-        let completion = Completion::new(EXECUTION_START_TIMEOUT_MS);
-        let call = host_call(
-            &caller,
-            reference,
-            &request,
-            &dependency,
-            completion.clone(),
-            self.host_alive.clone(),
-        )
-        .map_err(start_failure)?;
-        let dedup_key = request.dedup_key(None);
-        if let Err(error) = self.plugin_services.lock().unwrap().enqueue(call) {
-            // A refused queue entry must not leave a session that never ran.
-            return Err(start_failure(error));
-        }
-        Ok(self
-            .host_sessions
-            .insert(provider, request, dedup_key, completion))
-    }
-
-    /// Ask the session's own provider to stop the program it started.
-    ///
-    /// The request is addressed to the pinned provider incarnation and carries the session identity
-    /// that provider returned. An acknowledgement means termination was issued, never that the
-    /// program has already exited, and the host borrows no provider-private resource handle.
-    pub fn stop_execution(&mut self, session: u64) -> anyhow::Result<()> {
+        let mut completion = Completion::new(EXECUTION_START_TIMEOUT_MS);
+        completion.lifetimes = context.lifetimes.clone();
         let execution = self
             .host_sessions
-            .get(session)
-            .ok_or_else(|| anyhow::anyhow!("Unknown execution session {session}"))?;
-        anyhow::ensure!(
-            execution.stoppable(),
-            "Execution session {session} is not running under an available provider"
-        );
-        let provider_session = execution
-            .snapshot()
-            .provider_session
-            .ok_or_else(|| anyhow::anyhow!("Provider reported no session identity to stop"))?;
-        let dependency = execution_dependency().map_err(start_failure)?;
-        let scope = self.host_scope();
-        let caller = host_caller(&scope);
-        self.refresh_services();
-        let (reference, provider) = {
-            let broker = self.plugin_services.lock().unwrap();
-            // The session is pinned to the incarnation that answered it, so a replacement provider
-            // can never be asked to stop a program it did not start.
-            let reference = broker
-                .resolve(&caller, EXECUTION_CONTRACT, &dependency)
+            .insert(
+                provider,
+                request.clone(),
+                dedup_key,
+                completion.clone(),
+                context,
+            )
+            .map_err(start_failure)?;
+        let queued = (|| {
+            let mut call = host_call(
+                &execution.origin.caller,
+                reference,
+                &request,
+                &dependency,
+                completion.clone(),
+                self.host_alive.clone(),
+            )
+            .map_err(start_failure)?;
+            call.context = execution
+                .origin
+                .delegate(&call.reference.provider, &call.signature)
                 .map_err(start_failure)?;
-            if reference.provider.caller.instance != execution.provider_instance() {
-                return Err(anyhow::anyhow!(
-                    "Execution session {session} belongs to a provider that is no longer selected"
-                ));
-            }
-            let provider = reference.provider.clone();
-            (reference, provider)
-        };
-        // Stopping waits less than a start: a provider that cannot acknowledge promptly is reported
-        // instead of leaving the controls waiting on an unreachable session.
-        let completion = Completion::new(EXECUTION_STOP_TIMEOUT_MS);
-        let call = host_method_call(
-            &caller,
-            reference,
-            "stop",
-            serde_json::json!({ "session": provider_session }),
-            &dependency,
-            completion,
-            self.host_alive.clone(),
-        )
-        .map_err(start_failure)?;
-        if let Err(error) = self.plugin_services.lock().unwrap().enqueue(call) {
-            return Err(start_failure(error));
+            call.completion.lifetimes = call.context.lifetimes.clone();
+            self.plugin_services
+                .lock()
+                .unwrap()
+                .enqueue(call)
+                .map_err(start_failure)
+        })();
+        if let Err(error) = queued {
+            // Refused admission cannot retain a live delegation token or consume activity capacity.
+            execution.execution_alive.store(false, Ordering::Release);
+            return Err(error);
         }
-        let _ = provider;
-        Ok(())
+        Ok(execution)
     }
 
     /// Poll until the given request is answered, or until this call's own bound expires.
@@ -999,33 +1289,61 @@ impl Manager {
         }
     }
 
-    /// Ask every session that still owns a program to stop it, before the runtime goes away.
+    /// Give all programs one shared normal-exit window before force and final instance cleanup.
     ///
-    /// Shutting down must not silently abandon programs, so each active session is asked through the
-    /// provider that started it, and each answer is given a short window rather than waited on
-    /// forever: a provider that cannot acknowledge promptly still must not hold up closing the
-    /// window. Nothing is retried and nothing is claimed — the request means "terminate", never "it
-    /// has exited" — so a provider that does not answer leaves its program's fate where it was.
-    ///
-    /// This covers the target a session owns. A debugger or adapter a provider started for itself is
-    /// the provider's own process and is released with the provider's instance, which shutdown stops
-    /// immediately afterwards.
+    /// Shutdown runs on the actor, while the native window awaits its acknowledgement. Programs stop
+    /// concurrently rather than each consuming a full timeout. Provider acceptance never shortens
+    /// this wait: only observed termination or revoked ownership ends it.
     pub(super) fn stop_owned_programs(&mut self) {
+        // Debuggers own their targets as a separate resource tree; disconnect before parking a scope.
+        self.stop_owned_debuggers();
         let active = self
             .host_sessions
             .iter()
-            .filter(|execution| execution.stoppable())
+            .filter(|execution| {
+                execution.origin.caller.scope == self.host_scope() && execution.stoppable()
+            })
             .map(|execution| execution.id)
             .collect::<Vec<_>>();
-        for session in active {
-            if self.stop_execution(session).is_err() {
-                continue;
+        for session in &active {
+            let _ = self.stop_execution(*session);
+        }
+        for (mode, wait_ms) in [
+            (
+                plugin_protocol::process::ExitMode::Graceful,
+                DEFAULT_STOP_GRACE_MS,
+            ),
+            (
+                plugin_protocol::process::ExitMode::Force,
+                EXECUTION_STOP_TIMEOUT_MS,
+            ),
+        ] {
+            if mode == plugin_protocol::process::ExitMode::Force {
+                for session in &active {
+                    let _ = self.stop_execution_with(
+                        *session,
+                        StopOptions {
+                            mode,
+                            ..Default::default()
+                        },
+                    );
+                }
             }
-            let deadline = std::time::Instant::now() + std::time::Duration::from_millis(200);
-            while std::time::Instant::now() < deadline {
+            let deadline =
+                std::time::Instant::now() + std::time::Duration::from_millis(wait_ms.into());
+            while active.iter().any(|id| {
+                self.execution(*id)
+                    .is_some_and(|entry| entry.state().is_active())
+            }) && std::time::Instant::now() < deadline
+            {
                 self.poll();
                 std::thread::sleep(std::time::Duration::from_millis(2));
             }
+        }
+        // A silent provider cannot defer window shutdown indefinitely. Native instance teardown
+        // below releases all remaining jobs; revocation prevents a delayed start from escaping it.
+        for session in active.into_iter().filter_map(|id| self.execution(id)) {
+            session.execution_alive.store(false, Ordering::Release);
         }
     }
 
@@ -1090,8 +1408,7 @@ impl Manager {
     /// derived from elapsed time or from output the host happens to have seen.
     pub fn query_execution(&mut self, session: u64) -> anyhow::Result<Completion<Value>> {
         let execution = self
-            .host_sessions
-            .get(session)
+            .execution(session)
             .ok_or_else(|| anyhow::anyhow!("Unknown execution session {session}"))?;
         anyhow::ensure!(
             execution.provider_active(),
@@ -1102,24 +1419,24 @@ impl Manager {
             .provider_session
             .ok_or_else(|| anyhow::anyhow!("Provider reported no session identity to query"))?;
         let dependency = execution_dependency().map_err(start_failure)?;
-        let scope = self.host_scope();
-        let caller = host_caller(&scope);
+        let caller = &execution.origin.caller;
         self.refresh_services();
         let reference = {
             let broker = self.plugin_services.lock().unwrap();
             let reference = broker
-                .resolve(&caller, EXECUTION_CONTRACT, &dependency)
+                .resolve_pinned(
+                    caller,
+                    EXECUTION_CONTRACT,
+                    &dependency,
+                    execution.provider_instance(),
+                )
                 .map_err(start_failure)?;
-            if reference.provider.caller.instance != execution.provider_instance() {
-                return Err(anyhow::anyhow!(
-                    "Execution session {session} belongs to a provider that is no longer selected"
-                ));
-            }
             reference
         };
-        let completion = Completion::new(EXECUTION_STATUS_TIMEOUT_MS);
-        let call = host_method_call(
-            &caller,
+        let mut completion = Completion::new(EXECUTION_STATUS_TIMEOUT_MS);
+        completion.lifetimes = execution.origin.lifetimes.clone();
+        let mut call = host_method_call(
+            caller,
             reference,
             "status",
             serde_json::json!({ "session": provider_session }),
@@ -1128,6 +1445,11 @@ impl Manager {
             self.host_alive.clone(),
         )
         .map_err(start_failure)?;
+        call.context = execution
+            .origin
+            .delegate(&call.reference.provider, &call.signature)
+            .map_err(start_failure)?;
+        call.completion.lifetimes = call.context.lifetimes.clone();
         if let Err(error) = self.plugin_services.lock().unwrap().enqueue(call) {
             return Err(start_failure(error));
         }
@@ -1152,20 +1474,8 @@ mod tests {
             serde_json::from_str(include_str!("../../../../plugins/terminal/manifest.json"))
                 .unwrap();
         let declared = &manifest["plugin_services"]["provides"][EXECUTION_CONTRACT];
-        let version: semver::Version = serde_json::from_value(declared["version"].clone()).unwrap();
-        let execute: Method =
-            serde_json::from_value(declared["methods"]["execute"].clone()).unwrap();
-        let stop: Method = serde_json::from_value(declared["methods"]["stop"].clone()).unwrap();
-        let status: Method = serde_json::from_value(declared["methods"]["status"].clone()).unwrap();
-        let contract = plugin_protocol::service::Contract {
-            version,
-            // Every method the host requires is declared here; a missing one is the drift under test.
-            methods: BTreeMap::from([
-                ("execute".to_owned(), execute),
-                ("stop".to_owned(), stop),
-                ("status".to_owned(), status),
-            ]),
-        };
+        let contract: plugin_protocol::service::Contract =
+            serde_json::from_value(declared.clone()).unwrap();
         let dependency = execution_dependency().unwrap();
         assert!(
             dependency.matches(&contract),
@@ -1241,9 +1551,22 @@ mod tests {
             .get(SESSION_CONTRACT)
             .expect("the host offers the session contract");
         assert_eq!(contract.version.to_string(), SESSION_CONTRACT_VERSION);
-        // Exactly the operations the ticket names, each with a declared shape.
+        // Launch/control and bounded observation use one source-owned public contract.
         let names = contract.methods.keys().cloned().collect::<Vec<_>>();
-        assert_eq!(names, ["list", "start", "status", "stop"]);
+        assert_eq!(
+            names,
+            [
+                "input",
+                "list",
+                "locate",
+                "next",
+                "start",
+                "status",
+                "stop",
+                "subscribe",
+                "unsubscribe"
+            ]
+        );
         for method in contract.methods.values() {
             // A declared shape is what a consumer's dependency is matched against, so an empty one
             // would let a consumer require nothing and still be told it matches.
@@ -1286,11 +1609,17 @@ mod tests {
         )
         .unwrap();
         let scope = manager.host_scope().to_owned();
+        let context = CallContext {
+            caller: host_caller(&scope),
+            permissions: host_caller(&scope).permissions,
+            lifetimes: vec![manager.host_alive.clone()],
+            ancestry: vec![],
+        };
         // Nothing can serve this launch, so it is refused instead of leaving a failed session that
         // the title bar would then offer to stop.
         let refused = session_answer(
             &mut manager,
-            &scope,
+            &context,
             "start",
             &serde_json::json!({"program":"tool.exe","args":[]}),
         )
@@ -1303,7 +1632,7 @@ mod tests {
         // An unknown identity is refused rather than answered with whatever else is there.
         let unknown = session_answer(
             &mut manager,
-            &scope,
+            &context,
             "status",
             &serde_json::json!({"session": "9999"}),
         )
@@ -1311,13 +1640,16 @@ mod tests {
         assert_eq!(unknown.code, ErrorCode::InvalidHandle);
         // A missing identity is a malformed request, not an unknown one.
         let missing =
-            session_answer(&mut manager, &scope, "stop", &serde_json::json!({})).unwrap_err();
+            session_answer(&mut manager, &context, "stop", &serde_json::json!({})).unwrap_err();
         assert_eq!(missing.code, ErrorCode::InvalidRequest);
         // Another workspace cannot address this one's sessions, whatever it asks.
         for method in SESSION_METHODS {
             let foreign = session_answer(
                 &mut manager,
-                "C:/somewhere-else",
+                &CallContext {
+                    caller: host_caller("C:/somewhere-else"),
+                    ..context.clone()
+                },
                 method,
                 &serde_json::json!({}),
             )
@@ -1326,10 +1658,10 @@ mod tests {
         }
         // A method the host does not offer is refused rather than guessed at.
         let unsupported =
-            session_answer(&mut manager, &scope, "attach", &serde_json::json!({})).unwrap_err();
+            session_answer(&mut manager, &context, "attach", &serde_json::json!({})).unwrap_err();
         assert_eq!(unsupported.code, ErrorCode::UnsupportedOperation);
         // Listing an empty table is an answer, not an error: there is simply nothing running.
-        let empty = session_answer(&mut manager, &scope, "list", &serde_json::json!({})).unwrap();
+        let empty = session_answer(&mut manager, &context, "list", &serde_json::json!({})).unwrap();
         assert_eq!(empty["sessions"].as_array().unwrap().len(), 0);
         manager.shutdown();
     }

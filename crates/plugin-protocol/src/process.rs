@@ -85,6 +85,15 @@ pub enum Update {
     Terminated,
 }
 
+/// process 1.5 separates a supported normal-exit request from an explicit forceful tree termination.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ExitMode {
+    #[default]
+    Graceful,
+    Force,
+}
+
 /// Start is separated from handle operations so service callers cannot override executable fields.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
@@ -115,6 +124,15 @@ pub enum Operation {
         handle: crate::api::ResourceHandle,
         columns: u16,
         rows: u16,
+    },
+    /// process 1.5: request exit while retaining the handle until actual completion is observed.
+    ///
+    /// Graceful PTY exit delivers a console interrupt. Stdio has no universal exit protocol and
+    /// returns `UnsupportedOperation`. Neither mode acknowledges the program's completed exit.
+    RequestExit {
+        handle: crate::api::ResourceHandle,
+        #[serde(default)]
+        mode: ExitMode,
     },
     Terminate {
         handle: crate::api::ResourceHandle,

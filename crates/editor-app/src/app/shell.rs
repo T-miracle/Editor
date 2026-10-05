@@ -465,6 +465,12 @@ impl Render for EditorApp {
                     .child(self.render_window_controls(window, cx)),
             )
             .child(h_flex().flex_1().min_h_0().child(self.dock_area.clone()))
+            .when_some(self.render_build_output(cx), |shell, panel| {
+                shell.child(panel)
+            })
+            .when_some(self.render_debug_panel(cx), |shell, panel| {
+                shell.child(panel)
+            })
             .child(
                 div()
                     .w_full()
@@ -510,6 +516,7 @@ impl Render for EditorApp {
                 shell.child(confirm)
             })
             .child(self.render_run_menu(window, cx))
+            .child(self.render_run_form_modal(window, cx))
             .child(self.render_plugin_popup(window, cx))
             .child(self.render_explorer_menu(window, cx))
             .child(self.render_explorer_edit(cx))

@@ -71,6 +71,7 @@ use plugin_runtime::{
 use std::cell::RefCell;
 use std::collections::BTreeMap;
 pub(crate) use worker::DebugAnswerMessage;
+pub(crate) use worker::targets::TargetCatalog;
 pub use worker::{HostRunSnapshot, RunStatus, Work as HostWork};
 use worker::{LifecycleAction, OperationProgress, Work, Worker};
 
@@ -1028,10 +1029,34 @@ impl ExtensionPanel {
             .tx
             .send(crate::extensions::worker::Work::DebugCall {
                 request,
+                configuration: None,
                 method: method.to_owned(),
                 arguments,
             })
             .is_ok()
+    }
+
+    /// Debug answers published since the last read, keyed by the request that asked.
+    pub(crate) fn stage_debug_launch(
+        &self,
+        request: u64,
+        configuration: &str,
+        arguments: serde_json::Value,
+    ) -> bool {
+        self.worker
+            .tx
+            .send(worker::Work::DebugCall {
+                request,
+                configuration: Some(configuration.into()),
+                method: "start".into(),
+                arguments,
+            })
+            .is_ok()
+    }
+
+    /// Drain actual observations; the immutable host IDs associate them with their owning config.
+    pub(crate) fn take_debug_observations(&self) -> Vec<plugin_runtime::DebugSession> {
+        std::mem::take(&mut self.worker.state.lock().unwrap().debug_observations)
     }
 
     /// Debug answers published since the last read, keyed by the request that asked.
@@ -1066,6 +1091,49 @@ impl ExtensionPanel {
         })
     }
 
+    /// Translate the actual registry once; each session then reads the capabilities of its owner.
+    pub(crate) fn all_debug_capabilities(
+        &self,
+    ) -> BTreeMap<String, editor_core::DebugCapabilities> {
+        self.worker
+            .state
+            .lock()
+            .unwrap()
+            .debug_provider_abilities
+            .iter()
+            .map(|(id, abilities)| {
+                (
+                    id.clone(),
+                    editor_core::DebugCapabilities {
+                        breakpoints: abilities.breakpoints,
+                        resume_pause: abilities.resume_pause,
+                        step: abilities.step,
+                        inspect: abilities.inspect,
+                    },
+                )
+            })
+            .collect()
+    }
+
+    /// Drain each target receipt once; UI applies only the request identity belonging to its plan.
+    /// Consume actual per-request output independently from provider terminal receipts.
+    pub(crate) fn take_target_snapshots(
+        &self,
+    ) -> BTreeMap<u64, (String, usize, plugin_runtime::PreparationSnapshot)> {
+        std::mem::take(&mut self.worker.state.lock().unwrap().target_snapshots)
+    }
+    pub(crate) fn take_target_preparations(
+        &self,
+    ) -> Vec<(String, usize, u64, Result<String, String>)> {
+        std::mem::take(&mut self.worker.state.lock().unwrap().target_preparations)
+    }
+    /// Discovery is asynchronous and never implicitly creates a saved configuration.
+    pub(crate) fn take_target_discoveries(
+        &self,
+    ) -> Vec<(String, u64, Result<worker::targets::TargetCatalog, String>)> {
+        std::mem::take(&mut self.worker.state.lock().unwrap().target_discoveries)
+    }
+
     /// Published host sessions, start refusals and stop answers reported by the worker.
     ///
     /// Reading drains the answer lists, so each outcome is explained exactly once.
@@ -1084,6 +1152,10 @@ impl ExtensionPanel {
             std::mem::take(&mut state.stop_results),
             std::mem::take(&mut state.run_status),
         )
+    }
+    /// Drain provider location replies once; the window checks whether that session is still selected.
+    pub(crate) fn take_run_locations(&self) -> Vec<(u64, u64, Result<(), String>)> {
+        std::mem::take(&mut self.worker.state.lock().unwrap().locate_results)
     }
 }
 

@@ -42,6 +42,10 @@ fn with_steps(id: &str, name: &str, build: &str, prelaunch: &str) -> RunConfig {
         tool_paths: String::new(),
         source: editor_core::RunConfigSource::Local,
         from_target: None,
+        provided: None,
+        provider_build: vec![],
+        provider_prelaunch: vec![],
+        original_arguments: None,
         provider: None,
         breakpoints: String::new(),
         share: false,
@@ -357,7 +361,10 @@ fn an_unresolvable_reference_blocks_the_plan() {
     let message = controls
         .prepare("run-2", "C:/work", 16)
         .expect_err("a self reference is refused");
-    assert!(message.contains("自身"), "{message}");
+    assert!(
+        message.contains("自身") || message.contains("its own build"),
+        "{message}"
+    );
 }
 
 /// A plan that would grow past its bound is refused rather than run halfway.
@@ -658,7 +665,7 @@ fn a_loaded_shared_configuration_prepares_the_request_it_describes() {
     assert!(!bytes.contains("tools"));
 }
 
-/// A discovery corrects a target that moved, offers new ones, and marks the ones that are gone.
+/// Discovery offers a moved target for explicit repair and marks missing targets without deleting them.
 #[test]
 fn a_discovery_reports_what_changed_without_changing_the_users_work() {
     use plugin_schema::DiscoveredTarget;
@@ -712,9 +719,14 @@ fn a_discovery_reports_what_changed_without_changing_the_users_work() {
         "a target that is still offered is not marked invalid"
     );
 
-    // The same target now names another program: only the program changes.
+    // The same target now names another program: discovery proposes it and confirmation applies it.
     let report = controls.reconcile_discovered(&[target("rust-binary:my-app", "renamed-app")]);
     assert_eq!(report.repaired, vec!["我的程序".to_owned()]);
+    assert_eq!(
+        controls.configuration("run-1").unwrap().target.executable(),
+        "my-app"
+    );
+    controls.repair_target("run-1", &workspace).unwrap();
     let repaired = controls.configuration("run-1").expect("still stored");
     assert_eq!(repaired.target.executable(), "renamed-app");
     assert_eq!(
@@ -753,7 +765,9 @@ fn a_discovery_reports_what_changed_without_changing_the_users_work() {
         })
         .collect::<Vec<_>>();
     assert!(
-        labels.iter().any(|label| label.contains("目标已失效")),
+        labels
+            .iter()
+            .any(|label| label.contains("目标已失效") || label.contains("Target missing")),
         "{labels:?}"
     );
 }
@@ -927,7 +941,10 @@ fn a_debug_launch_is_refused_rather_than_replaced_by_a_plain_run() {
     let reason = controls
         .debug_blocker("run-1")
         .expect("an unconfirmed capability blocks debugging");
-    assert!(reason.contains("尚未确认"), "{reason}");
+    assert!(
+        reason.contains("尚未确认") || reason.contains("not confirmed"),
+        "{reason}"
+    );
 
     // No provider installed is reported as such, not as a reason to run plainly.
     controls.note_debug_availability(Err("没有安装提供调试能力的插件".into()));
@@ -1000,9 +1017,15 @@ fn breakpoints_round_trip_through_the_edit_form() {
 
     // A line that is not a location is refused by name rather than dropped silently.
     let error = parse_breakpoints("src/main.rs").expect_err("a location needs a line");
-    assert!(error.contains("源文件:行号"), "{error}");
+    assert!(
+        error.contains("源文件:行号") || error.contains("SOURCE:LINE"),
+        "{error}"
+    );
     let error = parse_breakpoints("src/main.rs:abc").expect_err("a line is a number");
-    assert!(error.contains("数字"), "{error}");
+    assert!(
+        error.contains("数字") || error.contains("number"),
+        "{error}"
+    );
     let error = parse_breakpoints("src/main.rs:0").expect_err("line zero is not a location");
     assert!(error.contains('1'), "{error}");
 
@@ -1047,7 +1070,8 @@ fn debug_controls_follow_the_session_state() {
             .1
             .as_ref()
             .unwrap_err()
-            .contains("单步"),
+            .split_whitespace()
+            .any(|word| word.contains("单步") || word.eq_ignore_ascii_case("stepping")),
         "an undeclared ability is reported rather than assumed"
     );
     // With the provider's own declaration, the abilities follow it.
@@ -1641,12 +1665,15 @@ fn a_plugin_lifecycle_change_names_the_sessions_it_affects() {
             reason: None,
         },
     );
+    controls.note_debug_provider_owner("run-2", "adapter");
     let impact = controls.plugin_session_impact("adapter", Some("adapter"));
     assert_eq!(impact.debugging, vec!["第二个".to_owned()]);
     assert!(impact.running.is_empty());
     let summary = impact.summary().expect("a debug session is affected");
     assert!(
-        summary.contains("调试会话") && summary.contains("第二个"),
+        (summary.contains("调试会话") || summary.contains("debug sessions"))
+            && summary.contains("第二个")
+            && summary.contains('1'),
         "{summary}"
     );
     assert!(
@@ -1656,7 +1683,12 @@ fn a_plugin_lifecycle_change_names_the_sessions_it_affects() {
             .is_empty(),
         "a plugin that is not the selected debug provider ends no debug session"
     );
-    // With no debug provider selected, no plugin is credited with the debug sessions either.
+    // Changing or removing the default does not change the owner of an existing paused target.
+    assert_eq!(
+        controls.plugin_session_impact("adapter", None).debugging,
+        vec!["第二个".to_owned()]
+    );
+    controls.note_debug_state("run-2", DebugSessionState::Exited);
     assert!(controls.plugin_session_impact("adapter", None).is_empty());
 }
 
@@ -1850,12 +1882,16 @@ fn a_control_action_is_awaited_before_the_next_one() {
     assert!(busy.start.is_err());
     for outcome in [&busy.resume, &busy.pause, &busy.stop] {
         assert!(
-            outcome.as_ref().unwrap_err().contains("正在进行"),
+            outcome.as_ref().unwrap_err().contains("正在进行")
+                || outcome.as_ref().unwrap_err().contains("in progress"),
             "{outcome:?}"
         );
     }
     for (_, outcome) in &busy.step {
-        assert!(outcome.as_ref().unwrap_err().contains("正在进行"));
+        assert!(
+            outcome.as_ref().unwrap_err().contains("正在进行")
+                || outcome.as_ref().unwrap_err().contains("in progress")
+        );
     }
     // The answer releases them.
     controls.note_debug_action_finished();
@@ -1981,7 +2017,7 @@ fn following_a_pause_is_decided_once_per_pause() {
             reason: Some("断点".into()),
         },
     );
-    controls.note_debug_session_begun();
+    controls.note_debug_session_begun("run-1");
     assert!(controls.take_debug_position_to_follow());
 
     // Stepping is the user driving: the pause it produces is not chased.
@@ -2005,7 +2041,7 @@ fn following_a_pause_is_decided_once_per_pause() {
     assert!(!controls.take_debug_position_to_follow());
     // A pause reported without the user driving to it is followed again, which is what an independent
     // breakpoint hit looks like from here.
-    controls.note_debug_session_begun();
+    controls.note_debug_session_begun("run-1");
     assert!(controls.take_debug_position_to_follow());
 }
 
@@ -2075,14 +2111,18 @@ fn breakpoint_answers_replace_what_is_known_about_a_session() {
         .upsert(config("run-1", "第一个"), &workspace)
         .unwrap();
 
+    controls.select("run-1", &workspace);
     // Nothing has been asked, so nothing is claimed either way.
     assert_eq!(controls.debug_breakpoint_verified("src/main.rs", 4), None);
 
-    controls.note_debug_breakpoints([
-        ("src/main.rs".to_owned(), 4, true),
-        ("src/main.rs".to_owned(), 9, false),
-        ("src/lib.rs".to_owned(), 12, true),
-    ]);
+    controls.note_debug_breakpoints(
+        "run-1",
+        [
+            ("src/main.rs".to_owned(), 4, true),
+            ("src/main.rs".to_owned(), 9, false),
+            ("src/lib.rs".to_owned(), 12, true),
+        ],
+    );
     assert_eq!(
         controls.debug_breakpoint_verified("src/main.rs", 4),
         Some(true)
@@ -2104,12 +2144,12 @@ fn breakpoint_answers_replace_what_is_known_about_a_session() {
 
     // A later answer describes the set it was asked about: a breakpoint removed in between is simply
     // absent, which is what makes an answer about a removed position meaningful.
-    controls.note_debug_breakpoints([("src/main.rs".to_owned(), 4, true)]);
+    controls.note_debug_breakpoints("run-1", [("src/main.rs".to_owned(), 4, true)]);
     assert_eq!(controls.debug_breakpoint_verified("src/main.rs", 9), None);
     assert_eq!(controls.debug_breakpoint_verified("src/lib.rs", 12), None);
 
     // Beginning a session forgets the previous one's answer: it described a different target.
-    controls.note_debug_session_begun();
+    controls.note_debug_session_begun("run-1");
     assert_eq!(controls.debug_breakpoint_verified("src/main.rs", 4), None);
 }
 
@@ -2326,7 +2366,7 @@ fn an_answered_stop_blocks_the_preparation() {
     assert!(
         reason
             .as_deref()
-            .is_some_and(|reason| reason.contains("停止")),
+            .is_some_and(|reason| reason.contains("停止") || reason.contains("were stopped")),
         "a stopped preparation reports why: {reason:?}"
     );
 }
@@ -2492,35 +2532,60 @@ fn configurations_round_trip_through_the_host_local_file() {
 #[test]
 fn the_unified_dropdown_groups_sessions_before_configurations() {
     let mut controls = controls();
+    // Compare identities, admission and group order independently of the selected UI language.
+    // Human-readable action/status labels must still be present; saved names remain exact.
+    let behavior = |entries: Vec<RunMenuEntry>| {
+        entries
+            .into_iter()
+            .map(|entry| match entry {
+                RunMenuEntry::Action { id, label, enabled } => {
+                    assert!(!label.trim().is_empty());
+                    RunMenuEntry::Action {
+                        id,
+                        label: String::new(),
+                        enabled,
+                    }
+                }
+                RunMenuEntry::Session { id, label } => {
+                    assert!(!label.trim().is_empty());
+                    RunMenuEntry::Session {
+                        id,
+                        label: String::new(),
+                    }
+                }
+                other => other,
+            })
+            .collect::<Vec<_>>()
+    };
     // An empty editor still explains itself instead of showing an empty menu.
     assert_eq!(
-        controls.menu_entries(),
+        behavior(controls.menu_entries()),
         vec![
             RunMenuEntry::Action {
                 id: "run-none".into(),
-                label: "(没有运行中的会话)".into(),
+                label: String::new(),
                 enabled: false
             },
             RunMenuEntry::Separator,
             RunMenuEntry::Action {
                 id: "run-empty".into(),
-                label: "(尚未保存运行配置)".into(),
+                label: String::new(),
                 enabled: false
             },
             RunMenuEntry::Separator,
             RunMenuEntry::Action {
                 id: "run-edit".into(),
-                label: "编辑所选配置…".into(),
+                label: String::new(),
                 enabled: false
             },
             RunMenuEntry::Action {
                 id: "run-new".into(),
-                label: "新建运行配置…".into(),
+                label: String::new(),
                 enabled: true
             },
             RunMenuEntry::Action {
                 id: "run-discover".into(),
-                label: "发现运行目标…".into(),
+                label: String::new(),
                 enabled: true
             },
         ]
@@ -2542,11 +2607,11 @@ fn the_unified_dropdown_groups_sessions_before_configurations() {
         plugin_runtime::ExecutionState::Running,
     )]);
     assert_eq!(
-        controls.menu_entries(),
+        behavior(controls.menu_entries()),
         vec![
             RunMenuEntry::Session {
                 id: 9,
-                label: "1 · 运行中".into()
+                label: String::new()
             },
             RunMenuEntry::Separator,
             RunMenuEntry::Configuration {
@@ -2561,17 +2626,17 @@ fn the_unified_dropdown_groups_sessions_before_configurations() {
             RunMenuEntry::Separator,
             RunMenuEntry::Action {
                 id: "run-edit".into(),
-                label: "编辑所选配置…".into(),
+                label: String::new(),
                 enabled: true
             },
             RunMenuEntry::Action {
                 id: "run-new".into(),
-                label: "新建运行配置…".into(),
+                label: String::new(),
                 enabled: true
             },
             RunMenuEntry::Action {
                 id: "run-discover".into(),
-                label: "发现运行目标…".into(),
+                label: String::new(),
                 enabled: true
             },
         ]
@@ -2592,6 +2657,10 @@ fn drafts_preserve_argument_boundaries() {
         tool_paths: String::new(),
         source: editor_core::RunConfigSource::Local,
         from_target: None,
+        provided: None,
+        provider_build: vec![],
+        provider_prelaunch: vec![],
+        original_arguments: None,
         provider: None,
         breakpoints: String::new(),
         share: false,
@@ -2654,6 +2723,10 @@ fn prepared_actions_round_trip_through_the_edited_form() {
         tool_paths: String::new(),
         source: editor_core::RunConfigSource::Local,
         from_target: None,
+        provided: None,
+        provider_build: vec![],
+        provider_prelaunch: vec![],
+        original_arguments: None,
         provider: None,
         breakpoints: String::new(),
         share: false,
@@ -2706,6 +2779,10 @@ fn a_prelaunch_step_references_a_build_without_copying_it() {
         tool_paths: String::new(),
         source: editor_core::RunConfigSource::Local,
         from_target: None,
+        provided: None,
+        provider_build: vec![],
+        provider_prelaunch: vec![],
+        original_arguments: None,
         provider: None,
         breakpoints: String::new(),
         share: false,
@@ -2776,7 +2853,9 @@ fn prepared_actions_can_be_reordered_in_place() {
     // Adding appends a template row that is not yet an action, so it can be edited in place.
     let added = add_step(text);
     assert!(added.starts_with(text));
-    assert_eq!(added.lines().last(), Some("# 名称 = 程序 | 参数"));
+    assert!(added.lines().last().is_some_and(
+        |line| line == "# 名称 = 程序 | 参数" || line == "# Name = program | arguments"
+    ));
     let parsed = parse_steps(&added).expect("a template row is not an action yet");
     assert_eq!(parsed.len(), 3, "the template is not an action");
     assert_eq!(
@@ -2816,6 +2895,10 @@ fn malformed_prepared_actions_are_refused() {
         tool_paths: String::new(),
         source: editor_core::RunConfigSource::Local,
         from_target: None,
+        provided: None,
+        provider_build: vec![],
+        provider_prelaunch: vec![],
+        original_arguments: None,
         provider: None,
         breakpoints: String::new(),
         share: false,
@@ -2856,6 +2939,10 @@ fn a_malformed_environment_line_is_refused() {
         tool_paths: String::new(),
         source: editor_core::RunConfigSource::Local,
         from_target: None,
+        provided: None,
+        provider_build: vec![],
+        provider_prelaunch: vec![],
+        original_arguments: None,
         provider: None,
         breakpoints: String::new(),
         share: false,
@@ -2863,7 +2950,10 @@ fn a_malformed_environment_line_is_refused() {
         prelaunch: String::new(),
     };
     let error = base.to_config().expect_err("a line without '=' is refused");
-    assert!(error.contains("名称=值"), "{error}");
+    assert!(
+        error.contains("名称=值") || error.contains("NAME=VALUE"),
+        "{error}"
+    );
     // A name that a native program could not accept is refused too, and by the store as well.
     let invalid = RunConfigDraft {
         environment: "BAD-NAME\n".into(),
@@ -2888,6 +2978,10 @@ fn shell_mode_names_an_interpreter_and_passes_the_script_verbatim() {
         tool_paths: String::new(),
         source: editor_core::RunConfigSource::Local,
         from_target: None,
+        provided: None,
+        provider_build: vec![],
+        provider_prelaunch: vec![],
+        original_arguments: None,
         provider: None,
         breakpoints: String::new(),
         share: false,
@@ -2933,5 +3027,43 @@ fn shell_mode_names_an_interpreter_and_passes_the_script_verbatim() {
         as_program.literal_arguments(),
         vec!["-NoProfile", "-Command"],
         "a program launch never gains the script text"
+    );
+}
+/// Binding receipts are routed by request owner, so switching to B before A's answer never marks B.
+#[test]
+fn breakpoint_receipts_belong_to_the_original_debug_session() {
+    let mut controls = controls();
+    let workspace = "C:/work";
+    for id in ["a", "b"] {
+        let mut configuration = config(id, id);
+        configuration.breakpoints.insert("src/main.rs", 8).unwrap();
+        controls.upsert(configuration, workspace).unwrap();
+        controls.begin_debug_session(id);
+    }
+    controls.select_debug_session("a");
+    let receipt = controls
+        .begin_debug_request(DebugMethod::Breakpoints, None)
+        .unwrap();
+    controls.select_debug_session("b");
+    controls
+        .apply_debug_breakpoint_answer(receipt, [("src/main.rs".into(), 8, true)])
+        .unwrap();
+    assert_eq!(controls.debug_breakpoint_verified("src/main.rs", 8), None);
+    controls.note_debug_breakpoints("b", [("src/main.rs".into(), 8, false)]);
+    controls.select_debug_session("a");
+    assert_eq!(
+        controls.debug_breakpoint_verified("src/main.rs", 8),
+        Some(true)
+    );
+    controls.note_debug_session_begun("b");
+    assert_eq!(
+        controls.debug_breakpoint_verified("src/main.rs", 8),
+        Some(true)
+    );
+    controls.end_debug_session("a");
+    assert!(
+        controls
+            .apply_debug_breakpoint_answer(receipt, [("src/main.rs".into(), 8, true)])
+            .is_err()
     );
 }

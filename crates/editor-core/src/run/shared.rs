@@ -11,7 +11,7 @@
 //! hand cannot mean something different from editing the form.
 use super::{
     MAX_RUN_CONFIGS, MAX_RUN_STEPS, RunBreakpoints, RunConfig, RunConfigError, RunConfigSet,
-    RunConfigSource, RunStep, RunTarget,
+    RunConfigSource, RunStep, RunTarget, StepTarget,
 };
 use serde::{Deserialize, Serialize};
 use std::{
@@ -29,7 +29,7 @@ const PROJECT_DIRECTORY: &str = ".editor";
 /// File holding the configurations a project shares with everyone who opens it.
 const PROJECT_FILE: &str = "runs.json";
 /// Format of the shared file; only this module decides which versions are readable.
-pub const SHARED_CONFIG_VERSION: u32 = 1;
+pub const SHARED_CONFIG_VERSION: u32 = 2;
 
 /// The project-relative directory a shared configuration uses when it names no directory.
 ///
@@ -63,7 +63,7 @@ impl std::fmt::Display for SharedStoreError {
             Self::Invalid(error) => write!(formatter, "{error}"),
             Self::UnsupportedVersion { found } => write!(
                 formatter,
-                "Shared run configuration file is version {found}, newer than this build understands"
+                "Unsupported shared run configuration version {found}"
             ),
         }
     }
@@ -122,21 +122,22 @@ pub fn project_path(workspace: &Path) -> PathBuf {
 impl SharedConfig {
     /// The portable half of one configuration.
     ///
-    /// An absolute directory is replaced by the workspace token, because a path that is meaningful on
-    /// this machine means nothing on another one; everything else that is machine-specific — the
-    /// environment, the tool directories and the chosen provider — is left out entirely.
+    /// Paths inside the project become portable. Paths outside it remain visibly invalid for sharing,
+    /// so saving fails instead of exporting private paths or silently changing the user's command.
     pub fn from_config(config: &RunConfig, workspace: &Path) -> Self {
         Self {
             id: config.id.clone(),
             name: config.name.clone(),
-            target: config.target.clone(),
+            target: map_target(&config.target, &|value| portable(value, workspace)),
             directory: config.directory.as_ref().map(|directory| {
                 relative_to_project(directory, workspace).unwrap_or_else(|| directory.clone())
             }),
-            build: config.build.clone(),
-            prelaunch: config.prelaunch.clone(),
-            // A stop location means the same thing on another machine, so it travels with the entry.
-            breakpoints: config.breakpoints.clone(),
+            build: map_steps(&config.build, &|value| portable(value, workspace)),
+            prelaunch: map_steps(&config.prelaunch, &|value| portable(value, workspace)),
+            // A source location travels only after its path passes the same project boundary.
+            breakpoints: config
+                .breakpoints
+                .map_sources(&|source| portable(source, workspace)),
         }
     }
 
@@ -146,36 +147,78 @@ impl SharedConfig {
     /// and tool directories while its portable half comes from the project.
     pub fn resolve(self, workspace: &Path, overrides: Option<&RunConfig>) -> RunConfig {
         let overrides = overrides.filter(|local| local.id == self.id);
+        let target = map_target(&self.target, &|value| resolved(value, workspace));
+        // Discovery provenance is machine-local, and belongs to a target identity rather than its args.
+        // Replacing the shared target cannot carry the previous source's missing/error blocker forward.
+        let from_target = overrides
+            .filter(|local| same_target_identity(&local.target, &target))
+            .and_then(|local| local.from_target.clone());
         RunConfig {
             id: self.id,
             name: self.name,
-            target: self.target,
+            target,
             directory: self.directory.map(|directory| {
-                if directory == WORKSPACE_TOKEN {
-                    workspace.display().to_string()
+                if directory == WORKSPACE_TOKEN
+                    || directory.starts_with(&format!("{WORKSPACE_TOKEN}/"))
+                {
+                    resolved(&directory, workspace)
                 } else {
-                    directory
+                    workspace.join(directory).display().to_string()
                 }
             }),
             env: overrides.map(|local| local.env.clone()).unwrap_or_default(),
             tool_paths: overrides
                 .map(|local| local.tool_paths.clone())
                 .unwrap_or_default(),
-            build: self.build,
-            prelaunch: self.prelaunch,
+            build: map_steps(&self.build, &|value| resolved(value, workspace)),
+            prelaunch: map_steps(&self.prelaunch, &|value| resolved(value, workspace)),
             // A project entry stays a project entry: saving it writes back to the file it came from.
             source: RunConfigSource::Project,
             // A shared entry is a definition, not a pointer at a discovered target: that link belongs
             // to the machine whose discovery offered it.
-            from_target: overrides.and_then(|local| local.from_target.clone()),
+            from_target,
             // Which provider runs a program is this machine's fact, not the project's: another
             // machine may have a different provider installed.
             provider: overrides.and_then(|local| local.provider.clone()),
             // Breakpoints are source and line, so they are the project's: someone else's program stops
             // in the same place, while the environment and tool directories stay this machine's.
-            breakpoints: self.breakpoints,
+            breakpoints: self
+                .breakpoints
+                .map_sources(&|source| resolved(source, workspace)),
             local: false,
         }
+    }
+}
+
+/// Editable arguments and display names do not change discovery identity; opaque bindings do.
+fn same_target_identity(left: &RunTarget, right: &RunTarget) -> bool {
+    match (left, right) {
+        (RunTarget::Program { program: a, .. }, RunTarget::Program { program: b, .. }) => a == b,
+        (
+            RunTarget::Script {
+                interpreter: a,
+                script: x,
+                ..
+            },
+            RunTarget::Script {
+                interpreter: b,
+                script: y,
+                ..
+            },
+        ) => a == b && x == y,
+        (
+            RunTarget::Provided {
+                provider: a,
+                binding: x,
+                ..
+            },
+            RunTarget::Provided {
+                provider: b,
+                binding: y,
+                ..
+            },
+        ) => a == b && x == y,
+        _ => false,
     }
 }
 
@@ -183,10 +226,22 @@ impl SharedSet {
     /// Read the shared file, treating a missing one as a project that shares nothing.
     pub fn from_json(bytes: &[u8]) -> Result<Self, SharedStoreError> {
         let set: Self = serde_json::from_slice(bytes).map_err(SharedStoreError::Malformed)?;
-        if set.version > SHARED_CONFIG_VERSION {
-            return Err(SharedStoreError::UnsupportedVersion { found: set.version });
+        set.validate()?;
+        Ok(set)
+    }
+
+    /// Validate a complete proposal before a caller commits either its project or local file.
+    ///
+    /// Returns the same version, bounds and field errors as parsing or saving the shared document.
+    pub fn validate(&self) -> Result<(), SharedStoreError> {
+        // Only the published v1 predecessor and current v2 format have a defined migration.
+        // Unknown older values are not a license to reinterpret or clear a project definition.
+        if !(1..=SHARED_CONFIG_VERSION).contains(&self.version) {
+            return Err(SharedStoreError::UnsupportedVersion {
+                found: self.version,
+            });
         }
-        if set.configurations.len() > MAX_RUN_CONFIGS {
+        if self.configurations.len() > MAX_RUN_CONFIGS {
             return Err(SharedStoreError::Invalid(RunConfigError::InvalidIdentity {
                 id: "too many shared configurations".to_owned(),
             }));
@@ -194,10 +249,10 @@ impl SharedSet {
         // Every entry is held to the same rules as one created in the form, so a hand-edited file
         // cannot introduce a configuration the form would have refused. The entry's own values are
         // checked here rather than a resolved copy, so what is refused is what the file says.
-        for entry in &set.configurations {
+        for entry in &self.configurations {
             validate_shared(entry).map_err(SharedStoreError::Invalid)?;
         }
-        Ok(set)
+        Ok(())
     }
 
     pub fn to_json(&self) -> Result<Vec<u8>, SharedStoreError> {
@@ -206,6 +261,8 @@ impl SharedSet {
 
     /// Replace or add one entry, keeping the file's own order for everything else.
     pub fn upsert(&mut self, entry: SharedConfig) {
+        // Preserve older readable data while writing new fields under their actual format version.
+        self.version = SHARED_CONFIG_VERSION;
         match self
             .configurations
             .iter_mut()
@@ -238,10 +295,178 @@ fn validate_shared(entry: &SharedConfig) -> Result<(), RunConfigError> {
     // A shared directory is project-relative by design, so the directory rule that belongs to a
     // resolved host-local configuration is not applied to the file; everything else is.
     super::validate_target(&entry.target)?;
+    validate_portable_target(&entry.target)?;
+    if let Some(directory) = &entry.directory {
+        validate_portable_path(directory)?;
+    }
     for step in entry.build.iter().chain(entry.prelaunch.iter()) {
-        step.validate().map_err(|error| error)?;
+        step.validate()?;
+        if let StepTarget::Action { target } = &step.target {
+            validate_portable_target(target)?;
+        }
+    }
+    entry
+        .breakpoints
+        .validate()
+        .map_err(RunConfigError::InvalidBreakpoint)?;
+    for breakpoint in entry.breakpoints.entries() {
+        validate_portable_path(&breakpoint.source)?;
     }
     Ok(())
+}
+
+/// An absolute path is portable only when it names a location inside this project.
+fn portable(value: &str, workspace: &Path) -> String {
+    if Path::new(value).is_absolute() {
+        if let Some(relative) = relative_to_project(value, workspace) {
+            return if relative == WORKSPACE_TOKEN {
+                relative
+            } else {
+                format!("{WORKSPACE_TOKEN}/{}", relative.replace('\\', "/"))
+            };
+        }
+    }
+    value.into()
+}
+
+/// Expand only the explicitly supported project token, never environment variables or Shell syntax.
+fn resolved(value: &str, workspace: &Path) -> String {
+    if value == WORKSPACE_TOKEN {
+        return workspace.display().to_string();
+    }
+    value
+        .strip_prefix(&format!("{WORKSPACE_TOKEN}/"))
+        .map(|relative| workspace.join(relative).display().to_string())
+        .unwrap_or_else(|| value.into())
+}
+
+/// Convert executable and argument path values while preserving literal argument boundaries and scripts.
+fn map_target(target: &RunTarget, map: &impl Fn(&str) -> String) -> RunTarget {
+    match target {
+        RunTarget::Provided {
+            provider,
+            binding,
+            label,
+            args,
+        } => RunTarget::Provided {
+            provider: provider.clone(),
+            binding: binding.clone(),
+            label: label.clone(),
+            args: args.iter().map(|arg| map_argument(arg, map)).collect(),
+        },
+        RunTarget::Program { program, args } => RunTarget::Program {
+            program: map(program),
+            args: args.iter().map(|arg| map_argument(arg, map)).collect(),
+        },
+        RunTarget::Script {
+            interpreter,
+            args,
+            script,
+        } => RunTarget::Script {
+            interpreter: map(interpreter),
+            args: args.iter().map(|arg| map_argument(arg, map)).collect(),
+            script: script.clone(),
+        },
+    }
+}
+
+/// An option assignment stays one argv item; only its literal value crosses the path boundary.
+fn map_argument(argument: &str, map: &impl Fn(&str) -> String) -> String {
+    match argument.split_once('=') {
+        Some((option, value)) if option.starts_with('-') => format!("{option}={}", map(value)),
+        _ => map(argument),
+    }
+}
+
+/// Prepared actions obey the same portability rules as the final program; build references keep identity.
+fn map_steps(steps: &[RunStep], map: &impl Fn(&str) -> String) -> Vec<RunStep> {
+    steps
+        .iter()
+        .map(|step| RunStep {
+            name: step.name.clone(),
+            target: match &step.target {
+                StepTarget::Action { target } => StepTarget::Action {
+                    target: map_target(target, map),
+                },
+                reference => reference.clone(),
+            },
+        })
+        .collect()
+}
+
+/// Reject machine paths, unknown variables and traversal before writing or resolving a shared definition.
+fn validate_portable_path(value: &str) -> Result<(), RunConfigError> {
+    let relative = if value == WORKSPACE_TOKEN {
+        ""
+    } else {
+        value
+            .strip_prefix(&format!("{WORKSPACE_TOKEN}/"))
+            .unwrap_or(value)
+    };
+    if value.contains('\0')
+        || relative.contains("${")
+        || relative.contains(':')
+        || relative.starts_with(['/', '\\'])
+        || relative.split(['/', '\\']).any(|part| part == "..")
+        || Path::new(relative).is_absolute()
+    {
+        return Err(RunConfigError::InvalidSharedPath { path: value.into() });
+    }
+    Ok(())
+}
+
+/// Script bodies are explicit user code; the host validates path fields without trying to parse that code.
+fn validate_portable_target(target: &RunTarget) -> Result<(), RunConfigError> {
+    if let RunTarget::Provided { binding, .. } = target {
+        // Portable bindings may contain nested provider fields, but never machine paths or secrets.
+        let value: serde_json::Value =
+            serde_json::from_str(binding).map_err(|_| RunConfigError::ProgramTooLong)?;
+        validate_portable_binding(&value)?;
+    } else {
+        validate_portable_path(target.executable())?;
+    }
+    let args = match target {
+        RunTarget::Program { args, .. }
+        | RunTarget::Script { args, .. }
+        | RunTarget::Provided { args, .. } => args,
+    };
+    for arg in args {
+        let value = match arg.split_once('=') {
+            Some((option, value)) if option.starts_with('-') => value,
+            _ => arg.as_str(),
+        };
+        // Ordinary literal options are not paths. Path values and variables must be portable.
+        if Path::new(value).is_absolute()
+            || value.contains("${")
+            || value.starts_with(['/', '\\'])
+            || value.starts_with("../")
+            || value.starts_with("..\\")
+            || value.as_bytes().get(1) == Some(&b':')
+        {
+            validate_portable_path(value)?;
+        }
+    }
+    Ok(())
+}
+
+/// The host validates only generic portable values; it does not interpret a provider's binding keys.
+fn validate_portable_binding(value: &serde_json::Value) -> Result<(), RunConfigError> {
+    match value {
+        serde_json::Value::String(text) => validate_portable_path(text),
+        serde_json::Value::Array(values) => {
+            for value in values {
+                validate_portable_binding(value)?;
+            }
+            Ok(())
+        }
+        serde_json::Value::Object(fields) => {
+            for value in fields.values() {
+                validate_portable_binding(value)?;
+            }
+            Ok(())
+        }
+        _ => Ok(()),
+    }
 }
 
 /// Read the shared configurations a project holds.
@@ -262,9 +487,7 @@ pub fn load(workspace: &Path) -> Result<SharedSet, SharedStoreError> {
 /// The project directory is created here and nowhere else: nothing writes into a project until the
 /// user has chosen to share something with it.
 pub fn save(workspace: &Path, set: &SharedSet) -> Result<(), SharedStoreError> {
-    for entry in &set.configurations {
-        validate_shared(entry).map_err(SharedStoreError::Invalid)?;
-    }
+    set.validate()?;
     let path = project_path(workspace);
     let parent = path.parent().ok_or_else(|| {
         SharedStoreError::Io(std::io::Error::new(
@@ -290,6 +513,9 @@ pub fn merge(workspace: &Path, local: &RunConfigSet, shared: &SharedSet) -> RunC
         .map(|config| (config.id.clone(), config))
         .collect::<BTreeMap<_, _>>();
     let mut set = local.clone();
+    // Project entries in the local store are overrides, not an executable fallback. Deleted or
+    // unreadable project definitions must disappear instead of reviving an old cached command.
+    set.configurations.retain(|config| config.local);
     for entry in &shared.configurations {
         let resolved = entry
             .clone()
@@ -307,6 +533,13 @@ pub fn merge(workspace: &Path, local: &RunConfigSet, shared: &SharedSet) -> RunC
                 set.configurations.push(resolved);
             }
         }
+    }
+    if set
+        .selected
+        .as_deref()
+        .is_some_and(|id| set.find(id).is_none())
+    {
+        set.selected = None;
     }
     set
 }

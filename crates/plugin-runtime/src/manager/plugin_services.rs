@@ -133,6 +133,12 @@ impl Manager {
     /// No service callback can recursively invoke another store; callbacks enqueue their next hop.
     pub(super) fn route_services(&mut self) {
         self.refresh_services();
+        for (call, result) in self.plugin_services.lock().unwrap().take_completed() {
+            match result {
+                Ok(value) => self.host_sessions.observe_status(&call, &value),
+                Err(error) => self.host_sessions.observe_error(&call, &error),
+            }
+        }
         let calls = self.plugin_services.lock().unwrap().take_batch();
         for call in calls {
             self.refresh_services();
@@ -152,6 +158,9 @@ impl Manager {
                 continue;
             }
             let result = self.dispatch_service(&call).and_then(|value| {
+                let Some(value) = value else {
+                    return Ok(None);
+                };
                 if serde_json::to_vec(&value).map_or(true, |bytes| bytes.len() > 65536) {
                     return Err(api::Failure::new(
                         api::ErrorCode::LimitExceeded,
@@ -159,12 +168,18 @@ impl Manager {
                     ));
                 }
                 call.signature.result.accepts(&value)?;
-                Ok(value)
+                Ok(Some(value))
             });
-            call.completion.finish(result);
+            match &result {
+                Ok(Some(value)) => self.host_sessions.observe_status(&call, value),
+                Ok(None) => continue,
+                Err(failure) => self.host_sessions.observe_error(&call, failure),
+            }
+            call.completion
+                .finish(result.map(|value| value.expect("deferred calls continue above")));
         }
     }
-    fn dispatch_service(&mut self, call: &Call) -> Result<serde_json::Value, api::Failure> {
+    fn dispatch_service(&mut self, call: &Call) -> Result<Option<serde_json::Value>, api::Failure> {
         // The host is a participant like any provider, so a call addressed to its session contract is
         // answered here instead of being searched for among the running instances. The identity is
         // compared exactly, so a plugin cannot reach the host's session surface by naming it.
@@ -178,12 +193,17 @@ impl Manager {
                     "Service provider exited",
                 ));
             }
+            if matches!(call.method.as_str(), "input" | "locate" | "next") {
+                self.forward_session_operation(call)?;
+                return Ok(None);
+            }
             return super::host_services::session_answer(
                 self,
-                &call.context.caller.scope,
+                &call.context,
                 &call.method,
                 &call.arguments,
-            );
+            )
+            .map(Some);
         }
         let provider = self
             .live

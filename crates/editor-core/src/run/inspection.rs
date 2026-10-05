@@ -141,6 +141,16 @@ impl PauseData {
         &self.frames
     }
 
+    /// A valid empty stack is still an answered request; the native actor must not poll it forever.
+    pub fn frames_described(&self) -> bool {
+        self.described
+    }
+
+    /// Distinguish zero locals from a scope the provider has not answered yet.
+    pub fn variables_described(&self, frame: u32) -> bool {
+        self.variables.contains_key(&frame)
+    }
+
     /// The frame whose variables are shown, if one is selected.
     pub fn selected_frame(&self) -> Option<u32> {
         self.selected

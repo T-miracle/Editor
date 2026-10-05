@@ -108,6 +108,8 @@ pub(crate) struct PopupMenu {
     selected: Option<usize>,
     closed: bool,
     scroll: ScrollHandle,
+    /// The caller chooses a local layout width; actual rendering still clamps it to the viewport.
+    width: f32,
     sink: Rc<dyn Fn(Action, &mut Window, &mut App)>,
 }
 impl PopupMenu {
@@ -132,6 +134,7 @@ impl PopupMenu {
             selected,
             closed: false,
             scroll: ScrollHandle::new(),
+            width: 230.,
             sink: Rc::new(sink),
         }
     }
@@ -144,7 +147,15 @@ impl PopupMenu {
             focus.focus(window, cx);
         }
         (self.sink)(action, window, cx);
+        cx.emit(gpui_kit::DismissEvent);
         cx.notify();
+    }
+    /// Configure width without duplicating popup focus, scroll or button behavior in callers.
+    pub fn width(mut self, width: f32) -> Self {
+        if width.is_finite() && width > 0. {
+            self.width = width;
+        }
+        self
     }
     fn key(&mut self, key: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
         cx.stop_propagation();
@@ -193,7 +204,7 @@ impl Render for PopupMenu {
             return div().into_any_element();
         }
         let viewport = window.viewport_size();
-        let width = 230_f32.min((viewport.width / px(1.) - 16.).max(0.));
+        let width = self.width.min((viewport.width / px(1.) - 16.).max(0.));
         let height = (self.items.len() as f32 * 29. + 2. * self.style.padding_y)
             .min((viewport.height / px(1.) - 16.).max(0.));
         let left = self
@@ -265,3 +276,11 @@ impl Render for PopupMenu {
         .into_any_element()
     }
 }
+
+/// The shell can retain focus and dismiss a superseded popup by its own entity identity.
+impl gpui_kit::Focusable for PopupMenu {
+    fn focus_handle(&self, _cx: &App) -> FocusHandle {
+        self.focus.clone()
+    }
+}
+impl gpui_kit::EventEmitter<gpui_kit::DismissEvent> for PopupMenu {}

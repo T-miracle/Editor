@@ -319,61 +319,108 @@ fn language_for_path_in_catalog(
 /// Each declaration is applied independently, so a provider that offers nothing — or offers
 /// something unusable — cannot stop another provider from offering its own targets. The candidates
 /// are gathered here and handed on; nothing in this module decides what a candidate means.
-pub fn discover_run_targets(workspace: &Path) -> Vec<DiscoveredTarget> {
-    let providers = CATALOG
-        .read()
-        .unwrap()
+pub fn discover_run_targets(workspace: &Path) -> Result<Vec<DiscoveredTarget>, String> {
+    let catalog = CATALOG.read().unwrap().clone();
+    let providers = catalog
         .plugins
-        .values()
-        .flat_map(|contribution| contribution.run_targets.iter().cloned())
+        .iter()
+        .flat_map(|(owner, contribution)| {
+            contribution
+                .run_targets
+                .iter()
+                .map(move |provider| (owner.clone(), provider.clone()))
+        })
         .collect::<Vec<_>>();
     if providers.is_empty() {
-        return Vec::new();
+        return Ok(Vec::new());
     }
-    // The caller lists the files once, so every provider reads the same view of the project and a
-    // wildcard pattern cannot reach a file the workspace never offered.
-    let files = workspace_files(workspace);
+    let root = workspace
+        .canonicalize()
+        .map_err(|error| error.to_string())?;
+    let files = workspace_files(&root)?;
     let mut targets = Vec::new();
-    for provider in providers {
-        targets.extend(provider.discover(&files, |path| {
-            let resolved = workspace.join(path);
-            // A declaration may only read regular files inside the workspace it was given.
-            (resolved.starts_with(workspace) && resolved.is_file())
-                .then(|| std::fs::read_to_string(resolved).ok())
-                .flatten()
-        }));
+    for (owner, provider) in providers {
+        let candidates = provider.discover(&files, |path| {
+            let resolved = root.join(path).canonicalize().ok()?;
+            // Recheck each selected input against the canonical root, including changed symlinks.
+            if !resolved.starts_with(&root)
+                || !resolved.is_file()
+                || std::fs::metadata(&resolved).ok()?.len() > 256 * 1024
+            {
+                return None;
+            }
+            std::fs::read_to_string(resolved).ok()
+        });
+        for mut target in candidates {
+            target.id = format!(
+                "{}:{}:{}:{}:{}",
+                owner.len(),
+                owner,
+                target.found_in.len(),
+                target.found_in,
+                target.id
+            );
+            target.provider = owner.clone();
+            targets.push(target);
+            if targets.len() > 128 {
+                return Err("Discovery exceeds 128 candidates".into());
+            }
+        }
     }
-    targets
+    Ok(targets)
 }
 
-/// Workspace-relative file names, bounded so a discovery walk stays a bounded read.
-fn workspace_files(workspace: &Path) -> Vec<String> {
-    /// Most names one discovery walk offers to the providers.
-    const MAX_LISTED_FILES: usize = 20000;
-    let mut files = Vec::new();
-    let mut pending = vec![workspace.to_path_buf()];
+/// Canonical paths and a visited-directory set bound links, cycles and empty-directory floods.
+fn workspace_files(workspace: &Path) -> Result<Vec<String>, String> {
+    let root = workspace
+        .canonicalize()
+        .map_err(|error| error.to_string())?;
+    let mut files = std::collections::BTreeSet::new();
+    let mut visited = std::collections::BTreeSet::new();
+    let mut pending = vec![root.clone()];
+    let mut scanned = 0usize;
     while let Some(directory) = pending.pop() {
-        let Ok(entries) = std::fs::read_dir(&directory) else {
+        if !directory.starts_with(&root) || !visited.insert(directory.clone()) {
             continue;
-        };
-        for entry in entries.flatten() {
-            let path = entry.path();
-            let name = entry.file_name();
-            // Generated directories are never discovery inputs and would dominate the walk.
-            if matches!(name.to_str(), Some(".git" | "target" | "node_modules")) {
+        }
+        if visited.len() > 20000 {
+            return Err("Discovery directory limit exceeded".into());
+        }
+        let entries = std::fs::read_dir(directory).map_err(|error| error.to_string())?;
+        for entry in entries {
+            let entry = entry.map_err(|error| error.to_string())?;
+            scanned += 1;
+            if scanned > 60000 {
+                return Err("Discovery entry limit exceeded".into());
+            }
+            if matches!(
+                entry.file_name().to_str(),
+                Some(".git" | "target" | "node_modules" | "vendor")
+            ) {
+                continue;
+            }
+            let Ok(path) = entry.path().canonicalize() else {
+                continue;
+            };
+            if !path.starts_with(&root) {
                 continue;
             }
             if path.is_dir() {
                 pending.push(path);
-            } else if let Ok(relative) = path.strip_prefix(workspace) {
-                files.push(relative.to_string_lossy().replace('\\', "/"));
-                if files.len() >= MAX_LISTED_FILES {
-                    return files;
+            } else if path.is_file() {
+                let relative = path
+                    .strip_prefix(&root)
+                    .unwrap()
+                    .to_string_lossy()
+                    .replace('\\', "/");
+                files.insert(relative);
+                if files.len() > 20000 {
+                    return Err("Discovery file limit exceeded".into());
                 }
             }
         }
     }
-    files
+    Ok(files.into_iter().collect())
 }
 
 /// Publish one plugin's declarative contributions the way the registry does.
@@ -440,59 +487,48 @@ pub fn asset(path: &str) -> Option<Vec<u8>> {
 mod tests {
     use super::*;
 
-    /// The shipped Rust plugin's declaration is read and applied by the host's own code.
-    ///
-    /// This is the vertical seam for discovery: the package's contribution file, the declaration it
-    /// names, and the candidates a real Cargo manifest produces — with no host knowledge of Rust.
+    /// A differently named resource-only provider uses the same catalog and stable source identity.
     #[test]
-    fn the_rust_plugin_offers_a_real_projects_targets() {
+    fn an_independent_declaration_offers_distinct_sources_without_language_rules() {
         let plugins = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../plugins");
-        let rust = Contribution::read(
-            &plugins.join("rust"),
+        let example = Contribution::read(
+            &plugins.join("run-target-example"),
             "plugin.toml",
-            "rust",
+            "run-target-example",
             &"b".repeat(64),
         )
-        .unwrap_or_else(|error| panic!("the shipped rust plugin reads: {error:#}"));
-        assert_eq!(rust.run_targets.len(), 1);
-        assert_eq!(rust.run_targets[0].id, "rust-binary");
-        assert_eq!(rust.run_targets[0].target_type, "rust-binary");
-
-        let project = tempfile::tempdir().unwrap();
-        std::fs::write(
-            project.path().join("Cargo.toml"),
-            "[package]\nname = \"my-app\"\nversion = \"0.4.0\"\n",
-        )
         .unwrap();
-        std::fs::create_dir_all(project.path().join("src")).unwrap();
-        std::fs::write(project.path().join("src/main.rs"), "fn main() {}").unwrap();
+        assert_eq!(example.run_targets.len(), 1);
+        let project = tempfile::tempdir().unwrap();
+        for directory in ["one", "two"] {
+            std::fs::create_dir_all(project.path().join(directory)).unwrap();
+            std::fs::write(
+                project.path().join(directory).join("native-tool.toml"),
+                "[tool]\nname=\"Same label\"\nprogram=\"tool.exe\"\n",
+            )
+            .unwrap();
+        }
         let mut catalog = Catalog::default();
-        catalog.plugins.insert("rust".to_owned(), rust);
+        catalog.plugins.insert("run-target-example".into(), example);
         *CATALOG.write().unwrap() = Arc::new(catalog);
-        let targets = discover_run_targets(project.path());
-        assert_eq!(targets.len(), 1, "{targets:?}");
-        let target = &targets[0];
-        assert_eq!(target.id, "rust-binary:my-app");
-        assert_eq!(target.provider, "rust-binary");
-        assert_eq!(target.label, "my-app");
-        assert_eq!(
-            target.program, "cargo",
-            "the program is the toolchain the provider declared, from the field it named"
+        let targets = discover_run_targets(project.path()).unwrap();
+        assert_eq!(targets.len(), 2);
+        assert_ne!(
+            targets[0].id, targets[1].id,
+            "equal labels in different files are different targets"
         );
-        assert_eq!(target.found_in, "Cargo.toml");
-        assert_eq!(
-            target.fields.get("package").map(String::as_str),
-            Some("my-app")
+        assert!(
+            targets
+                .iter()
+                .all(|target| target.provider == "run-target-example"
+                    && target.target_type == "native-tool"
+                    && target.program == "tool.exe")
         );
-        assert_eq!(
-            target.fields.get("version").map(String::as_str),
-            Some("0.4.0")
+        assert!(
+            discover_run_targets(tempfile::tempdir().unwrap().path())
+                .unwrap()
+                .is_empty()
         );
-
-        // A project without a manifest simply offers nothing.
-        let empty = tempfile::tempdir().unwrap();
-        assert!(discover_run_targets(empty.path()).is_empty());
-        // Restore the catalog so another check does not inherit this one's plugins.
         *CATALOG.write().unwrap() = Arc::new(Catalog::default());
     }
 

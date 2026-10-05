@@ -59,7 +59,8 @@ impl RenderOnce for Input {
             .flex()
             .items_center()
             .text_color(palette.foreground)
-            .text_size(px(13.))
+            // Rem-based text follows the single global typography size, including form zoom.
+            .text_sm()
             .when(self.appearance, |this| {
                 this.px_2()
                     .rounded(palette.radius)

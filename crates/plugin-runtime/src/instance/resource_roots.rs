@@ -12,6 +12,8 @@ pub(super) enum RootKind {
     ImageInput,
     ServiceReference,
     ServiceRequest,
+    /// Provider-side deferred reply; it is not a consumer reference or a native process authority.
+    ServiceInvocation,
     Subscription,
     Process(u64),
 }
@@ -139,6 +141,7 @@ impl State {
             | RootKind::ImageInput
             | RootKind::ServiceReference
             | RootKind::ServiceRequest
+            | RootKind::ServiceInvocation
             | RootKind::Subscription
             | RootKind::Process(_) => {
                 return Err(Failure::new(ErrorCode::InvalidHandle, "Not a file handle"));
@@ -292,15 +295,23 @@ impl State {
             }
             api::Operation::CloseResource { handle } => {
                 self.roots.resolve(&handle)?;
-                self.plugin_services.resources.remove(&handle.resource);
+                // Process termination still needs the original context for its native receipt.
                 if let RootKind::Process(_) = self.roots.resolve(&handle)? {
                     return self
                         .process_request(plugin_protocol::process::Operation::Terminate { handle })
                         .map(|_| Value::Unit);
                 }
+                self.plugin_services.resources.remove(&handle.resource);
                 self.subscriptions.remove(&handle.resource);
                 self.image_inputs.remove(&handle.resource);
                 self.plugin_services.references.remove(&handle.resource);
+                if let Some(incoming) = self.plugin_services.incoming.remove(&handle.resource) {
+                    // Explicitly dropping a reply rejects its wait; created native effects stay owned.
+                    incoming.call.completion.finish(Err(Failure::new(
+                        ErrorCode::Cancelled,
+                        "Provider released its reply handle",
+                    )));
+                }
                 if let Some(request) = self.plugin_services.pending.remove(&handle.resource) {
                     request.call.completion.retire();
                 }

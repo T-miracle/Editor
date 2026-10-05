@@ -1,47 +1,83 @@
-//! The vertical acceptance for Rust discovery: a real project's target, confirmed and run.
-//!
-//! Everything here goes through the seams the editor uses — the shipped plugin's own contribution
-//! file, the host's catalog, the run controls' discovery, and the real terminal package starting
-//! real programs — so the check is about what a user gets, not about a helper's behaviour.
+//! Real packages, native B1 confirmation, exact artifacts and explicit target repair.
 #![cfg(windows)]
-use super::composable_tests::{publish_with_launches, pump_recording};
+use super::composable_tests::{publish_frame, publish_with_launches, pump_recording_all};
 use super::*;
 use gpui_kit::{TestAppContext, gpui};
+use plugin_runtime::Manager;
+use std::time::{Duration, Instant};
 
-/// Whether the toolchain discovery will ask for is available on this machine.
-fn cargo_available() -> bool {
-    std::process::Command::new("cargo")
-        .arg("--version")
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .status()
-        .is_ok_and(|status| status.success())
+mod debugging;
+
+/// Retain both production asynchronous dispatchers while native frames are painted.
+#[derive(Default)]
+struct Driver {
+    renderer: images::VectorRenderer,
+    launches: Vec<(u64, String, u64)>,
+    debug: BTreeMap<u64, (String, plugin_runtime::DebugRequest)>,
+    targets: super::worker::targets::TargetCalls,
 }
-
-/// A minimal Rust project whose program prints something a test can see.
-fn rust_project(root: &std::path::Path, name: &str, marker: &str) {
-    std::fs::create_dir_all(root.join("src")).unwrap();
-    std::fs::write(
-        root.join("Cargo.toml"),
-        format!(
-            "[package]\nname = \"{name}\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n\
-             [dependencies]\n"
-        ),
-    )
-    .unwrap();
-    std::fs::write(
-        root.join("src/main.rs"),
-        format!("fn main() {{ println!(\"{marker}\"); }}\n"),
-    )
-    .unwrap();
+impl Driver {
+    fn frame(
+        &mut self,
+        manager: &mut Manager,
+        app: &Entity<EditorApp>,
+        cx: &mut gpui_kit::VisualTestContext,
+    ) {
+        manager.poll();
+        let (statuses, stops) = pump_recording_all(
+            manager,
+            app,
+            cx,
+            &mut self.launches,
+            &mut self.debug,
+            &mut self.targets,
+        );
+        publish_frame(
+            manager,
+            &mut self.renderer,
+            app,
+            cx,
+            &self.launches,
+            statuses,
+            stops,
+        );
+    }
+    #[track_caller]
+    fn wait(
+        &mut self,
+        manager: &mut Manager,
+        app: &Entity<EditorApp>,
+        cx: &mut gpui_kit::VisualTestContext,
+        predicate: impl Fn(&EditorApp) -> bool,
+    ) {
+        let deadline = Instant::now() + Duration::from_secs(60);
+        loop {
+            self.frame(manager, app, cx);
+            if cx.update(|_, cx| predicate(app.read(cx))) {
+                return;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "native flow timed out: {}; {:?}; selected={:?}; frames={:?}",
+                cx.update(|_, cx| app.read(cx).status.clone()),
+                manager.debug_observations(),
+                cx.update(|_, cx| app
+                    .read(cx)
+                    .run_controls
+                    .debug_session()
+                    .map(|(id, _)| id.to_owned())),
+                cx.update(|_, cx| app.read(cx).run_controls.debug_frames().to_vec())
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    }
 }
-
-/// Install the real terminal package and open the editor on this workspace.
+/// Install actual distribution ZIPs and keep all host-local state under the isolated fixture.
 fn editor_for<'a>(
     cx: &'a mut TestAppContext,
-    root: &std::path::Path,
+    root: &Path,
 ) -> (
-    plugin_runtime::Manager,
+    Manager,
     Entity<EditorApp>,
     &'a mut gpui_kit::VisualTestContext,
 ) {
@@ -51,8 +87,8 @@ fn editor_for<'a>(
         apply_theme(builtin_theme(false), cx);
         cx.set_reduce_motion(true);
     });
-    let mut manager = plugin_runtime::Manager::open(
-        root.join("runtime"),
+    let mut manager = Manager::open(
+        root.join(".runtime-plugin-test"),
         protocol::Environment {
             workspace: root.display().to_string(),
             os: "windows".into(),
@@ -60,20 +96,36 @@ fn editor_for<'a>(
         },
     )
     .unwrap();
-    let terminal = Package::read(
-        &PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../dist/plugins/terminal.zip"),
-    )
-    .unwrap();
-    let grants = terminal.manifest.permissions.clone();
-    manager.install(&terminal, grants).unwrap();
-
+    for name in ["terminal", "rust", "run-target-example"] {
+        let package = Package::read(
+            &PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .join(format!("../../dist/plugins/{name}.zip")),
+        )
+        .unwrap();
+        manager
+            .install(&package, package.manifest.permissions.clone())
+            .unwrap();
+    }
     let slot = Rc::new(RefCell::new(None));
     let capture = slot.clone();
     let workspace = Workspace::open(root).unwrap();
     let (_, cx) = cx.add_window_view(move |window, cx| {
         let app = cx.new(|cx| EditorApp::new(workspace, None, window, cx));
         *capture.borrow_mut() = Some(app.clone());
-        Root::new(app, window, cx)
+        app.update(cx, |state, cx| {
+            let key = state.workspace_key();
+            state.run_controls = crate::run::RunControls::load_with_project(
+                &key,
+                Some(state.workspace.root().join("private-runs")),
+                Some(state.workspace.root().into()),
+            );
+            cx.notify();
+        });
+        let holder = cx.new(|cx| FormWindow {
+            owner: app.clone(),
+            _observe: cx.observe(&app, |_, _, cx| cx.notify()),
+        });
+        Root::new(holder, window, cx)
     });
     let app = slot.borrow_mut().take().unwrap();
     cx.simulate_resize(size(px(1400.), px(900.)));
@@ -81,349 +133,298 @@ fn editor_for<'a>(
     publish_with_launches(&mut manager, &mut renderer, &app, cx, &[]);
     (manager, app, cx)
 }
-
-/// Drive one frame of the editor's own loop.
-fn frame(
-    manager: &mut plugin_runtime::Manager,
-    renderer: &mut images::VectorRenderer,
+/// The production B1 renderer is observed and repainted after asynchronous catalog/input changes.
+struct FormWindow {
+    owner: Entity<EditorApp>,
+    _observe: Subscription,
+}
+impl Render for FormWindow {
+    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        if self.owner.read(cx).run_form.is_some() {
+            crate::run::ui::render_run_config_form(
+                &self.owner.downgrade(),
+                crate::ui::controls::DialogContent::new(),
+                cx,
+            )
+            .into_any_element()
+        } else {
+            div().child(self.owner.clone()).into_any_element()
+        }
+    }
+}
+fn form_window<'a>(
+    cx: &'a mut gpui_kit::VisualTestContext,
     app: &Entity<EditorApp>,
-    cx: &mut gpui_kit::VisualTestContext,
-    launches: &mut Vec<(u64, String, u64)>,
-) {
-    let (statuses, stops) = pump_recording(manager, app, cx, launches);
-    manager.poll();
-    super::composable_tests::publish_frame(manager, renderer, app, cx, launches, statuses, stops);
-    std::thread::sleep(std::time::Duration::from_millis(20));
+) -> &'a mut gpui_kit::VisualTestContext {
+    // Use one native test window. Painting the same EditorApp in two test windows causes
+    // its measured layout to alternate indefinitely; this holder mounts exactly one view.
+    cx.update(|window, cx| {
+        let key = app.read(cx).workspace_key();
+        let controls = app.read(cx).run_controls.clone();
+        let form = cx.new(|cx| crate::run::RunConfigForm::open(&controls, &key, None, window, cx));
+        app.update(cx, |state, cx| {
+            state.run_form = Some(form);
+            cx.notify();
+        });
+    });
+    cx.simulate_resize(size(px(900.), px(900.)));
+    cx.run_until_parked();
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+    cx
+}
+/// Return to the actual editor view after confirming/editing the native form.
+fn main_window<'a>(
+    cx: &'a mut gpui_kit::VisualTestContext,
+    app: &Entity<EditorApp>,
+) -> &'a mut gpui_kit::VisualTestContext {
+    let _ = app;
+    cx.simulate_resize(size(px(1400.), px(900.)));
+    cx.run_until_parked();
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+    cx
+}
+/// Click the painted native hit region, never a synthetic action dispatched by selector.
+fn click(cx: &mut gpui_kit::VisualTestContext, selector: &'static str) {
+    cx.run_until_parked();
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+    let bounds = cx
+        .debug_bounds(selector)
+        .unwrap_or_else(|| panic!("missing native control {selector}"));
+    // Physical clicks move the pointer first; hover hit testing is part of native event routing.
+    cx.simulate_event(gpui::MouseMoveEvent {
+        position: bounds.center(),
+        pressed_button: None,
+        modifiers: Default::default(),
+    });
+    cx.run_until_parked();
+    cx.simulate_click(bounds.center(), Default::default());
+    cx.run_until_parked();
+}
+/// Native focus/Ctrl+A/text input must preserve literal multi-line values.
+fn edit(cx: &mut gpui_kit::VisualTestContext, selector: &'static str, value: &str) {
+    click(cx, selector);
+    cx.simulate_keystrokes("ctrl-a");
+    cx.simulate_input(value);
+    cx.run_until_parked();
+}
+/// The final program itself records argv/env so a compiled artifact is distinguishable from Cargo.
+fn rust_project(root: &Path, name: &str) {
+    std::fs::create_dir_all(root.join("src")).unwrap();
+    std::fs::write(
+        root.join("Cargo.toml"),
+        format!("[package]\nname=\"{name}\"\nversion=\"0.1.0\"\nedition=\"2024\"\n"),
+    )
+    .unwrap();
+    std::fs::write(root.join("src/main.rs"),"//! Native discovery acceptance program.\nfn main() {let value=format!(\"{:?} / {}\",std::env::args().skip(1).collect::<Vec<_>>(),std::env::var(\"RUN_ENV\").unwrap_or_default());std::fs::write(\"program-ran.txt\",value).unwrap();}\n").unwrap();
 }
 
-/// End the test without leaving a program running on the machine.
-fn shut_down(
-    manager: &mut plugin_runtime::Manager,
-    app: &Entity<EditorApp>,
-    cx: &mut gpui_kit::VisualTestContext,
-) {
-    let sessions = cx.update(|_, cx| app.read(cx).run_controls.active_sessions());
-    for session in sessions {
-        let _ = manager.stop_execution(session.id);
-    }
-    for _ in 0..40 {
-        manager.poll();
-        if manager.executions().iter().all(|execution| {
-            !matches!(
-                execution.state(),
-                plugin_runtime::ExecutionState::Starting | plugin_runtime::ExecutionState::Running
-            )
-        }) {
-            break;
-        }
-        std::thread::sleep(std::time::Duration::from_millis(25));
-    }
+#[gpui::test]
+#[ignore = "build terminal, rust and run-target-example through the current public SDK first"]
+fn a_real_rust_project_is_discovered_built_and_run(cx: &mut TestAppContext) {
+    let root = tempfile::tempdir().unwrap();
+    rust_project(root.path(), "delivery-target");
+    let (mut manager, app, cx) = editor_for(cx, root.path());
+    let mut driver = Driver::default();
+    let cx = form_window(cx, &app);
+
+    click(cx, "run-config-discover");
+    driver.wait(&mut manager, &app, cx, |state| {
+        state.run_controls.discovered_targets().len() == 2
+    });
+    assert!(
+        cx.update(|_, cx| app.read(cx).run_controls.configurations().is_empty()),
+        "discovery stores no candidates"
+    );
+    assert!(!root.path().join("program-ran.txt").exists());
+    let target = cx.update(|_, cx| {
+        app.read(cx)
+            .run_controls
+            .discovered_targets()
+            .iter()
+            .find(|target| target.label.ends_with("Debug"))
+            .unwrap()
+            .clone()
+    });
+    let selector = Box::leak(format!("run-config-target-{}", target.id).into_boxed_str());
+    click(cx, selector);
+
+    let stored = cx.update(|_, cx| app.read(cx).run_controls.selected().unwrap().id.clone());
+    edit(cx, "run-config-name", "用户保留的名称");
+    edit(
+        cx,
+        "run-config-arguments",
+        "literal space\nquote\"value\n中文;&|",
+    );
+    click(cx, "run-config-tab-environment");
+    edit(cx, "run-config-environment", "RUN_ENV=本机环境");
+    click(cx, "run-config-save");
+    let config = cx.update(|_, cx| {
+        app.read(cx)
+            .run_controls
+            .configuration(&stored)
+            .unwrap()
+            .clone()
+    });
+    assert_eq!(config.name, "用户保留的名称");
+    assert_eq!(
+        config.literal_arguments(),
+        ["literal space", "quote\"value", "中文;&|"]
+    );
+    assert_eq!(config.env["RUN_ENV"], "本机环境");
+    assert!(matches!(
+        config.target,
+        editor_core::RunTarget::Provided { .. }
+    ));
+    let cx = main_window(cx, &app);
+    click(cx, "run-build");
+    driver.wait(&mut manager, &app, cx, |state| {
+        !state.run_controls.is_pending(&stored) && !state.run_controls.is_preparing(&stored)
+    });
+    assert!(driver.launches.is_empty(), "Build creates no final program");
+    assert!(!root.path().join("program-ran.txt").exists());
+    assert!(cx.debug_bounds("run-build-output").is_some());
+    click(cx, "run-build-hide");
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+    assert!(cx.debug_bounds("run-build-output").is_none());
+    cx.update(|_, cx| {
+        app.update(cx, |state, cx| {
+            let request = state
+                .run_controls
+                .menu_entries()
+                .iter()
+                .find_map(|row| match row {
+                    crate::run::RunMenuEntry::Action { id, .. } => id
+                        .strip_prefix("run-preparation-")
+                        .and_then(|id| id.parse().ok()),
+                    _ => None,
+                })
+                .unwrap();
+            state.run_controls.show_preparation_output(request);
+            cx.notify();
+        })
+    });
+    driver.frame(&mut manager, &app, cx);
+    assert!(cx.debug_bounds("run-build-output").is_some());
+    click(cx, "run-start");
+    driver.wait(&mut manager, &app, cx, |state| {
+        !state.run_controls.is_pending(&stored) && !state.run_controls.is_preparing(&stored)
+    });
+    assert_eq!(driver.launches.len(), 1, "the artifact is executed once");
+    let request = manager
+        .execution(driver.launches[0].0)
+        .unwrap()
+        .request()
+        .clone();
+    assert!(request.program.ends_with("delivery-target.exe") && !request.program.contains("cargo"));
+    let result = std::fs::read_to_string(root.path().join("program-ran.txt")).unwrap();
+    assert!(
+        result.contains("literal space")
+            && result.contains("中文;&|")
+            && result.ends_with(" / 本机环境"),
+        "{result}"
+    );
     manager.shutdown();
 }
 
-/// The whole delivery path in one flow: discover, confirm, build, run, then ask to debug.
-///
-/// This is ticket 12's combination regression. Each step was verified on its own by its own ticket;
-/// what this checks is that they still compose — the discovered configuration is the one that runs,
-/// the run really starts the target, and the debug launch asks the provider for what the
-/// configuration says rather than falling back to an ordinary run.
+/// Rename/repair preserves edits, and a different installed provider/type is confirmed through B1.
 #[gpui::test]
-#[ignore = "build terminal and capability-example through the public SDK first"]
+#[ignore = "build terminal, rust and run-target-example through the current public SDK first"]
 fn a_discovered_project_is_confirmed_built_run_and_offered_for_debugging(cx: &mut TestAppContext) {
-    if !cargo_available() {
-        eprintln!("skipping: cargo is not available on this machine");
-        return;
-    }
     let root = tempfile::tempdir().unwrap();
-    let name = "delivery-flow";
-    let marker = "DELIVERY_FLOW_RAN";
-    rust_project(root.path(), name, marker);
-
+    rust_project(root.path(), "original-target");
+    std::fs::create_dir_all(root.path().join("tool")).unwrap();
+    std::fs::write(root.path().join("tool/native-tool.toml"),"[tool]\nname=\"Independent native tool\"\nprogram=\"powershell.exe\"\narguments=\"-NoProfile\\n-Command\\nWrite-Output INDEPENDENT\"\n").unwrap();
     let (mut manager, app, cx) = editor_for(cx, root.path());
-    let mut renderer = images::VectorRenderer::default();
-    crate::extensions::contributions::publish_declarative_plugin_for_test(
-        &PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../plugins/rust"),
-        "rust",
-    );
-
-    // 1. Discovery offers the project's target through the editor's own entry point.
-    cx.update(|_, cx| app.update(cx, |app, cx| app.discover_run_targets(cx)));
-    let (targets, status) = cx.update(|_, cx| {
-        let state = app.read(cx);
+    let mut driver = Driver::default();
+    cx.update(|_, cx| app.update(cx, |state, cx| state.discover_run_targets(cx)));
+    driver.wait(&mut manager, &app, cx, |state| {
+        state.run_controls.discovered_targets().len() == 3
+    });
+    let (target, independent) = cx.update(|_, cx| {
+        let targets = app.read(cx).run_controls.discovered_targets();
         (
-            state.run_controls.discovered_targets().to_vec(),
-            state.status.clone(),
+            targets
+                .iter()
+                .find(|target| target.label.ends_with("Debug"))
+                .unwrap()
+                .id
+                .clone(),
+            targets
+                .iter()
+                .find(|target| target.provider == "run-target-example")
+                .unwrap()
+                .clone(),
         )
     });
-    let target = targets
-        .iter()
-        .find(|target| target.label == name)
-        .unwrap_or_else(|| panic!("the package target is offered: {targets:?} / {status}"));
-    assert!(
-        cx.update(|_, cx| app.read(cx).run_controls.configurations().is_empty()),
-        "discovery alone stores nothing"
-    );
-
-    // 2. Confirming stores exactly that target as an editable configuration.
-    let target_id = target.id.clone();
-    let workspace = cx.update(|_, cx| app.read(cx).workspace_key());
-    let stored = cx
-        .update(|_, cx| {
-            app.update(cx, |app, _| {
-                app.run_controls.confirm_target(&target_id, &workspace)
-            })
+    assert_eq!(independent.target_type, "native-tool");
+    let stored = cx.update(|_, cx| {
+        app.update(cx, |state, _| {
+            let key = state.workspace_key();
+            let id = state.run_controls.confirm_target(&target, &key).unwrap();
+            let mut config = state.run_controls.configuration(&id).unwrap().clone();
+            config.name = "My retained edits".into();
+            config.env.insert("RUN_ENV".into(), "RETAINED".into());
+            if let editor_core::RunTarget::Provided { args, .. } = &mut config.target {
+                args.push("user argv".into());
+            }
+            state.run_controls.upsert(config, &key).unwrap();
+            id
         })
-        .expect("the candidate is confirmed");
-    let configuration = cx.update(|_, cx| {
+    });
+    rust_project(root.path(), "renamed-target");
+    cx.update(|_, cx| app.update(cx, |state, cx| state.discover_run_targets(cx)));
+    driver.wait(&mut manager, &app, cx, |state| {
+        state.run_controls.target_missing(&stored)
+    });
+    assert!(cx.update(|_, cx| app.read(cx).run_controls.launch_blocker(&stored).is_some()));
+    assert!(driver.launches.is_empty());
+    let renamed = cx.update(|_, cx| {
         app.read(cx)
             .run_controls
-            .configuration(&stored)
-            .cloned()
-            .expect("it is stored")
-    });
-    assert_eq!(
-        configuration.from_target.as_deref(),
-        Some(target_id.as_str())
-    );
-    assert_eq!(
-        configuration.build.len(),
-        1,
-        "the provider's build action travels with the confirmed target"
-    );
-
-    // 3. A debug launch asks for what the configuration says, and does not become an ordinary run.
-    let request = cx
-        .update(|_, cx| {
-            app.read(cx)
-                .run_controls
-                .debug_launch_request(&stored, &workspace)
-        })
-        .expect("the confirmed configuration can be debugged");
-    assert_eq!(
-        request["program"],
-        configuration.target.executable(),
-        "the debug request starts the same program a run would"
-    );
-    // The arguments are the ones the program is started with, verbatim: the toolchain's own
-    // subcommand for a target it builds, never a joined command line.
-    assert_eq!(
-        request["args"],
-        serde_json::json!(["run"]),
-        "the debug request carries the program's own arguments"
-    );
-    // No breakpoints were set, so the field is absent rather than an empty list.
-    assert!(request.get("breakpoints").is_none());
-    // Debugging is refused while no provider is confirmed, instead of running the program anyway.
-    let refusal =
-        cx.update(|_, cx| app.update(cx, |app, _| app.run_controls.debug_blocker(&stored)));
-    assert!(
-        refusal.is_some(),
-        "an unconfirmed debug capability blocks debugging"
-    );
-
-    // 4. Running it really starts the target, and the artifact exists afterwards.
-    cx.update(|window, cx| {
-        app.update(cx, |app, cx| {
-            app.start_configuration_without_environment(&stored, window, cx);
-        });
-    });
-    let mut launches = Vec::new();
-    let mut finished = false;
-    for _ in 0..1200 {
-        frame(&mut manager, &mut renderer, &app, cx, &mut launches);
-        if cx.update(|_, cx| app.read(cx).run_controls.preparation_complete(&stored)) {
-            finished = true;
-            break;
-        }
-    }
-    let status = cx.update(|_, cx| app.read(cx).status.clone());
-    assert!(finished, "the launch prepared and started: {status}");
-    assert_eq!(
-        launches.len(),
-        3,
-        "build, the target's own step, then the program"
-    );
-    assert!(
-        root.path()
-            .join("target")
-            .join("debug")
-            .join(format!("{name}.exe"))
-            .exists(),
-        "the build in this flow produced the artifact it was asked for"
-    );
-    // 5. The configuration that ran is still the discovered one: the flow replaced nothing.
-    let after = cx.update(|_, cx| {
-        app.read(cx)
-            .run_controls
-            .configuration(&stored)
-            .cloned()
-            .expect("still stored")
-    });
-    assert_eq!(after.from_target, configuration.from_target);
-    assert_eq!(after.breakpoints, configuration.breakpoints);
-    shut_down(&mut manager, &app, cx);
-}
-
-/// A real Rust project is discovered, confirmed, built and run through the editor's own controls.
-#[gpui::test]
-#[ignore = "build terminal and capability-example through the public SDK first"]
-fn a_real_rust_project_is_discovered_built_and_run(cx: &mut TestAppContext) {
-    if !cargo_available() {
-        // The toolchain is an environment fact, not something this test may install.
-        eprintln!("skipping: cargo is not available on this machine");
-        return;
-    }
-    let root = tempfile::tempdir().unwrap();
-    let name = "discovery-acceptance";
-    let marker = "DISCOVERY_TARGET_RAN";
-    rust_project(root.path(), name, marker);
-    let (mut manager, app, cx) = editor_for(cx, root.path());
-    let mut renderer = images::VectorRenderer::default();
-    // Publish the shipped Rust plugin's own declarations into the host catalog, after the editor has
-    // started: opening a workspace refreshes the catalog, and this is the package under test.
-    crate::extensions::contributions::publish_declarative_plugin_for_test(
-        &PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../plugins/rust"),
-        "rust",
-    );
-    // Discovery is asked for through the editor's own entry point.
-    cx.update(|_, cx| {
-        app.update(cx, |app, cx| app.discover_run_targets(cx));
-    });
-    let (targets, status) = cx.update(|_, cx| {
-        let state = app.read(cx);
-        (
-            state.run_controls.discovered_targets().to_vec(),
-            state.status.clone(),
-        )
-    });
-    assert!(
-        !targets.is_empty(),
-        "the project's target was found: {status}"
-    );
-    let target = targets
-        .iter()
-        .find(|target| target.label == name)
-        .unwrap_or_else(|| panic!("the package target is offered: {targets:?}"));
-    assert_eq!(
-        target.program, "cargo",
-        "the program is the toolchain the provider declared, not the artifact"
-    );
-    assert_eq!(
-        target.fields.get("package").map(String::as_str),
-        Some(name),
-        "the package the manifest declares is reported"
-    );
-    assert_eq!(
-        targets.len(),
-        targets
+            .discovered_targets()
             .iter()
-            .map(|target| target.id.as_str())
-            .collect::<std::collections::BTreeSet<_>>()
-            .len(),
-        "no target is offered twice"
-    );
-    // Discovery stored nothing: confirming is what adds a configuration.
-    assert!(cx.update(|_, cx| app.read(cx).run_controls.configurations().is_empty()));
-
-    let target_id = target.id.clone();
-    let workspace = cx.update(|_, cx| app.read(cx).workspace_key());
-    let stored = cx
-        .update(|_, cx| {
-            app.update(cx, |app, _| {
-                app.run_controls.confirm_target(&target_id, &workspace)
-            })
+            .find(|target| target.label.ends_with("Debug"))
+            .unwrap()
+            .id
+            .clone()
+    });
+    cx.update(|_, cx| {
+        app.update(cx, |state, _| {
+            let key = state.workspace_key();
+            state
+                .run_controls
+                .repair_target_with(&stored, &renamed, &key)
+                .unwrap();
         })
-        .expect("the candidate is confirmed");
-    let (configuration, plan) = cx.update(|_, cx| {
-        let state = app.read(cx);
-        let configuration = state
+    });
+    let repaired = cx.update(|_, cx| {
+        app.read(cx)
             .run_controls
             .configuration(&stored)
-            .cloned()
-            .expect("it is stored");
-        // The confirmed configuration runs the binary the build produces, and its own build action
-        // is the command the provider described.
-        let plan = state
-            .run_controls
-            .launch_plan(&stored, &workspace)
-            .expect("the confirmed configuration is launchable");
-        (configuration, plan)
+            .unwrap()
+            .clone()
     });
-    assert_eq!(
-        configuration.target.executable(),
-        "cargo",
-        "the program runs the target through the toolchain that builds it"
-    );
-    assert_eq!(
-        configuration.build.len(),
-        1,
-        "the provider's build action is part of the confirmed configuration"
-    );
-    // The plan is the whole launch: the build, the step that runs the target, then the program. A
-    // package manager's own subcommand belongs in a step, so the program field stays the artifact
-    // for a debugger to attach to rather than the manager.
-    assert_eq!(
-        plan.steps.iter().map(|step| step.kind).collect::<Vec<_>>(),
-        vec![
-            crate::run::StepKind::Build,
-            crate::run::StepKind::Prelaunch,
-            crate::run::StepKind::Program
-        ],
-        "the launch builds, then runs the target, then leaves the program"
-    );
-    assert_eq!(plan.steps[0].request.program, "cargo.exe");
-    assert_eq!(plan.steps[0].request.args, vec!["build".to_owned()]);
-    assert_eq!(plan.steps[2].request.program, "cargo");
-
-    // Run it: the build compiles the project and the program is the artifact just built.
-    cx.update(|window, cx| {
-        app.update(cx, |app, cx| {
-            app.start_configuration_without_environment(&stored, window, cx);
-        });
+    assert_eq!(repaired.name, "My retained edits");
+    assert_eq!(repaired.env["RUN_ENV"], "RETAINED");
+    assert_eq!(repaired.literal_arguments(), ["user argv"]);
+    let count = cx.update(|_, cx| app.read(cx).run_controls.configurations().len());
+    click(cx, "run-start");
+    driver.wait(&mut manager, &app, cx, |state| {
+        !state.run_controls.is_pending(&stored) && !state.run_controls.is_preparing(&stored)
     });
-    let mut launches = Vec::new();
-    let mut finished = false;
-    for _ in 0..1200 {
-        frame(&mut manager, &mut renderer, &app, cx, &mut launches);
-        let complete = cx.update(|_, cx| app.read(cx).run_controls.preparation_complete(&stored));
-        if complete {
-            finished = true;
-            break;
-        }
-    }
-    let status = cx.update(|_, cx| app.read(cx).status.clone());
-    assert!(finished, "the launch prepared and started: {status}");
+    assert_eq!(driver.launches.len(), 1);
+    assert!(cx.update(|_, cx| app.read(cx).run_controls.debug_blocker(&stored).is_some()));
     assert_eq!(
-        launches.len(),
-        3,
-        "a build, the binary's own step and the program: {status}"
+        std::fs::read_to_string(root.path().join("program-ran.txt")).unwrap(),
+        "[\"user argv\"] / RETAINED"
     );
-    // The build really produced an artifact, and the program started it.
-    let artifact = root
-        .path()
-        .join("target")
-        .join("debug")
-        .join(format!("{name}.exe"));
-    assert!(
-        artifact.exists(),
-        "the build produced the artifact it was asked for"
-    );
-    let program = manager
-        .execution(launches[2].0)
-        .expect("the program session exists")
-        .request()
-        .clone();
+    let cx = form_window(cx, &app);
+    let selector = Box::leak(format!("run-config-target-{}", independent.id).into_boxed_str());
+    click(cx, selector);
+    assert!(cx.update(|_,cx|matches!(app.read(cx).run_controls.selected().unwrap().target,editor_core::RunTarget::Program {ref program,..} if program=="powershell.exe")));
     assert_eq!(
-        program.program, "cargo",
-        "the program is the command the provider described"
+        cx.update(|_, cx| app.read(cx).run_controls.configurations().len()),
+        count + 1
     );
-    assert_eq!(program.args, vec!["run".to_owned()]);
-    let cwd = program.cwd.clone().unwrap_or_default();
-    assert_eq!(
-        cwd.trim_start_matches(r"\\?\"),
-        root.path().display().to_string(),
-        "the program runs in this project"
-    );
-    shut_down(&mut manager, &app, cx);
-    let _ = cx;
+    manager.shutdown();
 }

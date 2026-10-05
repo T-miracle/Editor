@@ -1,0 +1,71 @@
+# Build the documentation site and publish it to GitHub Pages.
+#
+# The site is a project page, so every emitted URL carries the repository name as
+# a path prefix; `base` in the Astro config owns that prefix, and this workflow
+# only supplies the files.
+#
+# Deployment runs from the default branch only. A pull request or a feature branch
+# still builds and runs the documentation gate, so a broken page set is caught
+# before it can reach the published site.
+name: Documentation site
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'website/**'
+      - '.github/workflows/docs-site.yml'
+  pull_request:
+    paths:
+      - 'website/**'
+      - '.github/workflows/docs-site.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# One deployment at a time, and never cancel a run that is publishing.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Build and check
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: website
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          # Kept in step with .node-version at the repository root.
+          node-version: '24.19.0'
+          cache: npm
+          cache-dependency-path: website/package-lock.json
+      - name: Install dependencies
+        run: npm ci
+      - name: Check the documentation sources and links
+        run: npm test
+      - name: Build the site
+        run: npm run build
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: website/dist
+
+  deploy:
+    name: Deploy to GitHub Pages
+    needs: build
+    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
+# Triggered by a real change; the workflow only runs for website or workflow edits.

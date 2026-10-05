@@ -161,6 +161,14 @@ impl State {
                 Some(context),
             ) = (&result, &self.plugin_services.context)
             {
+                if matches!(
+                    self.roots.resolve(handle),
+                    Ok(resource_roots::RootKind::Process(_))
+                ) {
+                    self.host_resources
+                        .preparations
+                        .opened(&context.lifetimes, handle);
+                }
                 self.plugin_services
                     .resources
                     .insert(handle.resource, (handle.clone(), context.clone()));

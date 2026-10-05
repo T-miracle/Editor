@@ -5,8 +5,11 @@
 //! behavior: a configuration is either valid, or it is not.
 use crate::extensions::HostRunSnapshot;
 use editor_core::{RunConfig, RunConfigSet, RunTarget};
+use rust_i18n::t;
 use std::collections::BTreeMap;
 
+mod debug_presentation;
+mod provider_preparation;
 pub(crate) mod ui;
 pub use ui::RunConfigForm;
 pub(crate) use ui::RunMenu;
@@ -16,6 +19,8 @@ mod sequence;
 #[cfg(test)]
 pub use sequence::StepState;
 pub use sequence::{RunSequence, SequenceAction, StepOutcome};
+#[cfg(test)]
+mod regression_tests;
 #[cfg(test)]
 mod run_ui_tests;
 #[cfg(test)]
@@ -34,11 +39,11 @@ pub enum StepKind {
 
 impl StepKind {
     /// The word shown for this phase in status and failure text.
-    pub fn label(self) -> &'static str {
+    pub fn label(self) -> String {
         match self {
-            Self::Build => "构建",
-            Self::Prelaunch => "启动前",
-            Self::Program => "程序",
+            Self::Build => t!("run.phase_build").to_string(),
+            Self::Prelaunch => t!("run.phase_prelaunch").to_string(),
+            Self::Program => t!("run.phase_program").to_string(),
         }
     }
 }
@@ -55,6 +60,8 @@ pub struct PreparedStep {
     /// The configuration whose stored definition produced this step, for de-duplication.
     pub config: String,
     pub request: plugin_runtime::RunRequest,
+    /// Provider build replaces a placeholder; final launch requires its actual artifact receipt.
+    pub preparation: Option<(String, String)>,
 }
 
 /// Every action one launch performs, in order, ending with the program itself.
@@ -130,10 +137,13 @@ impl RunSession {
     /// Whether the session is still a launch or a running program rather than a finished result.
     pub fn is_active(&self) -> bool {
         match self.state {
-            plugin_runtime::ExecutionState::Starting | plugin_runtime::ExecutionState::Running => {
-                true
+            plugin_runtime::ExecutionState::Starting
+            | plugin_runtime::ExecutionState::Running
+            | plugin_runtime::ExecutionState::Stopping
+            | plugin_runtime::ExecutionState::Terminating => true,
+            plugin_runtime::ExecutionState::Failed | plugin_runtime::ExecutionState::Exited => {
+                false
             }
-            plugin_runtime::ExecutionState::Failed => false,
         }
     }
 }
@@ -150,12 +160,22 @@ pub const MAX_PREPARED_STEPS: usize = editor_core::MAX_RUN_STEPS + 1;
 /// borrow of the editor that owns them; it is not a second source of run state.
 #[derive(Clone, Debug)]
 pub struct RunControls {
+    /// Bounded output histories keyed by authenticated preparation requests, never by plugin panel.
+    provider_preparations: BTreeMap<u64, provider_preparation::ProviderPreparationView>,
+    preparation_output: Option<u64>,
+    pub(super) preparation_output_open: bool,
+    /// Replacement intent retains the original preparation and launch/debug mode until actual cleanup.
+    preparation_reruns: BTreeMap<String, (u64, bool)>,
     configs: RunConfigSet,
     /// Identity assigned to the next local session, used only before the runtime answers.
     next_request: u64,
     pending: Vec<PendingRun>,
     /// Stop requests awaiting their provider's answer, keyed by the configuration they stop.
     stops: Vec<PendingStop>,
+    /// Explicit replacements wait on the original session, independent of subsequent selection.
+    reruns: BTreeMap<String, u64>,
+    /// The exact historical or active session most recently selected for location.
+    location: Option<(u64, u64, String)>,
     sessions: BTreeMap<u64, RunSession>,
     /// Preparation in progress, keyed by the configuration whose launch or build owns it.
     ///
@@ -184,6 +204,11 @@ pub struct RunControls {
     discovered: Vec<plugin_schema::DiscoveredTarget>,
     /// Whether a discovery has run at all, so an empty list is not mistaken for "not yet asked".
     discovery_ran: bool,
+    /// A failed source preserves prior candidates but blocks launches until repaired discovery.
+    discovery_failures: BTreeMap<String, String>,
+    declarative_discovery_error: Option<String>,
+    /// An invocation nonce distinguishes asynchronous discovery from an abandoned workspace form.
+    discovery_request: Option<u64>,
     /// Which provider a debug launch would use, or the reason there is none.
     debug_availability: Option<Result<String, String>>,
     /// Every debug session this editor is running, one per configuration.
@@ -192,7 +217,19 @@ pub struct RunControls {
     ///
     /// While one is outstanding the session's state is about to change, so the controls are withheld
     /// rather than letting a second click race the answer that has not arrived.
-    debug_action_in_flight: bool,
+    debug_action_in_flight: std::collections::BTreeSet<String>,
+    /// Provider epochs distinguish repeated stops at the same source line and reject old state replies.
+    debug_epochs: std::collections::BTreeMap<String, u64>,
+    /// Actual owning provider is immutable for a target, independent of later default changes.
+    debug_owners: std::collections::BTreeMap<String, String>,
+    /// Replacing a debug target waits for the original target's actual final observation.
+    debug_reruns: std::collections::BTreeMap<String, String>,
+    /// Source often arrives after the stopped receipt; locate each reported pause at most once.
+    debug_position_epochs: std::collections::BTreeMap<String, u64>,
+    /// Frozen final debug requests wait until every ordinary preparation step actually succeeds.
+    debug_preparations: std::collections::BTreeMap<String, serde_json::Value>,
+    /// Resolution may fill only the original frozen final binding, not a later edited configuration.
+    debug_preparation_bindings: std::collections::BTreeMap<String, (String, String)>,
     /// Whether the editor should move to where the target next stops.
     ///
     /// True from the start of a session, because a breakpoint hit is a pause the user did not ask
@@ -205,17 +242,21 @@ pub struct RunControls {
     /// is applied to the pause it was asked about, and one that arrives after that pause ended is
     /// reported rather than applied.
     debug_requests: Vec<PendingDebugRequest>,
+    /// Strictly increasing even after completion, so a delayed response cannot name a newer request.
+    next_debug_request: u64,
     /// What the selected debug provider declared it can do.
     ///
     /// Defaulting to nothing is deliberate: an ability the host has not been told about is not one it
     /// may offer, so a provider that has not been asked leaves its controls disabled with a reason.
     debug_capabilities: editor_core::DebugCapabilities,
+    /// Live targets use the declaration of their original owner; defaults only choose new launches.
+    debug_provider_capabilities: std::collections::BTreeMap<String, editor_core::DebugCapabilities>,
     /// Which configured breakpoints the running provider could actually bind.
     ///
     /// The set is per session, not per configuration: the same position may be bindable under one
     /// target and not another, so this is cleared when a session begins and replaced by each answer.
     /// A position absent from here has not been reported either way, which is not the same as unverified.
-    debug_breakpoints_verified: Vec<(String, u32, bool)>,
+    debug_breakpoints_verified: BTreeMap<String, Vec<(String, u32, bool)>>,
     /// Set when the stored file could not be read or written; shown instead of silently defaulting.
     pub error: Option<String>,
 }
@@ -247,18 +288,24 @@ impl PluginSessionImpact {
         }
         let mut parts = Vec::new();
         if !self.running.is_empty() {
-            parts.push(format!(
-                "将停止 {} 个正在运行的程序（{}）",
-                self.running.len(),
-                self.running.join("、")
-            ));
+            parts.push(
+                t!(
+                    "run.impact_running",
+                    count = self.running.len(),
+                    names = self.running.join(", ")
+                )
+                .to_string(),
+            );
         }
         if !self.debugging.is_empty() {
-            parts.push(format!(
-                "将结束 {} 个调试会话（{}）",
-                self.debugging.len(),
-                self.debugging.join("、")
-            ));
+            parts.push(
+                t!(
+                    "run.impact_debugging",
+                    count = self.debugging.len(),
+                    names = self.debugging.join(", ")
+                )
+                .to_string(),
+            );
         }
         Some(parts.join("；"))
     }
@@ -275,7 +322,7 @@ pub struct PendingDebugRequest {
     pub scope: editor_core::PauseScope,
     /// The frame a variable request asked about.
     pub frame: Option<u32>,
-    /// The configuration a start request begins, so its answer knows where to land.
+    /// The owning configuration, including inspection requests whose pause numbers may coincide.
     pub config: Option<String>,
 }
 
@@ -290,6 +337,18 @@ pub enum DebugMethod {
     Variables,
     /// Move the paused target, in one of the three directions.
     Step(editor_core::DebugStep),
+    /// State-changing controls retain their request/configuration association outside a pause.
+    Control(DebugControl),
+}
+
+/// Typed control intent prevents the shared request ID zero from targeting a different session.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DebugControl {
+    Resume,
+    Pause,
+    Stop,
+    /// Explicit host job revocation may upgrade a normal stop already awaiting adapter completion.
+    Force,
 }
 
 /// One frame row of the debug panel.
@@ -327,7 +386,7 @@ pub struct DebugPanelRows {
 /// What one discovery run did to the stored configurations.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct DiscoveryReport {
-    /// Configurations whose target's program a discovery corrected, by name.
+    /// Configurations whose target changed and needs the user's repair confirmation, by name.
     pub repaired: Vec<String>,
     /// Targets no configuration claims, which the user may confirm.
     pub offered: Vec<String>,
@@ -355,10 +414,16 @@ pub struct PendingPoll {
 impl Default for RunControls {
     fn default() -> Self {
         Self {
+            provider_preparations: Default::default(),
+            preparation_output: None,
+            preparation_output_open: false,
+            preparation_reruns: Default::default(),
             configs: RunConfigSet::default(),
             next_request: 0,
             pending: Vec::new(),
             stops: Vec::new(),
+            reruns: BTreeMap::new(),
+            location: None,
             sessions: BTreeMap::new(),
             sequences: BTreeMap::new(),
             step_sessions: BTreeMap::new(),
@@ -369,13 +434,24 @@ impl Default for RunControls {
             shared: editor_core::SharedSet::default(),
             discovered: Vec::new(),
             discovery_ran: false,
+            discovery_failures: BTreeMap::new(),
+            declarative_discovery_error: None,
+            discovery_request: None,
             debug_availability: None,
             debug_sessions: editor_core::DebugSessions::default(),
-            debug_action_in_flight: false,
+            debug_action_in_flight: Default::default(),
+            debug_epochs: Default::default(),
+            debug_owners: Default::default(),
+            debug_reruns: Default::default(),
+            debug_position_epochs: Default::default(),
+            debug_preparations: Default::default(),
+            debug_preparation_bindings: Default::default(),
             debug_position_followed: true,
             debug_requests: Vec::new(),
+            next_debug_request: 0,
             debug_capabilities: editor_core::DebugCapabilities::default(),
-            debug_breakpoints_verified: Vec::new(),
+            debug_provider_capabilities: Default::default(),
+            debug_breakpoints_verified: BTreeMap::new(),
             error: None,
         }
     }
@@ -424,17 +500,50 @@ impl RunControls {
                 controls.shared = shared.clone();
                 controls.configs = editor_core::merge(&project, &controls.configs, &shared);
             }
-            Err(error) => controls.error = Some(error.to_string()),
+            Err(error) => {
+                controls.configs = editor_core::merge(
+                    &project,
+                    &controls.configs,
+                    &editor_core::SharedSet::default(),
+                );
+                controls.error = Some(error.to_string());
+            }
         }
         controls
     }
 
-    /// Whether one session is still active, so a preparation can tell a live step from one the
-    /// runtime has already dropped.
-    pub fn session_is_active(&self, session: u64) -> bool {
+    /// Whether a preparation can still query its provider for the actual result of this session.
+    ///
+    /// An `Exited` snapshot does not carry an exit code and can arrive before the dedicated status
+    /// reply. Keep polling it until that reply settles the step; only a failed session is unqueryable.
+    pub fn session_can_report_result(&self, session: u64) -> bool {
         self.sessions
             .get(&session)
-            .is_some_and(RunSession::is_active)
+            .is_some_and(|session| !matches!(session.state, plugin_runtime::ExecutionState::Failed))
+    }
+
+    /// Choose the next preparation action while preserving an actual runtime failure's diagnostic.
+    /// Snapshot failure is more specific than an unavailable exit-code reply and must stay visible.
+    pub fn preparation_action(&self, configuration: &str) -> Option<SequenceAction> {
+        let sequence = self.preparation(configuration)?;
+        if let Some(session) = sequence.current_session()
+            && let Some(message) = self
+                .sessions
+                .get(&session)
+                .and_then(|session| session.failure.as_deref())
+        {
+            let name = sequence
+                .current_step()
+                .map(|step| step.name.as_str())
+                .unwrap_or(configuration);
+            return Some(SequenceAction::Blocked {
+                reason: t!("run.step_failed", name = name, message = message).to_string(),
+            });
+        }
+        Some(sequence.next_action(
+            |session| self.session_known(session),
+            |session| self.session_can_report_result(session),
+        ))
     }
 
     /// Whether a session is known at all, so a preparation can tell "not yet published" from "gone".
@@ -479,7 +588,7 @@ impl RunControls {
         let selected = self.configs.select(id);
         if selected {
             // Selection is persisted, so reopening the editor keeps the same visible target.
-            let _ = self.persist(workspace);
+            let _ = self.persist_local(workspace);
         }
         selected
     }
@@ -488,23 +597,48 @@ impl RunControls {
     pub fn upsert(&mut self, configuration: RunConfig, workspace: &str) -> Result<(), String> {
         // A rejected configuration is reported here as well as returned, so the visible error and the
         // refused edit cannot disagree.
-        let configuration = configuration.clone();
+        let previous = self.configs.clone();
         if let Err(error) = self.configs.upsert(configuration.clone()) {
             let message = error.to_string();
             self.error = Some(message.clone());
             return Err(message);
         }
-        self.persist_configuration(&configuration, workspace)
+        let result = self.persist_configuration(&configuration, workspace);
+        if result.is_err() {
+            // A refused edit cannot become the in-memory command a subsequent click executes.
+            self.configs = previous;
+        }
+        result
     }
 
     /// Remove one configuration from wherever it was stored.
     pub fn remove(&mut self, id: &str, workspace: &str) -> Result<(), String> {
+        let shared = if self
+            .shared
+            .configurations
+            .iter()
+            .any(|entry| entry.id == id)
+        {
+            if let Some(project) = self.project.clone() {
+                // Preserve other entries that may have been edited outside this editor.
+                let mut shared =
+                    editor_core::load_shared(&project).map_err(|error| error.to_string())?;
+                shared.configurations.retain(|entry| entry.id != id);
+                Some(shared)
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+        let previous = self.configs.clone();
         self.configs.remove(id);
-        // Removing a shared configuration removes it from the project's file as well: leaving it
-        // there would resurrect it on the next load, after the user asked for it to be gone.
-        self.shared.configurations.retain(|entry| entry.id != id);
         // A removed configuration's finished sessions stay visible; running ones are not hidden.
-        self.persist(workspace)
+        let result = self.persist_edit(workspace, shared);
+        if result.is_err() {
+            self.configs = previous;
+        }
+        result
     }
 
     /// Confirm one discovered candidate and store it as an editable configuration.
@@ -513,6 +647,8 @@ impl RunControls {
     /// ordinary configuration from that moment on. Confirming the same target twice resolves to the
     /// configuration that already exists instead of saving a second copy.
     pub fn confirm_target(&mut self, target_id: &str, workspace: &str) -> Result<String, String> {
+        // A stored identity remains selectable after a refresh reports it missing; launches
+        // still validate the current catalog, and confirmation must never make a duplicate.
         if let Some(existing) = self
             .configs
             .configurations
@@ -523,12 +659,27 @@ impl RunControls {
             self.select(&id, workspace);
             return Ok(id);
         }
+        let candidate = self
+            .discovered
+            .iter()
+            .find(|target| target.id == target_id)
+            .ok_or_else(|| format!("{} ({target_id})", t!("run.target_missing")))?;
+        if let Some(existing) = self
+            .configs
+            .configurations
+            .iter()
+            .find(|config| config.claims_target(candidate))
+        {
+            let id = existing.id.clone();
+            self.select(&id, workspace);
+            return Ok(id);
+        }
         let target = self
             .discovered
             .iter()
             .find(|target| target.id == target_id)
             .cloned()
-            .ok_or_else(|| format!("发现结果里没有这个目标：{target_id}"))?;
+            .ok_or_else(|| t!("run.target_not_discovered", id = target_id).to_string())?;
         let id = self.generate_id(workspace);
         // The target's display label is the natural name, so the user recognizes what they confirmed
         // and can rename it in the form immediately afterwards.
@@ -542,11 +693,6 @@ impl RunControls {
     /// Identity for a new configuration in this workspace.
     pub fn generate_id(&self, workspace: &str) -> String {
         self.configs.generate_id(workspace)
-    }
-
-    fn persist(&mut self, workspace: &str) -> Result<(), String> {
-        self.persist_local(workspace)?;
-        self.persist_shared()
     }
 
     /// Write this machine's own record of every configuration it knows about.
@@ -572,19 +718,19 @@ impl RunControls {
     }
 
     /// Write the project's shared file, creating it only when something is actually shared.
-    fn persist_shared(&mut self) -> Result<(), String> {
+    fn persist_shared(&mut self, shared: &editor_core::SharedSet) -> Result<(), String> {
         let Some(project) = self.project.clone() else {
             return Ok(());
         };
         let path = editor_core::project_path(&project);
         // Nothing is written into a project until a user shares something with it, so a workspace
         // that never shared has no `.editor` directory at all.
-        if self.shared.configurations.is_empty() && !path.exists() {
+        if shared.configurations.is_empty() && !path.exists() {
             return Ok(());
         }
         // Once the project has a file it stays a current document: unsharing the last entry removes it
         // rather than leaving an entry that would reappear on the next load.
-        match editor_core::save_shared(&project, &self.shared) {
+        match editor_core::save_shared(&project, shared) {
             Ok(()) => {
                 self.error = None;
                 Ok(())
@@ -603,22 +749,114 @@ impl RunControls {
     /// here; unsharing removes it from the project's file, so a configuration that is no longer shared
     /// stops being read by anyone else's editor. Neither direction deletes what the user typed.
     fn persist_configuration(&mut self, config: &RunConfig, workspace: &str) -> Result<(), String> {
-        if let Some(project) = self.project.clone() {
+        let changes_shared = !config.local
+            || self
+                .shared
+                .configurations
+                .iter()
+                .any(|entry| entry.id == config.id);
+        let shared = if changes_shared && let Some(project) = self.project.clone() {
+            // Only an explicit shared edit writes the project. Read the current file first, so
+            // unrelated external edits survive and malformed/newer files are never overwritten.
+            let mut shared = match editor_core::load_shared(&project) {
+                Ok(shared) => shared,
+                Err(error) => {
+                    let message = error.to_string();
+                    self.error = Some(message.clone());
+                    return Err(message);
+                }
+            };
             if config.local {
-                self.shared
-                    .configurations
-                    .retain(|entry| entry.id != config.id);
+                shared.configurations.retain(|entry| entry.id != config.id);
             } else {
-                self.shared
-                    .upsert(editor_core::SharedConfig::from_config(config, &project));
+                shared.upsert(editor_core::SharedConfig::from_config(config, &project));
             }
+            Some(shared)
+        } else {
+            None
+        };
+        self.persist_edit(workspace, shared)
+    }
+
+    /// Commit local values before publishing a project edit, restoring them if publication fails.
+    ///
+    /// The shared file is the final commit boundary: local I/O failure must never publish a command
+    /// the form reports as rejected. Both files use atomic replacement. A second I/O failure during
+    /// rollback is reported explicitly rather than claiming a two-file filesystem transaction.
+    fn persist_edit(
+        &mut self,
+        workspace: &str,
+        shared: Option<editor_core::SharedSet>,
+    ) -> Result<(), String> {
+        let Some(shared) = shared else {
+            return self.persist_local(workspace);
+        };
+        let previous_local = (|| {
+            shared.validate().map_err(|error| error.to_string())?;
+            self.root
+                .as_ref()
+                .map(|root| editor_core::load(root, workspace).map_err(|error| error.to_string()))
+                .transpose()
+        })()
+        .inspect_err(|message| self.error = Some(message.clone()))?;
+        self.persist_local(workspace)?;
+        if let Err(message) = self.persist_shared(&shared) {
+            let rollback = self
+                .root
+                .as_ref()
+                .zip(previous_local.as_ref())
+                .map(|(root, previous)| editor_core::save(root, workspace, previous))
+                .transpose();
+            let message = match rollback {
+                Ok(_) => message,
+                Err(error) => t!(
+                    "run.local_restore_failed",
+                    error = message,
+                    restore = error.to_string()
+                )
+                .to_string(),
+            };
+            self.error = Some(message.clone());
+            return Err(message);
         }
-        self.persist(workspace)
+        self.shared = shared;
+        Ok(())
+    }
+
+    /// Read one current project snapshot before planning any side effects.
+    ///
+    /// Cached project entries supply local overrides only. Hand edits, deletion and parse errors in
+    /// the open window have the same meaning as reopening it; preparation uses this immutable set.
+    fn configurations_for_launch(&self) -> Result<RunConfigSet, String> {
+        let Some(project) = &self.project else {
+            return Ok(self.configs.clone());
+        };
+        let shared = editor_core::load_shared(project).map_err(|error| error.to_string())?;
+        Ok(editor_core::merge(project, &self.configs, &shared))
     }
 
     /// All sessions this editor knows about, newest request last.
     pub fn sessions(&self) -> Vec<RunSession> {
         self.sessions.values().cloned().collect()
+    }
+    /// Location has its own request identity; an ended session is still a valid selection.
+    pub fn begin_location(&mut self, session: u64, config: &str) -> u64 {
+        self.next_request += 1;
+        self.location = Some((session, self.next_request, config.into()));
+        self.next_request
+    }
+    /// Accept only the newest selection reply, including honest expiry of retained output.
+    pub fn finish_location(&mut self, session: u64, request: u64) -> bool {
+        if !self
+            .location
+            .as_ref()
+            .is_some_and(|pending| pending.0 == session && pending.1 == request)
+        {
+            return false;
+        }
+        let (_, _, config) = self.location.take().unwrap();
+        self.selected()
+            .is_some_and(|selected| selected.id == config)
     }
 
     /// Active sessions only, which is what the top bar offers to stop or reveal.
@@ -655,19 +893,25 @@ impl RunControls {
     /// A configuration that is already starting or running resolves to its session; an invalid one
     /// reports why; otherwise the runtime is asked to start it.
     pub fn plan_launch(&self, id: &str, workspace_root: &str) -> LaunchPlan {
-        let Some(config) = self.configs.find(id) else {
+        if let Some(session) = self.running_for(id) {
+            // A repeat locates the original launch snapshot even while its shared definition is
+            // being edited or has been removed; only a new execution reads the current document.
+            return LaunchPlan::Existing {
+                session: session.id,
+            };
+        }
+        let configs = match self.configurations_for_launch() {
+            Ok(configs) => configs,
+            Err(message) => return LaunchPlan::Invalid { message },
+        };
+        let Some(config) = configs.find(id) else {
             return LaunchPlan::Invalid {
-                message: "运行配置不存在，请重新选择".into(),
+                message: t!("run.configuration_missing").to_string().into(),
             };
         };
         if let Err(error) = config.validate() {
             return LaunchPlan::Invalid {
                 message: error.to_string(),
-            };
-        }
-        if let Some(session) = self.running_for(id) {
-            return LaunchPlan::Existing {
-                session: session.id,
             };
         }
         // A configuration without a directory launches from the workspace root; a stored directory is
@@ -718,12 +962,13 @@ impl RunControls {
         workspace_root: &str,
         limit: usize,
     ) -> Result<RunPlan, String> {
-        let config = self
-            .configs
+        let configs = self.configurations_for_launch()?;
+        let config = configs
             .configurations
             .iter()
             .find(|config| config.id == id)
-            .ok_or_else(|| "运行配置不存在，请重新选择".to_owned())?;
+            .ok_or_else(|| t!("run.configuration_missing").to_string().to_owned())?;
+        self.validate_build_configuration(config)?;
         let mut steps = Vec::new();
         for step in &config.build {
             steps.push(self.action_step(
@@ -735,12 +980,32 @@ impl RunControls {
             )?);
         }
         if steps.is_empty() {
-            return Err("该配置没有构建操作".to_owned());
+            return Err(t!("run.no_build_actions").to_string().to_owned());
         }
         if limit == 0 || steps.len() > limit {
-            return Err(format!("一次构建不能超过 {limit} 个操作"));
+            return Err(t!("run.build_limit", limit = limit.to_string()).to_string());
         }
         Ok(RunPlan { steps })
+    }
+
+    /// Direct and referenced builds share target validity, matching preparation and empty-list rules.
+    /// The caller supplies its single launch snapshot so file edits never split admission from execution.
+    fn validate_build_configuration(&self, config: &RunConfig) -> Result<(), String> {
+        config.validate().map_err(|error| error.to_string())?;
+        if let Some(error) = self.discovery_blocker(config) {
+            return Err(error);
+        }
+        if self.configuration_target_missing(config) {
+            return Err(t!("run.target_missing").into());
+        }
+        if let Some(binding)=provided_binding(&config.target) && !config.build.iter().any(|step|
+            matches!(&step.target,editor_core::StepTarget::Action {target} if provided_binding(target)==Some(binding.clone()))) {
+            return Err(t!("run.provider_build_missing").into());
+        }
+        if config.build.is_empty() {
+            return Err(t!("run.no_build_actions").into());
+        }
+        Ok(())
     }
 
     /// Every action a launch performs for one configuration, in order: build, then each pre-launch
@@ -750,12 +1015,29 @@ impl RunControls {
     /// so the sequence cannot change halfway through a launch. `limit` bounds the preparation, which
     /// is what a launch computes before its program is appended.
     pub fn prepare(&self, id: &str, workspace_root: &str, limit: usize) -> Result<RunPlan, String> {
-        let config = self
-            .configs
+        let configs = self.configurations_for_launch()?;
+        self.prepare_from(&configs, id, workspace_root, limit)
+    }
+
+    /// Expand preparation from one snapshot so external edits cannot change a plan halfway through.
+    fn prepare_from(
+        &self,
+        configs: &RunConfigSet,
+        id: &str,
+        workspace_root: &str,
+        limit: usize,
+    ) -> Result<RunPlan, String> {
+        let config = configs
             .configurations
             .iter()
             .find(|config| config.id == id)
-            .ok_or_else(|| "运行配置不存在，请重新选择".to_owned())?;
+            .ok_or_else(|| t!("run.configuration_missing").to_string().to_owned())?;
+        if let Some(error) = self.discovery_blocker(config) {
+            return Err(error);
+        }
+        if self.configuration_target_missing(config) {
+            return Err(t!("run.target_missing").into());
+        }
         let mut steps = Vec::new();
         // A configuration's own build actions come first: a pre-launch step may then rely on them.
         for step in &config.build {
@@ -783,20 +1065,17 @@ impl RunControls {
                 editor_core::StepTarget::Build { config: name } => {
                     // A reference is resolved to the referenced configuration's own actions, so the
                     // command exists once and an edit to it takes effect on the next launch.
-                    let referenced = self
-                        .configs
+                    let referenced = configs
                         .configurations
                         .iter()
                         .find(|candidate| candidate.name == *name)
                         .ok_or_else(|| {
-                            format!("启动前步骤 {} 引用的构建配置不存在：{name}", step.name)
+                            t!("run.reference_missing", step = &step.name, name = name).to_string()
                         })?;
                     if referenced.id == config.id {
-                        return Err(format!(
-                            "启动前步骤 {} 不能引用当前配置自身的构建",
-                            step.name
-                        ));
+                        return Err(t!("run.reference_self", step = &step.name).to_string());
                     }
+                    self.validate_build_configuration(referenced)?;
                     for action in &referenced.build {
                         steps.push(self.action_step(
                             referenced,
@@ -810,7 +1089,7 @@ impl RunControls {
             }
         }
         if limit == 0 || steps.len() > limit {
-            return Err(format!("一次启动的准备步骤不能超过 {limit} 个"));
+            return Err(t!("run.preparation_limit", limit = limit.to_string()).to_string());
         }
         Ok(RunPlan { steps })
     }
@@ -825,15 +1104,27 @@ impl RunControls {
         workspace_root: &str,
         limit: usize,
     ) -> Result<RunPlan, String> {
+        let configs = self.configurations_for_launch()?;
+        self.prepare_launch_from(&configs, id, workspace_root, limit)
+    }
+
+    /// Keep the final program and its preparation bound to the same validated project document.
+    fn prepare_launch_from(
+        &self,
+        configs: &RunConfigSet,
+        id: &str,
+        workspace_root: &str,
+        limit: usize,
+    ) -> Result<RunPlan, String> {
         // The program is one of the bounded actions, so preparation may use one fewer. A plan that is
         // only the program is always allowed, which is what a configuration without steps produces.
-        let mut plan = self.prepare(id, workspace_root, limit.saturating_sub(1).max(1))?;
-        let config = self
-            .configs
+        let mut plan =
+            self.prepare_from(configs, id, workspace_root, limit.saturating_sub(1).max(1))?;
+        let config = configs
             .configurations
             .iter()
             .find(|config| config.id == id)
-            .ok_or_else(|| "运行配置不存在，请重新选择".to_owned())?;
+            .ok_or_else(|| t!("run.configuration_missing").to_string().to_owned())?;
         let directory = config
             .directory
             .clone()
@@ -842,6 +1133,7 @@ impl RunControls {
             kind: StepKind::Program,
             name: config.name.clone(),
             config: config.id.clone(),
+            preparation: provided_binding(&config.target),
             request: plugin_runtime::RunRequest {
                 program: config.target.executable().to_owned(),
                 args: config.literal_arguments(),
@@ -866,7 +1158,7 @@ impl RunControls {
         workspace_root: &str,
     ) -> Result<PreparedStep, String> {
         let editor_core::StepTarget::Action { target } = target else {
-            return Err(format!("步骤 {name} 不是可直接执行的动作"));
+            return Err(t!("run.step_not_action", name = name).to_string());
         };
         let directory = config
             .directory
@@ -876,6 +1168,7 @@ impl RunControls {
             kind,
             name: name.to_owned(),
             config: config.id.clone(),
+            preparation: provided_binding(target),
             request: plugin_runtime::RunRequest {
                 program: target.executable().to_owned(),
                 args: target.arguments().into_iter().map(str::to_owned).collect(),
@@ -915,6 +1208,68 @@ impl RunControls {
     /// Whether a stop for this configuration is still awaiting its provider's answer.
     pub fn is_stopping(&self, config: &str) -> bool {
         self.stops.iter().any(|stop| stop.config == config)
+            || self.provider_preparations.values().any(|view| {
+                view.config == config
+                    && matches!(
+                        view.snapshot.state,
+                        plugin_runtime::ExecutionState::Stopping
+                            | plugin_runtime::ExecutionState::Terminating
+                    )
+            })
+            || self.sessions.values().any(|session| {
+                session.config == config
+                    && matches!(
+                        session.state,
+                        plugin_runtime::ExecutionState::Stopping
+                            | plugin_runtime::ExecutionState::Terminating
+                    )
+            })
+    }
+
+    /// Remember one explicit rerun; a repeated click cannot replace its original exit barrier.
+    pub fn wait_to_rerun(&mut self, config: &str, session: u64) {
+        self.reruns.entry(config.into()).or_insert(session);
+    }
+
+    /// Return replacements once their original program is confirmed ended, or a diagnostic on failure.
+    pub fn take_ready_reruns(&mut self) -> Vec<(String, Result<(), String>)> {
+        let ready = self
+            .reruns
+            .iter()
+            .filter_map(|(config, id)| {
+                let session = self.sessions.get(id)?;
+                if session.is_active() {
+                    return None;
+                }
+                let result = if session.state == plugin_runtime::ExecutionState::Exited {
+                    Ok(())
+                } else {
+                    Err(session
+                        .failure
+                        .clone()
+                        .unwrap_or_else(|| t!("run.old_exit_unknown").into()))
+                };
+                Some((config.clone(), result))
+            })
+            .collect::<Vec<_>>();
+        for (config, _) in &ready {
+            self.reruns.remove(config);
+        }
+        ready
+    }
+
+    /// A user-requested stop or leave cancels replacement intent without cancelling the exit itself.
+    pub fn cancel_rerun(&mut self, config: &str) {
+        self.reruns.remove(config);
+        self.preparation_reruns.remove(config);
+    }
+
+    /// Stop intent belongs to the whole preparation: even a clean exit cannot launch its next step.
+    pub fn request_configuration_stop(&mut self, config: &str) {
+        self.cancel_prepared_debug(config);
+        if let Some(sequence) = self.sequences.get_mut(config) {
+            sequence.request_stop();
+        }
     }
 
     /// Whether leaving now would abandon managed work: a running session or an unanswered start.
@@ -923,8 +1278,28 @@ impl RunControls {
     /// user makes rather than something that happens while they are editing.
     pub fn has_work_in_flight(&self) -> bool {
         !self.pending.is_empty()
+            || self.sequences.values().any(RunSequence::is_active)
+            || self
+                .provider_preparations
+                .values()
+                .any(|view| view.snapshot.state.is_active())
             || !self.stops.is_empty()
+            || !self.reruns.is_empty()
+            || !self.debug_reruns.is_empty()
+            || !self.preparation_reruns.is_empty()
             || self.sessions.values().any(|session| session.is_active())
+            || self.debug_sessions.entries().any(|(_, session)| {
+                matches!(
+                    session.state(),
+                    editor_core::DebugSessionState::Starting
+                        | editor_core::DebugSessionState::Running
+                        | editor_core::DebugSessionState::Paused { .. }
+                )
+            })
+            || self
+                .debug_requests
+                .iter()
+                .any(|request| request.method == DebugMethod::Start)
     }
 
     /// Every session that would be left behind, for the confirmation text.
@@ -934,6 +1309,86 @@ impl RunControls {
             .filter(|session| session.is_active())
             .map(|session| session.id)
             .collect()
+    }
+
+    /// Count actual and pending work for the leave prompt, including paused debugger targets.
+    pub fn active_work_count(&self) -> usize {
+        let running = self
+            .sessions
+            .values()
+            .filter(|session| session.is_active())
+            .count();
+        let preparing = self
+            .pending
+            .iter()
+            .filter(|pending| {
+                !self
+                    .sessions
+                    .values()
+                    .any(|session| session.config == pending.config && session.is_active())
+            })
+            .count();
+        let debugging = self
+            .debug_sessions
+            .entries()
+            .filter(|(_, session)| {
+                matches!(
+                    session.state(),
+                    editor_core::DebugSessionState::Starting
+                        | editor_core::DebugSessionState::Running
+                        | editor_core::DebugSessionState::Paused { .. }
+                )
+            })
+            .count();
+        running + preparing + debugging
+    }
+
+    /// A selected configuration has one target, regardless of ordinary or debug launch mode.
+    pub fn debug_target_active(&self, config: &str) -> bool {
+        self.debug_sessions.session(config).is_some_and(|session| {
+            matches!(
+                session.state(),
+                editor_core::DebugSessionState::Starting
+                    | editor_core::DebugSessionState::Running
+                    | editor_core::DebugSessionState::Paused { .. }
+            )
+        })
+    }
+
+    /// Keep the old host identity in the replacement barrier; a new selection cannot release it.
+    pub fn wait_to_debug_again(&mut self, config: &str) {
+        if let Some(session) = self
+            .debug_sessions
+            .session(config)
+            .and_then(|session| session.provider_session())
+        {
+            self.debug_reruns.insert(config.into(), session.into());
+        }
+    }
+
+    /// Consume each requested replacement once, only after the original target ended or was revoked.
+    pub fn take_ready_debug_reruns(&mut self) -> Vec<String> {
+        let ready = self
+            .debug_reruns
+            .iter()
+            .filter_map(|(config, id)| {
+                self.debug_sessions
+                    .session(config)
+                    .filter(|session| {
+                        session.provider_session() == Some(id.as_str())
+                            && matches!(
+                                session.state(),
+                                editor_core::DebugSessionState::Exited
+                                    | editor_core::DebugSessionState::Failed { .. }
+                            )
+                    })
+                    .map(|_| config.clone())
+            })
+            .collect::<Vec<_>>();
+        for config in &ready {
+            self.debug_reruns.remove(config);
+        }
+        ready
     }
 
     /// Accept the answers to stop requests this editor made; each answer is reported once.
@@ -1064,6 +1519,46 @@ impl RunControls {
         self.sequences.get(config)
     }
 
+    /// Settle the original provider step and fill only that launch's frozen final debug request.
+    pub fn provider_prepared(
+        &mut self,
+        config: &str,
+        index: usize,
+        request: u64,
+        result: Result<&str, &str>,
+    ) -> bool {
+        // Provider preparations finish without HostRunSnapshot. Even a stopped/late receipt retires
+        // only its own wait; it must never leave a ghost start or clear a newer request.
+        self.pending
+            .retain(|pending| pending.config != config || pending.request_id != request);
+        if let Some(view) = self.provider_preparations.get_mut(&request) {
+            if view.snapshot.state.is_active() {
+                view.snapshot.state = if result.is_ok() {
+                    plugin_runtime::ExecutionState::Exited
+                } else {
+                    plugin_runtime::ExecutionState::Failed
+                };
+            }
+        }
+        let Some(sequence) = self.sequences.get_mut(config) else {
+            return false;
+        };
+        let own_build = sequence
+            .current_step()
+            .is_some_and(|step| step.config == config)
+            && sequence.planned_preparation(index) == self.debug_preparation_bindings.get(config);
+        if !sequence.provider_prepared(index, request, result.clone()) {
+            return false;
+        }
+        if own_build
+            && let Ok(program) = result
+            && let Some(arguments) = self.debug_preparations.get_mut(config)
+        {
+            arguments["program"] = serde_json::json!(program);
+        }
+        true
+    }
+
     /// The step now running for a configuration, as `阶段 名称`, for status text.
     pub fn preparing_step(&self, config: &str) -> Option<String> {
         self.sequences.get(config).and_then(|sequence| {
@@ -1079,7 +1574,7 @@ impl RunControls {
     /// user can read rather than a control that silently does nothing.
     pub fn preparation_error(&self, config: &str) -> Option<String> {
         if self.configs.find(config).is_none() {
-            return Some("运行配置不存在，请重新选择".into());
+            return Some(t!("run.configuration_missing").to_string().into());
         }
         self.prepare_build(config, "", MAX_PREPARED_STEPS).err()
     }
@@ -1091,13 +1586,83 @@ impl RunControls {
     pub fn begin_sequence(&mut self, config: &str, plan: RunPlan, request_id: u64) {
         self.sequences
             .insert(config.to_owned(), RunSequence::new(config, &plan));
-        // The launch this request identity belongs to is what a published session is adopted by, so
-        // the session joins the request rather than being ignored as another window's. Which step it
-        // is comes from the sequence, which already holds the plan.
-        self.pending.push(PendingRun {
-            config: config.to_owned(),
-            request_id,
-        });
+        // The plan owns its waiting steps; only staged effect requests belong in `pending`.
+        // Keeping the reserved plan identity would strand a ghost start after a real build exits.
+        self.pending
+            .retain(|pending| pending.config != config || pending.request_id != request_id);
+    }
+
+    /// Freeze the debug target while ordinary build/prelaunch sessions run, without an ordinary
+    /// execution of the final program. The same saved launch plan supplies argv, env and cwd.
+    pub fn begin_debug_preparation(
+        &mut self,
+        config: &str,
+        mut plan: RunPlan,
+        workspace: &str,
+    ) -> Result<(), String> {
+        let target = plan
+            .steps
+            .pop()
+            .filter(|step| step.kind == StepKind::Program)
+            .ok_or_else(|| "Missing final debug program".to_owned())?;
+        let mut arguments =
+            serde_json::to_value(target.request).map_err(|error| error.to_string())?;
+        let definition = self
+            .configuration(config)
+            .ok_or_else(|| "Missing debug configuration".to_owned())?;
+        let breakpoints = definition
+            .breakpoints
+            .entries()
+            .iter()
+            .map(|point| {
+                let path = std::path::Path::new(&point.source);
+                let path = if path.is_absolute() {
+                    path.to_path_buf()
+                } else {
+                    std::path::Path::new(workspace).join(path)
+                };
+                serde_json::json!({"source":path.display().to_string(),"line":point.line})
+            })
+            .collect::<Vec<_>>();
+        arguments["breakpoints"] = serde_json::json!(breakpoints);
+        if let Some(binding) = target.preparation {
+            self.debug_preparation_bindings
+                .insert(config.into(), binding);
+        }
+        self.debug_preparations.insert(config.into(), arguments);
+        let request = self.begin(config);
+        self.begin_sequence(config, plan, request);
+        Ok(())
+    }
+    /// Only the completed sequence may consume this once; a stopped preparation discards it.
+    pub fn take_prepared_debug(&mut self, config: &str) -> Option<serde_json::Value> {
+        if self.sequences.get(config)?.next_action(|_| true, |_| true) != SequenceAction::Done {
+            return None;
+        }
+        let arguments = self.debug_preparations.remove(config)?;
+        self.debug_preparation_bindings.remove(config);
+        self.sequences.remove(config);
+        self.pending.retain(|request| request.config != config);
+        Some(arguments)
+    }
+    /// A failed build is reported as a failed debug preparation, with no adapter or ordinary target.
+    pub fn fail_prepared_debug(&mut self, config: &str, reason: &str) {
+        self.debug_preparation_bindings.remove(config);
+        if self.debug_preparations.remove(config).is_some() {
+            self.note_debug_state(
+                config,
+                editor_core::DebugSessionState::Failed {
+                    reason: reason.into(),
+                },
+            );
+        }
+    }
+    /// Cancellation seals both ordinary preparation and its not-yet-created debug target.
+    pub fn cancel_prepared_debug(&mut self, config: &str) {
+        self.debug_preparation_bindings.remove(config);
+        if self.debug_preparations.remove(config).is_some() {
+            self.note_debug_state(config, editor_core::DebugSessionState::Exited);
+        }
     }
 
     /// Replace one entry of a configuration's program step for this launch only.
@@ -1127,10 +1692,9 @@ impl RunControls {
             config.to_owned(),
             RunSequence::build_only(config, &plan.steps),
         );
-        self.pending.push(PendingRun {
-            config: config.to_owned(),
-            request_id,
-        });
+        // The first actual step receives its own request; the reservation is not an effect.
+        self.pending
+            .retain(|pending| pending.config != config || pending.request_id != request_id);
     }
 
     /// Join published sessions to the preparation steps that requested them.
@@ -1144,9 +1708,13 @@ impl RunControls {
             let Some((config, index)) = self.step_by_request(*request_id) else {
                 continue;
             };
-            if let Some(sequence) = self.sequences.get_mut(&config) {
-                sequence.started(index, *session, provider_session.clone());
-            }
+            let Some(sequence) = self.sequences.get_mut(&config) else {
+                continue;
+            };
+            // Publications repeat for ended sessions. Adopt once while the original request waits;
+            // replaying an old snapshot must never turn a succeeded/stopped step back into Running.
+            if !sequence.steps().get(index).is_some_and(|step|matches!(step.state,sequence::StepState::Starting {request} if request==*request_id)) {continue;}
+            sequence.started(index, *session, provider_session.clone());
             self.step_sessions
                 .insert(*session, (config.to_owned(), index));
         }
@@ -1244,8 +1812,20 @@ impl RunControls {
 
     /// Record that one step of a configuration's preparation could not start at all.
     pub fn sequence_start_failed(&mut self, config: &str, index: usize, reason: &str) {
+        let request = self
+            .sequences
+            .get(config)
+            .and_then(RunSequence::pending_provider_request);
         if let Some(sequence) = self.sequences.get_mut(config) {
             sequence.start_failed(index, reason);
+        }
+        if let Some(request) = request {
+            self.pending
+                .retain(|pending| pending.config != config || pending.request_id != request);
+            if let Some(view) = self.provider_preparations.get_mut(&request) {
+                view.snapshot.state = plugin_runtime::ExecutionState::Failed;
+                view.snapshot.output = reason.into();
+            }
         }
     }
 
@@ -1261,6 +1841,7 @@ impl RunControls {
 
     /// Ask every preparing configuration to stop, blocking its launch.
     pub fn stop_preparations(&mut self) -> Vec<(String, Option<u64>)> {
+        self.reruns.clear();
         let mut stopped = Vec::new();
         for (config, sequence) in &mut self.sequences {
             if !sequence.is_active() {
@@ -1282,6 +1863,29 @@ impl RunControls {
         sequence.stopped(session);
         self.poll_config(&config);
         Some(config)
+    }
+
+    /// Only observed ended/revoked sessions finish a stopped preparation; a stop acknowledgement cannot.
+    pub fn finish_stopped_preparations(&mut self) -> Vec<String> {
+        let ended = self
+            .step_sessions
+            .iter()
+            .filter_map(|(id, (config, _))| {
+                (self
+                    .sequences
+                    .get(config)
+                    .is_some_and(RunSequence::is_stopping)
+                    && self
+                        .sessions
+                        .get(id)
+                        .is_some_and(|session| !session.is_active()))
+                .then_some(*id)
+            })
+            .collect::<Vec<_>>();
+        ended
+            .into_iter()
+            .filter_map(|id| self.note_preparation_stopped(id))
+            .collect()
     }
 
     /// Drop every status query belonging to one configuration's preparation.
@@ -1307,13 +1911,13 @@ impl RunControls {
     }
 
     /// Whether a debug launch could start right now, and the reason it cannot.
-    pub fn debug_availability(&self) -> Result<&str, &str> {
+    pub fn debug_availability(&self) -> Result<&str, String> {
         match &self.debug_availability {
             Some(Ok(provider)) => Ok(provider.as_str()),
-            Some(Err(reason)) => Err(reason.as_str()),
+            Some(Err(reason)) => Err(reason.clone()),
             // Before the host has answered, nothing is offered: an entry point may not assume a
             // capability it has not been told about, and it may not fall back to running plainly.
-            None => Err("尚未确认调试能力；打开调试页后重试"),
+            None => Err(t!("run.debug_unconfirmed").to_string()),
         }
     }
 
@@ -1349,22 +1953,47 @@ impl RunControls {
     }
 
     /// Note that a session has begun, which is the first pause worth following.
-    pub fn note_debug_session_begun(&mut self) {
+    pub fn note_debug_session_begun(&mut self, config: &str) {
         self.debug_position_followed = true;
         // Nothing has been reported about this session's breakpoints yet, and the previous session's
         // answer described a different target.
-        self.debug_breakpoints_verified.clear();
+        self.debug_breakpoints_verified.remove(config);
     }
 
     /// Record the positions the provider could bind, replacing whatever the last answer said.
     ///
     /// Replacing rather than merging is what makes a removed breakpoint stop being reported as bound:
     /// the provider's answer describes the set it was just asked about, not a history of it.
-    pub fn note_debug_breakpoints(&mut self, bound: impl IntoIterator<Item = (String, u32, bool)>) {
-        self.debug_breakpoints_verified = bound
-            .into_iter()
-            .map(|(source, line, verified)| (source, line, verified))
-            .collect();
+    pub fn note_debug_breakpoints(
+        &mut self,
+        config: &str,
+        bound: impl IntoIterator<Item = (String, u32, bool)>,
+    ) {
+        self.debug_breakpoints_verified
+            .insert(config.into(), bound.into_iter().collect());
+    }
+
+    /// A receipt names its original target even if the user has selected another paused session.
+    /// An abandoned request cannot replace evidence for a later incarnation of the same config.
+    pub fn apply_debug_breakpoint_answer(
+        &mut self,
+        request: u64,
+        bound: impl IntoIterator<Item = (String, u32, bool)>,
+    ) -> Result<(), editor_core::InspectionError> {
+        let index = self
+            .debug_requests
+            .iter()
+            .position(|pending| pending.id == request && pending.method == DebugMethod::Breakpoints)
+            .ok_or(editor_core::InspectionError::NoSession)?;
+        let pending = self.debug_requests.remove(index);
+        let config = pending
+            .config
+            .ok_or(editor_core::InspectionError::NoSession)?;
+        if self.debug_session_of(&config).is_none() {
+            return Err(editor_core::InspectionError::NoSession);
+        }
+        self.note_debug_breakpoints(&config, bound);
+        Ok(())
     }
 
     /// Whether the provider could bind this position: `None` when no answer has mentioned it.
@@ -1372,7 +2001,12 @@ impl RunControls {
     /// Distinct from `Some(false)` on purpose: a breakpoint that was asked about and refused is a
     /// problem to fix, while one that no answer has covered is simply not described yet.
     pub fn debug_breakpoint_verified(&self, source: &str, line: u32) -> Option<bool> {
+        let config = self
+            .debug_session()
+            .map(|(config, _)| config)
+            .or_else(|| self.selected().map(|config| config.id.as_str()))?;
         self.debug_breakpoints_verified
+            .get(config)?
             .iter()
             .find(|(known, known_line, _)| known_line == &line && known == source)
             .map(|(_, _, verified)| *verified)
@@ -1385,7 +2019,9 @@ impl RunControls {
     /// would have to survive `parse_breakpoints`. This is the same list the field renders, read
     /// separately for the part that is evidence rather than input.
     pub fn debug_breakpoint_positions(&self) -> Vec<(String, u32)> {
-        self.selected()
+        self.debug_session()
+            .and_then(|(config, _)| self.configuration(config))
+            .or_else(|| self.selected())
             .map(|config| {
                 config
                     .breakpoints
@@ -1399,7 +2035,11 @@ impl RunControls {
 
     /// End one configuration's debug session, handing the panel to another if there is one.
     pub fn end_debug_session(&mut self, config: &str) {
+        // Restarting a configuration must not resurrect replies from the previous incarnation.
+        self.debug_requests
+            .retain(|pending| pending.config.as_deref() != Some(config));
         self.debug_sessions.remove(config);
+        self.debug_breakpoints_verified.remove(config);
     }
 
     /// The selected debug session, if one is selected and still running.
@@ -1530,7 +2170,7 @@ impl RunControls {
     pub fn plugin_session_impact(
         &self,
         plugin: &str,
-        debug_provider: Option<&str>,
+        _debug_provider: Option<&str>,
     ) -> PluginSessionImpact {
         let names = |config: &str| {
             self.configs
@@ -1538,22 +2178,38 @@ impl RunControls {
                 .map(|configuration| configuration.name.clone())
                 .unwrap_or_else(|| config.to_owned())
         };
-        let running = self
+        let mut running = self
             .sessions
             .iter()
             .filter(|(_, session)| session.plugin == plugin && session.is_active())
             .map(|(_, session)| names(&session.config))
             .collect::<Vec<_>>();
-        // A debug session exists only while the plugin that would serve it is the selected debug
-        // provider, so that is the plugin whose removal ends it.
-        let debugging = match debug_provider {
-            Some(provider) if provider == plugin => self
-                .debug_sessions
-                .entries()
-                .map(|(config, _)| names(config))
-                .collect::<Vec<_>>(),
-            _ => Vec::new(),
-        };
+        // A preparation owns its original provider even when the saved configuration was edited.
+        running.extend(
+            self.provider_preparations
+                .values()
+                .filter(|view| view.snapshot.provider == plugin && view.snapshot.state.is_active())
+                .map(|view| names(&view.config)),
+        );
+        running.sort();
+        running.dedup();
+        // A default switch affects future launches; impact belongs to each target's original owner.
+        let debugging = self
+            .debug_sessions
+            .entries()
+            .filter(|(config, session)| {
+                self.debug_owners
+                    .get(*config)
+                    .is_some_and(|owner| owner == plugin)
+                    && matches!(
+                        session.state(),
+                        editor_core::DebugSessionState::Starting
+                            | editor_core::DebugSessionState::Running
+                            | editor_core::DebugSessionState::Paused { .. }
+                    )
+            })
+            .map(|(config, _)| names(config))
+            .collect();
         PluginSessionImpact { running, debugging }
     }
 
@@ -1562,13 +2218,25 @@ impl RunControls {
     /// The scope is captured here rather than by the caller, so a request can only ever be joined to
     /// the pause that was current when it was sent.
     pub fn begin_debug_request(&mut self, method: DebugMethod, frame: Option<u32>) -> Option<u64> {
+        let config = if method == DebugMethod::Start {
+            self.configs.selected.clone()?
+        } else if method == DebugMethod::Breakpoints && self.debug_sessions.current().is_none() {
+            // A breakpoint definition can be recorded before any provider session or pause exists.
+            self.configs.selected.clone()?
+        } else {
+            self.debug_sessions.current()?.0.to_owned()
+        };
         // Starting is about no pause: it is what begins the session whose pauses are inspected later.
         // Setting breakpoints is likewise about the session, not about a moment in it — a user may set
         // one while the target runs, and it has to reach the debugger before the next stop. Everything
         // else names the pause it describes, so an answer can be refused once it is over.
         let scope = match self.debug_pause_scope() {
             Some(scope) => scope,
-            None if matches!(method, DebugMethod::Start | DebugMethod::Breakpoints) => {
+            None if matches!(
+                method,
+                DebugMethod::Start | DebugMethod::Breakpoints | DebugMethod::Control(_)
+            ) =>
+            {
                 editor_core::PauseScope::starting()
             }
             None => return None,
@@ -1576,34 +2244,28 @@ impl RunControls {
         // One request per method per pause: asking twice would leave two answers racing to describe
         // the same pause, and the later one would win for no reason the user could see.
         if self.debug_requests.iter().any(|request| {
-            request.scope == scope && request.method == method && request.frame == frame
+            request.config.as_deref() == Some(config.as_str())
+                && request.scope == scope
+                && request.method == method
+                && request.frame == frame
         }) {
             return None;
         }
-        let id = self
-            .debug_requests
-            .iter()
-            .map(|request| request.id)
-            .max()
-            .unwrap_or(0)
-            + 1;
+        self.next_debug_request = self.next_debug_request.checked_add(1)?;
+        let id = self.next_debug_request;
         // Starting a session is what creates it, so the session exists from the moment it is asked
         // for: the answer has somewhere to land, and a configuration that cannot be named has no
         // session to begin.
-        let config = if method == DebugMethod::Start {
-            let selected = self.configs.selected.clone()?;
+        if method == DebugMethod::Start {
             self.debug_sessions
-                .insert(&selected, editor_core::DebugSession::default());
-            Some(selected)
-        } else {
-            None
-        };
+                .insert(&config, editor_core::DebugSession::default());
+        }
         self.debug_requests.push(PendingDebugRequest {
             id,
             method,
             scope,
             frame,
-            config,
+            config: Some(config),
         });
         Some(id)
     }
@@ -1627,6 +2289,9 @@ impl RunControls {
             return Err(editor_core::InspectionError::NoSession);
         };
         let pending = self.debug_requests.remove(index);
+        if pending.config.as_deref() != self.debug_sessions.selected() {
+            return Err(editor_core::InspectionError::WrongSession);
+        }
         // The answer is applied to the pause it was asked about, which is what refuses a late one.
         match pending.method {
             // A session that has started is recorded with the provider's own identity, so every later
@@ -1646,7 +2311,9 @@ impl RunControls {
             ),
             // A step's answer is its new state, which `apply_debug_step` takes; a view arriving for a
             // step is not an answer to what was asked.
-            DebugMethod::Step(_) => Err(editor_core::InspectionError::NoSession),
+            DebugMethod::Step(_) | DebugMethod::Control(_) => {
+                Err(editor_core::InspectionError::NoSession)
+            }
         }
     }
 
@@ -1674,6 +2341,152 @@ impl RunControls {
         }
     }
 
+    /// An early creation identity belongs to the configuration captured by its start request.
+    pub fn note_debug_connecting(
+        &mut self,
+        request: u64,
+        session: &str,
+    ) -> Result<(), editor_core::InspectionError> {
+        let config = self
+            .debug_requests
+            .iter()
+            .find(|pending| pending.id == request && pending.method == DebugMethod::Start)
+            .and_then(|pending| pending.config.clone())
+            .ok_or(editor_core::InspectionError::NoSession)?;
+        self.note_debug_provider_session(&config, session);
+        self.note_debug_state(&config, editor_core::DebugSessionState::Starting);
+        Ok(())
+    }
+    /// A state reply completes its own action even after selection changes. Epoch checks keep a
+    /// late resume/start reply from overwriting a newer real stop at the same source line.
+    pub fn apply_debug_state_reply(
+        &mut self,
+        request: u64,
+        report: &plugin_runtime::DebugSession,
+    ) -> Result<(), editor_core::InspectionError> {
+        let index = self
+            .debug_requests
+            .iter()
+            .position(|pending| pending.id == request)
+            .ok_or(editor_core::InspectionError::NoSession)?;
+        let pending = self.debug_requests.remove(index);
+        let config = pending
+            .config
+            .ok_or(editor_core::InspectionError::NoSession)?;
+        if !matches!(
+            pending.method,
+            DebugMethod::Start | DebugMethod::Step(_) | DebugMethod::Control(_)
+        ) {
+            return Err(editor_core::InspectionError::NoSession);
+        }
+        self.debug_action_in_flight.remove(&config);
+        if pending.method == DebugMethod::Start {
+            self.note_debug_provider_session(&config, &report.session);
+        }
+        if self
+            .debug_session_of(&config)
+            .and_then(|session| session.provider_session())
+            != Some(report.session.as_str())
+        {
+            return Err(editor_core::InspectionError::WrongSession);
+        }
+        self.observe_debug_report(report);
+        Ok(())
+    }
+    /// Consume an actual provider observation, beginning inspection only at a new pause epoch.
+    /// Return whether this is a newly stopped selected session so the UI can navigate once.
+    pub fn observe_debug_report(&mut self, report: &plugin_runtime::DebugSession) -> bool {
+        let Some(config) = self
+            .debug_sessions
+            .entries()
+            .find(|(_, session)| session.provider_session() == Some(report.session.as_str()))
+            .map(|(config, _)| config.to_owned())
+        else {
+            return false;
+        };
+        let epoch = report.pause.unwrap_or(0);
+        if let Some(provider) = &report.provider {
+            self.debug_owners.insert(config.clone(), provider.clone());
+        }
+        if self
+            .debug_epochs
+            .get(&config)
+            .is_some_and(|previous| *previous > epoch)
+        {
+            return false;
+        }
+        // Control receipts omit location fields. Preserve a richer observation from the same
+        // epoch rather than erasing the source after its asynchronous location reply arrives.
+        let previous = self
+            .debug_sessions
+            .session(&config)
+            .map(|session| session.state().clone());
+        let same_pause = self.debug_epochs.get(&config) == Some(&epoch);
+        let prior_location = if same_pause {
+            match previous {
+                Some(editor_core::DebugSessionState::Paused {
+                    reason,
+                    source,
+                    line,
+                }) => Some((reason, source, line)),
+                _ => None,
+            }
+        } else {
+            None
+        };
+        let state = match report.state {
+            plugin_runtime::DebugState::Starting => editor_core::DebugSessionState::Starting,
+            plugin_runtime::DebugState::Running => editor_core::DebugSessionState::Running,
+            plugin_runtime::DebugState::Exited => editor_core::DebugSessionState::Exited,
+            plugin_runtime::DebugState::Failed => editor_core::DebugSessionState::Failed {
+                reason: report
+                    .reason
+                    .clone()
+                    .unwrap_or_else(|| "Debug session failed".into()),
+            },
+            plugin_runtime::DebugState::Paused => editor_core::DebugSessionState::Paused {
+                reason: report
+                    .reason
+                    .clone()
+                    .or_else(|| prior_location.as_ref().and_then(|prior| prior.0.clone())),
+                source: report
+                    .source
+                    .clone()
+                    .or_else(|| prior_location.as_ref().map(|prior| prior.1.clone()))
+                    .unwrap_or_default(),
+                line: report
+                    .line
+                    .or_else(|| prior_location.as_ref().map(|prior| prior.2))
+                    .unwrap_or(0),
+            },
+        };
+        let session = self.debug_sessions.session_mut(&config).unwrap();
+        let new_pause = report.state == plugin_runtime::DebugState::Paused
+            && (self.debug_epochs.get(&config) != Some(&epoch)
+                || !matches!(
+                    session.state(),
+                    editor_core::DebugSessionState::Paused { .. }
+                ));
+        session.note_state(state);
+        if new_pause {
+            session.begin_pause();
+        }
+        self.debug_epochs.insert(config.clone(), epoch);
+        let location_ready = report.state == plugin_runtime::DebugState::Paused
+            && report
+                .source
+                .as_ref()
+                .is_some_and(|source| !source.is_empty())
+            && report.line.is_some_and(|line| line > 0)
+            && self.debug_position_epochs.get(&config) != Some(&epoch);
+        if location_ready {
+            self.debug_position_epochs.insert(config.clone(), epoch);
+        }
+        location_ready
+            && self.debug_sessions.selected() == Some(config.as_str())
+            && !self.debug_sessions.another_is_paused(&config)
+    }
+
     /// The selected session's provider identity, which every call names.
     pub fn debug_provider_session(&self) -> Option<String> {
         self.debug_sessions
@@ -1682,14 +2495,31 @@ impl RunControls {
             .map(str::to_owned)
     }
 
+    /// Public pause epoch associated with the selected inspection; frame IDs alone are not stable.
+    pub fn debug_pause_epoch(&self) -> Option<u64> {
+        self.debug_sessions
+            .selected()
+            .and_then(|config| self.debug_epochs.get(config))
+            .copied()
+    }
+
+    /// Record the launch-time owner before any lifecycle prompt; later defaults cannot reattribute it.
+    pub fn note_debug_provider_owner(&mut self, config: &str, provider: &str) {
+        self.debug_owners.insert(config.into(), provider.into());
+    }
+
     /// Note that one debug control action was sent, and is waiting for its answer.
     pub fn note_debug_action(&mut self) {
-        self.debug_action_in_flight = true;
+        if let Some(config) = self.debug_sessions.selected() {
+            self.debug_action_in_flight.insert(config.into());
+        }
     }
 
     /// Note that the outcome of a debug control action is known, whichever way it went.
     pub fn note_debug_action_finished(&mut self) {
-        self.debug_action_in_flight = false;
+        if let Some(config) = self.debug_sessions.selected() {
+            self.debug_action_in_flight.remove(config);
+        }
     }
 
     /// Whether a request this editor sent begins a session rather than asking about one.
@@ -1701,7 +2531,9 @@ impl RunControls {
 
     /// Whether a debug control action is still waiting for its answer.
     pub fn debug_action_pending(&self) -> bool {
-        self.debug_action_in_flight
+        self.debug_sessions
+            .selected()
+            .is_some_and(|config| self.debug_action_in_flight.contains(config))
     }
 
     /// Apply a start's answer, which establishes the session the provider now owns.
@@ -1751,8 +2583,11 @@ impl RunControls {
         id: &str,
         workspace_root: &str,
     ) -> Option<serde_json::Value> {
-        let configuration = self.configs.find(id)?;
-        let plan = self.launch_plan(id, workspace_root).ok()?;
+        let configs = self.configurations_for_launch().ok()?;
+        let configuration = configs.find(id)?;
+        let plan = self
+            .prepare_launch_from(&configs, id, workspace_root, MAX_PREPARED_STEPS)
+            .ok()?;
         let program = plan.steps.last()?;
         let mut arguments = serde_json::json!({
             "program": program.request.program,
@@ -1789,8 +2624,53 @@ impl RunControls {
 
     /// Begin the debug session for one configuration, so its identity can be recorded when it answers.
     pub fn begin_debug_session(&mut self, config: &str) {
+        // A restarted target owns a new epoch sequence; old numeric epochs cannot shadow it.
+        self.debug_epochs.remove(config);
+        self.debug_position_epochs.remove(config);
+        self.debug_owners.remove(config);
         self.debug_sessions
             .insert(config, editor_core::DebugSession::default());
+    }
+
+    /// Start receipts use the frozen preparation owner, even if the user selected another config.
+    pub fn begin_debug_start_request(&mut self, config: &str) -> Option<u64> {
+        if self.debug_requests.iter().any(|pending| {
+            pending.config.as_deref() == Some(config) && pending.method == DebugMethod::Start
+        }) {
+            return None;
+        }
+        self.next_debug_request = self.next_debug_request.checked_add(1)?;
+        let request = self.next_debug_request;
+        self.debug_requests.push(PendingDebugRequest {
+            id: request,
+            config: Some(config.into()),
+            method: DebugMethod::Start,
+            scope: editor_core::PauseScope::starting(),
+            frame: None,
+        });
+        Some(request)
+    }
+
+    /// Actual failure clears this action and marks its own start, without failing a different selection.
+    pub fn fail_debug_reply(
+        &mut self,
+        request: u64,
+        reason: String,
+    ) -> Result<(), editor_core::InspectionError> {
+        let index = self
+            .debug_requests
+            .iter()
+            .position(|pending| pending.id == request)
+            .ok_or(editor_core::InspectionError::NoSession)?;
+        let pending = self.debug_requests.remove(index);
+        let config = pending
+            .config
+            .ok_or(editor_core::InspectionError::NoSession)?;
+        self.debug_action_in_flight.remove(&config);
+        if pending.method == DebugMethod::Start {
+            self.note_debug_state(&config, editor_core::DebugSessionState::Failed { reason });
+        }
+        Ok(())
     }
 
     /// Apply a step's answer, which is the session's new state rather than a view of a pause.
@@ -1815,18 +2695,18 @@ impl RunControls {
             // An answer to one question is not an answer to another.
             return Err(editor_core::InspectionError::NoSession);
         };
-        let (config, session) = self
-            .debug_sessions
-            .current()
+        let config = pending
+            .config
             .ok_or(editor_core::InspectionError::NoSession)?;
-        let config = config.to_owned();
         // The step is only applied to the pause it was asked about: a step whose answer arrived after
         // another pause began describes a moment that is already over.
-        session.pause().accepts(pending.scope)?;
         let session = self
             .debug_sessions
             .session_mut(&config)
-            .expect("the session was just selected");
+            .ok_or(editor_core::InspectionError::NoSession)?;
+        // A control response changes its owning session, even when another session is selected.
+        // Selection controls presentation only; the captured pause still guards stale replies.
+        session.pause().accepts(pending.scope)?;
         let paused = matches!(state, editor_core::DebugSessionState::Paused { .. });
         session.note_state(state);
         if paused {
@@ -1855,6 +2735,9 @@ impl RunControls {
         let pending = self.debug_requests.remove(index);
         // The pause is still checked, so a failure about a pause that has ended is not reported
         // against the one the user is looking at.
+        if pending.config.as_deref() != self.debug_sessions.selected() {
+            return Err(editor_core::InspectionError::WrongSession);
+        }
         self.debug_sessions
             .current()
             .ok_or(editor_core::InspectionError::NoSession)
@@ -1873,12 +2756,10 @@ impl RunControls {
     /// the provider's own rendering of the value. Only the selected session's data is described, so a
     /// row can never belong to a session the user is not looking at.
     pub fn debug_panel_rows(&self) -> DebugPanelRows {
-        /// Bound on rows one panel shows; the view scrolls rather than growing without limit.
-        const MAX_ROWS: usize = 64;
+        // Protocol bounds limit the data; native scrolling keeps every reported row reachable.
         let frames = self
             .debug_frames()
             .iter()
-            .take(MAX_ROWS)
             .map(|frame| DebugFrameRow {
                 selector: format!("run-debug-frame-{}", frame.id),
                 label: format!("{}  {}:{}", frame.name, frame.source, frame.line),
@@ -1891,7 +2772,6 @@ impl RunControls {
             .map(|frame| {
                 self.debug_variables(frame)
                     .iter()
-                    .take(MAX_ROWS)
                     .map(|variable| DebugVariableRow {
                         selector: format!("run-debug-variable-{frame}-{}", variable.name),
                         // The value is the provider's rendering and is shown as given.
@@ -1931,8 +2811,8 @@ impl RunControls {
         // An action that is already in flight is not joined by a second one: the session's state is
         // about to change, so a click now would race the answer that has not arrived. Every control
         // carries that reason, including the ones the state alone would have allowed.
-        if self.debug_action_in_flight {
-            let busy = || Err("调试操作正在进行".to_owned());
+        if self.debug_action_pending() {
+            let busy = || Err(t!("run.debug_busy").to_string().to_owned());
             return editor_core::DebugControls {
                 start: busy(),
                 resume: busy(),
@@ -1949,16 +2829,47 @@ impl RunControls {
             };
         }
         let state = self.debug_state();
-        editor_core::DebugControls::derive(
-            self.debug_availability(),
+        let availability = self.debug_availability();
+        editor_core::DebugControls::derive_with(
+            availability
+                .as_ref()
+                .map(|provider| *provider)
+                .map_err(String::as_str),
             &state,
-            self.debug_capabilities,
+            self.selected_debug_capabilities(),
+            debug_presentation::control_reason,
         )
     }
 
     /// Record what the selected debug provider declared it can do.
     pub fn note_debug_capabilities(&mut self, capabilities: editor_core::DebugCapabilities) {
         self.debug_capabilities = capabilities;
+        if let Ok(provider) = self.debug_availability() {
+            self.debug_provider_capabilities
+                .insert(provider.to_owned(), capabilities);
+        }
+    }
+
+    /// Replace the live registry atomically; an absent declaration cannot silently inherit a default.
+    pub fn note_all_debug_capabilities(
+        &mut self,
+        capabilities: std::collections::BTreeMap<String, editor_core::DebugCapabilities>,
+    ) {
+        self.debug_provider_capabilities = capabilities;
+    }
+
+    /// Inspection and optional actions follow the selected target's original provider.
+    pub fn selected_debug_capabilities(&self) -> editor_core::DebugCapabilities {
+        self.debug_sessions
+            .selected()
+            .and_then(|config| self.debug_owners.get(config))
+            .map(|owner| {
+                self.debug_provider_capabilities
+                    .get(owner)
+                    .copied()
+                    .unwrap_or_default()
+            })
+            .unwrap_or(self.debug_capabilities)
     }
 
     /// Whether this configuration may be debugged, and the reason it may not.
@@ -1978,9 +2889,24 @@ impl RunControls {
     /// launch that refuses cannot disagree about whether the configuration is usable. A
     /// configuration that does not exist is not launchable either: that is a reason, not a pass.
     pub fn launch_blocker(&self, id: &str) -> Option<String> {
-        let Some(configuration) = self.configs.find(id) else {
-            return Some("未选择运行配置".into());
+        if self.running_for(id).is_some() {
+            // Locating owned work does not launch the edited shared definition.
+            return None;
+        }
+        let configs = match self.configurations_for_launch() {
+            Ok(configs) => configs,
+            Err(message) => return Some(message),
         };
+        let Some(configuration) = configs.find(id) else {
+            return Some(t!("run.no_configuration").into());
+        };
+        // The blocker and the ensuing launch must inspect the same newly loaded shared target.
+        if let Some(error) = self.discovery_blocker(configuration) {
+            return Some(error);
+        }
+        if self.configuration_target_missing(configuration) {
+            return Some(t!("run.target_missing").into());
+        }
         configuration
             .validate()
             .err()
@@ -1999,7 +2925,7 @@ impl RunControls {
         workspace: &str,
     ) -> Result<(), String> {
         let Some(mut configuration) = self.configs.find(id).cloned() else {
-            return Err(format!("未知的配置：{id}"));
+            return Err(t!("run.configuration_unknown", id = id).to_string());
         };
         configuration.provider = provider.map(str::to_owned);
         self.upsert(configuration, workspace)
@@ -2019,7 +2945,7 @@ impl RunControls {
             .iter()
             .find(|candidate| candidate.plugin == chosen)
         {
-            None => Some(format!("配置指定的执行提供者 {chosen} 未安装")),
+            None => Some(t!("run.provider_not_installed", provider = chosen).to_string()),
             Some(candidate) => candidate.unavailable.clone(),
         }
     }
@@ -2031,33 +2957,65 @@ impl RunControls {
 
     /// Reconcile stored configurations with the targets the installed plugins now offer.
     ///
-    /// A target whose program changed is corrected in place; a target that is gone is remembered as
-    /// invalid so its configuration can say so; a target nobody claimed is offered for the user to
-    /// confirm. Nothing is added, removed or renamed without that confirmation.
+    /// A changed target is offered for repair; a missing target is reported; an unclaimed target is
+    /// offered for confirmation. This read never changes an executable or writes a configuration.
+    /// Merge only failed sources from the prior catalog; a successful empty source is definitive.
+    pub(crate) fn accept_target_catalog(
+        &mut self,
+        mut catalog: crate::extensions::TargetCatalog,
+    ) -> Result<(DiscoveryReport, String), String> {
+        catalog.candidates.extend(
+            self.discovered
+                .iter()
+                .filter(|target| {
+                    catalog.failed.contains_key(&target.provider)
+                        || (catalog.declarative_error.is_some()
+                            && !target.fields.contains_key("provider_binding"))
+                })
+                .cloned(),
+        );
+        catalog.candidates.sort_by(|a, b| a.id.cmp(&b.id));
+        catalog.candidates.dedup_by(|a, b| a.id == b.id);
+        if catalog.candidates.len() > 128 {
+            return Err(t!("run.target_catalog_limit").into());
+        }
+        let mut diagnostics = catalog
+            .failed
+            .iter()
+            .map(|(provider, error)| format!("{provider}: {error}"))
+            .collect::<Vec<_>>();
+        diagnostics.extend(catalog.declarative_error.iter().cloned());
+        self.discovery_failures = catalog.failed;
+        self.declarative_discovery_error = catalog.declarative_error;
+        let report = self.reconcile_discovered(&catalog.candidates);
+        self.note_discovery();
+        Ok((report, diagnostics.join("\n")))
+    }
+
+    /// Failure to inspect a source is not proof its targets disappeared; it is a repairable blocker.
+    fn discovery_blocker(&self, config: &RunConfig) -> Option<String> {
+        if let RunTarget::Provided { provider, .. } = &config.target {
+            return self
+                .discovery_failures
+                .get(provider)
+                .map(|error| format!("{provider}: {error}"));
+        }
+        config
+            .from_target
+            .as_ref()
+            .and(self.declarative_discovery_error.clone())
+    }
+
     pub fn reconcile_discovered(
         &mut self,
         targets: &[plugin_schema::DiscoveredTarget],
     ) -> DiscoveryReport {
         let outcome = editor_core::reconcile(&self.configs, targets);
-        let mut repaired = Vec::new();
-        for id in &outcome.updated {
-            let Some(stored) = self.configs.find(id).cloned() else {
-                continue;
-            };
-            let Some(target) = targets
-                .iter()
-                .find(|target| stored.from_target.as_deref() == Some(target.id.as_str()))
-            else {
-                continue;
-            };
-            let fixed = editor_core::repair(&stored, target);
-            if fixed != stored {
-                repaired.push(fixed.name.clone());
-                // A correction is applied to the stored definition; the user's own parts are the
-                // ones `repair` preserved.
-                let _ = self.configs.upsert(fixed);
-            }
-        }
+        let repaired = outcome
+            .updated
+            .iter()
+            .filter_map(|id| self.configs.find(id).map(|stored| stored.name.clone()))
+            .collect();
         self.discovered = targets.to_vec();
         DiscoveryReport {
             repaired,
@@ -2074,6 +3032,48 @@ impl RunControls {
         }
     }
 
+    /// Apply the repair explicitly chosen in the menu, preserving the user's other configuration values.
+    pub fn repair_target(&mut self, id: &str, workspace: &str) -> Result<(), String> {
+        let configs = self.configurations_for_launch()?;
+        let stored = configs
+            .find(id)
+            .ok_or_else(|| t!("run.target_config_missing").to_string())?;
+        let target = self
+            .discovered
+            .iter()
+            .find(|target| stored.claims_target(target))
+            .ok_or_else(|| t!("run.target_missing").to_string())?;
+        self.upsert(editor_core::repair(stored, target), workspace)
+    }
+
+    /// Rebind a disappeared target only to the candidate explicitly chosen in the native menu.
+    pub fn repair_target_with(
+        &mut self,
+        id: &str,
+        target: &str,
+        workspace: &str,
+    ) -> Result<(), String> {
+        let configs = self.configurations_for_launch()?;
+        let config = configs
+            .find(id)
+            .ok_or_else(|| t!("run.target_config_missing").to_string())?;
+        let candidate = self
+            .discovered
+            .iter()
+            .find(|candidate| candidate.id == target)
+            .ok_or_else(|| t!("run.target_missing").to_string())?;
+        self.upsert(editor_core::repair(config, candidate), workspace)
+    }
+
+    /// The currently proposed executable, shown in the confirmation action before it is applied.
+    fn changed_target(&self, id: &str) -> Option<&plugin_schema::DiscoveredTarget> {
+        let config = self.configs.find(id)?;
+        self.discovered.iter().find(|target| {
+            config.from_target.as_deref() == Some(target.id.as_str())
+                && config.target.executable() != target.program
+        })
+    }
+
     /// The targets the last discovery offered, for the entry point that lists them.
     pub fn discovered_targets(&self) -> &[plugin_schema::DiscoveredTarget] {
         &self.discovered
@@ -2084,19 +3084,23 @@ impl RunControls {
     /// A configuration with no target link is never invalid this way, and neither is anything before
     /// a discovery has run: a target is only missing relative to a discovery that looked for it.
     pub fn target_missing(&self, id: &str) -> bool {
+        self.configs
+            .find(id)
+            .is_some_and(|config| self.configuration_target_missing(config))
+    }
+
+    /// Evaluate a target from the caller's snapshot; launch paths pass freshly loaded shared data.
+    fn configuration_target_missing(&self, config: &RunConfig) -> bool {
         if !self.discovery_ran {
             return false;
         }
-        let Some(stored) = self.configs.find(id) else {
+        if config.from_target.is_none() && !matches!(config.target, RunTarget::Provided { .. }) {
             return false;
-        };
-        let Some(from_target) = &stored.from_target else {
-            return false;
-        };
+        }
         !self
             .discovered
             .iter()
-            .any(|target| target.id == *from_target)
+            .any(|target| config.claims_target(target))
     }
 
     /// Configurations whose discovered target is no longer offered, by identity and name.
@@ -2117,6 +3121,28 @@ impl RunControls {
     /// Record that a discovery ran, so the entry point can tell the two empty states apart.
     pub fn note_discovery(&mut self) {
         self.discovery_ran = true;
+    }
+
+    /// Nonces survive workspace/model replacement by coming from one process-wide checked counter.
+    pub fn begin_discovery(&mut self) -> Result<u64, String> {
+        static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+        let nonce = NEXT
+            .fetch_update(
+                std::sync::atomic::Ordering::Relaxed,
+                std::sync::atomic::Ordering::Relaxed,
+                |value| value.checked_add(1),
+            )
+            .map_err(|_| "Discovery identity exhausted")?;
+        self.discovery_request = Some(nonce);
+        Ok(nonce)
+    }
+    /// Only the latest explicit invocation may reconcile a catalog; each result settles once.
+    pub fn finish_discovery(&mut self, request: u64) -> bool {
+        if self.discovery_request != Some(request) {
+            return false;
+        }
+        self.discovery_request = None;
+        true
     }
 
     /// The plan a launch of this configuration performs, or why it cannot be launched.
@@ -2159,7 +3185,7 @@ impl RunControls {
         if self.sessions.is_empty() {
             entries.push(RunMenuEntry::Action {
                 id: "run-none".into(),
-                label: "(没有运行中的会话)".into(),
+                label: t!("run.menu_none").to_string().into(),
                 enabled: false,
             });
         } else {
@@ -2179,11 +3205,27 @@ impl RunControls {
                 });
             }
         }
+        for (request, view) in &self.provider_preparations {
+            let name = self
+                .configs
+                .find(&view.config)
+                .map(|config| config.name.as_str())
+                .unwrap_or(&view.config);
+            entries.push(RunMenuEntry::Action {
+                id: format!("run-preparation-{request}"),
+                label: format!(
+                    "{name} · {} · {}",
+                    view.name,
+                    session_state_word(view.snapshot.state)
+                ),
+                enabled: true,
+            });
+        }
         entries.push(RunMenuEntry::Separator);
         if self.configs.configurations.is_empty() {
             entries.push(RunMenuEntry::Action {
                 id: "run-empty".into(),
-                label: "(尚未保存运行配置)".into(),
+                label: t!("run.menu_empty").to_string().into(),
                 enabled: false,
             });
         } else {
@@ -2197,7 +3239,7 @@ impl RunControls {
                 // A discovered configuration whose target disappeared is marked where it is chosen,
                 // not only when it is launched and fails.
                 if self.target_missing(&config.id) {
-                    label.push_str(" ⚠ 目标已失效");
+                    label.push_str(&t!("run.menu_invalid"));
                 }
                 entries.push(RunMenuEntry::Configuration {
                     id: config.id.clone(),
@@ -2208,12 +3250,12 @@ impl RunControls {
         entries.push(RunMenuEntry::Separator);
         entries.push(RunMenuEntry::Action {
             id: "run-edit".into(),
-            label: "编辑所选配置…".into(),
+            label: t!("run.menu_edit").to_string().into(),
             enabled: self.configs.selected.is_some(),
         });
         entries.push(RunMenuEntry::Action {
             id: "run-new".into(),
-            label: "新建运行配置…".into(),
+            label: t!("run.menu_new").to_string().into(),
             enabled: true,
         });
         // Discovery is always offered: a workspace with no provider says so when it is asked, which
@@ -2221,9 +3263,9 @@ impl RunControls {
         entries.push(RunMenuEntry::Action {
             id: "run-discover".into(),
             label: if self.discovered.is_empty() {
-                "发现运行目标…".to_owned()
+                t!("run.menu_discover").to_string().to_owned()
             } else {
-                format!("发现运行目标（{} 个候选）…", self.discovered.len())
+                t!("run.menu_candidates", count = self.discovered.len()).to_string()
             },
             enabled: true,
         });
@@ -2234,7 +3276,7 @@ impl RunControls {
                 .configs
                 .configurations
                 .iter()
-                .any(|config| config.from_target.as_deref() == Some(target.id.as_str()))
+                .any(|config| config.claims_target(target))
             {
                 continue;
             }
@@ -2245,23 +3287,56 @@ impl RunControls {
             });
         }
         // A configuration whose target is gone says so, so a failed launch is not the first hint.
+        if let Some(config) = self
+            .selected()
+            .filter(|config| self.target_missing(&config.id))
+        {
+            for target in &self.discovered {
+                entries.push(RunMenuEntry::Action {
+                    id: format!(
+                        "run-rebind-{}",
+                        serde_json::to_string(&(&config.id, &target.id)).unwrap()
+                    ),
+                    label: format!("{} → {}", config.name, target.label),
+                    enabled: true,
+                });
+            }
+        }
         for (config, name) in self.invalid_targets() {
             entries.push(RunMenuEntry::Action {
                 id: format!("run-repair-{config}"),
-                label: format!("目标已失效：{name}（重新发现以修复）"),
+                label: t!("run.menu_repair", name = name).to_string(),
                 enabled: true,
             });
+        }
+        for config in &self.configs.configurations {
+            if let Some(target) = self.changed_target(&config.id) {
+                entries.push(RunMenuEntry::Action {
+                    id: format!("run-apply-repair-{}", config.id),
+                    label: t!(
+                        "run.target_confirm_repair",
+                        name = &config.name,
+                        program = &target.program
+                    )
+                    .to_string(),
+                    enabled: true,
+                });
+            }
         }
         entries
     }
 }
 
 /// The state word shown beside a session in the dropdown and in the title bar.
-pub fn session_state_word(state: plugin_runtime::ExecutionState) -> &'static str {
+pub fn session_state_word(state: plugin_runtime::ExecutionState) -> String {
     match state {
-        plugin_runtime::ExecutionState::Starting => "启动中",
-        plugin_runtime::ExecutionState::Running => "运行中",
-        plugin_runtime::ExecutionState::Failed => "已结束",
+        plugin_runtime::ExecutionState::Starting => t!("run.state_starting").to_string(),
+        plugin_runtime::ExecutionState::Running => t!("run.state_running").to_string(),
+        plugin_runtime::ExecutionState::Stopping => t!("run.state_stopping").to_string(),
+        plugin_runtime::ExecutionState::Terminating => t!("run.state_terminating").to_string(),
+        plugin_runtime::ExecutionState::Failed | plugin_runtime::ExecutionState::Exited => {
+            t!("run.state_ended").to_string()
+        }
     }
 }
 
@@ -2289,6 +3364,14 @@ pub struct RunConfigDraft {
     pub source: editor_core::RunConfigSource,
     /// The discovered target this configuration came from, when a plugin offered it.
     pub from_target: Option<String>,
+    /// Structured provider bindings survive edits; changing the program field explicitly detaches.
+    pub provided: Option<RunTarget>,
+    /// Provider build actions remain structured while the editable list shows ordinary user commands.
+    pub provider_build: Vec<(usize, editor_core::RunStep)>,
+    /// Opaque prelaunch actions retain their original ordering without exposing private binding data.
+    pub provider_prelaunch: Vec<(usize, editor_core::RunStep)>,
+    /// Unedited literal argument lists keep empty and multi-line values when reopened.
+    pub original_arguments: Option<Vec<String>>,
     /// The execution provider this configuration asks for, or `None` to follow the default.
     ///
     /// The choice belongs to the configuration, so a later switch of the default does not silently
@@ -2314,24 +3397,88 @@ impl RunConfigDraft {
                 shell: matches!(config.target, RunTarget::Script { .. }),
                 program: config.target.executable().to_owned(),
                 arguments: match &config.target {
-                    RunTarget::Program { args, .. } | RunTarget::Script { args, .. } => {
-                        args.join("\n")
-                    }
+                    RunTarget::Program { args, .. }
+                    | RunTarget::Script { args, .. }
+                    | RunTarget::Provided { args, .. } => args.join("\n"),
                 },
                 script: match &config.target {
                     RunTarget::Script { script, .. } => script.clone(),
-                    RunTarget::Program { .. } => String::new(),
+                    RunTarget::Program { .. } | RunTarget::Provided { .. } => String::new(),
                 },
                 directory: config.directory.clone().unwrap_or_default(),
                 environment: render_environment(&config.env),
                 tool_paths: config.tool_paths.join("\n"),
                 source: config.source,
                 from_target: config.from_target.clone(),
+                provided: matches!(config.target, RunTarget::Provided { .. })
+                    .then(|| config.target.clone()),
+                provider_build: config
+                    .build
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, step)| {
+                        matches!(
+                            &step.target,
+                            editor_core::StepTarget::Action {
+                                target: RunTarget::Provided { .. }
+                            }
+                        )
+                    })
+                    .map(|(index, step)| (index, step.clone()))
+                    .collect(),
+                provider_prelaunch: config
+                    .prelaunch
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, step)| {
+                        matches!(
+                            &step.target,
+                            editor_core::StepTarget::Action {
+                                target: RunTarget::Provided { .. }
+                            }
+                        )
+                    })
+                    .map(|(index, step)| (index, step.clone()))
+                    .collect(),
+                // Match exactly the editable argv field; Shell appends its script only at launch.
+                original_arguments: Some(match &config.target {
+                    RunTarget::Program { args, .. }
+                    | RunTarget::Script { args, .. }
+                    | RunTarget::Provided { args, .. } => args.clone(),
+                }),
                 provider: config.provider.clone(),
                 breakpoints: render_breakpoints(&config.breakpoints),
                 share: !config.local,
-                build: render_steps(&config.build),
-                prelaunch: render_steps(&config.prelaunch),
+                build: render_steps(
+                    &config
+                        .build
+                        .iter()
+                        .filter(|step| {
+                            !matches!(
+                                &step.target,
+                                editor_core::StepTarget::Action {
+                                    target: RunTarget::Provided { .. }
+                                }
+                            )
+                        })
+                        .cloned()
+                        .collect::<Vec<_>>(),
+                ),
+                prelaunch: render_steps(
+                    &config
+                        .prelaunch
+                        .iter()
+                        .filter(|step| {
+                            !matches!(
+                                &step.target,
+                                editor_core::StepTarget::Action {
+                                    target: RunTarget::Provided { .. }
+                                }
+                            )
+                        })
+                        .cloned()
+                        .collect::<Vec<_>>(),
+                ),
             },
             None => Self {
                 id,
@@ -2345,6 +3492,10 @@ impl RunConfigDraft {
                 tool_paths: String::new(),
                 source: editor_core::RunConfigSource::Local,
                 from_target: None,
+                provided: None,
+                provider_build: vec![],
+                provider_prelaunch: vec![],
+                original_arguments: None,
                 provider: None,
                 breakpoints: String::new(),
                 // Sharing is an explicit choice; a new configuration starts on this machine only.
@@ -2355,19 +3506,54 @@ impl RunConfigDraft {
         }
     }
 
+    /// Insert each opaque provider action at its original position, preserving earlier generators.
+    /// Detaching the final target removes only its own auto-build, never unrelated provider actions.
+    fn restore_opaque_steps(
+        &self,
+        mut steps: Vec<editor_core::RunStep>,
+        opaque: &[(usize, editor_core::RunStep)],
+        detach: bool,
+    ) -> Vec<editor_core::RunStep> {
+        for (index, step) in opaque {
+            if detach
+                && matches!(&step.target,editor_core::StepTarget::Action {target} if provided_binding(target)==self.provided.as_ref().and_then(provided_binding))
+            {
+                continue;
+            }
+            steps.insert((*index).min(steps.len()), step.clone());
+        }
+        steps
+    }
+
     /// Build the configuration this draft describes.
     ///
     /// The mode decides which fields mean what: program mode keeps a literal argv and never composes
     /// a command line, shell mode passes the script text to the named interpreter as one argument.
     /// A malformed environment line is reported here, so an unusable entry never reaches a launch.
     pub fn to_config(&self) -> Result<RunConfig, String> {
-        let arguments = self
-            .arguments
-            .lines()
-            .map(str::to_owned)
-            .filter(|line| !line.is_empty())
-            .collect::<Vec<_>>();
-        let target = if self.shell {
+        let arguments = if let Some(original) = &self.original_arguments
+            && original.join("\n") == self.arguments
+        {
+            original.clone()
+        } else {
+            self.arguments
+                .lines()
+                .map(str::to_owned)
+                .filter(|line| !line.is_empty())
+                .collect::<Vec<_>>()
+        };
+        let keeps_provider = !self.shell
+            && self
+                .provided
+                .as_ref()
+                .is_some_and(|target| target.executable() == self.program.trim());
+        let target = if keeps_provider {
+            let mut target = self.provided.clone().unwrap();
+            if let RunTarget::Provided { args, .. } = &mut target {
+                *args = arguments;
+            }
+            target
+        } else if self.shell {
             RunTarget::Script {
                 interpreter: self.program.trim().to_owned(),
                 args: arguments,
@@ -2393,8 +3579,16 @@ impl RunConfigDraft {
                 .filter(|line| !line.is_empty())
                 .map(str::to_owned)
                 .collect(),
-            build: parse_steps(&self.build)?,
-            prelaunch: parse_steps(&self.prelaunch)?,
+            build: self.restore_opaque_steps(
+                parse_steps(&self.build)?,
+                &self.provider_build,
+                !keeps_provider,
+            ),
+            prelaunch: self.restore_opaque_steps(
+                parse_steps(&self.prelaunch)?,
+                &self.provider_prelaunch,
+                false,
+            ),
             source: self.source,
             // Editing a configuration by hand keeps the target it came from, so a later discovery
             // still recognizes it as its own rather than offering to add a second copy.
@@ -2422,80 +3616,20 @@ impl RunConfigDraft {
     }
 }
 
-/// Read one prepared action per line: `名称 = 程序或解释器 | 参数 | 参数`.
-///
-/// The name comes first so a failure can say which step stopped the sequence, and arguments stay
-/// separate items rather than one command line, exactly as the stored action is defined.
-pub fn parse_steps(text: &str) -> Result<Vec<editor_core::RunStep>, String> {
-    let mut steps = Vec::new();
-    for line in text.lines() {
-        let line = line.trim();
-        if line.is_empty() {
-            continue;
-        }
-        // A row added as a template is a comment until the user turns it into an action.
-        if line.starts_with('#') {
-            continue;
-        }
-        let Some((name, rest)) = line.split_once('=') else {
-            return Err(format!("步骤需要写成 名称 = 程序 | 参数：{line}"));
-        };
-        let name = name.trim();
-        if name.is_empty() {
-            return Err(format!("步骤缺少名称：{line}"));
-        }
-        let mut parts = rest.split('|').map(str::trim);
-        let executable = parts.next().unwrap_or_default();
-        if executable.is_empty() {
-            return Err(format!("步骤缺少要运行的程序：{line}"));
-        }
-        if executable.starts_with('@') && executable.trim().len() == 1 {
-            return Err(format!("构建引用缺少配置名称：{line}"));
-        }
-        let arguments = parts
-            .map(str::to_owned)
-            .filter(|argument| !argument.is_empty())
-            .collect::<Vec<_>>();
-        // `@名称` runs the build actions of the configuration with that name; anything else starts
-        // what it names. A reference is stored as an identity, never as the commands it stands for.
-        let target = if let Some(reference) = executable.strip_prefix('@') {
-            editor_core::StepTarget::Build {
-                config: reference.trim().to_owned(),
-            }
-        } else {
-            editor_core::StepTarget::Action {
-                target: RunTarget::Program {
-                    program: executable.to_owned(),
-                    args: arguments,
-                },
-            }
-        };
-        steps.push(editor_core::RunStep {
-            name: name.to_owned(),
-            target,
-        });
+/// Extract a generic preparation binding; no provider fields or languages are interpreted here.
+fn provided_binding(target: &RunTarget) -> Option<(String, String)> {
+    if let RunTarget::Provided {
+        provider, binding, ..
+    } = target
+    {
+        Some((provider.clone(), binding.clone()))
+    } else {
+        None
     }
-    Ok(steps)
 }
 
-/// Render stored actions back into the one-per-line form the field edits.
-pub fn render_steps(steps: &[editor_core::RunStep]) -> String {
-    steps
-        .iter()
-        .map(|step| match &step.target {
-            editor_core::StepTarget::Action { target } => {
-                let mut line = format!("{} = {}", step.name, target.executable());
-                for argument in target.arguments() {
-                    line.push_str(" | ");
-                    line.push_str(argument);
-                }
-                line
-            }
-            editor_core::StepTarget::Build { config } => format!("{} = @{}", step.name, config),
-        })
-        .collect::<Vec<_>>()
-        .join("\n")
-}
+mod step_text;
+pub use step_text::{parse_steps, render_steps};
 
 /// The actions one list holds, as editable lines.
 ///
@@ -2552,7 +3686,7 @@ pub fn remove_step(text: &str, index: usize) -> Option<String> {
 /// finished.
 pub fn add_step(text: &str) -> String {
     let mut lines = step_lines(text);
-    lines.push("# 名称 = 程序 | 参数".to_owned());
+    lines.push(t!("run.steps_format_header").to_string());
     join_step_lines(&lines)
 }
 
@@ -2568,11 +3702,11 @@ pub fn parse_environment(text: &str) -> Result<BTreeMap<String, String>, String>
             continue;
         }
         let Some((name, value)) = line.split_once('=') else {
-            return Err(format!("环境变量需要写成 名称=值：{line}"));
+            return Err(t!("run.environment_syntax", line = line).to_string());
         };
         let name = name.trim();
         if name.is_empty() {
-            return Err(format!("环境变量缺少名称：{line}"));
+            return Err(t!("run.environment_name_missing", line = line).to_string());
         }
         entries.insert(name.to_owned(), value.to_owned());
     }
@@ -2600,10 +3734,10 @@ pub fn parse_breakpoints(text: &str) -> Result<editor_core::RunBreakpoints, Stri
             continue;
         }
         let Some((source, number)) = line.rsplit_once(':') else {
-            return Err(format!("断点需要写成 源文件:行号：{line}"));
+            return Err(t!("run.breakpoint_syntax", line = line).to_string());
         };
         let Ok(number) = number.trim().parse::<u32>() else {
-            return Err(format!("断点行号必须是数字：{line}"));
+            return Err(t!("run.breakpoint_line_invalid", line = line).to_string());
         };
         match breakpoints.insert(source.trim(), number) {
             Ok(()) => {}

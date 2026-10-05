@@ -82,6 +82,288 @@ fn call(manager: &mut Manager, method: &str, value: Value, timeout: u32) -> Stri
     )
 }
 
+/// A deferred provider keeps the request pending and later completes the same public consumer task.
+#[test]
+#[ignore = "build capability-example through the current public SDK first"]
+fn a_provider_can_reply_after_its_initial_wasm_callback_returns() {
+    let temp = tempfile::tempdir().unwrap();
+    let mut manager = Manager::open(temp.path().join("plugins"), Environment::default()).unwrap();
+    install(
+        &mut manager,
+        package("deferred-provider", true, false, "1.0.0"),
+    );
+    install(
+        &mut manager,
+        package("service-consumer", false, false, "^1"),
+    );
+    command(
+        &mut manager,
+        "service-consumer",
+        "service-open",
+        json!("example.echo"),
+    );
+    assert_eq!(
+        call(&mut manager, "defer", json!("pending"), 30000),
+        "Accepted"
+    );
+    for _ in 0..3 {
+        manager.poll();
+    }
+    let pending: plugin_runtime::plugin_protocol::api::RequestUpdate<Value> =
+        serde_json::from_str(&text(&manager, "service-consumer")).unwrap();
+    assert!(
+        !pending.is_terminal(),
+        "omitting the immediate reply must retain a bounded pending request: {pending:?}"
+    );
+    assert_eq!(
+        command(
+            &mut manager,
+            "deferred-provider",
+            "service-reply-deferred",
+            json!("later result")
+        ),
+        "Replied"
+    );
+    manager.poll();
+    let completed: plugin_runtime::plugin_protocol::api::RequestUpdate<Value> =
+        serde_json::from_str(&text(&manager, "service-consumer")).unwrap();
+    assert!(
+        matches!(completed, plugin_runtime::plugin_protocol::api::RequestUpdate::Completed { result: Ok(value) } if value == json!("later result"))
+    );
+    assert!(
+        command(
+            &mut manager,
+            "deferred-provider",
+            "service-replay-reply",
+            json!("duplicate")
+        )
+        .contains("InvalidHandle")
+    );
+}
+
+/// Reply authority comes from the retained provider invocation, not a consumer's services.call grant.
+#[test]
+#[ignore = "build capability-example through the current public SDK first"]
+fn a_pure_provider_can_complete_its_deferred_reply_without_consumer_authority() {
+    let temp = tempfile::tempdir().unwrap();
+    let mut manager = Manager::open(temp.path().join("plugins"), Environment::default()).unwrap();
+    install(
+        &mut manager,
+        service_packages::pure_provider("pure-provider"),
+    );
+    install(
+        &mut manager,
+        package("service-consumer", false, false, "^1"),
+    );
+    command(
+        &mut manager,
+        "service-consumer",
+        "service-open",
+        json!("example.echo"),
+    );
+    call(&mut manager, "defer", json!("pending"), 30000);
+    manager.poll();
+    assert_eq!(
+        command(
+            &mut manager,
+            "pure-provider",
+            "service-reply-deferred",
+            json!("done")
+        ),
+        "Replied"
+    );
+    manager.poll();
+    assert!(text(&manager, "service-consumer").contains("done"));
+}
+
+/// A delegated event from B cannot consume the invocation retained for source A.
+#[test]
+#[ignore = "build capability-example through the current public SDK first"]
+fn a_deferred_reply_cannot_borrow_another_sources_invocation() {
+    let temp = tempfile::tempdir().unwrap();
+    let mut manager = Manager::open(temp.path().join("plugins"), Environment::default()).unwrap();
+    for (id, provider) in [
+        ("deferred-provider", true),
+        ("service-consumer", false),
+        ("other-consumer", false),
+    ] {
+        install(
+            &mut manager,
+            package(id, provider, false, if provider { "1.0.0" } else { "^1" }),
+        );
+    }
+    command(
+        &mut manager,
+        "service-consumer",
+        "service-open",
+        json!("example.echo"),
+    );
+    command(
+        &mut manager,
+        "other-consumer",
+        "service-open",
+        json!("example.echo"),
+    );
+    call(&mut manager, "defer", json!("pending"), 30000);
+    manager.poll();
+    command(
+        &mut manager,
+        "other-consumer",
+        "service-call",
+        json!({"method":"reply-retained","value":"from B"}),
+    );
+    manager.poll();
+    assert!(
+        text(&manager, "other-consumer").contains("PermissionDenied"),
+        "another source must not complete A's invocation"
+    );
+    assert_eq!(
+        command(
+            &mut manager,
+            "deferred-provider",
+            "service-reply-deferred",
+            json!("from A")
+        ),
+        "Replied"
+    );
+    manager.poll();
+    assert!(text(&manager, "service-consumer").contains("from A"));
+}
+
+/// Late results, invalid schemas and retired sources cannot reopen a completed consumer task.
+#[test]
+#[ignore = "build capability-example through the current public SDK first"]
+fn deferred_replies_release_their_slots_on_cancel_timeout_and_source_retirement() {
+    use plugin_runtime::plugin_protocol::api::RequestUpdate;
+    let temp = tempfile::tempdir().unwrap();
+    let mut manager = Manager::open(temp.path().join("plugins"), Environment::default()).unwrap();
+    install(
+        &mut manager,
+        package("deferred-provider", true, false, "1.0.0"),
+    );
+    install(
+        &mut manager,
+        package("service-consumer", false, false, "^1"),
+    );
+    command(
+        &mut manager,
+        "service-consumer",
+        "service-open",
+        json!("example.echo"),
+    );
+    let resources = manager.live["deferred-provider"].resource_count();
+    call(&mut manager, "defer", json!("pending"), 30000);
+    manager.poll();
+    assert!(
+        command(
+            &mut manager,
+            "deferred-provider",
+            "service-reply-deferred",
+            json!(42)
+        )
+        .contains("InvalidRequest")
+    );
+    assert_eq!(
+        manager.live["deferred-provider"].resource_count(),
+        resources + 1
+    );
+    assert_eq!(
+        command(
+            &mut manager,
+            "deferred-provider",
+            "service-reply-deferred",
+            json!("corrected")
+        ),
+        "Replied"
+    );
+    manager.poll();
+    assert_eq!(
+        manager.live["deferred-provider"].resource_count(),
+        resources
+    );
+    assert!(
+        command(
+            &mut manager,
+            "deferred-provider",
+            "service-replay-reply",
+            json!("duplicate")
+        )
+        .contains("InvalidHandle")
+    );
+    for timeout in [30000, 50] {
+        call(&mut manager, "defer", json!("pending"), timeout);
+        manager.poll();
+        if timeout == 30000 {
+            command(
+                &mut manager,
+                "service-consumer",
+                "service-cancel",
+                Value::Null,
+            );
+        } else {
+            std::thread::sleep(std::time::Duration::from_millis(100));
+        }
+        for _ in 0..3 {
+            manager.poll();
+        }
+        let terminal = text(&manager, "service-consumer");
+        let result: RequestUpdate<Value> = serde_json::from_str(&terminal).unwrap();
+        assert!(matches!(result, RequestUpdate::Cancelled { .. }));
+        assert_eq!(
+            manager.live["deferred-provider"].resource_count(),
+            resources
+        );
+        assert!(
+            command(
+                &mut manager,
+                "deferred-provider",
+                "service-replay-reply",
+                json!("late")
+            )
+            .contains("InvalidHandle")
+        );
+        manager.poll();
+        assert_eq!(text(&manager, "service-consumer"), terminal);
+    }
+    call(&mut manager, "defer", json!("pending"), 30000);
+    manager.poll();
+    manager.disable("service-consumer").unwrap();
+    manager.poll();
+    assert_eq!(
+        manager.live["deferred-provider"].resource_count(),
+        resources
+    );
+    manager.enable("service-consumer").unwrap();
+    command(
+        &mut manager,
+        "service-consumer",
+        "service-open",
+        json!("example.echo"),
+    );
+    call(&mut manager, "defer", json!("new incarnation"), 30000);
+    manager.poll();
+    let pending: RequestUpdate<Value> =
+        serde_json::from_str(&text(&manager, "service-consumer")).unwrap();
+    assert!(
+        !pending.is_terminal(),
+        "source retirement must notify the provider to release its local slot: {pending:?}"
+    );
+    assert_eq!(
+        command(
+            &mut manager,
+            "deferred-provider",
+            "service-reply-deferred",
+            json!("new result")
+        ),
+        "Replied"
+    );
+    manager.poll();
+    assert_eq!(
+        manager.live["deferred-provider"].resource_count(),
+        resources
+    );
+}
+
 /// Switching a host choice changes new references, never the meaning of an existing opaque reference.
 #[test]
 #[ignore = "build capability-example through the public SDK first"]
@@ -269,7 +551,11 @@ fn service_calls_preserve_source_and_cannot_borrow_provider_authority_or_reenter
     assert!(text(&manager, "service-consumer").contains("invalid_request"));
     call(&mut manager, "trap", json!(""), 30000);
     manager.poll();
-    assert!(text(&manager, "service-consumer").contains("operation_failed"));
+    assert!(
+        text(&manager, "service-consumer").contains("operation_failed"),
+        "{}",
+        text(&manager, "service-consumer")
+    );
     assert!(manager.live["provider-a"].views.is_empty());
     assert!(!manager.live["service-consumer"].views.is_empty());
     manager.uninstall("service-consumer", true).unwrap();

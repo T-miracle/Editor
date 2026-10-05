@@ -1,4 +1,5 @@
 //! Rust Analyzer policy lives in this independent guest; the host only executes generic language plans.
+mod targets;
 use plugin_protocol::{
     api::{self, ErrorCode, Failure},
     bindings::{Guest, export},
@@ -12,6 +13,11 @@ impl Guest for RustLanguage {
     /// The SDK correlates lifecycle replies and typed host operations without exposing host implementation paths.
     fn dispatch(payload: String) -> Result<String, String> {
         api::guest::dispatch(&payload, |input| match input {
+            // Dynamic target policy shares this guest without moving Cargo parsing into the host.
+            input @ api::Input::Event {
+                event: api::Notification::Service(_) | api::Notification::Process { .. },
+                ..
+            } => targets::dispatch(input),
             api::Input::Event {
                 event: api::Notification::LanguageService(context),
                 ..

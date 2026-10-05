@@ -23,7 +23,7 @@ Me Editor 是一个 Rust + GPUI Kit 编写的原生桌面代码编辑器初版�
 - 声明式插件清单解析和校验骨架。
 - 统一命令注册表骨架。
 - WebAssembly 运行时插件：本机安装、热更新、权限确认、状态保存与通用 GPUI 停靠界面。终端插件内的 Alacritty 核心、右侧 Tab 与交互均在插件内，详见 [运行时插件平台](docs/runtime-plugins.md) 和 [终端插件使用说明](plugins/terminal/README.md)。
-- 运行、调试与构建：标题栏运行组配置并启动真实程序、单独构建、观察并行会话；程序与调试均由插件提供者经公开契约承担，宿主不内建语言或调试器知识。断点属于配置，断点命中时自动定位到源码行，暂停后可查看调用栈与局部变量。详见 [运行、调试与构建](docs/run-debug-build.md)。
+- 运行、调试与构建：标题栏运行组配置并启动真实程序、单独构建、观察并行会话；程序与调试均由插件提供者经公开契约承担，宿主不内建语言或调试器知识。断点属于配置，断点命中时自动定位到源码行，暂停后可查看调用栈与局部变量。使用说明见 [运行、调试与构建](https://t-miracle.github.io/Editor/zh-cn/guide/run-debug-build/)，公开协议见 [SDK 文档](https://t-miracle.github.io/Editor/zh-cn/sdk/sessions/)。维护者验收保存在 [验证记录](docs/plugins/verification/run-debug-build.md)。
 
 ## 运行
 
@@ -55,6 +55,19 @@ cargo run -p editor-app -- C:\path\to\project\src\main.rs
 ```
 
 产物位于 `dist/editor/`，插件位于其 `plugins/` 子目录。Markdown 方案、工单与逐单验收见[插件文档入口](docs/plugins/README.md)。
+
+## 运行与调试插件构建
+
+运行准备和调试均使用独立插件。已有 Rust/Cargo 与 `wasm32-wasip2` 目标的开发环境可执行：
+
+```powershell
+cargo build -p editor-app
+./scripts/build-plugins.ps1 -HostExe ./target/debug/editor-app.exe -Packages terminal,rust,run-target-example
+./scripts/build-rust-debugger.ps1 -HostExe ./target/debug/editor-app.exe
+./scripts/verify-plugin-sdk.ps1
+```
+
+Rust 调试插件将经哈希锁定的 CodeLLDB 与桥接程序准备到已授权的插件私有目录，不修改全局工具路径或安装编译器。安装包仍需正常批准声明的权限。读者文档源在 `website/`，站点构建说明见 [website/README.md](website/README.md)。
 
 ## 验证
 

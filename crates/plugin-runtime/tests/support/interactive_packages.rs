@@ -33,13 +33,13 @@ pub fn as_requirement(methods: Value) -> Value {
     )
 }
 
-/// This fixture declaration is an independent consumer's expectation of execution service 1.3.
+/// This fixture declaration is an independent consumer's expectation of execution service 2.0.
 ///
 /// `stop` and `status` are declared here too: a consumer that promises to end a program and to
 /// report what became of it has to require both, otherwise it would match a provider that can do
 /// neither.
 pub fn methods() -> Value {
-    json!({
+    let mut methods = json!({
         "execute": {
             "parameters": {"type":"record", "fields": {
                 "program":{"type":"string","max_bytes":4096},
@@ -60,8 +60,9 @@ pub fn methods() -> Value {
         },
         "stop": {
             "parameters":{"type":"record","fields":{
-                "session":{"type":"string","max_bytes":128}
-            }},
+                "session":{"type":"string","max_bytes":128},
+                "mode":{"type":"string","max_bytes":16}
+            },"optional":["mode"]},
             "result":{"type":"record","fields":{
                 "session":{"type":"string","max_bytes":128},
                 "state":{"type":"string","max_bytes":32}
@@ -75,11 +76,19 @@ pub fn methods() -> Value {
             "result":{"type":"record","fields":{
                 "session":{"type":"string","max_bytes":128},
                 "state":{"type":"string","max_bytes":32},
-                "code":{"type":"integer","min":0,"max":2147483647}
+                "code":{"type":"integer","min":0,"max":4294967295u64}
             }, "optional":["code"]},
             "permissions":["process.exec"]
         }
-    })
+    });
+    methods.as_object_mut().unwrap().extend(
+        serde_json::to_value(plugin_runtime::plugin_protocol::execution::observation_methods())
+            .unwrap()
+            .as_object()
+            .unwrap()
+            .clone(),
+    );
+    methods
 }
 
 /// The execution contract a provider must declare to serve this host, shape for shape.
@@ -88,7 +97,7 @@ pub fn methods() -> Value {
 /// cannot serve this host: the match is exact, and writing the shape here is how an independently
 /// packaged provider states that it agrees about what a call means.
 pub fn provider_methods() -> Value {
-    json!({
+    let mut methods = json!({
         "execute": {
             "parameters": {"type":"record", "fields": {
                 "program":{"type":"string","max_bytes":4096},
@@ -107,8 +116,9 @@ pub fn provider_methods() -> Value {
         },
         "stop": {
             "parameters":{"type":"record","fields":{
-                "session":{"type":"string","max_bytes":128}
-            }},
+                "session":{"type":"string","max_bytes":128},
+                "mode":{"type":"string","max_bytes":16}
+            },"optional":["mode"]},
             "result":{"type":"record","fields":{
                 "session":{"type":"string","max_bytes":128},
                 "state":{"type":"string","max_bytes":32}
@@ -122,11 +132,19 @@ pub fn provider_methods() -> Value {
             "result":{"type":"record","fields":{
                 "session":{"type":"string","max_bytes":128},
                 "state":{"type":"string","max_bytes":32},
-                "code":{"type":"integer","min":0,"max":2147483647}
+                "code":{"type":"integer","min":0,"max":4294967295u64}
             }, "optional":["code"]},
             "permissions":["process.exec"]
         }
-    })
+    });
+    methods.as_object_mut().unwrap().extend(
+        serde_json::to_value(plugin_runtime::plugin_protocol::execution::observation_methods())
+            .unwrap()
+            .as_object()
+            .unwrap()
+            .clone(),
+    );
+    methods
 }
 
 /// An independently packaged provider that declares exactly what this host calls.
@@ -143,10 +161,10 @@ pub fn provider(id: &str) -> Package {
     // A provider is a separate package: it never declares the host's settings hook.
     manifest["settings_hook"] = json!(false);
     manifest["api"]["required"]["plugin.services"] = json!("^1");
-    manifest["api"]["required"]["process"] = json!(">=1.4, <2");
+    manifest["api"]["required"]["process"] = json!(">=1.5, <2");
     manifest["permissions"] = json!(["assets.read", "services.call", "process.exec", "ui.panels"]);
     manifest["plugin_services"] =
-        json!({"provides": {CONTRACT:{"version":"1.3.0","methods":provider_methods()}}});
+        json!({"provides": {CONTRACT:{"version":"2.0.0","methods":provider_methods()}}});
     archive(files, manifest)
 }
 
@@ -157,89 +175,10 @@ pub fn provider(id: &str) -> Package {
 /// that rather than treating the package as unusable.
 pub const DEBUG_CONTRACT: &str = "debug.session";
 
-/// One method declaration, written as the host declares it.
-fn method(parameters: Value, result: Value, permissions: &[&str]) -> Value {
-    json!({
-        "parameters": parameters,
-        "result": result,
-        "permissions": permissions,
-    })
-}
-
-/// The debug methods a package may declare, keyed by name so a caller can drop one.
+/// Consumers and providers use the exact versioned SDK declaration, then omit optional methods
+/// explicitly to exercise capability matching without restating an obsolete wire contract.
 pub fn debug_methods() -> Value {
-    let session = json!({"type":"record","fields":{
-        "session":{"type":"string","max_bytes":128}}});
-    let session_state = json!({"type":"record","fields":{
-        "session":{"type":"string","max_bytes":128},
-        "state":{"type":"string","max_bytes":32}}});
-    json!({
-        "start": method(
-            json!({"type":"record","fields":{
-                "program":{"type":"string","max_bytes":4096},
-                "args":{"type":"array","max_items":128,"items":{"type":"string","max_bytes":4096}},
-                "cwd":{"type":"string","max_bytes":4096},
-                "name":{"type":"string","max_bytes":256},
-                "env":{"type":"array","max_items":64,"items":{"type":"record","fields":{
-                    "name":{"type":"string","max_bytes":128},
-                    "value":{"type":"string","max_bytes":32768}}}},
-                "breakpoints":{"type":"array","max_items":512,"items":{"type":"record","fields":{
-                    "source":{"type":"string","max_bytes":4096},
-                    "line":{"type":"integer","min":1,"max":2147483647}}}},
-                "stop_on_entry":{"type":"boolean"}},
-                "optional":["cwd","name","env","breakpoints","stop_on_entry"]}),
-            session_state.clone(),
-            &["process.exec","ui.panels"]),
-        "set_breakpoints": method(
-            json!({"type":"record","fields":{
-                "session":{"type":"string","max_bytes":128},
-                "breakpoints":{"type":"array","max_items":512,"items":{"type":"record","fields":{
-                    "source":{"type":"string","max_bytes":4096},
-                    "line":{"type":"integer","min":1,"max":2147483647}}}}}}),
-            json!({"type":"record","fields":{
-                "breakpoints":{"type":"array","max_items":512,"items":{"type":"record","fields":{
-                    "source":{"type":"string","max_bytes":4096},
-                    "line":{"type":"integer","min":1,"max":2147483647},
-                    "verified":{"type":"boolean"}}}}}}),
-            &["process.exec"]),
-        "resume": method(session.clone(), session_state.clone(), &["process.exec"]),
-        "pause": method(session.clone(), session_state.clone(), &["process.exec"]),
-        "step": method(
-            json!({"type":"record","fields":{
-                "session":{"type":"string","max_bytes":128},
-                "kind":{"type":"string","max_bytes":32}}}),
-            session_state.clone(),
-            &["process.exec"]),
-        "frames": method(
-            session.clone(),
-            json!({"type":"record","fields":{
-                "frames":{"type":"array","max_items":256,"items":{"type":"record","fields":{
-                    "id":{"type":"integer","min":0,"max":2147483647},
-                    "name":{"type":"string","max_bytes":512},
-                    "source":{"type":"string","max_bytes":4096},
-                    "line":{"type":"integer","min":1,"max":2147483647}}}}}}),
-            &["process.exec"]),
-        "variables": method(
-            json!({"type":"record","fields":{
-                "session":{"type":"string","max_bytes":128},
-                "frame":{"type":"integer","min":0,"max":2147483647}}}),
-            json!({"type":"record","fields":{
-                "variables":{"type":"array","max_items":512,"items":{"type":"record","fields":{
-                    "name":{"type":"string","max_bytes":512},
-                    "value":{"type":"string","max_bytes":4096}}}}}}),
-            &["process.exec"]),
-        "status": method(
-            session.clone(),
-            json!({"type":"record","fields":{
-                "session":{"type":"string","max_bytes":128},
-                "state":{"type":"string","max_bytes":32},
-                "reason":{"type":"string","max_bytes":64},
-                "source":{"type":"string","max_bytes":4096},
-                "line":{"type":"integer","min":1,"max":2147483647}},
-                "optional":["reason","source","line"]}),
-            &["process.exec"]),
-        "stop": method(session, session_state, &["process.exec"]),
-    })
+    serde_json::to_value(plugin_runtime::plugin_protocol::debug::declaration().methods).unwrap()
 }
 
 /// The debug methods a package may offer, as `provides` declarations.
@@ -251,7 +190,7 @@ pub fn debug_provides(omit: &[&str]) -> Value {
     for name in omit {
         methods.as_object_mut().unwrap().remove(*name);
     }
-    json!({DEBUG_CONTRACT: {"version": "1.0.0", "methods": methods}})
+    json!({DEBUG_CONTRACT: {"version": "1.1.0", "methods": methods}})
 }
 
 /// An independently packaged debug provider that declares the host's own shape.
@@ -291,13 +230,13 @@ pub fn session_consumer(id: &str) -> Package {
     manifest["settings_hook"] = json!(false);
     manifest["api"]["required"]["plugin.services"] = json!("^1");
     manifest["api"]["required"]["process"] = json!(">=1.3, <2");
-    manifest["permissions"] = json!(["assets.read", "services.call", "ui.panels"]);
+    manifest["permissions"] = json!(["assets.read", "services.call", "process.exec", "ui.panels"]);
     manifest["plugin_services"] = json!({
         "requires": {
-            CONTRACT: {"version": ">=1.3, <2", "optional": true, "methods": as_requirement(methods())},
+            CONTRACT: {"version": "^2", "optional": true, "methods": as_requirement(methods())},
             // The host's own session contract, required as stated so the consumer matches it.
             "session.host": {
-                "version": "^1",
+                "version": "^2",
                 "optional": false,
                 "methods": session_methods()
             }
@@ -308,7 +247,7 @@ pub fn session_consumer(id: &str) -> Package {
 
 /// The host's session contract as a consumer must state it to reach it.
 pub fn session_methods() -> Value {
-    json!({
+    let mut methods = json!({
         "start": {
             "parameters": {"type":"record","fields":{
                 "program":{"type":"string","max_bytes":4096},
@@ -323,7 +262,7 @@ pub fn session_methods() -> Value {
                 "session":{"type":"string","max_bytes":128},
                 "state":{"type":"string","max_bytes":32},
                 "located":{"type":"boolean"}}},
-            "permissions":[]
+            "permissions":["process.exec","ui.panels"]
         },
         "list": {
             "parameters":{"type":"record","fields":{}},
@@ -341,13 +280,41 @@ pub fn session_methods() -> Value {
             "permissions":[]
         },
         "stop": {
-            "parameters":{"type":"record","fields":{"session":{"type":"string","max_bytes":128}}},
+            "parameters":{"type":"record","fields":{
+                "session":{"type":"string","max_bytes":128},
+                "mode":{"type":"string","max_bytes":16},
+                "grace_ms":{"type":"integer","min":1,"max":60000}},"optional":["mode","grace_ms"]},
             "result":{"type":"record","fields":{
                 "session":{"type":"string","max_bytes":128},
                 "state":{"type":"string","max_bytes":32}}},
-            "permissions":[]
+            "permissions":["process.exec"]
         }
-    })
+    });
+    // An independent consumer declares every operation it uses, including bounded observer pulls.
+    let session = json!({"type":"string","max_bytes":128});
+    let state = json!({"type":"string","max_bytes":32});
+    let sub = json!({"type":"string","max_bytes":128});
+    let event = plugin_runtime::plugin_protocol::execution::event_schema();
+    let mut observations =
+        serde_json::to_value(plugin_runtime::plugin_protocol::execution::observation_methods())
+            .unwrap();
+    observations.as_object_mut().unwrap().remove("events");
+    methods
+        .as_object_mut()
+        .unwrap()
+        .extend(observations.as_object().unwrap().clone());
+    methods.as_object_mut().unwrap().extend(json!({
+        "subscribe":{"parameters":{"type":"record","fields":{"session":session}},"result":{"type":"record","fields":{"subscription":sub,"session":session,"state":state}}},
+        "next":{"parameters":{"type":"record","fields":{"subscription":sub,"limit":{"type":"integer","min":1,"max":16}}},"result":{"type":"record","fields":{"subscription":sub,"session":session,"state":state,"cursor":{"type":"integer","min":0,"max":i64::MAX},"gap":{"type":"boolean"},"events":{"type":"array","max_items":16,"items":event}}}},
+        "unsubscribe":{"parameters":{"type":"record","fields":{"subscription":sub}},"result":{"type":"record","fields":{"subscription":sub}}}
+    }).as_object().unwrap().clone());
+    methods["start"]["parameters"]["fields"]["configuration"] =
+        json!({"type":"string","max_bytes":256});
+    methods["start"]["parameters"]["optional"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!("configuration"));
+    methods
 }
 
 /// Repackage through admission so tests cannot silently mutate a validated manifest in memory.
@@ -404,12 +371,14 @@ pub fn fixture(id: &str, provider: bool, execution: bool) -> Package {
             .remove("permissions");
         methods.as_object_mut().unwrap().remove("stop");
         methods.as_object_mut().unwrap().remove("status");
+        methods.as_object_mut().unwrap().remove("input");
+        methods.as_object_mut().unwrap().remove("events");
     }
     manifest["plugin_services"] = if provider {
         // A provider implements every method of the execution contract it advertises.
-        json!({"provides": {CONTRACT:{"version":"1.3.0","methods":methods}}})
+        json!({"provides": {CONTRACT:{"version":"2.0.0","methods":methods}}})
     } else {
-        json!({"requires": {CONTRACT:{"version":">=1.3, <2","optional":true,"methods":methods}}})
+        json!({"requires": {CONTRACT:{"version":"^2","optional":true,"methods":methods}}})
     };
     archive(files, manifest)
 }

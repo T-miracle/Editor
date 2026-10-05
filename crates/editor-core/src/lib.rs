@@ -8,8 +8,8 @@ mod workspace;
 pub use commands::{CommandDescriptor, CommandId, CommandRegistry, KeyBindingDescriptor};
 pub use documents::{DocumentError, DocumentSession, DocumentStore, OpenedDocument};
 pub use run::{
-    BreakpointError, DebugCapabilities, DebugControls, DebugSession, DebugSessionState,
-    DebugSessions, DebugStep, DebugVariable, DiscoveryOutcome, InspectionError,
+    BreakpointError, DebugCapabilities, DebugControlReason, DebugControls, DebugSession,
+    DebugSessionState, DebugSessions, DebugStep, DebugVariable, DiscoveryOutcome, InspectionError,
     MAX_BREAKPOINT_SOURCE_BYTES, MAX_RUN_ARGUMENTS, MAX_RUN_BREAKPOINTS, MAX_RUN_CONFIGS,
     MAX_RUN_STEPS, PauseData, PauseScope, RUN_CONFIG_VERSION, RunBreakpoint, RunBreakpoints,
     RunConfig, RunConfigError, RunConfigReadiness, RunConfigSet, RunConfigSource, RunStep,

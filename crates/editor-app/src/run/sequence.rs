@@ -6,6 +6,7 @@
 //! never text the host happens to have seen.
 
 use super::{RunPlan, StepKind};
+use rust_i18n::t;
 
 #[cfg(test)]
 #[path = "sequence_tests.rs"]
@@ -81,6 +82,8 @@ pub struct RunSequence {
     /// The requests behind each step, fixed when the sequence began so a later edit cannot change
     /// what a launch already started doing.
     requests: Vec<plugin_runtime::RunRequest>,
+    /// Each provider build retains its portable binding; the final placeholder clears on resolution.
+    preparations: Vec<Option<(String, String)>>,
     /// The launch identity of each step's start request, once it has been requested.
     requested: Vec<Option<u64>>,
     current: usize,
@@ -123,6 +126,11 @@ impl RunSequence {
                 })
                 .collect(),
             requests: plan.steps.iter().map(|step| step.request.clone()).collect(),
+            preparations: plan
+                .steps
+                .iter()
+                .map(|step| step.preparation.clone())
+                .collect(),
             requested: vec![None; plan.steps.len()],
             current: 0,
             blocked: None,
@@ -144,6 +152,7 @@ impl RunSequence {
                 })
                 .collect(),
             requests: steps.iter().map(|step| step.request.clone()).collect(),
+            preparations: steps.iter().map(|step| step.preparation.clone()).collect(),
             requested: vec![None; steps.len()],
             current: 0,
             blocked: None,
@@ -154,6 +163,57 @@ impl RunSequence {
     /// The request for one step, so a caller stages exactly what the plan computed.
     pub fn planned_request(&self, index: usize) -> Option<&plugin_runtime::RunRequest> {
         self.requests.get(index)
+    }
+
+    /// A provider build is requested once; a final placeholder can never be executed directly.
+    pub fn planned_preparation(&self, index: usize) -> Option<&(String, String)> {
+        self.preparations.get(index)?.as_ref()
+    }
+
+    /// Explicit stop addresses the already queued provider request before a native receipt exists.
+    pub fn pending_provider_request(&self) -> Option<u64> {
+        self.planned_preparation(self.current)?;
+        match self.current_step()?.state {
+            StepState::Starting { request } => Some(request),
+            _ => None,
+        }
+    }
+
+    /// Apply only the original step receipt. Stopped or superseded preparations cannot launch.
+    pub fn provider_prepared(
+        &mut self,
+        index: usize,
+        request: u64,
+        result: Result<&str, &str>,
+    ) -> bool {
+        if index != self.current
+            || self.blocked.is_some()
+            || self.stopping
+            || !self.steps.get(index).is_some_and(
+                |step| matches!(step.state,StepState::Starting {request:id} if id==request),
+            )
+        {
+            return false;
+        }
+        let Some(binding) = self.planned_preparation(index).cloned() else {
+            return false;
+        };
+        match result {
+            Err(error) => self.start_failed(index, error),
+            Ok(program) => {
+                for next in index + 1..self.steps.len() {
+                    if self.steps[next].kind == StepKind::Program
+                        && self.preparations[next].as_ref() == Some(&binding)
+                    {
+                        self.requests[next].program = program.into();
+                        self.preparations[next] = None;
+                    }
+                }
+                self.steps[index].state = StepState::Succeeded;
+                self.current += 1;
+            }
+        }
+        true
     }
 
     /// The position of the step now being prepared.
@@ -201,13 +261,7 @@ impl RunSequence {
             .is_some_and(|step| matches!(step.state, StepState::Running { .. }))
     }
 
-    /// Whether a stop has been requested but the sequence has not yet accepted one.
-    ///
-    /// Only the checks ask this, through `RunControls::is_stopping`, which is itself only asked by a
-    /// check: the application reads the sequence's state through `is_active`, which already counts a
-    /// stop in progress as working. Compiled for tests so the library does not carry an accessor
-    /// nothing consults.
-    #[cfg(test)]
+    /// Whether a stop is waiting for its current program's actual end rather than its acceptance.
     pub fn is_stopping(&self) -> bool {
         self.stopping
     }
@@ -276,7 +330,7 @@ impl RunSequence {
             if let Some(step) = self.steps.get_mut(self.current) {
                 step.state = StepState::Stopped;
             }
-            self.block_here(self.current, "已停止准备步骤");
+            self.block_here(self.current, &t!("run.preparation_stopped"));
         }
     }
 
@@ -294,7 +348,7 @@ impl RunSequence {
         // The sequence is now finished rather than merely stopping: the window may close, and no
         // later step can start.
         self.stopping = false;
-        self.block_here(self.current, "已停止准备步骤");
+        self.block_here(self.current, &t!("run.preparation_stopped"));
     }
 
     /// Feed one observed outcome for the step the sequence is waiting on.
@@ -325,7 +379,8 @@ impl RunSequence {
                 true
             }
             StepOutcome::Exited { code } => {
-                let reason = format!("步骤 {name} 退出码 {code}");
+                let reason =
+                    t!("run.step_exited", name = name, code = code.to_string()).to_string();
                 self.steps[index].state = StepState::Failed {
                     reason: reason.clone(),
                 };
@@ -336,13 +391,13 @@ impl RunSequence {
                 self.steps[index].state = StepState::Stopped;
                 // A termination the user did not ask for still blocks: the remaining steps would
                 // run against a preparation that never finished.
-                self.block_here(index, &format!("步骤 {name} 已终止"));
+                self.block_here(index, &t!("run.step_terminated", name = name).to_string());
                 true
             }
             StepOutcome::Unknown => {
                 // An unanswerable status is not evidence of success. The provider may have retired,
                 // so the sequence stops rather than continuing on a guess.
-                let reason = format!("步骤 {name} 的结束状态无法确认");
+                let reason = t!("run.step_unknown_exit", name = name).to_string();
                 self.steps[index].state = StepState::Failed {
                     reason: reason.clone(),
                 };
@@ -363,12 +418,13 @@ impl RunSequence {
     /// What the host should do next, given how the runtime currently sees a session.
     ///
     /// This is the single decision point, so the order of preparation is checked in one place rather
-    /// than spread across the UI and the worker. `known` and `active` are asked separately because a
-    /// session the runtime has not published yet is not the same as one it has already dropped.
+    /// than spread across the UI and the worker. `known` and `can_report_result` distinguish a session
+    /// not yet published from one whose provider is unavailable. A published exit alone is not an
+    /// exit-code reply, so a finished but queryable session must still wait for its observed result.
     pub fn next_action(
         &self,
         known: impl Fn(u64) -> bool,
-        active: impl Fn(u64) -> bool,
+        can_report_result: impl Fn(u64) -> bool,
     ) -> SequenceAction {
         if let Some(reason) = &self.blocked {
             return SequenceAction::Blocked {
@@ -387,11 +443,11 @@ impl RunSequence {
                 if self.stopping {
                     return SequenceAction::Stop { session: *session };
                 }
-                // A session the runtime reports as finished cannot complete this step: the sequence
-                // waits for a provider's observation, not for a session to disappear.
-                if known(*session) && !active(*session) {
+                // Only loss of the result source blocks here. A queryable exited session waits for
+                // the same exit-code observation as a running one and never implies success.
+                if known(*session) && !can_report_result(*session) {
                     return SequenceAction::Blocked {
-                        reason: format!("步骤 {} 的会话已结束但未报告结果", step.name),
+                        reason: t!("run.step_missing_result", name = &step.name).to_string(),
                     };
                 }
                 SequenceAction::Wait
@@ -401,7 +457,7 @@ impl RunSequence {
                 reason: reason.clone(),
             },
             StepState::Stopped => SequenceAction::Blocked {
-                reason: "已停止准备步骤".to_owned(),
+                reason: t!("run.preparation_stopped").to_string(),
             },
         }
     }
@@ -410,7 +466,13 @@ impl RunSequence {
     fn block_here(&mut self, index: usize, reason: &str) {
         if self.blocked.is_none() {
             self.blocked = Some(match self.steps.get(index) {
-                Some(step) => format!("{}步骤 {}：{}", step.kind.label(), step.name, reason),
+                Some(step) => t!(
+                    "run.step_blocked",
+                    kind = step.kind.label(),
+                    name = &step.name,
+                    reason = reason
+                )
+                .to_string(),
                 None => reason.to_owned(),
             });
         }

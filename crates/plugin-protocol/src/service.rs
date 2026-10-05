@@ -203,6 +203,12 @@ pub enum Operation {
         arguments: Value,
         timeout_ms: u32,
     },
+    /// plugin.services 1.1 completes one deferred invocation using its host-issued provider handle.
+    /// Result shape, source lifetime and deadline remain those of the original invocation.
+    Reply {
+        request: ResourceHandle,
+        result: Result<Value, Failure>,
+    },
 }
 
 /// Source and scope are host metadata, never accepted from consumer-provided arguments.
@@ -220,12 +226,21 @@ pub struct Invocation {
     pub contract: String,
     pub method: String,
     pub arguments: Value,
+    /// Available only with plugin.services 1.1. Omit the synchronous service_reply to defer, then
+    /// complete this handle through Reply; closing it rejects the call without undoing side effects.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reply: Option<ResourceHandle>,
 }
 
 /// The same accepted/progress/completed/cancelled lifecycle is shared with editor requests.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum Notification {
     Invoke(Invocation),
+    /// plugin.services 1.1 retires the provider's deferred handle; no native rollback is implied.
+    InvocationCancelled {
+        request: ResourceHandle,
+        reason: Failure,
+    },
     Request {
         handle: ResourceHandle,
         update: crate::api::RequestUpdate<Value>,
@@ -249,6 +264,18 @@ pub struct Choice {
 pub mod guest {
     use super::*;
     use crate::api::{self, CancelMode, CancellationEffect, RequestUpdate};
+    /// Complete a deferred invocation from a later native or user event.
+    /// InvalidHandle means the source, deadline or invocation already ended; invalid shapes retain
+    /// the handle so the provider can return a corrected result or close it explicitly.
+    pub fn reply(request: &ResourceHandle, result: Result<Value, Failure>) -> Result<(), Failure> {
+        api::guest::request(api::Operation::Service {
+            operation: Operation::Reply {
+                request: request.clone(),
+                result,
+            },
+        })
+        .map(|_| ())
+    }
     pub fn open(contract: impl Into<String>) -> Result<ResourceHandle, Failure> {
         match api::guest::request(api::Operation::Service {
             operation: Operation::Open {

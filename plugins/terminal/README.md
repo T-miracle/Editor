@@ -1,6 +1,6 @@
 # 终端 WebAssembly 插件
 
-当前版本 0.7.1 使用清单 protocol 7 和类型化能力接口。插件通过通用布局树组合 `SideTabs`、`Canvas` 和原生菜单；终端解析、网格、历史、会话与 Shell 配置由 WASM 插件持有。宿主仅提供授权后的进程、文件、剪贴板、文档和 UI 能力。架构与包格式见 [运行时插件说明](../../docs/runtime-plugins.md)。
+当前版本 0.11.0 使用清单 protocol 7 和类型化能力接口。插件通过通用布局树组合 `SideTabs`、`Canvas` 和原生菜单；终端解析、网格、历史、会话与 Shell 配置由 WASM 插件持有。宿主仅提供授权后的进程、文件、剪贴板、文档和 UI 能力。架构与包格式见 [运行时插件说明](../../docs/runtime-plugins.md)。
 
 ## 安装与更新
 
@@ -10,7 +10,7 @@
 
 同 ID 包执行更新。更新前保存会话并关闭旧 Shell 及其子进程；恢复 Tab、配置和旧输出后，仅为之前仍运行的会话启动新 Shell；已退出会话保留历史，不重启，不重放旧命令。恢复保留原有网格尺寸、文字样式、软换行、光标位置与历史滚动位置，不插入提示文字或新增命令行；旧格式中自动生成的恢复分隔行会在迁移时清除。验证失败保留旧版；切换后失败会重新启用旧版。正常关闭编辑器后再次打开也会恢复这些数据。
 
-修改插件源码或替换编辑器 EXE 不会自动更新已经安装的 WASM。需在插件管理中安装新生成的 `dist/plugins/terminal.zip`，并确认版本为 0.7.1。旧配置和 schema 1 快照会迁移；schema 2 额外记录已退出会话。
+修改插件源码或替换编辑器 EXE 不会自动更新已经安装的 WASM。需在插件管理中安装新生成的 `dist/plugins/terminal.zip`，并确认版本为 0.11.0。旧配置和 schema 1 快照会迁移；schema 2 额外记录已退出会话。
 
 ## 界面与操作
 
@@ -41,9 +41,9 @@
 
 ## 插件间执行服务
 
-`interactive.execute` 1.0.0 的 `execute` 方法接受闭合记录：必填 `program`（最多 4096 字节）和 `args`（最多 128 项，每项最多 4096 字节），可选 `cwd`（现有绝对目录，最多 4096 字节）与 `name`（最多 256 字节）。未知字段拒绝；不接收配置档编号或拼接命令，参数原样交给通用进程能力。省略 cwd 使用当前工作区。具体 Schema 见本包 `manifest.json` 的 `plugin_services`。
+`interactive.execute` 2.0.0 的 `execute` 方法接受闭合记录：必填 `program`（最多 4096 字节）和 `args`（最多 128 项，每项最多 4096 字节），可选 `cwd`（现有绝对目录，最多 4096 字节）与 `name`（最多 256 字节）。还可提供有界 `env`、本次工具目录 `tool_paths` 和显式 `script` 模式；普通 argv 不会拼为脚本。未知字段拒绝，不接收终端配置档编号，参数原样交给通用进程能力。省略 cwd 使用当前工作区。具体 Schema 见本包 `manifest.json` 的 `plugin_services`。
 
-消费者声明 `plugin.services: ^1`、`requires.interactive.execute.version: ^1` 和相同方法结构，安装授权需有 `services.call`、`process.exec`、`ui.panels`。通过 SDK `service::guest::open("interactive.execute")` 和 `Task::start` 调用；消费者无须填写提供者插件 ID。一个兼容实现时自动选择，多个实现由插件设置选择；缺失、退出和旧引用按通用服务接口明确失败。
+消费者声明 `plugin.services: ^1`、`requires.interactive.execute.version: ^2` 和相同方法结构，安装授权需有 `services.call`、`process.exec`、`ui.panels`。通过 SDK `service::guest::open("interactive.execute")` 和 `Task::start` 调用；消费者无须填写提供者插件 ID。一个兼容实现时自动选择，多个实现由插件设置选择；缺失、退出和旧引用按通用服务接口明确失败。
 
 返回 `{"session":"2","state":"started"}` 表示已经创建程序，session 仅是当前提供者实例内的展示编号，不是可转交的原生进程句柄。它不代表程序执行完成、成功退出或面板显示已完成。终端另通过正常的异步面板请求显示会话，后续输出使用原生画布显示。
 
@@ -211,3 +211,4 @@ Windows 已进行实际运行验证。图片协议、kitty 扩展键盘协议和
 交互目标不变时，普通输出和绘制保持 UI revision，连续按键及输入法提交不会因为异步输出过期。停用、卸载和替换会清理所属进程与原生输入状态；隐藏面板保留正在运行的 Shell。
 
 回归入口：`editor-app.exe --plugin-cargo plugins/terminal/Cargo.toml test`；实际包通过 `cargo test -p plugin-runtime --test terminal_migration -- --ignored --test-threads=1` 验证。详见 [迁移验证记录](../../docs/specs/plugin-api-terminal-migration-verification.md)。
+公开执行契约 2.0 还提供 input（每次最多 1024 字节）、locate（恢复同一受管会话展示）和 events（游标增量输出与状态，每次 1–16 项）。受管视图隐藏不停止程序。stop 默认请求正常退出，force 只终止本会话进程树；受理不代表已退出，状态随真实进程结束更新。输出按原始字节交付，正常退出保留完整无符号原生退出码；旧 ^1 消费者需更新声明。

@@ -9,6 +9,7 @@ mod input;
 mod interaction;
 mod scene;
 mod service;
+mod service_observations;
 mod shell;
 #[cfg(test)]
 mod tests;
@@ -133,6 +134,12 @@ struct Extent {
 }
 struct Tab {
     id: u64,
+    /// Delegated ownership survives hiding; guessed IDs cannot expose another source's output.
+    service_owner: Option<String>,
+    /// Closing a managed view changes presentation, while the host retains program ownership.
+    hidden: bool,
+    /// Bounded raw output and lifecycle history is independent of the terminal's mutable screen.
+    observations: plugin_protocol::execution::EventBuffer,
     name: String,
     profile: Profile,
     cwd: String,
@@ -142,6 +149,8 @@ struct Tab {
     exited: bool,
     /// Exit status the host reported for this session's program, when it reported one.
     exit_code: Option<u32>,
+    /// Forceful completion is independent of every valid unsigned Windows exit code.
+    terminated: bool,
     /// Delegated programs are never restarted using this provider's private authority.
     resumable: bool,
     /// A second lightweight VT observer captures only shell integration metadata.
@@ -301,6 +310,9 @@ impl Terminal {
         term.replies_mut().bytes.clear();
         self.tabs.push(Tab {
             id: saved.id,
+            service_owner: None,
+            hidden: false,
+            observations: Default::default(),
             name: saved.name,
             profile: saved.profile,
             cwd: saved.cwd,
@@ -309,6 +321,7 @@ impl Terminal {
             exited: saved.exited,
             // A restored session has no process, so it carries no observed exit status.
             exit_code: None,
+            terminated: false,
             resumable: true,
             metadata_parser: vte::Parser::new(),
             metadata: shell::Metadata::default(),
@@ -443,20 +456,25 @@ impl Terminal {
             }
         }
     }
-    /// Close the selected process and ask the generic host to hide an empty terminal panel.
+    /// Managed sessions hide without ending their program; private shells retain their close behavior.
     fn close(&mut self, index: usize) {
         if index < self.tabs.len() {
             let active_id = self.tabs.get(self.active).map(|tab| tab.id);
-            let tab = self.tabs.remove(index);
-            if let Some(handle) = tab.handle {
-                let _ = host::process(process::Operation::Terminate { handle });
+            if self.tabs[index].service_owner.is_some() {
+                self.tabs[index].hidden = true;
+            } else {
+                let tab = self.tabs.remove(index);
+                if let Some(handle) = tab.handle {
+                    let _ = host::process(process::Operation::Terminate { handle });
+                }
             }
             self.active = self
                 .tabs
                 .iter()
-                .position(|tab| Some(tab.id) == active_id)
-                .unwrap_or(index.min(self.tabs.len().saturating_sub(1)));
-            if self.tabs.is_empty() {
+                .position(|tab| !tab.hidden && Some(tab.id) == active_id)
+                .or_else(|| self.tabs.iter().position(|tab| !tab.hidden))
+                .unwrap_or(usize::MAX);
+            if self.tabs.iter().all(|tab| tab.hidden) {
                 self.menu = None;
                 self.rename = None;
                 self.selecting = false;

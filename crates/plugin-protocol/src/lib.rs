@@ -5,11 +5,15 @@ use std::collections::BTreeSet;
 
 /// Capability-based lifecycle, notifications and correlated host operations.
 pub mod api;
+pub mod debug;
 pub mod dependencies;
+pub mod execution;
 pub mod language;
 pub mod process;
 pub mod service;
 pub mod settings;
+/// Dynamic target discovery and build preparation are provider policy, independent of execution.
+pub mod targets;
 pub mod ui;
 
 /// Guest imports and exports use the WIT contract supplied by the building editor.

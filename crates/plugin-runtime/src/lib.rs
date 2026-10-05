@@ -33,18 +33,23 @@ mod process;
 mod toolchains;
 pub use instance::Instance;
 pub use manager::{
-    DEBUG_CONTRACT, DebugAbilities, DebugAnswer, DebugBreakpoint, DebugFrame, DebugSession,
-    DebugState, DebugVariable, EXECUTION_CONTRACT, EXECUTION_START_TIMEOUT_MS, ExecutionFailure,
-    ExecutionSnapshot, ExecutionState, HostExecution, InstallationPreparation, Installed, Manager,
-    PreparedInstallation, ProviderCandidate, RunEnvEntry, RunRequest, debug_dependency_for_test,
+    DEBUG_CONTRACT, DEFAULT_STOP_GRACE_MS, DebugAbilities, DebugAnswer, DebugBreakpoint,
+    DebugFrame, DebugRequest, DebugSession, DebugState, DebugVariable, EXECUTION_CONTRACT,
+    EXECUTION_START_TIMEOUT_MS, ExecutionFailure, ExecutionSnapshot, ExecutionState, HostExecution,
+    InstallationPreparation, Installed, Manager, PreparedInstallation, ProviderCandidate,
+    RunEnvEntry, RunRequest, StopOptions, TargetRequest, debug_dependency_for_test,
     frames_from_value, variables_from_value,
 };
+mod native_work;
+pub use native_work::{PreparationRegistry, PreparationSnapshot};
 pub use package::Package;
 pub use plugin_protocol;
 
 /// Host-owned resources travel with every candidate; guests only see negotiated descriptions.
 #[derive(Clone, Debug, Default)]
 pub struct HostResources {
+    /// Authenticated preparation observation shared with all delegated native-process owners.
+    pub preparations: native_work::PreparationRegistry,
     /// No SDK is a supported host configuration; an export failure affects only a requesting guest.
     pub sdk: Option<Result<plugin_protocol::api::SdkDescriptor, String>>,
     /// One process-local log owner is shared by live, prepared and retired sources; never exposed to WASI.

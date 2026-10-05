@@ -16,6 +16,8 @@ struct State {
     /// Opaque lifecycle state survives reinstall/recovery without interpreting the host's storage layout.
     snapshot: plugin_protocol::Snapshot,
     service_client: service_demo::Client,
+    /// Native sessions remain owned after the creation callback returns.
+    execution: execution_demo::Provider,
     /// Bounded observable process history demonstrates stream ordering through the public SDK.
     process_events: Vec<plugin_protocol::process::Update>,
     /// Demonstrate cancellation from inside an output callback, including an already queued exit.
@@ -103,12 +105,23 @@ impl State {
                     api::Notification::Service(plugin_protocol::service::Notification::Invoke(call)),
                 ..
             } => {
+                if call.method == "defer" {
+                    // A real independently built provider keeps a host invocation for a later event.
+                    let result = self.service_client.defer(call);
+                    return Ok(api::Output {
+                        service_reply: result.err().map(Err),
+                        ..Default::default()
+                    });
+                }
                 // The alternative execution provider has its own ordinary panel, independent of any terminal UI.
                 if call.contract == "interactive.execute" {
-                    let result = execution_demo::execute(call);
+                    let result = self.execution.call(call);
                     self.text = format!("Execution: {}", serde_json::to_string(&result).unwrap());
                     return Ok(api::Output {
-                        service_reply: Some(result),
+                        service_reply: match result {
+                            Ok(value) => value.map(Ok),
+                            Err(error) => Some(Err(error)),
+                        },
                         views: vec![api::View {
                             panel: "welcome".into(),
                             document: ui::Document::new(ui::Node::text(
@@ -131,6 +144,16 @@ impl State {
                 if let Some(text) = self.service_client.update(&event) {
                     self.text = text;
                 }
+            }
+            api::Input::Event {
+                event: api::Notification::Command { id, arguments },
+                ..
+            } if id.starts_with("execution-") => {
+                let _ = arguments;
+                self.text = self
+                    .execution
+                    .command(&id)
+                    .unwrap_or_else(|error| error.to_string());
             }
             api::Input::Event {
                 event: api::Notification::Command { id, arguments },
@@ -287,6 +310,7 @@ impl State {
                 event: api::Notification::Process { handle, update },
                 ..
             } => {
+                self.execution.observe(&handle, &update);
                 if matches!(update, plugin_protocol::process::Update::Terminated) {
                     // The final resource notification cannot regain the provider's normal private-data grant.
                     self.text = format!(

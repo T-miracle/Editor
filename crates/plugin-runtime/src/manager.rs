@@ -21,16 +21,19 @@ mod preparation;
 mod recovery;
 pub use data_updates::PreparedInstallation;
 pub use debug_services::{
-    DebugAbilities, DebugAnswer, DebugBreakpoint, DebugFrame, DebugSession, DebugState,
-    DebugVariable, debug_dependency_for_test, frames_from_value, variables_from_value,
+    DebugAbilities, DebugAnswer, DebugBreakpoint, DebugFrame, DebugRequest, DebugSession,
+    DebugState, DebugVariable, debug_dependency_for_test, frames_from_value, variables_from_value,
 };
 pub use host_services::{
-    DEBUG_CONTRACT, EXECUTION_CONTRACT, EXECUTION_START_TIMEOUT_MS, ExecutionFailure,
-    ExecutionSnapshot, ExecutionState, HostExecution, ProviderCandidate, RunEnvEntry, RunRequest,
+    DEBUG_CONTRACT, DEFAULT_STOP_GRACE_MS, EXECUTION_CONTRACT, EXECUTION_START_TIMEOUT_MS,
+    ExecutionFailure, ExecutionSnapshot, ExecutionState, HostExecution, ProviderCandidate,
+    RunEnvEntry, RunRequest, StopOptions,
 };
 pub use preparation::InstallationPreparation;
 pub(crate) mod scopes;
 mod settings;
+mod targets;
+pub use targets::TargetRequest;
 mod ui_events;
 use host_services::HostSessions;
 use scopes::ParkedWorkspace;
@@ -92,6 +95,8 @@ pub struct Manager {
     retired_image_sources: BTreeMap<String, api::DocumentVersion>,
     /// Host-owned execution sessions started through the public service contract.
     host_sessions: HostSessions,
+    /// Debug targets retain the provider incarnation and a distinct revocable native-resource root.
+    debug_sessions: debug_services::Sessions,
     /// Retired with this runtime so a queued start cannot outlive the window that requested it.
     host_alive: std::sync::Arc<std::sync::atomic::AtomicBool>,
 }
@@ -169,6 +174,7 @@ impl Manager {
             image_input_budget: Default::default(),
             retired_image_sources: BTreeMap::new(),
             host_sessions: HostSessions::new(host_alive.clone()),
+            debug_sessions: Default::default(),
             host_alive,
         };
         if manager.installed.values().any(|entry| {
@@ -640,6 +646,8 @@ impl Manager {
             }
         }
         self.reconcile_images();
+        self.poll_execution_states();
+        self.poll_debug_sessions();
     }
     /// Periodic and shutdown checkpoints use atomic files, leaving last good data on failure.
     pub fn checkpoint(&mut self) -> anyhow::Result<()> {

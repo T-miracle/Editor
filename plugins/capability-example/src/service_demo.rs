@@ -11,8 +11,23 @@ pub(super) struct Client {
     continuation: Option<api::guest::EditorTask>,
     /// The last answer this consumer received, kept so a caller can read what actually arrived.
     last: Option<String>,
+    /// Provider-side invocation is separate from this instance's consumer request handles.
+    deferred: Option<api::ResourceHandle>,
+    /// Retaining one stale receipt lets the SDK example demonstrate host-side replay rejection.
+    retired_reply: Option<api::ResourceHandle>,
 }
 impl Client {
+    /// Defer one declared call until a later command or native notification produces its result.
+    pub(super) fn defer(&mut self, call: service::Invocation) -> Result<(), Failure> {
+        if self.deferred.is_some() {
+            return Err(Failure::new(
+                api::ErrorCode::LimitExceeded,
+                "One deferred example is already pending",
+            ));
+        }
+        self.deferred = call.reply;
+        Ok(())
+    }
     /// Async host results must keep the service's restricted source authority during this continuation.
     pub(super) fn editor_update(&mut self, event: &api::Notification) -> Option<String> {
         let update = self.continuation.as_mut()?.update(event)?;
@@ -28,6 +43,16 @@ impl Client {
         &mut self,
         call: service::Invocation,
     ) -> Result<serde_json::Value, Failure> {
+        if call.method == "reply-retained" {
+            // This delegated attempt must not finish a different source's retained invocation.
+            let request = self.deferred.as_ref().ok_or_else(|| {
+                Failure::new(api::ErrorCode::InvalidHandle, "No deferred invocation")
+            })?;
+            return Ok(serde_json::json!(format!(
+                "{:?}",
+                guest::reply(request, Ok(call.arguments))
+            )));
+        }
         if call.method == "editor-continuation" || call.method == "editor-cancel" {
             let task = api::guest::EditorTask::start(api::EditorOperation::ActiveDirectory, 30000)?;
             if call.method == "editor-cancel" {
@@ -48,6 +73,39 @@ impl Client {
     ) -> Result<String, Failure> {
         let args = args.unwrap_or_default();
         match id {
+            "service-forge-host-reference" => {
+                // A hostile guest can manufacture public handle bytes, but cannot create the
+                // host's private authority record or transfer an instance-owned service root.
+                let original = guest::open("session.host")?;
+                let mut forged = original.clone();
+                forged.instance = format!("host@{}", forged.scope);
+                let result = guest::Task::start(&forged, "list", serde_json::json!({}), 1000);
+                api::guest::close_resource(original)?;
+                Ok(match result {
+                    Ok(_) => "unexpected forged authority".into(),
+                    Err(error) => format!("{:?}: {}", error.code, error.message),
+                })
+            }
+            "service-reply-deferred" => {
+                let request = self.deferred.as_ref().ok_or_else(|| {
+                    Failure::new(api::ErrorCode::InvalidHandle, "No deferred invocation")
+                })?;
+                api::guest::request(api::Operation::Service {
+                    operation: service::Operation::Reply {
+                        request: request.clone(),
+                        result: Ok(args),
+                    },
+                })?;
+                self.retired_reply = self.deferred.take();
+                Ok("Replied".into())
+            }
+            "service-replay-reply" => {
+                let request = self.retired_reply.as_ref().ok_or_else(|| {
+                    Failure::new(api::ErrorCode::InvalidHandle, "No retired receipt")
+                })?;
+                guest::reply(request, Ok(args))?;
+                Ok("Unexpected replay".into())
+            }
             "service-open" => {
                 if let Some(handle) = self.reference.take() {
                     api::guest::close_resource(handle)?;
@@ -101,6 +159,12 @@ impl Client {
         }
     }
     pub(super) fn update(&mut self, event: &service::Notification) -> Option<String> {
+        if let service::Notification::InvocationCancelled { request, .. } = event {
+            if self.deferred.as_ref() == Some(request) {
+                self.retired_reply = self.deferred.take();
+            }
+            return None;
+        }
         let text = self
             .task
             .as_mut()?

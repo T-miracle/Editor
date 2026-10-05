@@ -108,6 +108,50 @@ pub struct DebugControls {
     pub step: Vec<(DebugStep, Result<(), String>)>,
 }
 
+/// Structured reasons let the application translate controls without interpreting diagnostic text.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum DebugControlReason {
+    /// A pinned target already owns the session.
+    AlreadyConnected,
+    /// The selected provider or target cannot start.
+    Unavailable(String),
+    /// Adapter creation has not answered.
+    Connecting,
+    /// There is no target to control.
+    NoSession,
+    /// Native target exit has been observed.
+    Exited,
+    /// The session failed with its original diagnostic.
+    Failed(String),
+    /// The target is executing.
+    Running,
+    /// The target is already stopped.
+    Paused,
+    /// Stepping first requires a pause.
+    PauseBeforeStep,
+    /// Continue/pause was not declared by the pinned provider.
+    ResumePauseUndeclared,
+    /// Stepping was not declared by the pinned provider.
+    StepUndeclared,
+}
+impl std::fmt::Display for DebugControlReason {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::AlreadyConnected => write!(f, "已有调试会话；请先停止它再开始新的调试"),
+            Self::Unavailable(reason) => write!(f, "{reason}"),
+            Self::Connecting => write!(f, "调试会话正在连接"),
+            Self::NoSession => write!(f, "没有调试会话"),
+            Self::Exited => write!(f, "目标已退出"),
+            Self::Failed(reason) => write!(f, "调试会话失败：{reason}"),
+            Self::Running => write!(f, "目标正在运行"),
+            Self::Paused => write!(f, "目标已暂停"),
+            Self::PauseBeforeStep => write!(f, "目标正在运行；请先暂停再单步"),
+            Self::ResumePauseUndeclared => write!(f, "该调试提供者未声明继续与暂停能力"),
+            Self::StepUndeclared => write!(f, "该调试提供者未声明单步能力"),
+        }
+    }
+}
+
 impl DebugControls {
     /// Derive the controls from the two facts that decide them.
     ///
@@ -120,63 +164,63 @@ impl DebugControls {
         state: &DebugSessionState,
         capabilities: DebugCapabilities,
     ) -> Self {
+        Self::derive_with(availability, state, capabilities, |reason| {
+            reason.to_string()
+        })
+    }
+
+    /// Derive the same state/permission decisions with caller-supplied presentation labels.
+    /// The formatter receives typed reasons and original failures; it never influences admission.
+    pub fn derive_with(
+        availability: Result<&str, &str>,
+        state: &DebugSessionState,
+        capabilities: DebugCapabilities,
+        format: impl Fn(DebugControlReason) -> String,
+    ) -> Self {
+        use DebugControlReason as Reason;
         let start = match (availability, state) {
-            // A session already being served is not started again: the panel stops it instead.
-            (_, state) if state.is_connected() => {
-                Err("已有调试会话；请先停止它再开始新的调试".into())
-            }
+            (_, state) if state.is_connected() => Err(format(Reason::AlreadyConnected)),
             (Ok(_), _) => Ok(()),
-            (Err(reason), _) => Err(reason.to_owned()),
+            (Err(reason), _) => Err(format(Reason::Unavailable(reason.into()))),
         };
-        // A control is unavailable for one of two reasons, and they are reported in that order: the
-        // provider never offered the ability, or the session is in a state where it means nothing.
-        // Offering a control the provider cannot serve would only move the failure to the click.
-        let state_reason = |state: &DebugSessionState, meaning: &str| match state {
-            DebugSessionState::Starting => "调试会话正在连接".to_owned(),
-            DebugSessionState::Disconnected => "没有调试会话".to_owned(),
-            DebugSessionState::Exited => "目标已退出".to_owned(),
-            DebugSessionState::Failed { reason } => format!("调试会话失败：{reason}"),
-            _ => meaning.to_owned(),
+        let state_reason = |meaning| {
+            format(match state {
+                DebugSessionState::Starting => Reason::Connecting,
+                DebugSessionState::Disconnected => Reason::NoSession,
+                DebugSessionState::Exited => Reason::Exited,
+                DebugSessionState::Failed { reason } => Reason::Failed(reason.clone()),
+                _ => meaning,
+            })
         };
         let resume = if !capabilities.resume_pause {
-            Err("该调试提供者未声明继续与暂停能力".into())
+            Err(format(Reason::ResumePauseUndeclared))
+        } else if matches!(state, DebugSessionState::Paused { .. }) {
+            Ok(())
         } else {
-            match state {
-                DebugSessionState::Paused { .. } => Ok(()),
-                other => Err(state_reason(other, "目标正在运行")),
-            }
+            Err(state_reason(Reason::Running))
         };
         let pause = if !capabilities.resume_pause {
-            Err("该调试提供者未声明继续与暂停能力".into())
+            Err(format(Reason::ResumePauseUndeclared))
+        } else if matches!(state, DebugSessionState::Running) {
+            Ok(())
         } else {
-            match state {
-                DebugSessionState::Running => Ok(()),
-                other => Err(state_reason(other, "目标已暂停")),
-            }
+            Err(state_reason(Reason::Paused))
         };
-        // Stopping is offered whenever a provider is serving the session, including while it is
-        // connecting: that is exactly when a user needs a way out of a session that will not answer.
+        // Stop always remains offered during creation, including providers without optional controls.
         let stop = if state.is_connected() {
             Ok(())
         } else {
-            match state {
-                DebugSessionState::Failed { reason } => Err(format!("调试会话失败：{reason}")),
-                DebugSessionState::Exited => Err("目标已退出".into()),
-                _ => Err("没有调试会话".into()),
-            }
+            Err(state_reason(Reason::NoSession))
         };
-        // Stepping means moving a target that is already stopped at a location. It is offered only
-        // while paused, and only when the provider said it can step at all.
         let step = [DebugStep::Into, DebugStep::Over, DebugStep::Out]
             .into_iter()
             .map(|kind| {
                 let outcome = if !capabilities.step {
-                    Err("该调试提供者未声明单步能力".into())
+                    Err(format(Reason::StepUndeclared))
+                } else if matches!(state, DebugSessionState::Paused { .. }) {
+                    Ok(())
                 } else {
-                    match state {
-                        DebugSessionState::Paused { .. } => Ok(()),
-                        other => Err(state_reason(other, "目标正在运行；请先暂停再单步")),
-                    }
+                    Err(state_reason(Reason::PauseBeforeStep))
                 };
                 (kind, outcome)
             })

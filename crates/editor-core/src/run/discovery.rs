@@ -19,12 +19,6 @@ const BUILD_PROGRAM_FIELD: &str = "build_program";
 const BUILD_ARGS_FIELD: &str = "build_args";
 /// Field a provider may report to name the program's own arguments, separated by newlines.
 const PROGRAM_ARGS_FIELD: &str = "program_args";
-/// The one program whose own subcommands select a build for every target language.
-///
-/// A package manager is not the artifact, so a package manager's own subcommand belongs in the
-/// pre-launch step rather than in the program field: a debugger attached to `cargo run` would debug
-/// the manager, not the program the user asked for.
-const PACKAGE_MANAGER: &str = "cargo";
 
 /// What a discovery run did to the stored configurations.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -45,43 +39,23 @@ pub struct DiscoveryOutcome {
 /// running a command the provider never described.
 pub fn configuration_for(target: &DiscoveredTarget, id: String, name: String) -> RunConfig {
     let program = arguments(&target.fields, PROGRAM_ARGS_FIELD);
-    // A provider that runs a target through a package manager says so by using it as the program;
-    // the manager's own subcommand then has to succeed before the program is started.
-    let through_manager = target
-        .program
-        .rsplit(['/', '\\'])
-        .next()
-        .map(|name| {
-            name.trim_end_matches(".exe")
-                .eq_ignore_ascii_case(PACKAGE_MANAGER)
-        })
-        .unwrap_or(false);
+    let build = build_steps(target);
     RunConfig {
         id,
         name,
         // The program is the one the provider named, never its display label: a configuration that
         // ran a label would fail at launch with a message about a missing file.
-        target: RunTarget::Program {
+        target: provided_target(target).unwrap_or_else(|| RunTarget::Program {
             program: target.program.clone(),
             args: program.clone(),
-        },
+        }),
         directory: None,
         env: Default::default(),
         tool_paths: Default::default(),
-        build: build_steps(target),
-        prelaunch: if through_manager {
-            vec![RunStep {
-                name: format!("构建 {}", target.label),
-                target: StepTarget::Action {
-                    target: RunTarget::Program {
-                        program: target.program.clone(),
-                        args: program,
-                    },
-                },
-            }]
-        } else {
-            Vec::new()
-        },
+        build,
+        // Launch planning already executes the configuration's own build. A duplicated final
+        // command would run twice or block forever, and a self build reference would be invalid.
+        prelaunch: Vec::new(),
         source: RunConfigSource::Local,
         from_target: Some(target.id.clone()),
         // A discovered configuration follows the scope's provider choice until the user changes it.
@@ -106,6 +80,12 @@ fn arguments(fields: &std::collections::BTreeMap<String, String>, key: &str) -> 
 
 /// The build action a provider's own fields describe, if it described one.
 fn build_steps(target: &DiscoveredTarget) -> Vec<RunStep> {
+    if let Some(target) = provided_target(target) {
+        return vec![RunStep {
+            name: "Build target".into(),
+            target: StepTarget::Action { target },
+        }];
+    }
     let Some(program) = target.fields.get(BUILD_PROGRAM_FIELD) else {
         return Vec::new();
     };
@@ -121,11 +101,21 @@ fn build_steps(target: &DiscoveredTarget) -> Vec<RunStep> {
     }]
 }
 
+impl RunConfig {
+    /// Match an explicitly confirmed discovery, including a portable provider binding reopened on
+    /// another machine. This compares opaque bindings and never guesses language-specific IDs.
+    pub fn claims_target(&self, target: &DiscoveredTarget) -> bool {
+        self.from_target.as_deref() == Some(target.id.as_str())
+            || matches!(&self.target,
+            RunTarget::Provided {provider,binding,..} if provider==&target.provider && target.fields.get("provider_binding")==Some(binding))
+    }
+}
+
 /// Reconcile stored configurations with what a discovery now offers.
 ///
 /// A configuration that names a target still being offered keeps its own name, arguments,
-/// environment and steps: a discovery may correct what the target *is*, not what the user made of
-/// it. One whose target is gone is left in place and reported, because deciding what to do about a
+/// environment and steps: a discovery reports what changed for the caller to confirm. One whose
+/// target is gone is left in place and reported, because deciding what to do about a
 /// missing target is the user's, not a background walk's.
 pub fn reconcile(configs: &RunConfigSet, targets: &[DiscoveredTarget]) -> DiscoveryOutcome {
     let mut outcome = DiscoveryOutcome::default();
@@ -133,7 +123,7 @@ pub fn reconcile(configs: &RunConfigSet, targets: &[DiscoveredTarget]) -> Discov
         match configs
             .configurations
             .iter()
-            .find(|config| config.from_target.as_deref() == Some(target.id.as_str()))
+            .find(|config| config.claims_target(target))
         {
             // The target is already stored; a discovery never rewrites the user's configuration.
             Some(_) => {}
@@ -141,15 +131,17 @@ pub fn reconcile(configs: &RunConfigSet, targets: &[DiscoveredTarget]) -> Discov
         }
     }
     for config in &configs.configurations {
-        let Some(from_target) = &config.from_target else {
+        if config.from_target.is_none() && !matches!(config.target, RunTarget::Provided { .. }) {
             continue;
-        };
-        let offered = targets.iter().find(|target| target.id == *from_target);
+        }
+        let offered = targets.iter().find(|target| config.claims_target(target));
         match offered {
             Some(target) => {
-                // A discovery may correct the program a target names — that is what "the target is
-                // now this" means — while everything the user chose stays as they left it.
-                if program_of(config) != Some(target.program.as_str()) {
+                // Report a proposal without applying it; only the user's repair action may replace
+                // the stored executable, including one they have edited themselves.
+                if program_of(config) != Some(target.program.as_str())
+                    || matches!(&config.target,RunTarget::Provided {binding,..} if target.fields.get("provider_binding")!=Some(binding))
+                {
                     outcome.updated.push(config.id.clone());
                 }
             }
@@ -159,20 +151,56 @@ pub fn reconcile(configs: &RunConfigSet, targets: &[DiscoveredTarget]) -> Discov
     outcome
 }
 
-/// Repair one configuration from the target it came from.
+/// Prepare the repair the user explicitly chose for the target a configuration came from.
 ///
-/// Only the program the target names is replaced; the name, arguments, environment, tool
-/// directories, steps and sharing choice are the user's and are returned unchanged.
+/// The confirmed target and its matching automatic build are replaced together. The user's name,
+/// arguments, environment, tool directories, unrelated steps and sharing choice remain unchanged.
 pub fn repair(config: &RunConfig, target: &DiscoveredTarget) -> RunConfig {
     let mut repaired = config.clone();
-    repaired.target = RunTarget::Program {
-        program: target.program.clone(),
-        args: match &config.target {
-            // The user's own arguments survive; only the program is the target's to name.
-            RunTarget::Program { args, .. } => args.clone(),
-            RunTarget::Script { .. } => Vec::new(),
-        },
-    };
+    let args = config.literal_arguments();
+    let new_target = provided_target(target);
+    // Retire only preparation that belongs to the old binding, including repairs to direct tools.
+    // An unrelated provider action remains the user's independent ordered step.
+    let mut replaced = false;
+    repaired.build.retain_mut(|step| {
+        let old_binding=matches!((&step.target,&config.target),
+            (StepTarget::Action {target:RunTarget::Provided {provider:left,binding:a,..}},RunTarget::Provided {provider:right,binding:b,..}) if left==right&&a==b);
+        if !old_binding {return true;}
+        replaced=true;
+        if let Some(target)=&new_target {
+            step.target=StepTarget::Action {target:target.clone()};true
+        } else {false}
+    });
+    if let Some(target) = &new_target
+        && !replaced
+    {
+        repaired.build.insert(
+            0,
+            RunStep {
+                name: "Build target".into(),
+                target: StepTarget::Action {
+                    target: target.clone(),
+                },
+            },
+        );
+    }
+    repaired.target = new_target
+        .map(|mut target| {
+            if let RunTarget::Provided { args: values, .. } = &mut target {
+                *values = args;
+            }
+            target
+        })
+        .unwrap_or_else(|| RunTarget::Program {
+            program: target.program.clone(),
+            args: match &config.target {
+                // The user's own arguments survive; only the program is the target's to name.
+                RunTarget::Program { args, .. } => args.clone(),
+                RunTarget::Script { .. } => Vec::new(),
+                RunTarget::Provided { args, .. } => args.clone(),
+            },
+        });
+    repaired.from_target = Some(target.id.clone());
     repaired
 }
 
@@ -181,5 +209,17 @@ fn program_of(config: &RunConfig) -> Option<&str> {
     match &config.target {
         RunTarget::Program { program, .. } => Some(program.as_str()),
         RunTarget::Script { .. } => None,
+        RunTarget::Provided { label, .. } => Some(label),
     }
+}
+
+/// Reserved versioned fields carry a generic provider binding, never a language-specific command.
+fn provided_target(target: &DiscoveredTarget) -> Option<RunTarget> {
+    let binding = target.fields.get("provider_binding")?;
+    Some(RunTarget::Provided {
+        provider: target.provider.clone(),
+        binding: binding.clone(),
+        label: target.program.clone(),
+        args: arguments(&target.fields, PROGRAM_ARGS_FIELD),
+    })
 }

@@ -1,7 +1,88 @@
 //! From a discovered target to a configuration, and what a later discovery may do to it.
 use super::*;
+
+/// Preparation builds what the provider described; it must never execute the final command twice.
+#[test]
+fn a_package_managers_run_command_is_not_a_preparation_step() {
+    let mut discovered = target("tools:app", "app");
+    discovered.program = "cargo".into();
+    discovered
+        .fields
+        .insert("program_args".into(), "run".into());
+    discovered
+        .fields
+        .insert("build_program".into(), "cargo.exe".into());
+    discovered
+        .fields
+        .insert("build_args".into(), "build".into());
+    let configuration = configuration_for(&discovered, "run-1".into(), "app".into());
+    assert_eq!(configuration.literal_arguments(), vec!["run"]);
+    assert!(configuration.prelaunch.is_empty());
+    assert_eq!(configuration.build.len(), 1);
+    assert_eq!(configuration.build[0].target.arguments(), ["build"]);
+}
 use crate::run::{RunConfigSet, configuration_for, reconcile, repair};
 use std::collections::BTreeMap;
+
+/// Repairing an application target must preserve a second independent provider build in the list.
+#[test]
+fn repairing_one_provided_target_preserves_unrelated_provider_actions() {
+    let old = with_fields(
+        "old",
+        "app",
+        &[("provider_binding", r#"{"version":1,"bin":"old"}"#)],
+    );
+    let new = with_fields(
+        "new",
+        "new app",
+        &[("provider_binding", r#"{"version":1,"bin":"new"}"#)],
+    );
+    let other = with_fields(
+        "other",
+        "other",
+        &[("provider_binding", r#"{"version":1,"bin":"other"}"#)],
+    );
+    let mut config = configuration_for(&old, "run".into(), "Mine".into());
+    let other_build = configuration_for(&other, "other-config".into(), "Other".into())
+        .build
+        .remove(0);
+    config.build.push(other_build.clone());
+    let repaired = repair(&config, &new);
+    assert_eq!(
+        repaired.build[1], other_build,
+        "unrelated provider build was overwritten"
+    );
+    assert_eq!(repaired.from_target.as_deref(), Some("new"));
+}
+
+/// Confirming a direct tool repair drops only the old binding's automatic preparation.
+#[test]
+fn repairing_a_provided_target_as_a_program_removes_its_old_build() {
+    let old = with_fields(
+        "old",
+        "app",
+        &[("provider_binding", r#"{"version":1,"bin":"old"}"#)],
+    );
+    let other = with_fields(
+        "other",
+        "other",
+        &[("provider_binding", r#"{"version":1,"bin":"other"}"#)],
+    );
+    let mut config = configuration_for(&old, "run".into(), "Mine".into());
+    let other_build = configuration_for(&other, "other-config".into(), "Other".into())
+        .build
+        .remove(0);
+    config.build.push(other_build.clone());
+    let direct = target("native-tool", "tool.exe");
+    let repaired = repair(&config, &direct);
+    assert!(matches!(&repaired.target,RunTarget::Program {program,..} if program=="tool.exe"));
+    assert_eq!(
+        repaired.build,
+        vec![other_build],
+        "only unrelated user preparation survives the repair"
+    );
+    assert_eq!(repaired.from_target.as_deref(), Some("native-tool"));
+}
 
 fn target(id: &str, label: &str) -> DiscoveredTarget {
     DiscoveredTarget {

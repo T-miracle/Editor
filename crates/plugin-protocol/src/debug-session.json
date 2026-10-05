@@ -1,0 +1,446 @@
+{
+  "version": "1.1.0",
+  "methods": {
+    "start": {
+      "parameters": {
+        "type": "record",
+        "fields": {
+          "program": {
+            "type": "string",
+            "max_bytes": 4096
+          },
+          "args": {
+            "type": "array",
+            "max_items": 128,
+            "items": {
+              "type": "string",
+              "max_bytes": 4096
+            }
+          },
+          "cwd": {
+            "type": "string",
+            "max_bytes": 4096
+          },
+          "name": {
+            "type": "string",
+            "max_bytes": 256
+          },
+          "env": {
+            "type": "array",
+            "max_items": 64,
+            "items": {
+              "type": "record",
+              "fields": {
+                "name": {
+                  "type": "string",
+                  "max_bytes": 128
+                },
+                "value": {
+                  "type": "string",
+                  "max_bytes": 32768
+                }
+              }
+            }
+          },
+          "breakpoints": {
+            "type": "array",
+            "max_items": 512,
+            "items": {
+              "type": "record",
+              "fields": {
+                "source": {
+                  "type": "string",
+                  "max_bytes": 4096
+                },
+                "line": {
+                  "type": "integer",
+                  "min": 1,
+                  "max": 2147483647
+                }
+              }
+            }
+          },
+          "stop_on_entry": {
+            "type": "boolean"
+          }
+        },
+        "optional": [
+          "cwd",
+          "name",
+          "env",
+          "breakpoints",
+          "stop_on_entry"
+        ]
+      },
+      "result": {
+        "type": "record",
+        "fields": {
+          "session": {
+            "type": "string",
+            "max_bytes": 128
+          },
+          "state": {
+            "type": "string",
+            "max_bytes": 32
+          },
+          "pause": {
+            "type": "integer",
+            "min": 0,
+            "max": 9223372036854775807
+          }
+        }
+      },
+      "permissions": [
+        "process.exec",
+        "ui.panels"
+      ]
+    },
+    "set_breakpoints": {
+      "parameters": {
+        "type": "record",
+        "fields": {
+          "session": {
+            "type": "string",
+            "max_bytes": 128
+          },
+          "breakpoints": {
+            "type": "array",
+            "max_items": 512,
+            "items": {
+              "type": "record",
+              "fields": {
+                "source": {
+                  "type": "string",
+                  "max_bytes": 4096
+                },
+                "line": {
+                  "type": "integer",
+                  "min": 1,
+                  "max": 2147483647
+                }
+              }
+            }
+          }
+        }
+      },
+      "result": {
+        "type": "record",
+        "fields": {
+          "breakpoints": {
+            "type": "array",
+            "max_items": 512,
+            "items": {
+              "type": "record",
+              "fields": {
+                "source": {
+                  "type": "string",
+                  "max_bytes": 4096
+                },
+                "line": {
+                  "type": "integer",
+                  "min": 1,
+                  "max": 2147483647
+                },
+                "verified": {
+                  "type": "boolean"
+                }
+              }
+            }
+          }
+        }
+      },
+      "permissions": [
+        "process.exec"
+      ]
+    },
+    "resume": {
+      "parameters": {
+        "type": "record",
+        "fields": {
+          "session": {
+            "type": "string",
+            "max_bytes": 128
+          },
+          "pause": {
+            "type": "integer",
+            "min": 0,
+            "max": 9223372036854775807
+          }
+        }
+      },
+      "result": {
+        "type": "record",
+        "fields": {
+          "session": {
+            "type": "string",
+            "max_bytes": 128
+          },
+          "state": {
+            "type": "string",
+            "max_bytes": 32
+          },
+          "pause": {
+            "type": "integer",
+            "min": 0,
+            "max": 9223372036854775807
+          }
+        }
+      },
+      "permissions": [
+        "process.exec"
+      ]
+    },
+    "pause": {
+      "parameters": {
+        "type": "record",
+        "fields": {
+          "session": {
+            "type": "string",
+            "max_bytes": 128
+          }
+        }
+      },
+      "result": {
+        "type": "record",
+        "fields": {
+          "session": {
+            "type": "string",
+            "max_bytes": 128
+          },
+          "state": {
+            "type": "string",
+            "max_bytes": 32
+          },
+          "pause": {
+            "type": "integer",
+            "min": 0,
+            "max": 9223372036854775807
+          }
+        }
+      },
+      "permissions": [
+        "process.exec"
+      ]
+    },
+    "step": {
+      "parameters": {
+        "type": "record",
+        "fields": {
+          "session": {
+            "type": "string",
+            "max_bytes": 128
+          },
+          "pause": {
+            "type": "integer",
+            "min": 0,
+            "max": 9223372036854775807
+          },
+          "kind": {
+            "type": "string",
+            "max_bytes": 32
+          }
+        }
+      },
+      "result": {
+        "type": "record",
+        "fields": {
+          "session": {
+            "type": "string",
+            "max_bytes": 128
+          },
+          "state": {
+            "type": "string",
+            "max_bytes": 32
+          },
+          "pause": {
+            "type": "integer",
+            "min": 0,
+            "max": 9223372036854775807
+          }
+        }
+      },
+      "permissions": [
+        "process.exec"
+      ]
+    },
+    "frames": {
+      "parameters": {
+        "type": "record",
+        "fields": {
+          "session": {
+            "type": "string",
+            "max_bytes": 128
+          },
+          "pause": {
+            "type": "integer",
+            "min": 0,
+            "max": 9223372036854775807
+          }
+        }
+      },
+      "result": {
+        "type": "record",
+        "fields": {
+          "frames": {
+            "type": "array",
+            "max_items": 256,
+            "items": {
+              "type": "record",
+              "fields": {
+                "id": {
+                  "type": "integer",
+                  "min": 0,
+                  "max": 2147483647
+                },
+                "name": {
+                  "type": "string",
+                  "max_bytes": 512
+                },
+                "source": {
+                  "type": "string",
+                  "max_bytes": 4096
+                },
+                "line": {
+                  "type": "integer",
+                  "min": 1,
+                  "max": 2147483647
+                }
+              }
+            }
+          }
+        }
+      },
+      "permissions": [
+        "process.exec"
+      ]
+    },
+    "variables": {
+      "parameters": {
+        "type": "record",
+        "fields": {
+          "session": {
+            "type": "string",
+            "max_bytes": 128
+          },
+          "pause": {
+            "type": "integer",
+            "min": 0,
+            "max": 9223372036854775807
+          },
+          "frame": {
+            "type": "integer",
+            "min": 0,
+            "max": 2147483647
+          }
+        }
+      },
+      "result": {
+        "type": "record",
+        "fields": {
+          "variables": {
+            "type": "array",
+            "max_items": 512,
+            "items": {
+              "type": "record",
+              "fields": {
+                "name": {
+                  "type": "string",
+                  "max_bytes": 512
+                },
+                "value": {
+                  "type": "string",
+                  "max_bytes": 4096
+                }
+              }
+            }
+          }
+        }
+      },
+      "permissions": [
+        "process.exec"
+      ]
+    },
+    "status": {
+      "parameters": {
+        "type": "record",
+        "fields": {
+          "session": {
+            "type": "string",
+            "max_bytes": 128
+          }
+        }
+      },
+      "result": {
+        "type": "record",
+        "fields": {
+          "session": {
+            "type": "string",
+            "max_bytes": 128
+          },
+          "state": {
+            "type": "string",
+            "max_bytes": 32
+          },
+          "reason": {
+            "type": "string",
+            "max_bytes": 64
+          },
+          "source": {
+            "type": "string",
+            "max_bytes": 4096
+          },
+          "line": {
+            "type": "integer",
+            "min": 1,
+            "max": 2147483647
+          },
+          "pause": {
+            "type": "integer",
+            "min": 0,
+            "max": 9223372036854775807
+          }
+        },
+        "optional": [
+          "reason",
+          "source",
+          "line"
+        ]
+      },
+      "permissions": [
+        "process.exec"
+      ]
+    },
+    "stop": {
+      "parameters": {
+        "type": "record",
+        "fields": {
+          "session": {
+            "type": "string",
+            "max_bytes": 128
+          }
+        }
+      },
+      "result": {
+        "type": "record",
+        "fields": {
+          "session": {
+            "type": "string",
+            "max_bytes": 128
+          },
+          "state": {
+            "type": "string",
+            "max_bytes": 32
+          },
+          "pause": {
+            "type": "integer",
+            "min": 0,
+            "max": 9223372036854775807
+          }
+        }
+      },
+      "permissions": [
+        "process.exec"
+      ]
+    }
+  }
+}

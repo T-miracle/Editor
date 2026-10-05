@@ -186,7 +186,7 @@ impl LanguageService {
             state.children.is_empty(),
             "LSP provider already has a live process"
         );
-        let mut child = spawn_piped(&self.program, &self.args, &self.root)?;
+        let mut child = spawn_piped(&self.program, &self.args, &self.root, &Default::default())?;
         let input = child.child.stdin.take().expect("piped stdin");
         let output = child.child.stdout.take().expect("piped stdout");
         let mut errors = child.child.stderr.take().expect("piped stderr");

@@ -248,20 +248,21 @@ impl EditorApp {
 
     pub(crate) fn open_file(&mut self, path: PathBuf, window: &mut Window, cx: &mut Context<Self>) {
         // Explorer and other explicit file navigation retain their reveal behavior.
-        self.open_file_with_reveal(path, true, window, cx);
+        self.open_file_with_navigation(path, true, true, window, cx);
     }
 
-    /// Apply one reveal policy to both an existing tab and a newly opened document.
-    fn open_file_with_reveal(
+    /// Apply explicit reveal/focus policies to existing tabs and newly opened documents alike.
+    fn open_file_with_navigation(
         &mut self,
         path: PathBuf,
         reveal: bool,
+        focus_editor: bool,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         let path = path.canonicalize().unwrap_or(path);
         if let Some(index) = self.tabs.iter().position(|tab| tab.session.path() == path) {
-            self.activate_tab_with_reveal(index, reveal, window, cx);
+            self.activate_tab_with_navigation(index, reveal, focus_editor, window, cx);
             return;
         }
 
@@ -349,7 +350,13 @@ impl EditorApp {
                     _observer: observer,
                 });
                 self.sync_watched_documents();
-                self.activate_tab_with_reveal(self.tabs.len() - 1, reveal, window, cx);
+                self.activate_tab_with_navigation(
+                    self.tabs.len() - 1,
+                    reveal,
+                    focus_editor,
+                    window,
+                    cx,
+                );
                 self.refresh_syntax_diagnostics(self.editor.entity_id(), cx);
                 let editor = self.tabs.last().unwrap().editor.downgrade();
                 // Start highlighting only after the loaded text has painted once.
@@ -394,7 +401,10 @@ impl EditorApp {
             return false;
         }
         let path = path.canonicalize().unwrap_or(path);
-        self.open_file(path.clone(), window, cx);
+        // Source navigation updates the document without taking keyboard focus from the debug
+        // panel. Consecutive frame keys and step shortcuts must stay in the user's active surface.
+        let previous_focus = window.focused(cx);
+        self.open_file_with_navigation(path.clone(), true, false, window, cx);
         if self.active_path.as_deref() != Some(path.as_path()) {
             return false;
         }
@@ -427,6 +437,11 @@ impl EditorApp {
             2,
             window,
         );
+        // Base cursor positioning focuses the input immediately; restore the caller's focus once.
+        // The navigation policy above schedules no later focus, so this cannot be overwritten.
+        if let Some(focus) = previous_focus {
+            focus.focus(window, cx);
+        }
         true
     }
 
@@ -449,9 +464,10 @@ impl EditorApp {
         }
         let path = path.canonicalize().unwrap_or(path);
         // Definition jumps follow the same explorer preference as tab switching.
-        self.open_file_with_reveal(
+        self.open_file_with_navigation(
             path.clone(),
             self.session_state.explorer_reveal_on_tab_switch,
+            true,
             window,
             cx,
         );
@@ -550,19 +566,21 @@ impl EditorApp {
         cx: &mut Context<Self>,
     ) {
         // Ordinary switches follow the saved preference; explicit navigation supplies its own policy.
-        self.activate_tab_with_reveal(
+        self.activate_tab_with_navigation(
             index,
             self.session_state.explorer_reveal_on_tab_switch,
+            true,
             window,
             cx,
         );
     }
 
-    /// Activate document content while keeping explorer navigation an explicit caller choice.
-    fn activate_tab_with_reveal(
+    /// Activate document content while keeping explorer reveal and keyboard focus caller choices.
+    fn activate_tab_with_navigation(
         &mut self,
         index: usize,
         reveal: bool,
+        focus_editor: bool,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
@@ -612,8 +630,11 @@ impl EditorApp {
         let max_scroll = (px(190.) * self.tabs.len() - viewport).max(px(0.));
         self.tabs_scroll
             .set_offset(point(-target.clamp(px(0.), max_scroll), px(0.)));
-        let focus = self.editor.focus_handle(cx);
-        window.defer(cx, move |window, cx| focus.focus(window, cx));
+        // Debugger source updates preserve inspection focus; explicit file navigation focuses editing.
+        if focus_editor {
+            let focus = self.editor.focus_handle(cx);
+            window.defer(cx, move |window, cx| focus.focus(window, cx));
+        }
         self.status = t!("status.opened", file_name = file_name, language = language).to_string();
         self.persist_session();
         cx.notify();

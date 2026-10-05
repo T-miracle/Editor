@@ -23,6 +23,114 @@ fn terminal() -> Package {
         .unwrap()
 }
 
+/// Cancelling a creation wait after a native effect must retain the program and its eventual identity.
+#[test]
+#[ignore = "build capability-example through the public SDK first"]
+fn cancelling_a_creation_wait_keeps_the_already_created_program_manageable() {
+    use plugin_runtime::plugin_protocol::api::{self, CancellationEffect};
+    let root = tempfile::tempdir().unwrap();
+    let mut manager = manager(root.path());
+    let package = packages::provider("async-runner");
+    manager
+        .install(&package, package.manifest.permissions.clone())
+        .unwrap();
+    manager
+        .live
+        .get_mut("async-runner")
+        .unwrap()
+        .call(api::Input::Event {
+            panel: None,
+            event: api::Notification::Command {
+                id: "execution-defer-next".into(),
+                arguments: None,
+            },
+        })
+        .unwrap();
+    let ready = root.path().join("created.txt");
+    let session = manager
+        .start_execution(RunRequest {
+            program: "powershell.exe".into(),
+            args: vec![
+                "-NoProfile".into(),
+                "-Command".into(),
+                format!(
+                    "[IO.File]::WriteAllText('{}', 'ready'); Start-Sleep -Seconds 60",
+                    ready.display()
+                ),
+            ],
+            cwd: Some(root.path().display().to_string()),
+            name: None,
+            env: vec![],
+        })
+        .unwrap();
+    wait_until(&mut manager, |_| ready.exists(), |ready| *ready);
+    assert!(
+        ready.exists(),
+        "the native side effect occurred before its receipt"
+    );
+    session.cancel();
+    assert!(matches!(
+        session.update(),
+        RequestUpdate::Cancelled {
+            effect: CancellationEffect::WaitingStopped,
+            ..
+        }
+    ));
+    for _ in 0..3 {
+        manager.poll();
+    }
+    assert_eq!(
+        manager.live["async-runner"].process_ids().len(),
+        1,
+        "stopping the wait cannot kill the program"
+    );
+    manager
+        .live
+        .get_mut("async-runner")
+        .unwrap()
+        .call(api::Input::Event {
+            panel: None,
+            event: api::Notification::Command {
+                id: "execution-release".into(),
+                arguments: None,
+            },
+        })
+        .unwrap();
+    let state = wait_until(
+        &mut manager,
+        |_| session.snapshot().state,
+        |state| *state != ExecutionState::Starting,
+    );
+    assert_eq!(state, ExecutionState::Running);
+    assert!(session.snapshot().provider_session.is_some());
+    assert!(
+        matches!(
+            session.update(),
+            RequestUpdate::Cancelled {
+                effect: CancellationEffect::WaitingStopped,
+                ..
+            }
+        ),
+        "a late receipt cannot reopen the cancelled caller wait"
+    );
+    manager
+        .stop_execution_with(
+            session.id(),
+            plugin_runtime::StopOptions {
+                mode: plugin_runtime::plugin_protocol::process::ExitMode::Force,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    let ended = wait_until(
+        &mut manager,
+        |_| session.snapshot().state,
+        |state| !state.is_active(),
+    );
+    assert_eq!(ended, ExecutionState::Exited);
+    manager.shutdown();
+}
+
 fn manager(root: &Path) -> Manager {
     Manager::open(
         root.join("plugins"),
@@ -1125,15 +1233,83 @@ fn host_controls_stop_the_program_a_session_owns() {
     }
     // The owned program is gone while the provider's private session remains.
     assert_eq!(manager.live["terminal"].process_count(), 1);
-    // The session keeps the only lifecycle fact this contract reports: the provider did start a
-    // program. Nothing in execution contract 1.1 reports a later exit back to a consumer, so the
-    // host does not invent a stopped state from the absence of a process.
-    assert_eq!(
-        manager.execution(session.id()).unwrap().state(),
-        ExecutionState::Running
+    // Contract 1.3 can observe a terminal status. Wait for that answer rather than deriving exit
+    // from the process count or from the preceding stop acknowledgement.
+    wait_until(
+        &mut manager,
+        |manager| manager.execution(session.id()).unwrap().snapshot().state,
+        |state| *state == ExecutionState::Exited,
     );
-    // Repeating the stop is answered by the provider, which has nothing left to stop.
+    // Repeating a confirmed stop remains harmless.
     manager.stop_execution(session.id()).unwrap();
     // An unknown session is refused instead of stopping an unrelated program.
     assert!(manager.stop_execution(session.id() + 1000).is_err());
+}
+
+/// Default selection affects the next start while a real existing program stays owned by its provider.
+#[test]
+#[ignore = "build terminal and capability-example through the public SDK first"]
+fn switching_the_default_keeps_existing_execution_controls_pinned() {
+    let root = tempfile::tempdir().unwrap();
+    let mut manager = manager(root.path());
+    let first = terminal();
+    manager
+        .install(&first, first.manifest.permissions.clone())
+        .unwrap();
+    let mut manifest = serde_json::to_value(&first.manifest).unwrap();
+    manifest["id"] = serde_json::json!("alternative-terminal");
+    manifest["name"] = serde_json::json!("Alternative terminal");
+    let second = packages::archive(first.files, manifest);
+    manager
+        .install(&second, second.manifest.permissions.clone())
+        .unwrap();
+    let select = |manager: &mut Manager, provider: &str| {
+        manager
+            .set_service_provider(
+                plugin_protocol::api::InstanceScope::Workspace,
+                plugin_protocol::settings::Scope::Project,
+                plugin_runtime::EXECUTION_CONTRACT,
+                Some(provider),
+            )
+            .unwrap()
+    };
+    select(&mut manager, "terminal");
+    let session = manager
+        .start_execution(RunRequest {
+            program: "powershell.exe".into(),
+            args: vec![
+                "-NoProfile".into(),
+                "-Command".into(),
+                "Start-Sleep -Seconds 60".into(),
+            ],
+            cwd: None,
+            name: None,
+            env: vec![],
+        })
+        .unwrap();
+    wait_until(
+        &mut manager,
+        |manager| manager.execution(session.id()).unwrap().snapshot().state,
+        |state| *state == ExecutionState::Running,
+    );
+    assert_eq!(manager.live["terminal"].process_count(), 2);
+    select(&mut manager, "alternative-terminal");
+    // Both query and stop remain bound to the original incarnation, despite the changed revision.
+    let query = manager.query_execution(session.id()).unwrap();
+    manager.poll_request(&query);
+    assert!(matches!(
+        query.status(),
+        plugin_protocol::api::RequestUpdate::Completed { result: Ok(_) }
+    ));
+    manager.stop_execution(session.id()).unwrap();
+    wait_until(
+        &mut manager,
+        |manager| manager.execution(session.id()).unwrap().snapshot().state,
+        |state| *state == ExecutionState::Exited,
+    );
+    assert_eq!(manager.live["terminal"].process_count(), 1);
+    assert_eq!(manager.live["alternative-terminal"].process_count(), 1);
+    let next = manager.start_execution(session.request().clone()).unwrap();
+    assert_eq!(next.plugin(), "alternative-terminal");
+    manager.shutdown();
 }

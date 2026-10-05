@@ -15,11 +15,15 @@ pub(super) struct Services {
     pub declarations: service::Declarations,
     pub references: BTreeMap<u64, Reference>,
     pub pending: BTreeMap<u64, Pending>,
+    /// At most 32 provider callbacks may await a later event, under their original call authority.
+    pub incoming: BTreeMap<u64, super::service_replies::Incoming>,
     pub context: Option<CallContext>,
     pub invoking: bool,
     pub resources: BTreeMap<u64, (api::ResourceHandle, CallContext)>,
     /// Final cleanup notifications retain revoked authority and are drained outside broker reconciliation.
     pub revoked_processes: Vec<(api::ResourceHandle, CallContext)>,
+    /// Retired invocation cleanup must also reach the guest without restoring source authority.
+    pub revoked_invocations: Vec<(api::ResourceHandle, CallContext)>,
 }
 impl Default for Services {
     fn default() -> Self {
@@ -35,10 +39,12 @@ impl Default for Services {
             declarations: Default::default(),
             references: Default::default(),
             pending: Default::default(),
+            incoming: Default::default(),
             context: None,
             invoking: false,
             resources: Default::default(),
             revoked_processes: Vec::new(),
+            revoked_invocations: Vec::new(),
         }
     }
 }
@@ -51,10 +57,15 @@ impl Services {
             pending.call.completion.retire();
         }
         self.pending.clear();
+        for incoming in self.incoming.values() {
+            incoming.call.completion.retire();
+        }
+        self.incoming.clear();
         self.references.clear();
         self.context = None;
         self.resources.clear();
         self.revoked_processes.clear();
+        self.revoked_invocations.clear();
     }
 }
 
@@ -75,13 +86,18 @@ impl State {
                 "plugin.services was not negotiated",
             ));
         }
-        if !self.permissions.contains("services.call") {
+        if !matches!(operation, service::Operation::Reply { .. })
+            && !self.permissions.contains("services.call")
+        {
             return Err(Failure::new(
                 ErrorCode::PermissionDenied,
                 "services.call permission required",
             ));
         }
         match operation {
+            service::Operation::Reply { request, result } => {
+                self.finish_service_reply(request, result)
+            }
             service::Operation::Open { contract } => {
                 let dependency = self
                     .plugin_services
@@ -152,41 +168,17 @@ impl State {
                         )
                     })?;
                 signature.parameters.accepts(&arguments)?;
-                let mut context =
-                    self.plugin_services
-                        .context
-                        .clone()
-                        .unwrap_or_else(|| CallContext {
-                            lifetimes: vec![self.plugin_services.alive.clone()],
-                            caller: self.plugin_services.principal.clone(),
-                            ancestry: vec![self.plugin_services.principal.instance.clone()],
-                            permissions: self.permissions.clone(),
-                        });
-                if context.ancestry.len() >= 8
-                    || context
-                        .ancestry
-                        .contains(&reference.provider.caller.instance)
-                {
-                    return Err(Failure::new(
-                        ErrorCode::Conflict,
-                        "Service call cycle or depth limit detected",
-                    ));
-                }
-                if !signature.permissions.is_subset(&context.permissions)
-                    || !signature
-                        .permissions
-                        .is_subset(&reference.provider.caller.permissions)
-                {
-                    return Err(Failure::new(
-                        ErrorCode::PermissionDenied,
-                        "Caller and provider must both authorize the service method",
-                    ));
-                }
-                context.permissions = signature.permissions.clone();
-                context
-                    .ancestry
-                    .push(reference.provider.caller.instance.clone());
-                context.lifetimes.push(reference.provider.alive.clone());
+                let context = self
+                    .plugin_services
+                    .context
+                    .clone()
+                    .unwrap_or_else(|| CallContext {
+                        lifetimes: vec![self.plugin_services.alive.clone()],
+                        caller: self.plugin_services.principal.clone(),
+                        ancestry: vec![self.plugin_services.principal.instance.clone()],
+                        permissions: self.permissions.clone(),
+                    });
+                let context = context.delegate(&reference.provider, &signature)?;
                 let Value::Resource(handle) = self.roots.open(RootKind::ServiceRequest)? else {
                     unreachable!()
                 };
@@ -246,6 +238,25 @@ impl State {
         {
             return Ok(());
         }
+        // A normal preparation stop keeps existing processes owned until actual exit, while sealing
+        // new allocations. Existing protocol writes let an approved DAP disconnect settle normally.
+        if self.host_resources.preparations.sealed(&context.lifetimes)
+            && !matches!(
+                operation,
+                api::Operation::Service {
+                    operation: service::Operation::Reply { .. }
+                } | api::Operation::Process {
+                    operation: process::Operation::RequestExit { .. }
+                        | process::Operation::Terminate { .. }
+                        | process::Operation::Write { .. }
+                }
+            )
+        {
+            return Err(Failure::new(
+                ErrorCode::Cancelled,
+                "Preparation is stopping; new effects are sealed",
+            ));
+        }
         if !self
             .plugin_services
             .broker
@@ -301,12 +312,14 @@ impl State {
                 _ => "editor.read",
             },
             api::Operation::Process {
-                operation: process::Operation::Execute { .. },
+                operation:
+                    process::Operation::Execute { .. } | process::Operation::StartService { .. },
             } => "process.exec",
             api::Operation::Process {
                 operation:
                     process::Operation::Write { handle, .. }
                     | process::Operation::Resize { handle, .. }
+                    | process::Operation::RequestExit { handle, .. }
                     | process::Operation::Terminate { handle },
             } if owned(handle) => "process.exec",
             _ => {
@@ -339,10 +352,9 @@ impl Instance {
             .collect::<Vec<_>>();
         drop(broker);
         for (handle, context) in retired {
-            let process = matches!(
-                self.store.data().roots.resolve(&handle),
-                Ok(RootKind::Process(_))
-            );
+            let kind = self.store.data().roots.resolve(&handle);
+            let process = matches!(kind, Ok(RootKind::Process(_)));
+            let invocation = matches!(kind, Ok(RootKind::ServiceInvocation));
             let released = self
                 .store
                 .data_mut()
@@ -355,32 +367,68 @@ impl Instance {
                     .plugin_services
                     .revoked_processes
                     .push((handle, context));
+            } else if invocation && released.is_ok() {
+                self.store
+                    .data_mut()
+                    .plugin_services
+                    .revoked_invocations
+                    .push((handle, context));
             }
         }
     }
     /// A final Terminated update may update local UI, but every new host effect still sees the dead source.
     pub(super) fn poll_service_revocations(&mut self) -> anyhow::Result<bool> {
         let revoked = std::mem::take(&mut self.store.data_mut().plugin_services.revoked_processes);
-        let changed = !revoked.is_empty();
+        let invocations =
+            std::mem::take(&mut self.store.data_mut().plugin_services.revoked_invocations);
+        let changed = !revoked.is_empty() || !invocations.is_empty();
         for (handle, context) in revoked {
-            // Bypass only the ordinary late-event suppression, never the authority check on host imports.
-            let previous = self
-                .store
-                .data_mut()
-                .plugin_services
-                .context
-                .replace(context);
-            let result = self.call(api::Input::Event {
-                panel: None,
-                event: api::Notification::Process {
-                    handle,
-                    update: process::Update::Terminated,
+            self.call_for_retirement(
+                context,
+                api::Input::Event {
+                    panel: None,
+                    event: api::Notification::Process {
+                        handle,
+                        update: process::Update::Terminated,
+                    },
                 },
-            });
-            self.store.data_mut().plugin_services.context = previous;
-            result?;
+            )?;
+        }
+        for (request, context) in invocations {
+            self.call_for_retirement(
+                context,
+                api::Input::Event {
+                    panel: None,
+                    event: api::Notification::Service(service::Notification::InvocationCancelled {
+                        request,
+                        reason: Failure::new(ErrorCode::InvalidHandle, "Service source retired"),
+                    }),
+                },
+            )?;
         }
         Ok(changed)
+    }
+    /// Final bookkeeping notifications bypass late delivery suppression with a sealed authority token.
+    /// The token applies only to this callback; cancelling a wait cannot revoke already owned programs.
+    pub(super) fn call_for_retirement(
+        &mut self,
+        mut context: CallContext,
+        message: api::Input,
+    ) -> anyhow::Result<api::Output> {
+        context
+            .lifetimes
+            .push(std::sync::Arc::new(std::sync::atomic::AtomicBool::new(
+                false,
+            )));
+        let previous = self
+            .store
+            .data_mut()
+            .plugin_services
+            .context
+            .replace(context);
+        let result = self.call(message);
+        self.store.data_mut().plugin_services.context = previous;
+        result
     }
     /// Async continuations inherit their source context instead of regaining provider privileges.
     pub(super) fn call_with_service_context(
@@ -433,42 +481,6 @@ impl Instance {
             }
         }
         Ok(())
-    }
-    /// Call under a shrinking source context and always restore normal authority, including error paths.
-    pub(crate) fn invoke_service(&mut self, call: &Call) -> Result<serde_json::Value, Failure> {
-        self.store.data_mut().plugin_services.invoking = true;
-        self.store.data_mut().plugin_services.context = Some(call.context.clone());
-        let mut caller = call.context.caller.clone();
-        caller.permissions = call.context.permissions.clone();
-        let result = self.call(api::Input::Event {
-            panel: None,
-            event: api::Notification::Service(service::Notification::Invoke(service::Invocation {
-                caller,
-                contract: call.reference.contract.clone(),
-                method: call.method.clone(),
-                arguments: call.arguments.clone(),
-            })),
-        });
-        self.store.data_mut().plugin_services.context = None;
-        self.store.data_mut().plugin_services.invoking = false;
-        match result {
-            Ok(reply) => reply.service_reply.ok_or_else(|| {
-                Failure::new(
-                    ErrorCode::InvalidRequest,
-                    "Service provider omitted its result",
-                )
-            })?,
-            Err(error) => {
-                if let Some(failure) = error.downcast_ref::<Failure>() {
-                    return Err(failure.clone());
-                }
-                self.stop();
-                Err(Failure::new(
-                    ErrorCode::OperationFailed,
-                    format!("Service provider failed: {error:#}"),
-                ))
-            }
-        }
     }
     pub(super) fn poll_service_requests(&mut self) -> anyhow::Result<()> {
         let updates = self

@@ -6,31 +6,90 @@
 //! behaving like the control next to it.
 use super::{
     LaunchPlan, MAX_PREPARED_STEPS, RunConfigDraft, RunControls, RunMenuEntry, SequenceAction,
-    add_step, join_step_lines, move_step, remove_step, step_lines,
+    StepKind, add_step, join_step_lines, move_step, remove_step, step_lines,
 };
-use crate::app::dialog as app_dialog;
 use crate::extensions::HostWork as Work;
 use crate::ui::controls::menu::MenuStyle;
 use crate::ui::controls::{Button, DialogContent};
 // The crate root already selects the same widget and styling traits the rest of the shell uses.
+use crate::ui::controls::menu::PopupMenu as NativePopupMenu;
 use crate::*;
-use gpui_base::input::{Input as BaseInput, InputEvent, InputState};
-use gpui_kit::component::menu::{PopupMenu as KitPopupMenu, PopupMenuItem};
+use gpui_base::input::{InputEvent, InputState, TextareaState};
 use gpui_kit::{AnyElement, DismissEvent, WeakEntity, Window, div, px};
 use rust_i18n::t;
 use sha2::{Digest, Sha256};
+
+mod build_output;
+pub(crate) mod panel;
 
 /// Width of the unified run dropdown; it holds session labels with state words beside them.
 const RUN_MENU_WIDTH: f32 = 260.;
 
 /// The unified dropdown retaining the component lifetime and its dismissal subscription.
 pub(crate) struct RunMenu {
-    pub position: gpui_kit::Point<gpui_kit::Pixels>,
-    pub popup: Entity<KitPopupMenu>,
+    pub popup: Entity<NativePopupMenu>,
     _dismiss: Subscription,
 }
 
-/// The B1 configuration dialog's tabs; only the basic page is implemented by this slice.
+/// A same-window modal entity renders after EditorApp releases its lease.
+/// It observes the editor and retained draft; closing revokes nodes without destroying an HWND.
+pub(crate) struct RunConfigModal {
+    owner: WeakEntity<EditorApp>,
+    focus: FocusHandle,
+    _updates: Vec<Subscription>,
+    /// Target confirmation can replace the entire draft, so observation follows its current identity.
+    observed_form: Option<Entity<RunConfigForm>>,
+    _form_update: Option<Subscription>,
+}
+impl Render for RunConfigModal {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let Some(app) = self.owner.upgrade() else {
+            return div().into_any_element();
+        };
+        let Some(form) = app.read(cx).run_form.clone() else {
+            return div().into_any_element();
+        };
+        if self
+            .observed_form
+            .as_ref()
+            .is_none_or(|old| old.entity_id() != form.entity_id())
+        {
+            self._form_update = Some(cx.observe(&form, |_, _, cx| cx.notify()));
+            self.observed_form = Some(form.clone());
+        }
+        let title = if app
+            .read(cx)
+            .run_controls
+            .configuration(&form.read(cx).draft.id)
+            .is_some()
+        {
+            t!("run.form_edit_title").to_string()
+        } else {
+            t!("run.form_new_title").to_string()
+        };
+        let cancel = self.owner.clone();
+        let save = self.owner.clone();
+        crate::ui::controls::dialog::modal(
+            self.focus.clone(),
+            title,
+            render_run_config_form(&self.owner, DialogContent::new(), cx).into_any_element(),
+            move |_, cx| {
+                let _ = cancel.update(cx, |state, cx| state.close_run_form(cx));
+            },
+            move |_, cx| {
+                save.update(cx, |state, cx| {
+                    state.commit_run_form(cx);
+                    state.run_form.is_none()
+                })
+                .unwrap_or(true)
+            },
+            window,
+            cx,
+        )
+    }
+}
+
+/// The four B1 pages edit one retained draft; changing pages never drops typed values.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum RunConfigTab {
     Basic,
@@ -42,12 +101,12 @@ pub enum RunConfigTab {
 impl RunConfigTab {
     const ALL: [Self; 4] = [Self::Basic, Self::Build, Self::Debug, Self::Environment];
 
-    fn label(self) -> &'static str {
+    fn label(self) -> String {
         match self {
-            Self::Basic => "基本",
-            Self::Build => "构建",
-            Self::Debug => "调试",
-            Self::Environment => "环境",
+            Self::Basic => t!("run.form_basic").to_string(),
+            Self::Build => t!("run.form_build").to_string(),
+            Self::Debug => t!("run.form_debug").to_string(),
+            Self::Environment => t!("run.form_environment").to_string(),
         }
     }
 
@@ -60,12 +119,12 @@ impl RunConfigTab {
         }
     }
 
-    fn hint(self) -> &'static str {
+    fn hint(self) -> String {
         match self {
-            Self::Basic => "名称、程序、参数与工作目录",
-            Self::Build => "构建操作与启动前步骤：前者可只构建，后者在启动前按顺序执行",
-            Self::Debug => "执行提供者：跟随默认，或为这个配置指定一个",
-            Self::Environment => "本配置的环境变量，每行一个 名称=值",
+            Self::Basic => t!("run.hint_basic").to_string(),
+            Self::Build => t!("run.hint_build").to_string(),
+            Self::Debug => t!("run.hint_debug").to_string(),
+            Self::Environment => t!("run.hint_environment").to_string(),
         }
     }
 
@@ -79,7 +138,7 @@ impl RunConfigTab {
     }
 }
 
-/// One labelled single-line field of the basic page.
+/// One labelled configuration field; scripts and row collections retain multi-line editing.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum RunField {
     Name,
@@ -109,19 +168,30 @@ impl RunField {
         Self::Breakpoints,
     ];
 
-    fn label(self) -> &'static str {
+    /// Separate input kinds preserve literal argv lines and real multi-line script/IME editing.
+    fn multiline(self) -> bool {
+        matches!(
+            self,
+            Self::Arguments
+                | Self::Script
+                | Self::Environment
+                | Self::ToolPaths
+                | Self::Breakpoints
+        )
+    }
+    fn label(self) -> String {
         match self {
-            Self::Name => "名称",
-            Self::Program => "程序",
+            Self::Name => t!("run.field_name").to_string(),
+            Self::Program => t!("run.field_program").to_string(),
             // One argument per line keeps a value containing spaces literal.
-            Self::Arguments => "参数（每行一个）",
-            Self::Script => "脚本文本",
-            Self::Directory => "工作目录",
-            Self::Environment => "环境变量（每行 名称=值）",
-            Self::ToolPaths => "本机工具路径（每行一个目录，优先于继承的 PATH）",
-            Self::Build => "构建操作（每行 名称 = 程序 | 参数）",
-            Self::Prelaunch => "启动前步骤（每行 名称 = 程序 | 参数，顺序执行）",
-            Self::Breakpoints => "断点（每行 源文件:行号）",
+            Self::Arguments => t!("run.field_arguments").to_string(),
+            Self::Script => t!("run.field_script").to_string(),
+            Self::Directory => t!("run.field_directory").to_string(),
+            Self::Environment => t!("run.field_environment").to_string(),
+            Self::ToolPaths => t!("run.field_tool_paths").to_string(),
+            Self::Build => t!("run.field_build").to_string(),
+            Self::Prelaunch => t!("run.field_prelaunch").to_string(),
+            Self::Breakpoints => t!("run.field_breakpoints").to_string(),
         }
     }
 
@@ -193,6 +263,8 @@ pub struct RunConfigForm {
     error: Option<String>,
     /// Editing state for each field, created with the dialog so text never resets per frame.
     inputs: Vec<(RunField, Entity<InputState>)>,
+    /// Lists/scripts need actual Enter and multi-line selection, rather than a single-line placeholder.
+    textareas: Vec<(RunField, Entity<TextareaState>)>,
     /// One editing state per prepared action, for the lists that are edited row by row.
     ///
     /// A row is its own single-line field so an action can be moved or removed without its text
@@ -221,12 +293,31 @@ impl RunConfigForm {
             draft,
             error: None,
             inputs: Vec::new(),
+            textareas: Vec::new(),
             rows: Vec::new(),
             _subscriptions: Vec::new(),
         };
         for field in RunField::ALL {
             let initial = field.value(&form.draft);
             let label = field.label();
+            if field.multiline() {
+                let input = cx.new(|cx| {
+                    TextareaState::new(window, cx)
+                        .rows(3)
+                        .default_value(initial)
+                        .placeholder(label.to_string())
+                });
+                form._subscriptions.push(cx.subscribe(
+                    &input,
+                    |form, _, event: &InputEvent, cx| {
+                        if matches!(event, InputEvent::Change) && form.error.take().is_some() {
+                            cx.notify();
+                        }
+                    },
+                ));
+                form.textareas.push((field, input));
+                continue;
+            }
             let input = cx.new(|cx| {
                 InputState::new(window, cx)
                     .default_value(initial)
@@ -300,7 +391,9 @@ impl RunConfigForm {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.sync_rows(field, cx);
+        // Rebuilding replaces both lists. Preserve both sets of unsaved native input first.
+        self.sync_rows(RunField::Build, cx);
+        self.sync_rows(RunField::Prelaunch, cx);
         let current = match field {
             RunField::Build => self.draft.build.clone(),
             RunField::Prelaunch => self.draft.prelaunch.clone(),
@@ -328,6 +421,13 @@ impl RunConfigForm {
 
     /// Current text of one field, read from its editing state.
     fn text(&self, field: RunField, cx: &gpui_kit::App) -> String {
+        if let Some((_, input)) = self
+            .textareas
+            .iter()
+            .find(|(candidate, _)| *candidate == field)
+        {
+            return input.read(cx).value().to_string();
+        }
         self.inputs
             .iter()
             .find(|(candidate, _)| *candidate == field)
@@ -355,7 +455,7 @@ impl RunConfigForm {
     ///
     /// Lets a native check confirm the approved structure without depending on how the strip is
     /// painted in the dialog's own window.
-    pub(crate) fn tab_labels(&self) -> Vec<(&'static str, bool)> {
+    pub(crate) fn tab_labels(&self) -> Vec<(String, bool)> {
         RunConfigTab::ALL
             .into_iter()
             .map(|tab| (tab.label(), tab.available()))
@@ -363,7 +463,7 @@ impl RunConfigForm {
     }
 
     /// The labelled fields of the basic page, in the order they are presented.
-    pub(crate) fn field_labels(&self) -> Vec<&'static str> {
+    pub(crate) fn field_labels(&self) -> Vec<String> {
         RunField::ALL.into_iter().map(RunField::label).collect()
     }
 
@@ -422,6 +522,57 @@ impl EditorApp {
     /// Read published host sessions into the run controls before the frame is painted.
     pub(crate) fn sync_run_controls(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let (executions, errors, stops, statuses) = self.extensions.read(cx).take_host_runs();
+        for (session, request, result) in self.extensions.read(cx).take_run_locations() {
+            if self.run_controls.finish_location(session, request) {
+                self.status = match result {
+                    Ok(()) => t!("run.located", session = session.to_string()).into(),
+                    Err(error) => t!("run.locate_failed", error = error).into(),
+                };
+            }
+        }
+        // Target receipts belong to their original workspace and plan, independent of current selection.
+        for (workspace, request, result) in self.extensions.read(cx).take_target_discoveries() {
+            if workspace != self.workspace_key() || !self.run_controls.finish_discovery(request) {
+                continue;
+            }
+            match result {
+                Ok(catalog) => match self.run_controls.accept_target_catalog(catalog) {
+                    Ok((report, diagnostics)) => {
+                        let summary = t!(
+                            "run.target_discovery_summary",
+                            count = self.run_controls.discovered_targets().len(),
+                            repairs = report.repaired.len(),
+                            offered = report.offered.len(),
+                            missing = report.missing.len()
+                        );
+                        self.status = if diagnostics.is_empty() {
+                            summary.into()
+                        } else {
+                            format!("{summary}\n{diagnostics}")
+                        };
+                    }
+                    Err(error) => self.status = error,
+                },
+                Err(error) => self.status = error,
+            }
+        }
+        for (request, (config, _, snapshot)) in self.extensions.read(cx).take_target_snapshots() {
+            self.run_controls
+                .observe_provider_preparation(request, &config, snapshot);
+        }
+        for (config, index, request, result) in self.extensions.read(cx).take_target_preparations()
+        {
+            if self.run_controls.provider_prepared(
+                &config,
+                index,
+                request,
+                result.as_deref().map_err(String::as_str),
+            ) {
+                if let Err(error) = result {
+                    self.status = error;
+                }
+            }
+        }
         // The host's own answer about debugging is carried into the controls, so a control that
         // offers a debug launch and the launch itself cannot disagree about whether there is one.
         if let Some(availability) = self.extensions.read(cx).debug_availability() {
@@ -432,11 +583,16 @@ impl EditorApp {
         if let Some(capabilities) = self.extensions.read(cx).debug_capabilities() {
             self.run_controls.note_debug_capabilities(capabilities);
         }
+        self.run_controls
+            .note_all_debug_capabilities(self.extensions.read(cx).all_debug_capabilities());
         // Debug answers arrive like every other host publication, and are applied to the pause they
         // were asked about: a late one is reported rather than replacing a newer view.
         for (request, answer) in self.extensions.read(cx).take_debug_answers() {
             use crate::extensions::DebugAnswerMessage;
             let outcome = match answer {
+                DebugAnswerMessage::Connecting(session) => {
+                    self.run_controls.note_debug_connecting(request, &session)
+                }
                 DebugAnswerMessage::Frames(frames) => self.run_controls.apply_debug_answer(
                     request,
                     Some(
@@ -468,73 +624,46 @@ impl EditorApp {
                 // A step is answered by a state, so applying it is what begins the new pause; the
                 // provider's word is translated, never a state the host assumed.
                 DebugAnswerMessage::State(session) => {
-                    let state = match session.state {
-                        plugin_runtime::DebugState::Starting => {
-                            editor_core::DebugSessionState::Starting
-                        }
-                        plugin_runtime::DebugState::Running => {
-                            editor_core::DebugSessionState::Running
-                        }
-                        plugin_runtime::DebugState::Paused => {
-                            editor_core::DebugSessionState::Paused {
-                                source: session.source.clone().unwrap_or_default(),
-                                line: session.line.unwrap_or(0),
-                                reason: session.reason.clone(),
-                            }
-                        }
-                        plugin_runtime::DebugState::Exited => {
-                            editor_core::DebugSessionState::Exited
-                        }
-                    };
-                    // A start and a step are both answered by a state, and the request says which one
-                    // it was: a start establishes the session, a step moves it.
-                    let outcome = if self.run_controls.debug_request_is_start(request) {
-                        self.run_controls
-                            .apply_debug_start(request, &session.session, state)
-                    } else {
-                        self.run_controls.apply_debug_step(request, state)
-                    };
-                    // A pause nobody asked for is where the user wants the source; one they asked for
-                    // by stepping is not, so the controls decide whether this pause is followed.
-                    if let editor_core::DebugSessionState::Paused { source, line, .. } =
-                        self.run_controls.debug_state()
-                        && self.run_controls.take_debug_position_to_follow()
-                    {
-                        let (source, line) = (source.clone(), line);
-                        if !self.open_debug_location(&source, line, window, cx) {
-                            // Reported rather than guessed at: a provider's path is not evidence that
-                            // the file is here.
-                            self.status = format!("无法定位到 {source}:{line}");
-                        }
-                    }
-                    outcome
+                    self.run_controls.apply_debug_state_reply(request, &session)
                 }
                 DebugAnswerMessage::Breakpoints(bound) => {
                     // The answer replaces what is known about this session's positions, so a
                     // breakpoint the provider refused stops being reported as bound.
-                    self.run_controls.note_debug_breakpoints(
+                    self.run_controls.apply_debug_breakpoint_answer(
+                        request,
                         bound
                             .into_iter()
                             .map(|entry| (entry.source, entry.line, entry.verified)),
-                    );
-                    self.run_controls.abandon_debug_request(request);
-                    Ok(())
+                    )
                 }
                 // A failed call is released and reported; it is never shown as an empty stack.
-                DebugAnswerMessage::Failed(message) => self
-                    .run_controls
-                    .fail_debug_request(request)
-                    .map_err(|error| {
-                        editor_core::InspectionError::Provider(format!("{error}（{message}）"))
-                    }),
+                DebugAnswerMessage::Failed(message) => {
+                    self.status = message.clone();
+                    self.run_controls.fail_debug_reply(request, message)
+                }
             };
             if let Err(reason) = outcome {
-                self.status = reason.to_string();
+                self.status = super::debug_presentation::inspection_error(&reason);
             }
         }
         // A pause is where the user wants to see the stack, so the editor asks for it. Without this
+        for report in self.extensions.read(cx).take_debug_observations() {
+            if self.run_controls.observe_debug_report(&report)
+                && let (Some(source), Some(line)) = (report.source.as_deref(), report.line)
+                && !source.is_empty()
+                && line > 0
+            {
+                self.open_debug_location(source, line, window, cx);
+            }
+        }
+        // Inspection belongs to the newly observed pause, never to cached output text.
         // the panel renders frames and variables that nobody ever requested.
         self.fetch_debug_inspection(cx);
+        if !self.leave_confirmed && !self.shutting_down {
+            for configuration in self.run_controls.take_ready_debug_reruns() {
+                self.debug_configuration(&configuration, cx);
+            }
+        }
         // And it is the moment to tell the debugger where to stop: a session that began before the user
         // set its breakpoints would otherwise never learn them, and a removed one would stay set. Only
         // while a session exists, because there is nothing to address before that.
@@ -563,16 +692,17 @@ impl EditorApp {
             // An acknowledgement means the provider was asked, not that the program has exited, so
             // the visible state never claims more than the provider actually reported.
             self.status = match &result {
-                Ok(()) => format!("已请求停止会话 {session}"),
-                Err(message) => format!("停止会话 {session} 失败：{message}"),
+                Ok(()) => t!("run.stop_requested", session = session).to_string(),
+                Err(message) => {
+                    t!("run.stop_failed", session = session, message = message).to_string()
+                }
             };
-            if result.is_ok() {
-                // A preparation that was stopping is now finished rather than still working.
-                self.run_controls.note_preparation_stopped(session);
-            }
+        }
+        for config in self.run_controls.finish_stopped_preparations() {
+            self.finish_preparation(&config, cx);
         }
         // An observed end advances its sequence; a program still running is not progress.
-        for (config, _, outcome) in self.run_controls.reconcile_run_status(&statuses) {
+        for (config, _, _outcome) in self.run_controls.reconcile_run_status(&statuses) {
             self.drive_preparation(cx);
             if let Some(sequence) = self.run_controls.preparation(&config)
                 && !sequence.is_active()
@@ -583,6 +713,23 @@ impl EditorApp {
             break;
         }
         self.drive_preparation(cx);
+        if !self.leave_confirmed && !self.shutting_down {
+            for (config, debug) in self.run_controls.take_ready_preparation_reruns() {
+                let workspace = self.workspace_key();
+                self.run_controls.select(&config, &workspace);
+                if debug {
+                    self.debug_configuration(&config, cx);
+                } else {
+                    self.start_configuration_without_environment(&config, window, cx);
+                }
+            }
+            for (config, outcome) in self.run_controls.take_ready_reruns() {
+                match outcome {
+                    Ok(()) => self.start_configuration_without_environment(&config, window, cx),
+                    Err(reason) => self.status = reason,
+                }
+            }
+        }
     }
 
     /// Whether this workspace may start programs at all; a restricted workspace never launches.
@@ -601,113 +748,137 @@ impl EditorApp {
         cx: &mut Context<Self>,
     ) {
         let owner = cx.entity().downgrade();
-        let previous_focus = window
-            .focused(cx)
-            .unwrap_or_else(|| self.editor.focus_handle(cx));
-        // One description drives both the menu and its native check, so grouping cannot drift
-        // between what a test asserts and what a user opens.
+        // The existing local popup owns retained focus, scrolling and gpui-base item behavior.
+        // Its immutable entry map keeps keyboard selection tied to this menu's session snapshot.
         let entries = self.run_controls.menu_entries();
-        let popup = KitPopupMenu::build(window, cx, move |mut menu, _window, _cx| {
-            menu = menu
-                .min_w(px(RUN_MENU_WIDTH))
-                .action_context(previous_focus);
-            for entry in entries {
-                match entry {
-                    RunMenuEntry::Target {
-                        id,
-                        label,
-                        target_type,
-                    } => {
-                        // Confirming is what stores anything: the candidate is shown with the
-                        // provider's own type, and nothing is added until this is clicked.
-                        let confirm = owner.clone();
-                        let title = format!("{label} · {target_type}");
-                        menu =
-                            menu.item(PopupMenuItem::new(title).on_click(move |_, window, cx| {
-                                let _ = confirm.update(cx, |app, cx| {
-                                    let workspace = app.workspace_key();
-                                    match app.run_controls.confirm_target(&id, &workspace) {
-                                        Ok(stored) => {
-                                            app.status = format!(
-                                                "已添加运行配置 {label}，可在配置弹窗中修改"
-                                            );
-                                            // The stored configuration opens for editing straight
-                                            // away, so confirming leads somewhere rather than
-                                            // leaving the user to find it in the list.
-                                            app.open_run_config_dialog(window, cx, Some(stored));
-                                        }
-                                        Err(message) => app.status = message,
-                                    }
-                                });
-                            }));
-                    }
-                    RunMenuEntry::Separator => menu = menu.separator(),
-                    RunMenuEntry::Session { id, label } => {
-                        let locate = owner.clone();
-                        menu =
-                            menu.item(PopupMenuItem::new(label).on_click(move |_, window, cx| {
-                                let _ = locate.update(cx, |app, cx| {
-                                    // The session's own configuration is the selection Stop acts on.
-                                    let config = app
-                                        .run_controls
-                                        .sessions()
-                                        .into_iter()
-                                        .find(|session| session.id == id)
-                                        .map(|session| session.config)
-                                        .unwrap_or_default();
-                                    app.reveal_run_session(id, &config, window, cx);
-                                });
-                            }));
-                    }
-                    RunMenuEntry::Configuration { id, label } => {
-                        let choose = owner.clone();
-                        menu = menu.item(PopupMenuItem::new(label).on_click(move |_, _, cx| {
-                            let _ = choose.update(cx, |app, cx| {
-                                let key = app.workspace_key();
-                                app.run_controls.select(&id, &key);
-                                cx.notify();
-                            });
-                        }));
-                    }
-                    RunMenuEntry::Action { id, label, enabled } => {
-                        if !enabled {
-                            menu = menu.item(PopupMenuItem::new(label).disabled(true));
-                            continue;
-                        }
-                        let act = owner.clone();
-                        menu =
-                            menu.item(PopupMenuItem::new(label).on_click(move |_, window, cx| {
-                                let _ = act.update(cx, |app, cx| match id.as_str() {
-                                    "run-edit" => {
-                                        let editing =
-                                            app.run_controls.selected().map(|c| c.id.clone());
-                                        app.open_run_config_dialog(window, cx, editing);
-                                    }
-                                    "run-new" => app.open_run_config_dialog(window, cx, None),
-                                    // Discovery never runs a target; it only asks the installed
-                                    // plugins what this workspace offers and reports the answer.
-                                    "run-discover" => app.discover_run_targets(cx),
-                                    other => {
-                                        // A repair entry names the configuration whose target is gone.
-                                        if let Some(id) =
-                                            other.strip_prefix("run-repair-").map(str::to_owned)
-                                        {
-                                            app.discover_run_targets(cx);
-                                            app.status = if app.run_controls.target_missing(&id) {
-                                                "该目标仍未被发现；检查项目文件或工具是否可用"
-                                                    .into()
-                                            } else {
-                                                "已重新发现该目标，配置已修复".into()
-                                            };
-                                            cx.notify();
-                                        }
-                                    }
-                                });
-                            }));
-                    }
+        let mut items = Vec::new();
+        let mut actions = std::collections::BTreeMap::new();
+        let mut separator = false;
+        for (index, entry) in entries.into_iter().enumerate() {
+            let (label, disabled) = match &entry {
+                RunMenuEntry::Separator => {
+                    separator = true;
+                    continue;
                 }
-            }
-            menu
+                RunMenuEntry::Target {
+                    label, target_type, ..
+                } => (format!("{label} · {target_type}"), false),
+                RunMenuEntry::Session { label, .. } | RunMenuEntry::Configuration { label, .. } => {
+                    (label.clone(), false)
+                }
+                RunMenuEntry::Action { label, enabled, .. } => (label.clone(), !enabled),
+            };
+            let id = format!("run-item-{index}");
+            items.push(plugin_runtime::plugin_protocol::ui::MenuItem {
+                id: id.clone(),
+                label,
+                disabled,
+                separator_before: separator,
+            });
+            separator = false;
+            actions.insert(id, entry);
+        }
+        let style = MenuStyle::current(cx);
+        let popup = cx.new(|cx| {
+            NativePopupMenu::new(
+                items,
+                style,
+                position,
+                move |action, window, cx| {
+                    let _ = owner.update(cx, |app, cx| {
+                        let plugin_runtime::plugin_protocol::ui::Action::Select(id) = action else {
+                            return;
+                        };
+                        let Some(entry) = actions.get(&id) else {
+                            return;
+                        };
+                        match entry {
+                            RunMenuEntry::Target { id, label, .. } => {
+                                let workspace = app.workspace_key();
+                                match app.run_controls.confirm_target(id, &workspace) {
+                                    Ok(stored) => {
+                                        app.status =
+                                            t!("run.target_added", name = label.clone()).into();
+                                        app.open_run_config_dialog(window, cx, Some(stored));
+                                    }
+                                    Err(message) => app.status = message,
+                                }
+                            }
+                            RunMenuEntry::Session { id, .. } => {
+                                if let Some(config) = app
+                                    .run_controls
+                                    .sessions()
+                                    .into_iter()
+                                    .find(|session| session.id == *id)
+                                    .map(|session| session.config)
+                                {
+                                    app.reveal_run_session(*id, &config, window, cx);
+                                }
+                            }
+                            RunMenuEntry::Configuration { id, .. } => {
+                                let key = app.workspace_key();
+                                app.run_controls.select(id, &key);
+                                cx.notify();
+                            }
+                            RunMenuEntry::Action {
+                                id, enabled: true, ..
+                            } => match id.as_str() {
+                                "run-edit" => {
+                                    let editing =
+                                        app.run_controls.selected().map(|config| config.id.clone());
+                                    app.open_run_config_dialog(window, cx, editing);
+                                }
+                                id if id.starts_with("run-preparation-") => {
+                                    if let Ok(request) =
+                                        id.trim_start_matches("run-preparation-").parse()
+                                    {
+                                        app.run_controls.show_preparation_output(request);
+                                        cx.notify();
+                                    }
+                                }
+                                "run-new" => app.open_run_config_dialog(window, cx, None),
+                                "run-discover" => app.discover_run_targets(cx),
+                                other => {
+                                    if let Some(binding) = other.strip_prefix("run-rebind-") {
+                                        if let Ok((config, target)) =
+                                            serde_json::from_str::<(String, String)>(binding)
+                                        {
+                                            let workspace = app.workspace_key();
+                                            app.status = match app
+                                                .run_controls
+                                                .repair_target_with(&config, &target, &workspace)
+                                            {
+                                                Ok(()) => t!("run.target_repaired").into(),
+                                                Err(error) => error,
+                                            };
+                                        }
+                                    } else if let Some(id) = other.strip_prefix("run-apply-repair-")
+                                    {
+                                        let workspace = app.workspace_key();
+                                        app.status =
+                                            match app.run_controls.repair_target(id, &workspace) {
+                                                Ok(()) => t!("run.target_repaired").into(),
+                                                Err(message) => message,
+                                            };
+                                    } else if let Some(id) = other.strip_prefix("run-repair-") {
+                                        app.discover_run_targets(cx);
+                                        app.status = if app.run_controls.target_missing(id) {
+                                            t!("run.target_missing").into()
+                                        } else {
+                                            t!("run.target_found_confirm").into()
+                                        };
+                                    }
+                                    cx.notify();
+                                }
+                            },
+                            _ => {}
+                        }
+                    });
+                },
+                window,
+                cx,
+            )
+            .width(RUN_MENU_WIDTH)
         });
         let popup_id = popup.entity_id();
         let dismiss = cx.subscribe(&popup, move |this, _, _: &DismissEvent, cx| {
@@ -723,7 +894,6 @@ impl EditorApp {
         });
         popup.focus_handle(cx).focus(window, cx);
         self.run_menu = Some(RunMenu {
-            position,
             popup,
             _dismiss: dismiss,
         });
@@ -754,11 +924,7 @@ impl EditorApp {
                     cx.notify();
                 }),
             )
-            .child(
-                gpui_kit::anchored()
-                    .position(menu.position)
-                    .child(menu.popup.clone()),
-            )
+            .child(menu.popup.clone())
             .into_any_element()
     }
 
@@ -788,6 +954,13 @@ impl EditorApp {
         // A preparation is asked to stop as a sequence, not as a program: its step may not have a
         // session yet, and one asked to stop must not be followed by the program it was preparing.
         let mut already_stopped = Vec::new();
+        // A provider build has no interactive execution identity, but owns real native work.
+        for request in self.run_controls.active_provider_preparations() {
+            let _ = self.extensions.read(cx).stage_host_run(Work::CancelTarget {
+                request,
+                mode: plugin_runtime::plugin_protocol::process::ExitMode::Graceful,
+            });
+        }
         for (config, session) in self.run_controls.stop_preparations() {
             let Some(session) = session else {
                 continue;
@@ -797,6 +970,7 @@ impl EditorApp {
             let _ = self.extensions.read(cx).stage_host_run(Work::StopRun {
                 session,
                 config,
+                mode: plugin_runtime::plugin_protocol::process::ExitMode::Graceful,
                 request_id,
             });
         }
@@ -815,6 +989,7 @@ impl EditorApp {
             let _ = self.extensions.read(cx).stage_host_run(Work::StopRun {
                 session: session.id,
                 config: session.config.clone(),
+                mode: plugin_runtime::plugin_protocol::process::ExitMode::Graceful,
                 request_id,
             });
         }
@@ -838,7 +1013,8 @@ impl EditorApp {
     /// The leave confirmation card, shown above the shell while a decision is pending.
     pub(crate) fn render_leave_confirmation(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
         let sessions = self.leave_confirm.as_ref()?;
-        let count = sessions.len();
+        let _ = sessions;
+        let count = self.run_controls.active_work_count();
         Some(
             div()
                 .debug_selector(|| "run-leave-confirm".into())
@@ -866,10 +1042,12 @@ impl EditorApp {
                         .bg(cx.theme().popover)
                         .text_color(cx.theme().popover_foreground)
                         .shadow_lg()
-                        .child(div().font_semibold().child("仍有正在运行的程序"))
-                        .child(div().child(format!(
-                            "关闭窗口会先停止 {count} 个运行会话。取消可保留它们继续运行。"
-                        )))
+                        .child(
+                            div()
+                                .font_semibold()
+                                .child(t!("run.leave_title").to_string()),
+                        )
+                        .child(div().child(t!("run.leave_body", count = count).to_string()))
                         .child(
                             h_flex()
                                 .gap_2()
@@ -878,7 +1056,7 @@ impl EditorApp {
                                     div()
                                         .id("run-leave-cancel")
                                         .debug_selector(|| "run-leave-cancel".into())
-                                        .child("取消")
+                                        .child(t!("run.form_cancel").to_string())
                                         .on_click(
                                             cx.listener(|this, _, _, cx| this.cancel_leave(cx)),
                                         ),
@@ -887,7 +1065,7 @@ impl EditorApp {
                                     div()
                                         .id("run-leave-confirm-accept")
                                         .debug_selector(|| "run-leave-confirm-accept".into())
-                                        .child("停止并关闭")
+                                        .child(t!("run.leave_confirm").to_string())
                                         .on_click(
                                             cx.listener(|this, _, _, cx| this.confirm_leave(cx)),
                                         ),
@@ -914,15 +1092,19 @@ impl EditorApp {
             .as_ref()
             .is_some_and(|config| self.run_controls.is_pending(&config.id));
         let permitted = self.run_permitted(cx);
-        let running = active.is_some() || pending;
+        let running = active.is_some()
+            || pending
+            || selected
+                .as_ref()
+                .is_some_and(|config| self.run_controls.debug_target_active(&config.id));
         // Build is about this configuration's own build actions, so its control reports the reason it
         // cannot run rather than being permanently unavailable.
         let build_blocker = selected.as_ref().and_then(|config| {
             if !permitted {
-                return Some("受限工作区不能启动程序".to_owned());
+                return Some(t!("run.restricted").to_string().to_owned());
             }
             if self.run_controls.is_preparing(&config.id) {
-                return Some("该配置正在准备".to_owned());
+                return Some(t!("run.preparing_busy").to_string().to_owned());
             }
             self.run_controls
                 .preparation_error(&config.id)
@@ -937,14 +1119,14 @@ impl EditorApp {
                 if let Some(step) = &preparing {
                     format!("{} · {}", config.name, step)
                 } else if pending {
-                    format!("{} · 启动中", config.name)
+                    format!("{} · {}", config.name, t!("run.state_starting"))
                 } else if active.is_some() {
-                    format!("{} · 运行中", config.name)
+                    format!("{} · {}", config.name, t!("run.state_running"))
                 } else {
                     config.name.clone()
                 }
             })
-            .unwrap_or_else(|| "运行配置".to_string());
+            .unwrap_or_else(|| t!("run.configurations").to_string().to_string());
         let state = active
             .as_ref()
             .map(|session| session.state)
@@ -973,7 +1155,7 @@ impl EditorApp {
             .child(
                 div().debug_selector(|| "run-build".into()).child(
                     Button::new("run-build-action")
-                        .label("构建")
+                        .label(t!("run.form_build").to_string())
                         .small()
                         .compact()
                         .ghost()
@@ -984,7 +1166,7 @@ impl EditorApp {
                         .tooltip(
                             build_blocker
                                 .clone()
-                                .unwrap_or_else(|| "只执行构建操作".into()),
+                                .unwrap_or_else(|| t!("run.build_only_hint").to_string().into()),
                         )
                         .on_click(cx.listener(|this, _, window, cx| {
                             this.build_selected(window, cx);
@@ -994,15 +1176,15 @@ impl EditorApp {
             .child(
                 div().debug_selector(|| "run-start".into()).child(
                     Button::new("run-start-action")
-                        .label("运行")
+                        .label(t!("run.start").to_string())
                         .small()
                         .compact()
                         .ghost()
                         .disabled(!permitted || selected.is_none())
                         .tooltip(if permitted {
-                            "运行所选配置"
+                            t!("run.start_hint").to_string()
                         } else {
-                            "受限工作区不能启动程序"
+                            t!("run.restricted").to_string()
                         })
                         .on_click(cx.listener(|this, _, window, cx| {
                             this.start_selected_run(window, cx);
@@ -1019,40 +1201,54 @@ impl EditorApp {
                     .as_ref()
                     .and_then(|configuration| self.run_controls.debug_blocker(&configuration.id))
                     .or_else(|| match self.run_controls.debug_availability() {
-                        Ok(provider) => Some(format!("通过 {provider} 调试所选配置")),
+                        Ok(provider) => Some(t!("run.debug_via", provider = provider).to_string()),
                         Err(reason) => Some(reason.to_owned()),
                     });
                 Button::new("run-debug-action")
-                    .label("调试")
+                    .label(t!("run.form_debug").to_string())
                     .small()
                     .compact()
                     .ghost()
                     .disabled(!permitted || debug_unavailable)
-                    .tooltip(debug_blocker.unwrap_or_else(|| "调试所选配置".into()))
+                    .tooltip(
+                        debug_blocker.unwrap_or_else(|| t!("run.debug_hint").to_string().into()),
+                    )
                     .on_click(cx.listener(|this, _, _, cx| this.debug_selected(cx)))
             }))
             .child(
                 div().debug_selector(|| "run-stop".into()).child(
                     Button::new("run-stop-action")
-                        .label("停止")
+                        .label(t!("run.stop").to_string())
                         .small()
                         .compact()
                         .ghost()
                         .disabled(!running)
-                        .tooltip("停止所选会话")
+                        .tooltip(t!("run.stop_hint").to_string())
                         .on_click(cx.listener(|this, _, _, cx| this.stop_selected_run(cx))),
+                ),
+            )
+            .child(
+                div().debug_selector(|| "run-terminate".into()).child(
+                    Button::new("run-terminate-action")
+                        .label(t!("run.force"))
+                        .small()
+                        .compact()
+                        .ghost()
+                        .disabled(!running)
+                        .tooltip(t!("run.force_hint"))
+                        .on_click(cx.listener(|this, _, _, cx| this.terminate_selected_run(cx))),
                 ),
             )
             .child(
                 div().debug_selector(|| "run-rerun".into()).child(
                     Button::new("run-rerun-action")
-                        .label("重新运行")
+                        .label(t!("run.rerun").to_string())
                         .small()
                         .compact()
                         .ghost()
                         // Rerunning is its own action: a repeat Run click only reveals a session.
                         .disabled(!running)
-                        .tooltip("先停止当前实例，再重新启动")
+                        .tooltip(t!("run.rerun_hint").to_string())
                         .on_click(
                             cx.listener(|this, _, window, cx| this.rerun_selected(window, cx)),
                         ),
@@ -1108,6 +1304,13 @@ impl EditorApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        // Run on an existing debug target locates that same target instead of spawning a second one.
+        if self.run_controls.debug_target_active(config_id) {
+            self.run_controls.select_debug_session(config_id);
+            self.debug_panel.open = true;
+            cx.notify();
+            return;
+        }
         let Some(config) = self
             .run_controls
             .configurations()
@@ -1115,12 +1318,12 @@ impl EditorApp {
             .find(|config| config.id == config_id)
             .cloned()
         else {
-            self.status = "运行配置不存在，请重新选择".into();
+            self.status = t!("run.missing_configuration").to_string().into();
             cx.notify();
             return;
         };
         if !self.run_permitted(cx) {
-            self.status = "受限工作区不能启动程序".into();
+            self.status = t!("run.restricted").to_string().into();
             cx.notify();
             return;
         }
@@ -1159,7 +1362,7 @@ impl EditorApp {
                     self.run_controls
                         .override_program_environment(&config.id, &entry);
                 }
-                self.status = format!("正在准备 {}", config.name);
+                self.status = t!("run.preparing_named", name = config.name).to_string();
                 self.drive_preparation(cx);
             }
         }
@@ -1204,7 +1407,7 @@ impl EditorApp {
             "pause" => &controls.pause,
             "stop" => &controls.stop,
             other => {
-                self.status = format!("未知的调试操作：{other}");
+                self.status = t!("run.debug_unknown_action", action = other).to_string();
                 cx.notify();
                 return;
             }
@@ -1224,25 +1427,43 @@ impl EditorApp {
             .debug_session()
             .map(|(_, session)| session.state().clone())
         else {
-            self.status = "没有正在检查的调试会话".into();
+            self.status = t!("run.no_debug_session").to_string().into();
             cx.notify();
             return;
         };
         // The provider's session identity is what it answered with, never one the host invents.
         let Some(provider_session) = self.run_controls.debug_provider_session() else {
-            self.status = "调试会话尚未建立".into();
+            self.status = t!("run.debug_not_connected").to_string().into();
             cx.notify();
             return;
         };
         let _ = session;
         self.run_controls.note_debug_action();
-        if !self.extensions.read(cx).stage_debug_call(
-            0,
-            method,
-            serde_json::json!({ "session": provider_session }),
-        ) {
+        let control = match method {
+            "resume" => crate::run::DebugControl::Resume,
+            "pause" => crate::run::DebugControl::Pause,
+            _ => crate::run::DebugControl::Stop,
+        };
+        let Some(request) = self
+            .run_controls
+            .begin_debug_request(crate::run::DebugMethod::Control(control), None)
+        else {
             self.run_controls.note_debug_action_finished();
-            self.status = "插件后台服务不可用，无法执行调试操作".into();
+            return;
+        };
+        let mut arguments = serde_json::json!({ "session": provider_session });
+        if method == "resume" {
+            arguments["pause"] =
+                serde_json::json!(self.run_controls.debug_pause_epoch().unwrap_or(0));
+        }
+        if !self
+            .extensions
+            .read(cx)
+            .stage_debug_call(request, method, arguments)
+        {
+            self.run_controls.note_debug_action_finished();
+            self.run_controls.abandon_debug_request(request);
+            self.status = t!("run.debug_worker_missing").to_string().into();
         }
         cx.notify();
     }
@@ -1254,7 +1475,7 @@ impl EditorApp {
     /// session exists and the provider declared breakpoint support; a provider that did not is never
     /// asked, and the panel keeps saying the positions are unverified rather than implying they are in.
     fn send_debug_breakpoints(&mut self, cx: &mut Context<Self>) {
-        if !self.run_controls.debug_capabilities.breakpoints {
+        if !self.run_controls.selected_debug_capabilities().breakpoints {
             return;
         }
         let Some(provider_session) = self.run_controls.debug_provider_session() else {
@@ -1307,6 +1528,9 @@ impl EditorApp {
     /// moment that is over. Asking twice for the same pause is left to `begin_debug_request`, which
     /// refuses the duplicate rather than sending two calls whose answers would race.
     fn fetch_debug_inspection(&mut self, cx: &mut Context<Self>) {
+        if self.run_controls.debug_action_pending() {
+            return;
+        }
         if !matches!(
             self.run_controls.debug_state(),
             editor_core::DebugSessionState::Paused { .. }
@@ -1317,7 +1541,11 @@ impl EditorApp {
             return;
         };
         let mut staged = Vec::new();
-        if self.run_controls.debug_capabilities.inspect
+        if self.run_controls.selected_debug_capabilities().inspect
+            && !self
+                .run_controls
+                .debug_session()
+                .is_some_and(|(_, session)| session.pause().frames_described())
             && let Some(request) = self
                 .run_controls
                 .begin_debug_request(crate::run::DebugMethod::Frames, None)
@@ -1325,7 +1553,7 @@ impl EditorApp {
             staged.push((
                 request,
                 "frames",
-                serde_json::json!({ "session": provider_session }),
+                serde_json::json!({ "session": provider_session, "pause":self.run_controls.debug_pause_epoch().unwrap_or(0) }),
             ));
         }
         // The frame list is a new pause's description, so it carries the first frame's scope with it.
@@ -1342,7 +1570,7 @@ impl EditorApp {
     /// update happened to pass through. The request is scoped to the frame, so a second selection makes
     /// the first answer stale rather than the two racing.
     fn fetch_debug_frame_variables(&mut self, cx: &mut Context<Self>) {
-        if !self.run_controls.debug_capabilities.inspect {
+        if !self.run_controls.selected_debug_capabilities().inspect {
             return;
         }
         let Some(provider_session) = self.run_controls.debug_provider_session() else {
@@ -1365,7 +1593,13 @@ impl EditorApp {
         frame: u32,
         staged: &mut Vec<(u64, &'static str, serde_json::Value)>,
     ) {
-        if !self.run_controls.debug_capabilities.inspect {
+        if self.run_controls.debug_action_pending()
+            || !self.run_controls.selected_debug_capabilities().inspect
+            || self
+                .run_controls
+                .debug_session()
+                .is_some_and(|(_, session)| session.pause().variables_described(frame))
+        {
             return;
         }
         if let Some(request) = self
@@ -1375,7 +1609,7 @@ impl EditorApp {
             staged.push((
                 request,
                 "variables",
-                serde_json::json!({ "session": provider_session, "frame": frame }),
+                serde_json::json!({ "session": provider_session, "pause":self.run_controls.debug_pause_epoch().unwrap_or(0), "frame": frame }),
             ));
         }
     }
@@ -1410,7 +1644,7 @@ impl EditorApp {
             .into_iter()
             .find(|(candidate, _)| *candidate == kind)
             .map(|(_, outcome)| outcome)
-            .unwrap_or_else(|| Err("该调试会话不支持单步".into()))
+            .unwrap_or_else(|| Err(t!("run.step_unsupported").to_string().into()))
         {
             self.status = reason;
             cx.notify();
@@ -1422,22 +1656,23 @@ impl EditorApp {
             .run_controls
             .begin_debug_request(crate::run::DebugMethod::Step(kind), None)
         else {
-            self.status = "该暂停已有未完成的单步请求".into();
+            self.status = t!("run.step_pending").to_string().into();
             cx.notify();
             return;
         };
-        let (session, _) = self
-            .run_controls
-            .debug_session()
-            .map(|(config, session)| (config.to_owned(), session.state().clone()))
-            .unwrap_or_default();
+        let Some(session) = self.run_controls.debug_provider_session() else {
+            self.run_controls.abandon_debug_request(request);
+            return;
+        };
+        self.run_controls.note_debug_action();
         if !self.extensions.read(cx).stage_debug_call(
             request,
             "step",
-            serde_json::json!({ "session": session, "kind": kind.as_str() }),
+            serde_json::json!({ "session": session, "pause":self.run_controls.debug_pause_epoch().unwrap_or(0), "kind": kind.as_str() }),
         ) {
             self.run_controls.abandon_debug_request(request);
-            self.status = "插件后台服务不可用，无法单步".into();
+            self.run_controls.note_debug_action_finished();
+            self.status = t!("run.step_worker_missing").to_string().into();
         }
         cx.notify();
     }
@@ -1448,62 +1683,127 @@ impl EditorApp {
     /// because running the program without a debugger would look like success while handing the user
     /// something they did not ask for.
     pub(crate) fn debug_selected(&mut self, cx: &mut Context<Self>) {
-        let Some(configuration) = self.run_controls.selected().cloned() else {
-            self.status = "未选择运行配置".into();
+        let Some(configuration) = self.run_controls.selected().map(|config| config.id.clone())
+        else {
+            self.status = t!("run.no_configuration").into();
             cx.notify();
             return;
         };
-        match self.run_controls.debug_blocker(&configuration.id) {
-            Some(reason) => {
+        self.debug_configuration(&configuration, cx);
+    }
+
+    /// Both an explicit Debug and a replacement use the captured owner, even after selection changes.
+    fn debug_configuration(&mut self, id: &str, cx: &mut Context<Self>) {
+        let Some(configuration) = self.run_controls.configuration(id).cloned() else {
+            self.status = t!("run.no_configuration").into();
+            cx.notify();
+            return;
+        };
+        if !self.run_permitted(cx) {
+            self.status = t!("run.restricted").into();
+            cx.notify();
+            return;
+        }
+        if self
+            .run_controls
+            .debug_session_of(&configuration.id)
+            .is_some_and(|session| {
+                matches!(
+                    session.state(),
+                    editor_core::DebugSessionState::Starting
+                        | editor_core::DebugSessionState::Running
+                        | editor_core::DebugSessionState::Paused { .. }
+                )
+            })
+        {
+            self.run_controls.select_debug_session(&configuration.id);
+            self.debug_panel.open = true;
+            cx.notify();
+            return;
+        }
+        if self
+            .run_controls
+            .preparation(&configuration.id)
+            .is_some_and(|sequence| sequence.is_active())
+        {
+            return;
+        }
+        if self.run_controls.running_for(&configuration.id).is_some() {
+            self.status = t!("run.stop_before_debug").into();
+            cx.notify();
+            return;
+        }
+        if let Some(reason) = self.run_controls.debug_blocker(&configuration.id) {
+            self.status = reason;
+            cx.notify();
+            return;
+        }
+        let workspace = self.workspace_key();
+        let plan = match self.run_controls.launch_plan(&configuration.id, &workspace) {
+            Ok(plan) => plan,
+            Err(reason) => {
+                self.status = reason;
+                cx.notify();
+                return;
+            }
+        };
+        // Saving and preparation are identical to Run; only the final target crosses debug.session.
+        if !self.save_dirty_documents(cx) {
+            return;
+        }
+        match self
+            .run_controls
+            .begin_debug_preparation(&configuration.id, plan, &workspace)
+        {
+            Ok(()) => {
+                self.debug_panel.open = true;
+                self.status = t!("run.preparing_debug", name = configuration.name.clone()).into();
+                self.drive_preparation(cx);
+            }
+            Err(reason) => {
                 self.status = reason;
                 cx.notify();
             }
-            None => self.start_debug_session(&configuration, cx),
         }
     }
 
-    /// Ask the selected provider to start debugging one configuration.
-    ///
-    /// The request carries what the configuration says the program is, its arguments, its working
-    /// directory, its environment and the breakpoints it has set — nothing here decides what a debug
-    /// session means, and the identity it answers with is the provider's own.
-    fn start_debug_session(
+    /// Start the frozen final target once, only after every build/prelaunch exit was actually zero.
+    fn start_prepared_debug(
         &mut self,
-        configuration: &editor_core::RunConfig,
+        configuration: &str,
+        details: serde_json::Value,
         cx: &mut Context<Self>,
     ) {
-        // A session begins with the first pause worth following: a program that stops on entry, or at
-        // a breakpoint, is exactly the pause the user wants to be shown.
-        self.run_controls.note_debug_session_begun();
-        let root = self.workspace_key();
-        let Some(details) = self
+        self.run_controls.note_debug_session_begun(configuration);
+        self.run_controls.begin_debug_session(configuration);
+        if let Ok(provider) = self.run_controls.debug_availability().map(str::to_owned) {
+            self.run_controls
+                .note_debug_provider_owner(configuration, &provider);
+        }
+        if self
             .run_controls
-            .debug_launch_request(&configuration.id, &root)
-        else {
-            self.status = "无法为该配置建立调试请求".into();
-            cx.notify();
+            .selected()
+            .is_some_and(|selected| selected.id == configuration)
+            // Cargo may finish after the user starts inspecting a different pause. Preserve that
+            // view; the new session appears as its own panel tab and can be selected explicitly.
+            && self.run_controls.debug_session().is_none_or(|(other,session)|
+                other==configuration || !matches!(session.state(),editor_core::DebugSessionState::Paused {..}))
+        {
+            self.run_controls.select_debug_session(configuration);
+        }
+        let Some(request) = self.run_controls.begin_debug_start_request(configuration) else {
             return;
         };
-        // The session exists from the moment it is asked for, so the answer has somewhere to land.
-        self.run_controls.begin_debug_session(&configuration.id);
-        let Some(request) = self
-            .run_controls
-            .begin_debug_request(crate::run::DebugMethod::Start, None)
-        else {
-            self.status = "已有未完成的调试请求".into();
-            cx.notify();
-            return;
-        };
-        let queued = self
+        if !self
             .extensions
             .read(cx)
-            .stage_debug_call(request, "start", details);
-        if !queued {
-            self.run_controls.abandon_debug_request(request);
-            self.run_controls.end_debug_session(&configuration.id);
-            self.status = "插件后台服务不可用，无法开始调试".into();
+            .stage_debug_launch(request, configuration, details)
+        {
+            let message = t!("run.debug_unavailable").to_string();
+            let _ = self.run_controls.fail_debug_reply(request, message.clone());
+            self.status = message;
         } else {
-            self.status = format!("正在开始调试：{}", configuration.name);
+            self.status = t!("run.starting_debug", name = configuration.to_owned()).into();
         }
         cx.notify();
     }
@@ -1514,25 +1814,25 @@ impl EditorApp {
     /// A target nobody claimed stays unclaimed until the user confirms it.
     pub(crate) fn discover_run_targets(&mut self, cx: &mut Context<Self>) {
         if !self.run_permitted(cx) {
-            self.status = "受限工作区不能启动程序".into();
+            self.status = t!("run.restricted").to_string().into();
             cx.notify();
             return;
         }
-        let workspace = std::path::PathBuf::from(self.workspace_key());
-        let targets = crate::extensions::contributions::discover_run_targets(&workspace);
-        let report = self.run_controls.reconcile_discovered(&targets);
-        self.run_controls.note_discovery();
-        self.status = if targets.is_empty() {
-            "没有发现可运行目标：未安装提供者，或项目没有可识别的目标".into()
-        } else {
-            format!(
-                "发现 {} 个可运行目标：修复 {}，新增候选 {}，目标失效 {}",
-                targets.len(),
-                report.repaired.len(),
-                report.offered.len(),
-                report.missing.len()
-            )
-        };
+        match self.run_controls.begin_discovery() {
+            Ok(request) => {
+                let workspace = self.workspace_key();
+                self.status = if self
+                    .extensions
+                    .read(cx)
+                    .stage_host_run(Work::DiscoverTargets { workspace, request })
+                {
+                    t!("run.discovering").into()
+                } else {
+                    t!("run.debug_unavailable").into()
+                };
+            }
+            Err(error) => self.status = error,
+        }
         cx.notify();
     }
 
@@ -1546,7 +1846,7 @@ impl EditorApp {
             return;
         };
         if !self.run_permitted(cx) {
-            self.status = "受限工作区不能启动程序".into();
+            self.status = t!("run.restricted").to_string().into();
             cx.notify();
             return;
         }
@@ -1574,7 +1874,7 @@ impl EditorApp {
         }
         let request_id = self.run_controls.begin(&config.id);
         self.run_controls.begin_build(&config.id, &plan, request_id);
-        self.status = format!("正在构建 {}", config.name);
+        self.status = t!("run.building_named", name = config.name).to_string();
         self.drive_preparation(cx);
     }
 
@@ -1591,13 +1891,7 @@ impl EditorApp {
             .collect::<Vec<_>>();
         for config in configs {
             loop {
-                let action = self.run_controls.preparation(&config).map(|sequence| {
-                    let controls = &self.run_controls;
-                    sequence.next_action(
-                        |session| controls.session_known(session),
-                        |session| controls.session_is_active(session),
-                    )
-                });
+                let action = self.run_controls.preparation_action(&config);
                 match action {
                     Some(SequenceAction::Start { index }) => {
                         // A requested step is not progress yet: the sequence waits for its exit.
@@ -1613,6 +1907,7 @@ impl EditorApp {
                         break;
                     }
                     Some(SequenceAction::Blocked { reason }) => {
+                        self.run_controls.fail_prepared_debug(&config, &reason);
                         self.status = reason;
                         self.run_controls.forget_step_sessions(&config);
                         cx.notify();
@@ -1652,8 +1947,8 @@ impl EditorApp {
             .and_then(|sequence| sequence.planned_request(index).cloned())
         else {
             self.run_controls
-                .sequence_start_failed(config, index, "步骤缺少可执行的命令");
-            self.status = "准备步骤缺少可执行的命令".into();
+                .sequence_start_failed(config, index, &t!("run.step_no_command"));
+            self.status = t!("run.preparation_no_command").to_string().into();
             cx.notify();
             return false;
         };
@@ -1661,15 +1956,42 @@ impl EditorApp {
         // The step is owned before the request is staged, so nothing can request it twice.
         self.run_controls
             .note_step_request(config, index, request_id);
-        let queued = self.extensions.read(cx).stage_host_run(Work::StartRun {
-            request,
-            config: config.to_owned(),
-            request_id,
-        });
+        let work = if let Some((provider, binding)) = self
+            .run_controls
+            .preparation(config)
+            .and_then(|sequence| sequence.planned_preparation(index))
+            .cloned()
+        {
+            if step.1 == StepKind::Program {
+                self.run_controls.sequence_start_failed(
+                    config,
+                    index,
+                    "Build did not resolve this provider target",
+                );
+                return false;
+            }
+            self.run_controls
+                .register_provider_preparation(config, index, request_id);
+            Work::PrepareTarget {
+                config: config.into(),
+                index,
+                request: request_id,
+                provider,
+                binding,
+                env: request.env,
+            }
+        } else {
+            Work::StartRun {
+                request,
+                config: config.into(),
+                request_id,
+            }
+        };
+        let queued = self.extensions.read(cx).stage_host_run(work);
         if !queued {
             self.run_controls
-                .sequence_start_failed(config, index, "插件后台服务不可用");
-            self.status = "插件后台服务不可用，无法继续准备".into();
+                .sequence_start_failed(config, index, &t!("run.worker_missing"));
+            self.status = t!("run.preparation_worker_missing").to_string().into();
             cx.notify();
             return false;
         }
@@ -1691,12 +2013,13 @@ impl EditorApp {
         let queued = self.extensions.read(cx).stage_host_run(Work::StopRun {
             session,
             config: config.to_owned(),
+            mode: plugin_runtime::plugin_protocol::process::ExitMode::Graceful,
             request_id,
         });
         if !queued {
             // The provider is unreachable, so the sequence cannot be told the program ended; it stays
             // owned rather than reporting a stop that did not happen.
-            self.status = "插件后台服务不可用，无法停止准备步骤".into();
+            self.status = t!("run.stop_worker_missing").to_string().into();
         }
         cx.notify();
     }
@@ -1726,20 +2049,24 @@ impl EditorApp {
                 request_id,
                 crate::extensions::RunStatus::Unknown,
             )]);
-            self.status = "插件后台服务不可用，无法确认步骤状态".into();
+            self.status = t!("run.status_worker_missing").to_string().into();
             cx.notify();
         }
     }
 
     /// Report a preparation that finished, whether it ended in a launch or a completed build.
     fn finish_preparation(&mut self, config: &str, cx: &mut Context<Self>) {
+        if let Some(details) = self.run_controls.take_prepared_debug(config) {
+            self.start_prepared_debug(config, details, cx);
+            return;
+        }
         let name = self
             .run_controls
             .configuration(config)
             .map(|stored| stored.name.clone())
             .unwrap_or_else(|| config.to_owned());
         self.run_controls.forget_step_sessions(config);
-        self.status = format!("{name} 构建完成");
+        self.status = t!("run.built_named", name = name).to_string();
         cx.notify();
     }
 
@@ -1774,25 +2101,22 @@ impl EditorApp {
             request_id,
         });
         self.status = if queued {
-            format!("正在启动 {}", config.name)
+            t!("run.starting_named", name = config.name).to_string()
         } else {
-            "插件后台服务不可用，无法启动".into()
+            t!("run.start_worker_missing").to_string().into()
         };
         cx.notify();
     }
 
-    /// Reveal one session's output: select its configuration and show the surface that owns it.
-    ///
-    /// The provider already asked the editor to show its own panel when it started the program; the
-    /// host repeats only that recorded request rather than guessing which panel a provider uses.
+    /// Select a configuration and ask its pinned provider to reveal the session's own retained view.
     pub(crate) fn reveal_run_session(
         &mut self,
         session: u64,
         config: &str,
-        window: &mut Window,
+        _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let Some(found) = self
+        let Some(_found) = self
             .run_controls
             .sessions()
             .into_iter()
@@ -1803,28 +2127,75 @@ impl EditorApp {
         // Selection follows the session's own configuration so Stop affects exactly this session.
         let key = self.workspace_key();
         self.run_controls.select(config, &key);
-        let outcome = self.show_provider_panel(&found.plugin, window, cx);
-        self.status = match outcome {
-            Ok(()) => format!(
-                "定位会话 {}（{}）",
-                found.provider_session.clone().unwrap_or_default(),
-                run_state_label(found.state)
-            ),
-            Err(message) => format!("无法定位会话输出：{message}"),
+        let request = self.run_controls.begin_location(session, config);
+        self.status = if self
+            .extensions
+            .read(cx)
+            .stage_host_run(Work::LocateRun { session, request })
+        {
+            t!("run.locating", session = session.to_string()).into()
+        } else {
+            self.run_controls.finish_location(session, request);
+            t!("run.locate_unavailable").into()
         };
         cx.notify();
     }
 
-    /// Stop is only meaningful once the provider accepts a stop request; until then it explains why.
+    /// Request normal exit through the selected session's original owner.
     pub(crate) fn stop_selected_run(&mut self, cx: &mut Context<Self>) {
+        self.request_selected_stop(
+            plugin_runtime::plugin_protocol::process::ExitMode::Graceful,
+            cx,
+        );
+    }
+
+    /// Explicit force bypasses normal cleanup and its grace period, retaining ownership until exit.
+    pub(crate) fn terminate_selected_run(&mut self, cx: &mut Context<Self>) {
+        self.request_selected_stop(
+            plugin_runtime::plugin_protocol::process::ExitMode::Force,
+            cx,
+        );
+    }
+
+    /// Both controls seal the preparation before sending effects to its owned program.
+    fn request_selected_stop(
+        &mut self,
+        mode: plugin_runtime::plugin_protocol::process::ExitMode,
+        cx: &mut Context<Self>,
+    ) {
         let Some(config) = self.run_controls.selected().cloned() else {
             return;
         };
+        if let Some(request) = self.run_controls.provider_preparation_request(&config.id) {
+            self.run_controls.request_configuration_stop(&config.id);
+            self.run_controls.cancel_rerun(&config.id);
+            self.extensions
+                .read(cx)
+                .stage_host_run(Work::CancelTarget { request, mode });
+            self.drive_preparation(cx);
+            cx.notify();
+            return;
+        }
+        // Debug may still be building through ordinary execution; stop that sequence before the adapter exists.
+        if self.run_controls.is_preparing(&config.id) {
+            self.run_controls.request_configuration_stop(&config.id);
+        }
+        if self.run_controls.debug_target_active(&config.id) {
+            self.run_controls.select_debug_session(&config.id);
+            if mode == plugin_runtime::plugin_protocol::process::ExitMode::Force {
+                self.force_debug(cx);
+            } else {
+                self.debug_action("stop", cx);
+            }
+            return;
+        }
         let Some(session) = self.run_controls.running_for(&config.id) else {
             return;
         };
+        self.run_controls.cancel_rerun(&config.id);
+        self.run_controls.request_configuration_stop(&config.id);
         if !session.is_active() {
-            self.status = "所选会话已经结束".into();
+            self.status = t!("run.session_ended").to_string().into();
             cx.notify();
             return;
         }
@@ -1832,13 +2203,14 @@ impl EditorApp {
         let queued = self.extensions.read(cx).stage_host_run(Work::StopRun {
             session: session.id,
             config: config.id.clone(),
+            mode,
             request_id,
         });
         self.status = if queued {
             // The provider is asked, not commanded by the host; the answer arrives in its own time.
-            format!("正在请求停止会话 {}", session.id)
+            t!("run.stopping_named", session = session.id).to_string()
         } else {
-            "插件后台服务不可用，无法请求停止".into()
+            t!("run.stop_request_worker_missing").to_string().into()
         };
         cx.notify();
     }
@@ -1852,19 +2224,46 @@ impl EditorApp {
             self.open_run_config_dialog(window, cx, None);
             return;
         };
+        if let Some(request) = self.run_controls.provider_preparation_request(&config.id) {
+            let debug = self.run_controls.debug_target_active(&config.id);
+            self.run_controls.request_configuration_stop(&config.id);
+            self.run_controls
+                .wait_to_prepare_again(&config.id, request, debug);
+            self.extensions.read(cx).stage_host_run(Work::CancelTarget {
+                request,
+                mode: plugin_runtime::plugin_protocol::process::ExitMode::Graceful,
+            });
+            cx.notify();
+            return;
+        }
+        if self.run_controls.debug_target_active(&config.id) {
+            self.run_controls.select_debug_session(&config.id);
+            self.run_controls.wait_to_debug_again(&config.id);
+            self.debug_action("stop", cx);
+            return;
+        }
         if let Some(session) = self.run_controls.running_for(&config.id) {
+            // Seal the old sequence before its clean stop can be mistaken for successful preparation.
+            self.run_controls.request_configuration_stop(&config.id);
             // The stop is requested before the replacement starts, and its outcome is reported.
             let request_id = self.run_controls.begin_stop(&config.id, session.id);
             let queued = self.extensions.read(cx).stage_host_run(Work::StopRun {
                 session: session.id,
                 config: config.id.clone(),
+                mode: plugin_runtime::plugin_protocol::process::ExitMode::Graceful,
                 request_id,
             });
             if !queued {
-                self.status = "插件后台服务不可用，无法重新运行".into();
+                self.status = t!("run.rerun_worker_missing").to_string().into();
                 cx.notify();
                 return;
             }
+            // The provider's acceptance is only a control acknowledgement. Actual exit releases
+            // this barrier in sync_run_controls, which repeats validation, save and preparation.
+            self.run_controls.wait_to_rerun(&config.id, session.id);
+            self.status = t!("run.rerun_waiting").to_string().into();
+            cx.notify();
+            return;
         }
         self.start_selected_run(window, cx);
     }
@@ -1876,10 +2275,8 @@ impl EditorApp {
         cx: &mut Context<Self>,
         editing: Option<String>,
     ) {
-        // One configuration dialog owns the editor window at a time, like settings and the manager.
-        if let Some((_, handle)) = self.run_dialog.take() {
-            let _ = handle.update(cx, |_, window, _| window.remove_window());
-        }
+        // Keep the modal inside its owning native window. UI Automation can retain a field
+        // after a secondary HWND is destroyed; the same-window base Dialog revokes only nodes.
         let key = self.workspace_key();
         // Opening the dialog asks the host for its provider listings, so the debug page and the debug
         // control speak about a capability that has been confirmed rather than one assumed from the
@@ -1890,32 +2287,32 @@ impl EditorApp {
             RunConfigForm::open(&self.run_controls, &key, editing_id.as_deref(), window, cx)
         });
         self.run_form = Some(form);
-        let title = if editing.is_some() {
-            "编辑运行配置"
-        } else {
-            "新建运行配置"
-        };
-        let entity = cx.entity().downgrade();
-        let (dialog, handle) = app_dialog::open_dialog_sized(
-            title,
-            660.,
-            440.,
-            move |content, _, cx| render_run_config_form(&entity, content, cx),
-            cx,
-        );
-        self.run_dialog = Some((dialog, handle));
-        let weak = cx.entity().downgrade();
-        let window_id = handle.window_id();
-        self._run_dialog_closed = Some(cx.on_window_closed(move |cx, closed_id| {
-            if closed_id == window_id {
-                let _ = weak.update(cx, |this, cx| {
-                    this.run_dialog = None;
-                    this.run_form = None;
-                    cx.notify();
-                });
+        let owner = cx.entity().downgrade();
+        let observed = cx.entity();
+        self.run_dialog = Some(cx.new(|cx| {
+            let focus = cx.focus_handle();
+            focus.focus(window, cx);
+            RunConfigModal {
+                owner,
+                focus,
+                _updates: vec![cx.observe(&observed, |_, _, cx| cx.notify())],
+                observed_form: None,
+                _form_update: None,
             }
         }));
         cx.notify();
+    }
+
+    /// Mount the modal entity only after the editor's render lease is released.
+    pub(crate) fn render_run_form_modal(
+        &self,
+        _: &mut Window,
+        _: &mut Context<Self>,
+    ) -> AnyElement {
+        self.run_dialog
+            .as_ref()
+            .map(|dialog| div().child(dialog.clone()).into_any_element())
+            .unwrap_or_else(|| div().into_any_element())
     }
 
     /// Save the dialog draft into host-local storage and close the dialog.
@@ -1946,7 +2343,7 @@ impl EditorApp {
             Ok(()) => {
                 // Saving never starts the program; the target merely becomes the selected one.
                 self.run_controls.select(&configuration.id, &key);
-                self.status = format!("已保存运行配置：{}", configuration.name);
+                self.status = t!("run.saved_named", name = configuration.name).to_string();
                 self.close_run_form(cx);
             }
             Err(message) => {
@@ -1963,9 +2360,8 @@ impl EditorApp {
 
     /// Close the configuration dialog without saving anything.
     pub(crate) fn close_run_form(&mut self, cx: &mut Context<Self>) {
-        if let Some((_, handle)) = self.run_dialog.take() {
-            let _ = handle.update(cx, |_, window, _| window.remove_window());
-        }
+        // Removing the modal nodes keeps the native HWND alive, including for IME/UIA clients.
+        self.run_dialog = None;
         self.run_form = None;
         cx.notify();
     }
@@ -1994,7 +2390,7 @@ impl EditorApp {
             self.save_document_at(index, cx);
             if self.tabs[index].session.is_dirty() {
                 // A save that did not take effect must not be treated as a successful preparation.
-                self.status = format!("保存失败，未启动：{}", path.display());
+                self.status = t!("run.save_failed_named", path = path.display()).to_string();
                 cx.notify();
                 return false;
             }
@@ -2037,9 +2433,15 @@ fn short_label(label: &str) -> String {
 /// A visible state word for one session; the host never invents a stronger claim than the provider's.
 fn run_state_label(state: plugin_runtime::ExecutionState) -> String {
     match state {
-        plugin_runtime::ExecutionState::Starting => "启动中".into(),
-        plugin_runtime::ExecutionState::Running => "运行中".into(),
-        plugin_runtime::ExecutionState::Failed => "已结束".into(),
+        plugin_runtime::ExecutionState::Starting => t!("run.state_starting").to_string().into(),
+        plugin_runtime::ExecutionState::Running => t!("run.state_running").to_string().into(),
+        plugin_runtime::ExecutionState::Stopping => t!("run.state_stopping").to_string().into(),
+        plugin_runtime::ExecutionState::Terminating => {
+            t!("run.state_terminating").to_string().into()
+        }
+        plugin_runtime::ExecutionState::Failed | plugin_runtime::ExecutionState::Exited => {
+            t!("run.state_ended").to_string().into()
+        }
     }
 }
 
@@ -2067,7 +2469,11 @@ fn render_step_rows(
                 .debug_selector(move || format!("{}-row-{index}", field.selector()))
                 .gap_1()
                 .items_center()
-                .child(div().flex_1().child(BaseInput::new(&input)))
+                .child(
+                    div()
+                        .flex_1()
+                        .child(crate::ui::controls::Input::new(&input)),
+                )
                 .child(step_control(
                     &owner,
                     field,
@@ -2111,17 +2517,36 @@ fn step_control(
     shell: bool,
 ) -> AnyElement {
     let (label, hint) = match edit {
-        StepEdit::Add => ("+ 添加", "在本配置中增加一条预置动作"),
-        StepEdit::Remove => ("删除", "从本配置中删除这条预置动作"),
-        StepEdit::Up => ("上移", "把这条动作提前一位"),
+        StepEdit::Add => (
+            t!("run.step_add").to_string(),
+            t!("run.step_add_hint").to_string(),
+        ),
+        StepEdit::Remove => (
+            t!("run.step_remove").to_string(),
+            t!("run.step_remove_hint").to_string(),
+        ),
+        StepEdit::Up => (
+            t!("run.step_up").to_string(),
+            t!("run.step_up_hint").to_string(),
+        ),
         // A pre-launch step may require another configuration's build by naming it after `@`.
-        StepEdit::Down => ("下移", "把这条动作推后一位"),
+        StepEdit::Down => (
+            t!("run.step_down").to_string(),
+            t!("run.step_down_hint").to_string(),
+        ),
     };
     let _ = shell;
     let owner = app.clone();
-    let id = format!("{}-{label}-{index}", field.selector());
+    let edit_key = match edit {
+        StepEdit::Add => "add",
+        StepEdit::Remove => "remove",
+        StepEdit::Up => "up",
+        StepEdit::Down => "down",
+    };
+    let id = format!("{}-{edit_key}-{index}", field.selector());
+    let selector = id.clone();
     div()
-        .debug_selector(move || format!("{}-{label}-{index}", field.selector()))
+        .debug_selector(move || selector.clone())
         .child(
             Button::new(id)
                 .label(label)
@@ -2154,16 +2579,18 @@ fn save_destination(
     app: &Entity<EditorApp>,
     share: bool,
     selector: &'static str,
-    label: &'static str,
+    label: String,
     to_project: bool,
 ) -> AnyElement {
     let selected = share == to_project;
     let owner = app.clone();
-    div()
-        .id(selector)
+    Button::new(selector)
+        .small()
+        .compact()
+        .ghost()
         .debug_selector(move || selector.into())
-        .when(selected, |choice| choice.font_semibold())
-        .child(label)
+        .when(selected, |choice| choice.primary())
+        .label(label)
         .on_click(move |_, _, cx| {
             owner.update(cx, |state, cx| {
                 let Some(form) = state.run_form.clone() else {
@@ -2180,6 +2607,58 @@ fn save_destination(
         .into_any_element()
 }
 
+/// Render bounded discovered candidates in B1 without implicitly storing or executing them.
+fn render_discovered_targets(app: &Entity<EditorApp>, cx: &mut gpui_kit::App) -> AnyElement {
+    let targets = app.read(cx).run_controls.discovered_targets().to_vec();
+    let mut list = v_flex()
+        .id("run-config-targets")
+        .max_h(px(120.))
+        .overflow_y_scroll()
+        .gap_1();
+    for target in targets {
+        let owner = app.clone();
+        let identity = target.id.clone();
+        let selector = format!("run-config-target-{}", target.id);
+        list = list.child(
+            Button::new(selector.clone())
+                .debug_selector(move || selector.clone())
+                .label(format!(
+                    "{} · {} · {}",
+                    target.label, target.provider, target.found_in
+                ))
+                .tooltip(t!("run.confirm_candidate").to_string())
+                .on_click(move |_, window, cx| {
+                    owner.update(cx, |state, cx| {
+                        let workspace = state.workspace_key();
+                        match state.run_controls.confirm_target(&identity, &workspace) {
+                            Ok(id) => {
+                                // Replace editing state atomically as well as the draft. Reusing old
+                                // InputState values would save the previous target's visible fields.
+                                state.run_form = Some(cx.new(|cx| {
+                                    RunConfigForm::open(
+                                        &state.run_controls,
+                                        &workspace,
+                                        Some(&id),
+                                        window,
+                                        cx,
+                                    )
+                                }));
+                                state.status = t!(
+                                    "run.target_added",
+                                    name = state.run_controls.configuration(&id).unwrap().name
+                                )
+                                .into();
+                            }
+                            Err(error) => state.status = error,
+                        }
+                        cx.notify();
+                    });
+                }),
+        );
+    }
+    list.into_any_element()
+}
+
 pub(crate) fn render_run_config_form(
     app: &WeakEntity<EditorApp>,
     content: DialogContent,
@@ -2188,7 +2667,7 @@ pub(crate) fn render_run_config_form(
     let Some(app) = app.upgrade() else {
         return content;
     };
-    let (tab, error, shell, share, texts, inputs, saved, providers, chosen_provider) = {
+    let (tab, error, shell, share, texts, inputs, textareas, saved, providers, chosen_provider) = {
         let state = app.read(cx);
         let saved = state.run_controls.configurations().to_vec();
         let Some(form) = state.run_form.as_ref() else {
@@ -2206,6 +2685,12 @@ pub(crate) fn render_run_config_form(
             }),
             RunField::ALL.map(|field| {
                 form.inputs
+                    .iter()
+                    .find(|(candidate, _)| *candidate == field)
+                    .map(|(_, input)| input.clone())
+            }),
+            RunField::ALL.map(|field| {
+                form.textareas
                     .iter()
                     .find(|(candidate, _)| *candidate == field)
                     .map(|(_, input)| input.clone())
@@ -2229,16 +2714,15 @@ pub(crate) fn render_run_config_form(
         .map(|candidate| {
             let selected = candidate == tab;
             let owner = app.clone();
-            div()
-                .id(candidate.selector())
+            Button::new(candidate.selector())
                 .debug_selector(move || candidate.selector().into())
-                .px_3()
-                .py_1()
-                .rounded(px(4.))
-                .when(selected, |tab| tab.bg(cx.theme().list_active))
+                .small()
+                .compact()
+                .ghost()
+                .when(selected, |tab| tab.text_color(cx.theme().primary))
                 // A tab whose settings are not implemented is visibly disabled, not silently empty.
-                .when(!candidate.available(), |tab| tab.opacity(0.5))
-                .child(candidate.label())
+                .disabled(!candidate.available())
+                .label(candidate.label())
                 .on_click(move |_, _, cx| {
                     if !candidate.available() {
                         return;
@@ -2288,12 +2772,13 @@ pub(crate) fn render_run_config_form(
         .into_iter()
         .zip(texts)
         .zip(inputs)
-        .filter(|((field, _), _)| page_fields.contains(field))
-        .map(|((field, text), input)| {
+        .zip(textareas)
+        .filter(|(((field, _), _), _)| page_fields.contains(field))
+        .map(|(((field, text), input), textarea)| {
             // In shell mode the executable field names the interpreter, which is what it means.
             let label = match (field, shell) {
-                (RunField::Program, true) => "解释器",
-                (RunField::Arguments, true) => "解释器参数（每行一个）",
+                (RunField::Program, true) => t!("run.field_interpreter").to_string(),
+                (RunField::Arguments, true) => t!("run.field_interpreter_arguments").to_string(),
                 _ => field.label(),
             };
             // A prepared-action list is edited row by row, so each action can be moved or removed
@@ -2310,12 +2795,18 @@ pub(crate) fn render_run_config_form(
                         .child(if list {
                             render_step_rows(&app, field, shell, cx).into_any_element()
                         } else {
-                            match input {
-                                // The field renders its own editing state, so text never resets.
-                                Some(input) => {
-                                    div().child(BaseInput::new(&input)).into_any_element()
+                            if let Some(input) = textarea {
+                                div()
+                                    .child(crate::ui::controls::Textarea::new(&input))
+                                    .into_any_element()
+                            } else {
+                                match input {
+                                    // The field renders its own editing state, so text never resets.
+                                    Some(input) => div()
+                                        .child(crate::ui::controls::Input::new(&input))
+                                        .into_any_element(),
+                                    None => div().child(text).into_any_element(),
                                 }
-                                None => div().child(text).into_any_element(),
                             }
                         }),
                 )
@@ -2325,6 +2816,8 @@ pub(crate) fn render_run_config_form(
 
     content.child(
         v_flex()
+            .id("run-config-form")
+            .overflow_y_scroll()
             .debug_selector(|| "run-config-form".into())
             .size_full()
             .gap_3()
@@ -2336,38 +2829,45 @@ pub(crate) fn render_run_config_form(
                     .child(
                         div()
                             .debug_selector(|| "run-config-existing".into())
-                            .child(format!("已保存 {} 项", saved.len())),
-                    )
-                    .child(
-                        div()
-                            .debug_selector(|| "run-config-discover".into())
-                            // Discovery arrives with its own ticket; the entry point explains itself
-                            // instead of pretending to have found candidates.
-                            .opacity(0.5)
-                            .child("发现配置（随后续工单接通）"),
+                            .child(t!("run.form_saved_count", count = saved.len()).to_string()),
                     )
                     .child({
                         let owner = app.clone();
-                        div()
-                            .id("run-config-new")
-                            .debug_selector(|| "run-config-new".into())
-                            .child("新建")
+                        Button::new("run-config-discover")
+                            .debug_selector(|| "run-config-discover".into())
+                            .label(t!("run.discover").to_string())
                             .on_click(move |_, _, cx| {
+                                // Discovery only publishes candidates; choosing a row is the
+                                // explicit confirmation that persists an editable configuration.
+                                owner.update(cx, |state, cx| state.discover_run_targets(cx));
+                            })
+                    })
+                    .child({
+                        let owner = app.clone();
+                        Button::new("run-config-new")
+                            .small()
+                            .compact()
+                            .ghost()
+                            .debug_selector(|| "run-config-new".into())
+                            .label(t!("run.form_new").to_string())
+                            .on_click(move |_, window, cx| {
                                 owner.update(cx, |state, cx| {
                                     let key = state.workspace_key();
-                                    let id = state.run_controls.generate_id(&key);
-                                    if let Some(form) = state.run_form.as_ref() {
-                                        form.update(cx, |form, cx| {
-                                            form.draft = RunConfigDraft::from_config(None, id);
-                                            form.error = None;
-                                            cx.notify();
-                                        });
-                                    }
+                                    state.run_form = Some(cx.new(|cx| {
+                                        RunConfigForm::open(
+                                            &state.run_controls,
+                                            &key,
+                                            None,
+                                            window,
+                                            cx,
+                                        )
+                                    }));
                                     cx.notify();
                                 });
                             })
                     }),
             )
+            .child(render_discovered_targets(&app, cx))
             .child(h_flex().gap_1().children(tabs))
             .child(
                 // The mode is an explicit choice: a program's arguments are never a command line,
@@ -2375,14 +2875,16 @@ pub(crate) fn render_run_config_form(
                 h_flex()
                     .gap_2()
                     .items_center()
-                    .child(div().w(px(150.)).child("运行方式"))
+                    .child(div().w(px(150.)).child(t!("run.form_mode").to_string()))
                     .child({
                         let owner = app.clone();
-                        div()
-                            .id("run-config-mode-program")
+                        Button::new("run-config-mode-program")
+                            .small()
+                            .compact()
+                            .ghost()
                             .debug_selector(|| "run-config-mode-program".into())
-                            .when(!shell, |mode| mode.font_semibold())
-                            .child("程序")
+                            .when(!shell, |mode| mode.text_color(cx.theme().primary))
+                            .label(t!("run.field_program").to_string())
                             .on_click(move |_, _, cx| {
                                 owner.update(cx, |state, cx| {
                                     if let Some(form) = state.run_form.as_ref() {
@@ -2398,11 +2900,13 @@ pub(crate) fn render_run_config_form(
                     })
                     .child({
                         let owner = app.clone();
-                        div()
-                            .id("run-config-mode-shell")
+                        Button::new("run-config-mode-shell")
+                            .small()
+                            .compact()
+                            .ghost()
                             .debug_selector(|| "run-config-mode-shell".into())
-                            .when(shell, |mode| mode.font_semibold())
-                            .child("Shell 脚本")
+                            .when(shell, |mode| mode.text_color(cx.theme().primary))
+                            .label(t!("run.form_shell").to_string())
                             .on_click(move |_, _, cx| {
                                 owner.update(cx, |state, cx| {
                                     if let Some(form) = state.run_form.as_ref() {
@@ -2430,23 +2934,41 @@ pub(crate) fn render_run_config_form(
                         .child(tab.hint()),
                 )
             })
+            .when(tab == RunConfigTab::Build, |form| {
+                let provider_build = app
+                    .read(cx)
+                    .run_form
+                    .as_ref()
+                    .map(|form| form.read(cx).draft.provider_build.clone())
+                    .unwrap_or_default();
+                form.children(
+                    provider_build
+                        .into_iter()
+                        .map(|(_, step)| div().child(step.name)),
+                )
+            })
             .when(tab == RunConfigTab::Debug, |form| {
                 // The provider choice belongs to this page. Following the default and asking for a
                 // named provider are two different things, and a provider that cannot run is shown
                 // with its reason rather than hidden or silently replaced.
                 let mut page = form.child(
-                    div()
-                        .debug_selector(|| "run-provider-rows".into())
-                        .child(format!(
-                            "当前生效：{}",
-                            providers
+                    div().debug_selector(|| "run-provider-rows".into()).child(
+                        t!(
+                            "run.provider_current",
+                            provider = providers
                                 .iter()
                                 .find(|candidate| candidate.selected)
-                                .map(|candidate| candidate.plugin.as_str())
-                                .unwrap_or("无可用提供者")
-                        )),
+                                .map(|candidate| candidate.plugin.clone())
+                                .unwrap_or_else(|| t!("run.provider_none").to_string())
+                        )
+                        .to_string(),
+                    ),
                 );
-                let mut rows = vec![(None, "跟随默认".to_owned(), None)];
+                let mut rows = vec![(
+                    None,
+                    t!("run.provider_default").to_string().to_owned(),
+                    None,
+                )];
                 for candidate in &providers {
                     rows.push((
                         Some(candidate.plugin.clone()),
@@ -2457,21 +2979,24 @@ pub(crate) fn render_run_config_form(
                 for (plugin, label, unavailable) in rows {
                     let owner = app.clone();
                     let requested = plugin.clone();
-                    let mut row = div()
-                        .id(format!(
-                            "run-provider-{}",
-                            plugin.clone().unwrap_or_else(|| "default".into())
-                        ))
-                        .debug_selector({
-                            let plugin = plugin.clone();
-                            move || {
-                                format!(
-                                    "run-provider-{}",
-                                    plugin.clone().unwrap_or_else(|| "default".into())
-                                )
-                            }
-                        })
-                        .when(chosen_provider == plugin, |row| row.font_semibold());
+                    let mut row = Button::new(format!(
+                        "run-provider-{}",
+                        plugin.clone().unwrap_or_else(|| "default".into())
+                    ))
+                    .debug_selector({
+                        let plugin = plugin.clone();
+                        move || {
+                            format!(
+                                "run-provider-{}",
+                                plugin.clone().unwrap_or_else(|| "default".into())
+                            )
+                        }
+                    })
+                    .small()
+                    .compact()
+                    .ghost()
+                    .disabled(unavailable.is_some())
+                    .when(chosen_provider == plugin, |row| row.primary());
                     let text = match &unavailable {
                         Some(reason) => format!("{label}（{reason}）"),
                         None => label.clone(),
@@ -2495,175 +3020,15 @@ pub(crate) fn render_run_config_form(
                             });
                         });
                     }
-                    page = page.child(row.child(text));
+                    page = page.child(row.label(text));
                 }
-                // The session's own state and the actions it allows. An action that is not offered
-                // says why, so a disabled control is never a mystery.
-                let state = app.read(cx).run_controls.debug_state().clone();
-                let controls = app.read(cx).run_controls.debug_controls();
-                let described = match &state {
-                    editor_core::DebugSessionState::Disconnected => "未开始调试".to_owned(),
-                    editor_core::DebugSessionState::Starting => "正在连接调试会话".to_owned(),
-                    editor_core::DebugSessionState::Running => "目标正在运行".to_owned(),
-                    editor_core::DebugSessionState::Paused {
-                        source,
-                        line,
-                        reason,
-                    } => format!(
-                        "已在 {source}:{line} 暂停{}",
-                        reason
-                            .as_ref()
-                            .map(|reason| format!("（{reason}）"))
-                            .unwrap_or_default()
-                    ),
-                    editor_core::DebugSessionState::Exited => "目标已退出".to_owned(),
-                    editor_core::DebugSessionState::Failed { reason } => {
-                        format!("调试会话失败：{reason}")
-                    }
-                };
-                let mut session = div()
-                    .debug_selector(|| "run-debug-session".into())
-                    .child(described);
-                for (selector, label, outcome) in [
-                    ("run-debug-resume", "继续", &controls.resume),
-                    ("run-debug-pause", "暂停", &controls.pause),
-                    ("run-debug-stop", "停止调试", &controls.stop),
-                ] {
-                    let owner = app.clone();
-                    let action = selector.to_owned();
-                    let mut button = div()
-                        .id(selector)
-                        .debug_selector({
-                            let action = action.clone();
-                            move || action.clone()
-                        })
-                        .child(label);
-                    match outcome {
-                        Ok(()) => {
-                            // The method is the control's own name, so what a click asks for is what
-                            // the contract declares and nothing the view invents.
-                            let method = selector.trim_start_matches("run-debug-").to_owned();
-                            button = button.on_click(move |_, _, cx| {
-                                owner.update(cx, |state, cx| state.debug_action(&method, cx));
-                            });
-                        }
-                        Err(reason) => {
-                            let reason = reason.clone();
-                            button = button.text_color(danger).child(format!("（{reason}）"));
-                        }
-                    }
-                    session = session.child(button);
-                }
-                // The three step directions are separate controls, so a click says which way to move
-                // and a direction the provider did not offer is disabled with its reason.
-                for (kind, selector, label) in [
-                    (editor_core::DebugStep::Into, "run-debug-step-into", "步入"),
-                    (editor_core::DebugStep::Over, "run-debug-step-over", "步过"),
-                    (editor_core::DebugStep::Out, "run-debug-step-out", "步出"),
-                ] {
-                    let owner = app.clone();
-                    let outcome = controls
-                        .step
-                        .iter()
-                        .find(|(candidate, _)| *candidate == kind)
-                        .map(|(_, outcome)| outcome);
-                    let mut button = div()
-                        .id(selector)
-                        .debug_selector({
-                            let selector = selector.to_owned();
-                            move || selector.clone()
-                        })
-                        .child(label);
-                    match outcome {
-                        Some(Ok(())) => {
-                            button = button.on_click(move |_, _, cx| {
-                                owner.update(cx, |state, cx| state.step_debug(kind, cx));
-                            });
-                        }
-                        Some(Err(reason)) => {
-                            button = button.text_color(danger).child(format!("（{reason}）"));
-                        }
-                        // A control the panel cannot derive is not offered rather than being shown
-                        // without a reason.
-                        None => {}
-                    }
-                    session = session.child(button);
-                }
-                // The frames and variables come from the same description the panel is checked
-                // against, so what is presented cannot drift from what was verified.
-                let rows = app.read(cx).run_controls.debug_panel_rows();
-                let mut inspection = div()
-                    .debug_selector(|| "run-debug-inspection".into())
-                    .child(match &rows.location {
-                        Some(location) => format!("停止位置 {location}"),
-                        None => "本次暂停没有可显示的位置".to_owned(),
-                    });
-                for frame in rows.frames {
-                    let owner = app.clone();
-                    let frame_id = frame.frame;
-                    let mut row = div()
-                        .id(frame.selector.clone())
-                        .debug_selector({
-                            let selector = frame.selector.clone();
-                            move || selector.clone()
-                        })
-                        .when(frame.selected, |row| row.font_semibold())
-                        .child(frame.label);
-                    row = row.on_click(move |_, _, cx| {
-                        owner.update(cx, |state, cx| {
-                            // Selecting a frame is what shows its scope and locates its source.
-                            if let Err(error) = state.run_controls.select_debug_frame(frame_id) {
-                                state.status = error.to_string();
-                            }
-                            // The new scope is asked for here rather than left to the next sync pass:
-                            // the pause has not changed, so nothing else would notice the selection.
-                            state.fetch_debug_frame_variables(cx);
-                            cx.notify();
-                        });
-                    });
-                    inspection = inspection.child(row);
-                }
-                if rows.variables.is_empty() {
-                    inspection = inspection.child(div().child("该帧没有变量可显示"));
-                }
-                for variable in rows.variables {
-                    inspection = inspection.child(
-                        div()
-                            .debug_selector({
-                                let selector = variable.selector.clone();
-                                move || selector.clone()
-                            })
-                            .child(variable.label),
-                    );
-                }
-                if rows.another_paused {
-                    // Another session is stopped, so this panel says so instead of moving the view.
-                    inspection =
-                        inspection.child(div().child("另一个调试会话已暂停，视图未自动跳转"));
-                }
-                // Where the debugger will actually stop, which the editable field cannot say: what the
-                // provider bound is evidence, not input. A position no answer has covered is reported
-                // as waiting rather than as bound, because the two look identical until a debugger
-                // confirms one — and a breakpoint the provider refused is the one case the user has to
-                // act on.
-                let positions = app.read(cx).run_controls.debug_breakpoint_positions();
-                if !positions.is_empty() {
-                    let controls = app.read(cx);
-                    let mut listed = div().debug_selector(|| "run-debug-breakpoints".into());
-                    for (source, line) in positions {
-                        let status = match controls
-                            .run_controls
-                            .debug_breakpoint_verified(&source, line)
-                        {
-                            Some(true) => "已绑定",
-                            Some(false) => "提供者未能绑定",
-                            None => "等待确认",
-                        };
-                        listed = listed.child(div().child(format!("{source}:{line}（{status}）")));
-                    }
-                    inspection = inspection.child(listed);
-                }
-                page.child(session).child(inspection)
+                // B1 edits launch settings. Live target controls and inspection have one stable
+                // home in the unified native panel, so opening this form never moves that view.
+                page.child(
+                    div()
+                        .text_color(cx.theme().muted_foreground)
+                        .child(t!("run.form_debug_panel_hint")),
+                )
             })
             .when_some(error, |form, message| {
                 form.child(
@@ -2685,39 +3050,43 @@ pub(crate) fn render_run_config_form(
                             .gap_2()
                             .items_center()
                             .debug_selector(|| "run-config-destination".into())
-                            .child("保存到：")
+                            .child(t!("run.form_destination").to_string())
                             .child(save_destination(
                                 &app,
                                 share,
                                 "run-config-local",
-                                "仅本机",
+                                t!("run.form_local").to_string(),
                                 false,
                             ))
                             .child(save_destination(
                                 &app,
                                 share,
                                 "run-config-shared",
-                                "项目共享",
+                                t!("run.form_shared").to_string(),
                                 true,
                             )),
                     )
                     .child(div().flex_1())
                     .child({
                         let owner = app.clone();
-                        div()
-                            .id("run-config-cancel")
+                        Button::new("run-config-cancel")
+                            .small()
+                            .compact()
+                            .ghost()
                             .debug_selector(|| "run-config-cancel".into())
-                            .child("取消")
+                            .label(t!("run.form_cancel").to_string())
                             .on_click(move |_, _, cx| {
                                 owner.update(cx, |state, cx| state.close_run_form(cx));
                             })
                     })
                     .child({
                         let owner = app.clone();
-                        div()
-                            .id("run-config-save")
+                        Button::new("run-config-save")
+                            .small()
+                            .compact()
+                            .ghost()
                             .debug_selector(|| "run-config-save".into())
-                            .child("保存配置")
+                            .label(t!("run.form_save").to_string())
                             .on_click(move |_, _, cx| {
                                 owner.update(cx, |state, cx| state.commit_run_form(cx));
                             })

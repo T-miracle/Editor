@@ -106,6 +106,12 @@ impl Button {
         self
     }
 
+    /// Publish the actual Base button hit region for native interaction acceptance.
+    pub(crate) fn debug_selector(mut self, selector: impl Fn() -> String + 'static) -> Self {
+        self.base = self.base.debug_selector(selector);
+        self
+    }
+
     /// Use an owner-managed handle for focus observation; Base still owns tab order and activation.
     pub(crate) fn track_focus(mut self, handle: &FocusHandle) -> Self {
         self.base = self.base.track_focus(handle);

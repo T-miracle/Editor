@@ -4,7 +4,7 @@ file_icons = "icons.json"
 [plugin]
 id = "rust"
 name = "Rust"
-version = "0.3.0"
+version = "0.4.0"
 host_version = ">=0.1.0"
 
 [[language_definitions]]
@@ -20,8 +20,4 @@ grammar = "grammar/rust.wasm"
 highlights = "queries/highlights.scm"
 # Keep the ABI exported by the bundled upstream grammar.
 tree_sitter_abi = 15
-# Runnable targets this plugin can offer. The host reads the declaration and applies it; it holds no
-# Rust-specific knowledge of what a target is.
-[[run_targets]]
-id = "rust-binary"
-file = "run-targets/rust.json"
+# Runnable targets use run.targets 1.0 in the independent guest; Cargo metadata owns their meaning.

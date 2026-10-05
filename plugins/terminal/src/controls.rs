@@ -14,7 +14,12 @@ impl Terminal {
     /// Include process identity so a restarted shell cannot receive callbacks meant for its predecessor.
     pub(super) fn interaction_identity(&self) -> InteractionIdentity {
         InteractionIdentity {
-            sessions: self.tabs.iter().map(|tab| tab.id).collect(),
+            sessions: self
+                .tabs
+                .iter()
+                .filter(|tab| !tab.hidden)
+                .map(|tab| tab.id)
+                .collect(),
             active: self
                 .tabs
                 .get(self.active)
@@ -65,6 +70,7 @@ impl Terminal {
             items: self
                 .tabs
                 .iter()
+                .filter(|tab| !tab.hidden)
                 .map(|t| SideTab {
                     id: t.id.to_string(),
                     label: t.name.clone(),
@@ -125,7 +131,11 @@ impl Terminal {
         if event.node != "sessions" {
             return;
         }
-        let index = |id: &str| self.tabs.iter().position(|t| t.id.to_string() == id);
+        let index = |id: &str| {
+            self.tabs
+                .iter()
+                .position(|t| !t.hidden && t.id.to_string() == id)
+        };
         match event.action {
             Action::Select(id) => {
                 if let Some(index) = index(&id) {

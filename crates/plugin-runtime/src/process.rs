@@ -1,5 +1,6 @@
 //! Owned native pipes and PTYs with bounded I/O; no escape parsing or terminal state lives here.
 use plugin_protocol::process::{Stream, Update};
+mod retirement;
 use portable_pty::{Child, MasterPty, PtySize};
 #[cfg(not(windows))]
 use portable_pty::{CommandBuilder, native_pty_system};
@@ -27,6 +28,8 @@ struct Process {
     applied_size: (u16, u16),
     pending_resize: Option<(u16, u16, Instant)>,
     exit_code: Option<u32>,
+    /// An explicit exit request retains its slot until the corresponding final native event.
+    forced: bool,
 }
 impl Process {
     /// Apply the latest requested size after the quiet period expires.
@@ -105,6 +108,15 @@ impl Job {
             windows_sys::Win32::System::JobObjects::TerminateJobObject(self.0, 1);
         }
     }
+    /// Explicit requests report OS refusal instead of acknowledging a tree that was never killed.
+    fn try_terminate(&self) -> anyhow::Result<()> {
+        anyhow::ensure!(
+            unsafe { windows_sys::Win32::System::JobObjects::TerminateJobObject(self.0, 1) } != 0,
+            "Cannot terminate owned process tree: {}",
+            std::io::Error::last_os_error()
+        );
+        Ok(())
+    }
     /// Native installers must stop every descendant before their staging directory can be published/deleted.
     pub(crate) fn terminate_and_wait(&self) -> anyhow::Result<()> {
         use windows_sys::Win32::System::JobObjects::*;
@@ -149,6 +161,8 @@ impl Drop for Job {
 pub(crate) struct Processes {
     next: u64,
     items: BTreeMap<u64, Process>,
+    /// Closed guest handles keep their native cleanup worker until tree/EOF completion.
+    reapers: Vec<std::thread::JoinHandle<anyhow::Result<()>>>,
 }
 impl Processes {
     /// Bound live processes and output buffers per plugin, with backpressure on noisy children.
@@ -163,7 +177,10 @@ impl Processes {
         env: std::collections::BTreeMap<String, String>,
         diagnostics: crate::faults::NativeReporter,
     ) -> anyhow::Result<u64> {
-        anyhow::ensure!(self.items.len() < 32, "Plugin process quota exceeded");
+        anyhow::ensure!(
+            self.items.len() + self.reapers.len() < 32,
+            "Plugin process quota exceeded"
+        );
         let rows = rows.clamp(1, 500);
         let cols = cols.clamp(2, 1000);
         let size = PtySize {
@@ -232,6 +249,7 @@ impl Processes {
                 applied_size: (cols, rows),
                 pending_resize: None,
                 exit_code: None,
+                forced: false,
                 #[cfg(windows)]
                 _job: job,
             },
@@ -250,6 +268,31 @@ impl Processes {
             .map_err(|e| anyhow::anyhow!("Process input is unavailable: {e}"))?;
         Ok(())
     }
+    /// A PTY exposes console interruption; ordinary pipes require an application-specific protocol.
+    pub fn request_exit(&mut self, id: u64) -> anyhow::Result<bool> {
+        let process = self
+            .items
+            .get(&id)
+            .ok_or_else(|| anyhow::anyhow!("Unknown process handle"))?;
+        if process.master.is_none() {
+            return Ok(false);
+        }
+        self.write(id, &[3])?;
+        Ok(true)
+    }
+    /// Kill the owned tree without discarding the observation that confirms it has actually ended.
+    pub fn terminate(&mut self, id: u64) -> anyhow::Result<()> {
+        let process = self
+            .items
+            .get_mut(&id)
+            .ok_or_else(|| anyhow::anyhow!("Unknown process handle"))?;
+        #[cfg(windows)]
+        process._job.try_terminate()?;
+        #[cfg(not(windows))]
+        process.child.kill()?;
+        process.forced = true;
+        Ok(())
+    }
     pub fn resize(&mut self, id: u64, cols: u16, rows: u16) -> anyhow::Result<()> {
         let process = self
             .items
@@ -263,13 +306,13 @@ impl Processes {
         Ok(())
     }
     pub fn close(&mut self, id: u64) -> anyhow::Result<()> {
-        self.items
-            .remove(&id)
-            .ok_or_else(|| anyhow::anyhow!("Unknown process handle"))?;
-        Ok(())
+        self.close_observed(id, |_| {})
     }
     pub fn clear(&mut self) {
-        self.items.clear();
+        for id in self.items.keys().copied().collect::<Vec<_>>() {
+            let _ = self.close(id);
+        }
+        self.wait_closed();
     }
     pub fn len(&self) -> usize {
         self.items.len()
@@ -283,6 +326,7 @@ impl Processes {
     }
     /// Drain a bounded batch so one noisy process cannot starve the UI event queue.
     pub fn poll_native(&mut self) -> anyhow::Result<Vec<(u64, Update)>> {
+        self.reap_finished();
         let mut events = vec![];
         let mut exited = vec![];
         for (&handle, process) in &mut self.items {
@@ -323,7 +367,14 @@ impl Processes {
                 }
             }
             if eof && let Some(code) = process.exit_code {
-                events.push((handle, Update::Exited { code }));
+                events.push((
+                    handle,
+                    if process.forced {
+                        Update::Terminated
+                    } else {
+                        Update::Exited { code }
+                    },
+                ));
                 exited.push(handle);
             }
         }
@@ -362,13 +413,17 @@ impl Processes {
         program: &std::path::Path,
         args: &[String],
         cwd: &std::path::Path,
+        env: &std::collections::BTreeMap<String, String>,
     ) -> anyhow::Result<u64> {
-        anyhow::ensure!(self.items.len() < 32, "Plugin process quota exceeded");
+        anyhow::ensure!(
+            self.items.len() + self.reapers.len() < 32,
+            "Plugin process quota exceeded"
+        );
         let Spawned {
             mut child,
             #[cfg(windows)]
             job,
-        } = spawn_piped(program, args, cwd)?;
+        } = spawn_piped(program, args, cwd, env)?;
         let reader = child.stdout.take().expect("piped stdout");
         let errors = child.stderr.take().expect("piped stderr");
         let mut writer = child.stdin.take().expect("piped stdin");
@@ -394,6 +449,7 @@ impl Processes {
                 applied_size: (0, 0),
                 pending_resize: None,
                 exit_code: None,
+                forced: false,
                 #[cfg(windows)]
                 _job: std::sync::Arc::new(job),
             },
@@ -419,7 +475,7 @@ pub(crate) fn probe(
     let cwd = program
         .parent()
         .ok_or_else(|| anyhow::anyhow!("Missing tool directory"))?;
-    let mut spawned = spawn_piped(program, args, cwd)?;
+    let mut spawned = spawn_piped(program, args, cwd, &Default::default())?;
     drop(spawned.child.stdin.take());
     // Discard output continuously: noisy probes cannot fill a pipe or allocate an unbounded buffer.
     let stdout = spawned.child.stdout.take().expect("piped stdout");
@@ -450,6 +506,7 @@ pub(crate) fn spawn_piped(
     program: &std::path::Path,
     args: &[String],
     cwd: &std::path::Path,
+    env: &std::collections::BTreeMap<String, String>,
 ) -> anyhow::Result<Spawned> {
     use std::process::{Command, Stdio};
     let mut command = Command::new(program);
@@ -459,6 +516,9 @@ pub(crate) fn spawn_piped(
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
+    // Transport cannot discard a negotiated execution override. Entries stay separate from argv,
+    // applied before suspended creation so no child observes an intermediate environment.
+    command.envs(env);
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;

@@ -71,6 +71,22 @@ pub struct RunBreakpoints {
 }
 
 impl RunBreakpoints {
+    /// Translate source paths without changing line numbers or silently dropping invalid entries.
+    ///
+    /// Sharing and resolving use the same boundary; the destination store validates the mapped set.
+    pub(super) fn map_sources(&self, map: &impl Fn(&str) -> String) -> Self {
+        Self {
+            entries: self
+                .entries
+                .iter()
+                .map(|entry| RunBreakpoint {
+                    source: map(&entry.source),
+                    line: entry.line,
+                })
+                .collect(),
+        }
+    }
+
     pub fn entries(&self) -> &[RunBreakpoint] {
         &self.entries
     }

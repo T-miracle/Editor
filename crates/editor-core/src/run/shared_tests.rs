@@ -3,6 +3,213 @@ use super::*;
 use crate::run::{RunStep, StepTarget};
 use std::path::Path;
 
+/// Machine discovery links survive argument edits, but cannot bind a new on-disk target to an old source.
+#[test]
+fn shared_target_changes_drop_stale_discovery_provenance() {
+    let workspace = Path::new("C:/work/project");
+    for provided in [false, true] {
+        let mut local = program("stable", "Target");
+        local.from_target = Some("machine-target".into());
+        local.env.insert("LOCAL_VALUE".into(), "preserved".into());
+        if provided {
+            local.target = RunTarget::Provided {
+                provider: "first-source".into(),
+                binding: "original".into(),
+                label: "Target".into(),
+                args: vec![],
+            };
+        }
+        let mut shared = SharedConfig::from_config(&local, workspace);
+        match &mut shared.target {
+            RunTarget::Program { args, .. } | RunTarget::Provided { args, .. } => {
+                args.push("new literal argument".into())
+            }
+            _ => unreachable!(),
+        }
+        assert_eq!(
+            shared.clone().resolve(workspace, Some(&local)).from_target,
+            local.from_target
+        );
+        shared.target = RunTarget::Program {
+            program: "replacement.exe".into(),
+            args: vec![],
+        };
+        let resolved = shared.resolve(workspace, Some(&local));
+        assert!(
+            resolved.from_target.is_none(),
+            "a target replacement must not inherit an unrelated discovery identity"
+        );
+        assert_eq!(
+            resolved.env, local.env,
+            "machine overrides remain independent of the discovery link"
+        );
+    }
+}
+
+/// Editing a legacy v1 file upgrades only its format; identities, scripts and ordered steps survive.
+#[test]
+fn legacy_sharing_migrates_without_clearing_entries_and_preserves_portable_bindings() {
+    let workspace = Path::new("C:/work/project");
+    let mut original = program("stable", "legacy");
+    original.target = RunTarget::Script {
+        interpreter: "powershell.exe".into(),
+        args: vec!["-Command".into()],
+        script: "Write-Output 'literal | 中文'\nWrite-Output end".into(),
+    };
+    let legacy = serde_json::json!({"version":1,"configurations":[SharedConfig::from_config(&original,workspace)]});
+    let mut migrated = SharedSet::from_json(&serde_json::to_vec(&legacy).unwrap()).unwrap();
+    let mut bound = program("bound", "portable target");
+    bound.target = RunTarget::Provided {
+        provider: "target-provider".into(),
+        binding: r#"{"manifest":"nested/Cargo.toml","bin":"native","profile":"dev"}"#.into(),
+        label: "Native Debug".into(),
+        args: vec!["literal space".into(), "".into()],
+    };
+    migrated.upsert(SharedConfig::from_config(&bound, workspace));
+    let bytes = migrated.to_json().unwrap();
+    let value: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(value["version"], 2);
+    let read = SharedSet::from_json(&bytes).unwrap();
+    assert_eq!(read.configurations.len(), 2);
+    assert_eq!(
+        read.configurations[0]
+            .clone()
+            .resolve(workspace, None)
+            .target,
+        original.target
+    );
+    assert_eq!(
+        read.configurations[1]
+            .clone()
+            .resolve(Path::new("D:/elsewhere"), None)
+            .target,
+        bound.target
+    );
+    for version in [0, SHARED_CONFIG_VERSION + 1] {
+        assert!(
+            SharedSet::from_json(
+                &serde_json::to_vec(&serde_json::json!({"version":version,"configurations":[]}))
+                    .unwrap()
+            )
+            .is_err()
+        );
+    }
+}
+
+/// A project file must refuse machine-specific executable and working-directory paths.
+#[test]
+fn shared_files_reject_private_paths_and_parent_directory_escape() {
+    let workspace = Path::new("C:/work/project");
+    let mut entry = SharedConfig::from_config(&program("run-1", "portable"), workspace);
+    for path in ["D:/private/tools", "../outside", "${unknown}/tools"] {
+        entry.directory = Some(path.into());
+        let mut shared = SharedSet::default();
+        shared.upsert(entry.clone());
+        assert!(
+            SharedSet::from_json(&shared.to_json().unwrap()).is_err(),
+            "{path} must not be shared"
+        );
+    }
+    entry.directory = None;
+    entry.target = RunTarget::Program {
+        program: "C:/Users/person/private/app.exe".into(),
+        args: vec![],
+    };
+    let mut shared = SharedSet::default();
+    shared.upsert(entry);
+    assert!(SharedSet::from_json(&shared.to_json().unwrap()).is_err());
+}
+
+/// Project-relative directories resolve to the selected project before ordinary launch validation.
+#[test]
+fn relative_shared_directories_are_resolved_before_launch_validation() {
+    let workspace = Path::new("C:/work/project");
+    for path in ["tools", "${workspace}/tools"] {
+        let mut entry = SharedConfig::from_config(&program("run-1", "portable"), workspace);
+        entry.directory = Some(path.into());
+        let resolved = entry.resolve(workspace, None);
+        assert_eq!(
+            resolved.directory.as_deref(),
+            Some(workspace.join("tools").to_str().unwrap())
+        );
+        assert!(resolved.validate().is_ok());
+    }
+}
+
+/// Source paths obey the same portability boundary as executable and working-directory paths.
+#[test]
+fn shared_breakpoints_convert_project_paths_and_refuse_private_sources() {
+    let workspace = Path::new("C:/work/project");
+    let mut config = program("run-1", "portable");
+    config
+        .breakpoints
+        .insert("C:/work/project/src/main.rs", 10)
+        .unwrap();
+    let entry = SharedConfig::from_config(&config, workspace);
+    assert_eq!(
+        entry.breakpoints.entries()[0].source,
+        "${workspace}/src/main.rs"
+    );
+    let elsewhere = entry.resolve(Path::new("D:/other/project"), None);
+    assert_eq!(
+        elsewhere.breakpoints.entries()[0].source,
+        Path::new("D:/other/project")
+            .join("src/main.rs")
+            .display()
+            .to_string()
+    );
+    config
+        .breakpoints
+        .insert("C:/Users/private/main.rs", 20)
+        .unwrap();
+    let mut file = SharedSet::default();
+    file.upsert(SharedConfig::from_config(&config, workspace));
+    assert!(SharedSet::from_json(&file.to_json().unwrap()).is_err());
+}
+
+/// Literal option arguments retain their boundaries while their path value becomes portable.
+#[test]
+fn shared_option_arguments_convert_project_paths_and_refuse_private_paths() {
+    let workspace = Path::new("C:/work/project");
+    let mut config = program("run-1", "portable");
+    config.target = RunTarget::Program {
+        program: "tool.exe".into(),
+        args: vec!["--out=C:/work/project/data with spaces".into()],
+    };
+    let entry = SharedConfig::from_config(&config, workspace);
+    assert_eq!(
+        entry.target.arguments(),
+        ["--out=${workspace}/data with spaces"]
+    );
+    let resolved = entry.resolve(Path::new("D:/other/project"), None);
+    assert_eq!(
+        resolved.target.arguments(),
+        [format!(
+            "--out={}",
+            Path::new("D:/other/project")
+                .join("data with spaces")
+                .display()
+        )]
+    );
+    for path in [
+        "--out=C:/Users/private/data",
+        "--out=../private",
+        "--out=${unknown}/data",
+    ] {
+        let mut entry = SharedConfig::from_config(&config, workspace);
+        entry.target = RunTarget::Program {
+            program: "tool.exe".into(),
+            args: vec![path.into()],
+        };
+        let mut file = SharedSet::default();
+        file.upsert(entry);
+        assert!(
+            SharedSet::from_json(&file.to_json().unwrap()).is_err(),
+            "{path}"
+        );
+    }
+}
+
 fn program(id: &str, name: &str) -> RunConfig {
     RunConfig {
         id: id.into(),
@@ -67,8 +274,8 @@ fn sharing_exports_only_portable_values() {
         "a personal tool path is not shared"
     );
 
-    // A directory outside the project has no portable form and is kept as written rather than
-    // invented as a path inside the project.
+    // An external directory remains visible in the proposed entry, but the shared file validator
+    // refuses it; it is never silently rewritten into a different working directory.
     let mut outside = program("run-2", "外部");
     outside.directory = Some("D:/elsewhere".into());
     assert_eq!(

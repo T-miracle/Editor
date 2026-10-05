@@ -704,3 +704,698 @@ settings.hidden:
 settings.resize_hint:
   en: "Resize panels by dragging the dividers."
   zh-CN: "拖动分隔线可调整面板大小。"
+run.target_config_missing:
+  en: "The run configuration no longer exists."
+  zh-CN: "运行配置不存在。"
+run.target_missing:
+  en: "The target is still missing. Check the project files and tools."
+  zh-CN: "该目标仍未被发现；检查项目文件或工具是否可用。"
+run.target_confirm_repair:
+  en: "Confirm repair: %{name} → %{program}"
+  zh-CN: "确认修复：%{name} → %{program}"
+run.target_repaired:
+  en: "The run target was updated as confirmed."
+  zh-CN: "已按确认更新运行目标。"
+run.target_found_confirm:
+  en: "The target was found again. Confirm its repair in the menu to update the configuration."
+  zh-CN: "已重新发现该目标；在菜单中确认修复后更新配置。"
+run.target_discovery_summary:
+  en: "Found %{count} run targets: %{repairs} repairs awaiting confirmation, %{offered} new candidates, %{missing} missing targets"
+  zh-CN: "发现 %{count} 个可运行目标：待确认修复 %{repairs}，新增候选 %{offered}，目标失效 %{missing}"
+run.local_restore_failed:
+  en: "%{error}; restoring local values also failed: %{restore}"
+  zh-CN: "%{error}；还原本机配置也失败了：%{restore}"
+run.force:
+  en: "Force"
+  zh-CN: "终止"
+run.force_hint:
+  en: "Immediately terminate the selected session and its process tree"
+  zh-CN: "立即终止所选会话及其进程树"
+run.locating:
+  en: "Locating session %{session}…"
+  zh-CN: "正在定位会话 %{session}…"
+run.located:
+  en: "Located session %{session}"
+  zh-CN: "已定位会话 %{session}"
+run.locate_failed:
+  en: "Cannot locate session output: %{error}"
+  zh-CN: "无法定位会话输出：%{error}"
+run.locate_unavailable:
+  en: "The plugin worker is unavailable. The session could not be located."
+  zh-CN: "插件后台服务不可用，无法定位会话。"
+run.target_added:
+  en: "Added run configuration %{name}. You can edit it in the configuration dialog."
+  zh-CN: "已添加运行配置 %{name}，可在配置弹窗中修改"
+run.no_configuration:
+  en: "Select a run configuration first."
+  zh-CN: "请先选择运行配置。"
+run.restricted:
+  en: "A restricted workspace cannot start programs."
+  zh-CN: "受限工作区不能启动程序。"
+run.preparing_debug:
+  en: "Preparing debug target %{name}…"
+  zh-CN: "正在准备调试目标 %{name}…"
+run.starting_debug:
+  en: "Starting debug target %{name}…"
+  zh-CN: "正在启动调试目标 %{name}…"
+run.debug_unavailable:
+  en: "The plugin worker is unavailable; debugging could not start."
+  zh-CN: "插件后台服务不可用，无法开始调试。"
+run.stop_before_debug:
+  en: "Stop this configuration's running target before starting debugging."
+  zh-CN: "请先停止该配置正在运行的目标，再启动调试。"
+run.debug_panel:
+  en: "Debug"
+  zh-CN: "调试"
+run.hide_output:
+  en: "Hide output"
+  zh-CN: "隐藏输出"
+run.discover:
+  en: "Discover configurations"
+  zh-CN: "发现配置"
+run.confirm_candidate:
+  en: "Confirm and save this target as an editable configuration"
+  zh-CN: "确认并保存此目标为可编辑配置"
+run.discovering:
+  en: "Discovering runnable targets…"
+  zh-CN: "正在发现运行目标…"
+run.debug_resume:
+  en: "Continue (F5)"
+  zh-CN: "继续 (F5)"
+run.debug_pause:
+  en: "Pause (F6)"
+  zh-CN: "暂停 (F6)"
+run.debug_stop:
+  en: "Stop debugging (Shift+F5)"
+  zh-CN: "停止调试 (Shift+F5)"
+run.debug_into:
+  en: "Step in (F11)"
+  zh-CN: "步入 (F11)"
+run.debug_over:
+  en: "Step over (F10)"
+  zh-CN: "步过 (F10)"
+run.debug_out:
+  en: "Step out (Shift+F11)"
+  zh-CN: "步出 (Shift+F11)"
+run.debug_hide:
+  en: "Hide"
+  zh-CN: "隐藏"
+run.debug_disconnected:
+  en: "Debugging has not started."
+  zh-CN: "尚未开始调试。"
+run.debug_connecting:
+  en: "Connecting to the debug target…"
+  zh-CN: "正在连接调试目标…"
+run.debug_running:
+  en: "Target is running."
+  zh-CN: "目标正在运行。"
+run.debug_paused:
+  en: "Paused at %{source}:%{line}"
+  zh-CN: "已在 %{source}:%{line} 暂停"
+run.debug_exited:
+  en: "Target exited."
+  zh-CN: "目标已退出。"
+run.debug_failed:
+  en: "Debugging failed: %{reason}"
+  zh-CN: "调试失败：%{reason}"
+run.debug_stack:
+  en: "Call stack"
+  zh-CN: "调用栈"
+run.debug_locals:
+  en: "Variables"
+  zh-CN: "变量"
+run.debug_no_locals:
+  en: "No variables in this frame."
+  zh-CN: "该帧没有变量。"
+run.debug_other_paused:
+  en: "Another session is paused; the source view was left in place."
+  zh-CN: "另一个会话已暂停，源码视图保留在原位置。"
+run.step_unclosed_quote:
+  en: "A step contains an unclosed quoted value."
+  zh-CN: "步骤包含未闭合的引号。"
+run.step_invalid_quote:
+  en: "A quoted step value must use valid JSON string escapes."
+  zh-CN: "步骤的引号文本需要合法的字符串转义。"
+run.step_syntax:
+  en: "Write the step as name = program | argument: %{line}"
+  zh-CN: "步骤需要写成 名称 = 程序 | 参数：%{line}"
+run.step_name_missing:
+  en: "The step is missing its name: %{line}"
+  zh-CN: "步骤缺少名称：%{line}"
+run.step_program_missing:
+  en: "The step is missing its executable: %{line}"
+  zh-CN: "步骤缺少要运行的程序：%{line}"
+run.step_reference_arguments:
+  en: "A build reference cannot include program arguments."
+  zh-CN: "构建引用不能附带程序参数。"
+run.step_reference_missing:
+  en: "The build reference is missing a configuration: %{line}"
+  zh-CN: "构建引用缺少配置名称：%{line}"
+run.step_script_missing:
+  en: "An explicit Shell step needs a final script value."
+  zh-CN: "显式 Shell 步骤需要最后一个脚本值。"
+run.form_basic:
+  en: "Basic"
+  zh-CN: "基本"
+run.form_build:
+  en: "Build"
+  zh-CN: "构建"
+run.form_debug:
+  en: "Debug"
+  zh-CN: "调试"
+run.form_environment:
+  en: "Environment"
+  zh-CN: "环境"
+run.field_name:
+  en: "Name"
+  zh-CN: "名称"
+run.field_program:
+  en: "Program"
+  zh-CN: "程序"
+run.field_arguments:
+  en: "Arguments (one per line)"
+  zh-CN: "参数（每行一个）"
+run.field_script:
+  en: "Script"
+  zh-CN: "脚本文本"
+run.field_directory:
+  en: "Working directory"
+  zh-CN: "工作目录"
+run.field_environment:
+  en: "Environment (NAME=value per line)"
+  zh-CN: "环境变量（每行 名称=值）"
+run.field_tool_paths:
+  en: "Local tool directories (one per line, before inherited PATH)"
+  zh-CN: "本机工具路径（每行一个目录，优先于继承的 PATH）"
+run.field_build:
+  en: "Build actions (name = program | arguments)"
+  zh-CN: "构建操作（每行 名称 = 程序 | 参数）"
+run.field_prelaunch:
+  en: "Prelaunch steps (in order)"
+  zh-CN: "启动前步骤（每行 名称 = 程序 | 参数，顺序执行）"
+run.field_breakpoints:
+  en: "Breakpoints (source:line per line)"
+  zh-CN: "断点（每行 源文件:行号）"
+run.field_interpreter:
+  en: "Interpreter"
+  zh-CN: "解释器"
+run.field_interpreter_arguments:
+  en: "Interpreter arguments (one per line)"
+  zh-CN: "解释器参数（每行一个）"
+run.form_mode:
+  en: "Run mode"
+  zh-CN: "运行方式"
+run.form_shell:
+  en: "Shell script"
+  zh-CN: "Shell 脚本"
+run.hint_basic:
+  en: "Name, program, arguments and working directory"
+  zh-CN: "名称、程序、参数与工作目录"
+run.hint_build:
+  en: "Build actions produce artifacts; prelaunch steps execute in order before the program."
+  zh-CN: "构建操作与启动前步骤：前者可只构建，后者在启动前按顺序执行"
+run.hint_debug:
+  en: "Choose the default or an explicit execution provider for this configuration."
+  zh-CN: "执行提供者：跟随默认，或为这个配置指定一个"
+run.hint_environment:
+  en: "This configuration's local environment, one NAME=value per line."
+  zh-CN: "本配置的环境变量，每行一个 名称=值"
+run.form_new:
+  en: "New"
+  zh-CN: "新建"
+run.form_destination:
+  en: "Save to"
+  zh-CN: "保存到："
+run.form_local:
+  en: "This machine"
+  zh-CN: "仅本机"
+run.form_shared:
+  en: "Project"
+  zh-CN: "项目共享"
+run.form_cancel:
+  en: "Cancel"
+  zh-CN: "取消"
+run.form_save:
+  en: "Save configuration"
+  zh-CN: "保存配置"
+run.form_edit_title:
+  en: "Edit run configuration"
+  zh-CN: "编辑运行配置"
+run.form_new_title:
+  en: "New run configuration"
+  zh-CN: "新建运行配置"
+run.provider_default:
+  en: "Follow default"
+  zh-CN: "跟随默认"
+run.provider_none:
+  en: "No provider available"
+  zh-CN: "无可用提供者"
+run.step_add:
+  en: "+ Add"
+  zh-CN: "+ 添加"
+run.step_remove:
+  en: "Remove"
+  zh-CN: "删除"
+run.step_up:
+  en: "Up"
+  zh-CN: "上移"
+run.step_down:
+  en: "Down"
+  zh-CN: "下移"
+run.step_add_hint:
+  en: "Add an action to this configuration"
+  zh-CN: "在本配置中增加一条预置动作"
+run.step_remove_hint:
+  en: "Remove this action from the configuration"
+  zh-CN: "从本配置中删除这条预置动作"
+run.step_up_hint:
+  en: "Move this action one position earlier"
+  zh-CN: "把这条动作提前一位"
+run.step_down_hint:
+  en: "Move this action one position later"
+  zh-CN: "把这条动作推后一位"
+run.breakpoint_verified:
+  en: "Bound"
+  zh-CN: "已绑定"
+run.breakpoint_unverified:
+  en: "Provider could not bind this breakpoint"
+  zh-CN: "提供者未能绑定"
+run.breakpoint_waiting:
+  en: "Awaiting confirmation"
+  zh-CN: "等待确认"
+run.debug_no_location:
+  en: "No source location in this pause."
+  zh-CN: "本次暂停没有可显示的位置"
+run.leave_title:
+  en: "Managed programs are still active"
+  zh-CN: "仍有正在运行的程序"
+run.form_saved_count:
+  en: "%{count} saved configurations"
+  zh-CN: "已保存 %{count} 项"
+run.debug_breakpoints:
+  en: "Breakpoints"
+  zh-CN: "断点"
+run.preparing_busy:
+  en: "This configuration is preparing"
+  zh-CN: "该配置正在准备"
+
+run.configurations:
+  en: "Run configurations"
+  zh-CN: "运行配置"
+
+run.build_only_hint:
+  en: "Execute build actions only"
+  zh-CN: "只执行构建操作"
+
+run.start:
+  en: "Run"
+  zh-CN: "运行"
+
+run.start_hint:
+  en: "Run the selected configuration"
+  zh-CN: "运行所选配置"
+
+run.debug_hint:
+  en: "Debug the selected configuration"
+  zh-CN: "调试所选配置"
+
+run.stop:
+  en: "Stop"
+  zh-CN: "停止"
+
+run.stop_hint:
+  en: "Stop the selected session"
+  zh-CN: "停止所选会话"
+
+run.rerun:
+  en: "Rerun"
+  zh-CN: "重新运行"
+
+run.rerun_hint:
+  en: "Stop the current target before starting its replacement"
+  zh-CN: "先停止当前实例，再重新启动"
+
+run.missing_configuration:
+  en: "Run configuration is missing; select it again"
+  zh-CN: "运行配置不存在，请重新选择"
+
+run.no_debug_session:
+  en: "No debug session is selected"
+  zh-CN: "没有正在检查的调试会话"
+
+run.debug_not_connected:
+  en: "Debug connection is not ready"
+  zh-CN: "调试会话尚未建立"
+
+run.debug_worker_missing:
+  en: "Plugin worker is unavailable; debugging cannot continue"
+  zh-CN: "插件后台服务不可用，无法执行调试操作"
+
+run.step_unsupported:
+  en: "This debug session does not support stepping"
+  zh-CN: "该调试会话不支持单步"
+
+run.step_pending:
+  en: "This pause already has a pending step"
+  zh-CN: "该暂停已有未完成的单步请求"
+
+run.step_worker_missing:
+  en: "Plugin worker is unavailable; stepping cannot continue"
+  zh-CN: "插件后台服务不可用，无法单步"
+
+run.step_no_command:
+  en: "The step has no executable command"
+  zh-CN: "步骤缺少可执行的命令"
+
+run.preparation_no_command:
+  en: "The preparation step has no executable command"
+  zh-CN: "准备步骤缺少可执行的命令"
+
+run.worker_missing:
+  en: "Plugin worker is unavailable"
+  zh-CN: "插件后台服务不可用"
+
+run.preparation_worker_missing:
+  en: "Plugin worker is unavailable; preparation cannot continue"
+  zh-CN: "插件后台服务不可用，无法继续准备"
+
+run.stop_worker_missing:
+  en: "Plugin worker is unavailable; preparation cannot be stopped"
+  zh-CN: "插件后台服务不可用，无法停止准备步骤"
+
+run.status_worker_missing:
+  en: "Plugin worker is unavailable; step state cannot be confirmed"
+  zh-CN: "插件后台服务不可用，无法确认步骤状态"
+
+run.start_worker_missing:
+  en: "Plugin worker is unavailable; launch cannot proceed"
+  zh-CN: "插件后台服务不可用，无法启动"
+
+run.session_ended:
+  en: "The selected session has ended"
+  zh-CN: "所选会话已经结束"
+
+run.stop_request_worker_missing:
+  en: "Plugin worker is unavailable; stop could not be requested"
+  zh-CN: "插件后台服务不可用，无法请求停止"
+
+run.rerun_worker_missing:
+  en: "Plugin worker is unavailable; rerun cannot proceed"
+  zh-CN: "插件后台服务不可用，无法重新运行"
+
+run.rerun_waiting:
+  en: "Waiting for the original program to end before rerunning"
+  zh-CN: "正在等待旧程序结束，然后重新运行"
+
+run.leave_confirm:
+  en: "Stop and close"
+  zh-CN: "停止并关闭"
+
+run.state_starting:
+  en: "Starting"
+  zh-CN: "启动中"
+
+run.state_running:
+  en: "Running"
+  zh-CN: "运行中"
+
+run.state_stopping:
+  en: "Stopping"
+  zh-CN: "停止中"
+
+run.state_terminating:
+  en: "Terminating"
+  zh-CN: "强制终止中"
+
+run.state_ended:
+  en: "Ended"
+  zh-CN: "已结束"
+
+run.resume_label:
+  en: "Continue"
+  zh-CN: "继续"
+
+run.pause_label:
+  en: "Pause"
+  zh-CN: "暂停"
+
+run.debug_stop_label:
+  en: "Stop debugging"
+  zh-CN: "停止调试"
+
+run.step_into_label:
+  en: "Step in"
+  zh-CN: "步入"
+
+run.step_over_label:
+  en: "Step over"
+  zh-CN: "步过"
+
+run.step_out_label:
+  en: "Step out"
+  zh-CN: "步出"
+
+run.phase_build:
+  en: "Build"
+  zh-CN: "构建"
+
+run.phase_prelaunch:
+  en: "Prelaunch"
+  zh-CN: "启动前"
+
+run.phase_program:
+  en: "Program"
+  zh-CN: "程序"
+
+run.menu_none:
+  en: "(No running sessions)"
+  zh-CN: "(没有运行中的会话)"
+
+run.menu_empty:
+  en: "(No saved configurations)"
+  zh-CN: "(尚未保存运行配置)"
+
+run.menu_edit:
+  en: "Edit selected configuration…"
+  zh-CN: "编辑所选配置…"
+
+run.menu_new:
+  en: "New run configuration…"
+  zh-CN: "新建运行配置…"
+
+run.menu_discover:
+  en: "Discover run targets…"
+  zh-CN: "发现运行目标…"
+
+run.menu_candidates:
+  en: "Discover run targets (%{count} candidates)…"
+  zh-CN: "发现运行目标（%{count} 个候选）…"
+
+run.menu_invalid:
+  en: " ⚠ Target missing"
+  zh-CN: " ⚠ 目标已失效"
+
+run.menu_repair:
+  en: "Target missing: %{name} (rediscover to repair)"
+  zh-CN: "目标已失效：%{name}（重新发现以修复）"
+
+run.stop_requested:
+  en: "Stop requested for session %{session}"
+  zh-CN: "已请求停止会话 %{session}"
+
+run.stop_failed:
+  en: "Failed to stop session %{session}: %{message}"
+  zh-CN: "停止会话 %{session} 失败：%{message}"
+
+run.leave_body:
+  en: "Closing stops %{count} managed sessions. Cancel keeps them running."
+  zh-CN: "关闭窗口会先停止 %{count} 个受管会话。取消可保留它们继续运行。"
+
+run.preparing_named:
+  en: "Preparing %{name}"
+  zh-CN: "正在准备 %{name}"
+
+run.building_named:
+  en: "Building %{name}"
+  zh-CN: "正在构建 %{name}"
+
+run.built_named:
+  en: "%{name} build completed"
+  zh-CN: "%{name} 构建完成"
+
+run.starting_named:
+  en: "Starting %{name}"
+  zh-CN: "正在启动 %{name}"
+
+run.stopping_named:
+  en: "Requesting stop for session %{session}"
+  zh-CN: "正在请求停止会话 %{session}"
+
+run.saved_named:
+  en: "Saved run configuration: %{name}"
+  zh-CN: "已保存运行配置：%{name}"
+
+run.save_failed_named:
+  en: "Save failed; launch cancelled: %{path}"
+  zh-CN: "保存失败，未启动：%{path}"
+
+run.debug_via:
+  en: "Debug selected configuration through %{provider}"
+  zh-CN: "通过 %{provider} 调试所选配置"
+
+run.debug_unknown_action:
+  en: "Unknown debug action: %{action}"
+  zh-CN: "未知的调试操作：%{action}"
+
+run.provider_current:
+  en: "Currently active: %{provider}"
+  zh-CN: "当前生效：%{provider}"
+
+run.form_debug_panel_hint:
+  en: "Set launch breakpoints here. Continue, stepping, stack and variables are in the unified debug panel."
+  zh-CN: "在这里配置启动断点。继续、单步、调用栈和变量位于统一调试面板。"
+
+run.configuration_missing:
+  en: "Run configuration is missing; select it again"
+  zh-CN: "运行配置不存在，请重新选择"
+
+run.no_build_actions:
+  en: "This configuration has no build actions"
+  zh-CN: "该配置没有构建操作"
+
+run.debug_busy:
+  en: "A debug operation is in progress"
+  zh-CN: "调试操作正在进行"
+
+run.preparation_stopped:
+  en: "Preparation steps were stopped"
+  zh-CN: "已停止准备步骤"
+
+run.impact_running:
+  en: "Will stop %{count} running programs (%{names})"
+  zh-CN: "将停止 %{count} 个正在运行的程序（%{names}）"
+
+run.impact_debugging:
+  en: "Will end %{count} debug sessions (%{names})"
+  zh-CN: "将结束 %{count} 个调试会话（%{names}）"
+run.step_failed:
+  en: 'Step %{name} failed: %{message}'
+  zh-CN: '步骤 %{name} 失败：%{message}'
+run.debug_already_connected:
+  en: 'A debug session is active; stop it before starting another'
+  zh-CN: '已有调试会话；请先停止它再开始新的调试'
+run.debug_already_paused:
+  en: 'The target is already paused'
+  zh-CN: '目标已暂停'
+run.debug_pause_before_step:
+  en: 'Pause the running target before stepping'
+  zh-CN: '目标正在运行；请先暂停再单步'
+run.debug_resume_pause_undeclared:
+  en: 'This provider does not declare resume and pause controls'
+  zh-CN: '该调试提供者未声明继续与暂停能力'
+run.debug_unconfirmed:
+  en: 'Debug capability is not confirmed; open Debug settings and try again'
+  zh-CN: '尚未确认调试能力；打开调试页后重试'
+run.debug_inspection_not_paused:
+  en: 'The target is not paused; inspection is unavailable'
+  zh-CN: '目标未暂停，暂无暂停数据'
+run.debug_stale_pause:
+  en: 'This pause has ended; the late result will not replace the current view'
+  zh-CN: '该暂停已结束，迟到的结果不会覆盖当前视图'
+run.debug_unknown_frame:
+  en: 'This pause has no frame %{frame}'
+  zh-CN: '该暂停没有第 %{frame} 个栈帧'
+run.debug_wrong_session:
+  en: 'This result belongs to another debug session'
+  zh-CN: '该结果属于另一个调试会话'
+run.debug_provider_failure:
+  en: 'Debug provider failed: %{reason}'
+  zh-CN: '调试提供者报告失败：%{reason}'
+run.step_exited:
+  en: 'Step %{name} exited with code %{code}'
+  zh-CN: '步骤 %{name} 退出码 %{code}'
+run.step_terminated:
+  en: 'Step %{name} was terminated'
+  zh-CN: '步骤 %{name} 已终止'
+run.step_unknown_exit:
+  en: 'The final state of step %{name} could not be confirmed'
+  zh-CN: '步骤 %{name} 的结束状态无法确认'
+run.step_missing_result:
+  en: 'Step %{name} ended without a result'
+  zh-CN: '步骤 %{name} 的会话已结束但未报告结果'
+run.step_blocked:
+  en: '%{kind} step %{name}: %{reason}'
+  zh-CN: '%{kind}步骤 %{name}：%{reason}'
+run.build_limit:
+  en: 'A build cannot exceed %{limit} actions'
+  zh-CN: '一次构建不能超过 %{limit} 个操作'
+run.preparation_limit:
+  en: 'Launch preparation cannot exceed %{limit} steps'
+  zh-CN: '一次启动的准备步骤不能超过 %{limit} 个'
+run.reference_missing:
+  en: 'Pre-launch step %{step} references a missing build configuration: %{name}'
+  zh-CN: '启动前步骤 %{step} 引用的构建配置不存在：%{name}'
+run.reference_self:
+  en: 'Pre-launch step %{step} cannot reference its own build'
+  zh-CN: '启动前步骤 %{step} 不能引用当前配置自身的构建'
+run.step_not_action:
+  en: 'Step %{name} is not a directly executable action'
+  zh-CN: '步骤 %{name} 不是可直接执行的动作'
+run.target_not_discovered:
+  en: 'The discovered catalog does not contain target %{id}'
+  zh-CN: '发现结果里没有这个目标：%{id}'
+run.old_exit_unknown:
+  en: 'The previous program exit could not be confirmed; rerun cancelled'
+  zh-CN: '无法确认旧程序已结束，取消重新运行'
+run.configuration_unknown:
+  en: 'Unknown configuration: %{id}'
+  zh-CN: '未知的配置：%{id}'
+run.provider_not_installed:
+  en: 'Configured execution provider %{provider} is not installed'
+  zh-CN: '配置指定的执行提供者 %{provider} 未安装'
+run.environment_syntax:
+  en: 'Write environment entries as NAME=VALUE: %{line}'
+  zh-CN: '环境变量需要写成 名称=值：%{line}'
+run.environment_name_missing:
+  en: 'An environment entry is missing its name: %{line}'
+  zh-CN: '环境变量缺少名称：%{line}'
+run.breakpoint_syntax:
+  en: 'Write breakpoints as SOURCE:LINE: %{line}'
+  zh-CN: '断点需要写成 源文件:行号：%{line}'
+run.breakpoint_line_invalid:
+  en: 'Breakpoint line must be a number: %{line}'
+  zh-CN: '断点行号必须是数字：%{line}'
+run.steps_format_header:
+  en: '# Name = program | arguments'
+  zh-CN: '# 名称 = 程序 | 参数'
+
+run.provider_build_missing:
+  en: "The provider target requires its matching build action; repair the configuration"
+  zh-CN: "提供者目标缺少对应的构建操作，请修复运行配置"
+run.target_catalog_limit:
+  en: "The target catalog exceeds the limit of 128"
+  zh-CN: "目标目录超过 128 项限制"
+plugins.remove_programs:
+  en: "This will stop %{count} running programs."
+  zh-CN: "将关闭 %{count} 个运行中的程序。"
+plugins.remove_resources:
+  en: "This will withdraw the plugin's syntax, theme or icon resources."
+  zh-CN: "将撤销此插件提供的语法、主题或图标资源。"
+plugins.disable:
+  en: "Disable"
+  zh-CN: "停用"
+plugins.remove_title:
+  en: "%{action} plugin · %{name}"
+  zh-CN: "%{action}插件 · %{name}"
+plugins.remove_data_hint:
+  en: "You can preserve plugin configuration or delete its saved data as well."
+  zh-CN: "可保留插件配置，也可同时删除插件保存的数据。"
+plugins.remove_preserve:
+  en: "Uninstall and preserve data"
+  zh-CN: "卸载，保留数据"
+plugins.confirm_disable:
+  en: "Confirm disable"
+  zh-CN: "确认停用"
+plugins.remove_delete:
+  en: "Uninstall and delete data"
+  zh-CN: "卸载并删除数据"
