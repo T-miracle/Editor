@@ -2,7 +2,7 @@
 
 日期：2026-10-06。议题：[#64](https://github.com/T-miracle/Editor/issues/64)。
 分支：`codex/plugin-ui-decoupling`；审查起点：`4d4a7b6`。
-状态：公开契约与实际包路径已实现，针对性检查、原生缩放回归和阶段基础检查通过；待固定提交双轴审查。
+状态：本批验收完成，固定候选 `1ee5ae9` 两轴审查通过；待交付提交推送后核对远端与 #64 状态。
 
 ## 实现边界
 
@@ -24,7 +24,7 @@
 
 - JSON 接缝先暴露工具字段未保留及非法目标被接受；协议实现后工具测试 3 项通过，全协议 34 项通过。
 - `cargo test -p plugin-runtime instance::preferences::tests --lib`：3 项通过，覆盖同范围并发写入、过期 CAS、幂等、目录／类型隔离、损坏保留及配额／事务回滚。
-- `cargo test -p plugin-runtime --test plugin_tools -- --ignored`：实际 SDK 包 3 项通过，涵盖能力协商、存储授权、缺失／危险图标、同类型切换、不同工作区、重启、watch 收敛／损坏终止和停用清理。
+- `cargo test -p plugin-runtime --test plugin_tools -- --ignored`：最终实际 SDK 包 4 项通过（44.74 秒），涵盖能力协商、存储授权、缺失／危险图标、同类型切换、不同工作区、重启、watch 收敛／损坏终止、停用清理及执行前撤权。
 - 原生工具用例通过真实鼠标和菜单键盘验证布局改变、辅助工具、禁用状态、窗口目标保持、两组单行溢出、旧文件事件拒绝及深浅主题；补充的菜单键盘跳过回归通过（18.66 秒）。
 - 原有实际布局／Image／中文 IME／文本与 Undo 回归 1 项通过（59.45 秒）。
 - `cargo fmt --check`、`cargo test --workspace --exclude editor-app`、`cargo check --workspace` 通过；ignored 不计为已执行。
@@ -39,8 +39,16 @@
 
 ## Standards
 
-待固定提交双轴审查。
+首次 `8043e4e` 审查发现 P2：发布工具后撤销 `editor.read`，捕获事件仍能进入 WASM。
+真实包回归先在原入口错误返回 `Ok` 处失败；`1ee5ae9` 在执行前重查当前授权、
+信任、工作区作用域及 File／Window 声明归属。拒绝保留健康实例与原偏好。
+固定提交复审剩余 0 项；未发现本批另需修复的判断性坏味道。
+修复后格式、非 UI workspace 测试与 workspace 编译再次通过；原生与 SDK 有效结果复用。
 
 ## Spec
 
-待固定提交双轴审查。
+`8043e4e` 初审与 `1ee5ae9` 增量复审均通过，剩余 0 项。
+核对功能上下文、双组溢出、CAS／watch、真实包与 SDK 路径；实际三插件迁移属于 #65，
+旧契约收缩及总故障矩阵属于 #66，没有混记为本批已完成。
+
+两位审查者只读检查固定提交及回归代码，没有重复执行构建；上文测试由实施者实际运行。
