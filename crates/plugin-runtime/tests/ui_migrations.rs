@@ -238,6 +238,49 @@ fn svg_uses_versioned_memory_and_discards_obsolete_content() {
         Some(&reopened)
     );
     assert_eq!(vector(&manager).w, initial.w);
+    action(
+        &mut manager,
+        "svg",
+        "preview",
+        "preview-canvas",
+        ui::Action::Canvas(ui::CanvasEvent::Wheel {
+            delta_x: 0.,
+            delta_y: 14.,
+            shift: false,
+            x: 200.,
+            y: 150.,
+        }),
+    );
+    let mut damaged = api::DocumentVersion {
+        id: "initially-damaged".into(),
+        path: "damaged.svg".into(),
+        revision: 0,
+    };
+    // A different file resets zoom even when its first snapshot cannot yet supply intrinsic dimensions.
+    svg_preview(&mut manager, Some(damaged.clone()), "<svg");
+    damaged.revision += 1;
+    svg_preview(&mut manager, Some(damaged.clone()), SVG);
+    assert_eq!(vector(&manager).w, initial.w);
+    action(
+        &mut manager,
+        "svg",
+        "preview",
+        "preview-canvas",
+        ui::Action::Canvas(ui::CanvasEvent::Wheel {
+            delta_x: 0.,
+            delta_y: 14.,
+            shift: false,
+            x: 200.,
+            y: 150.,
+        }),
+    );
+    let repaired_zoom = vector(&manager);
+    // An incomplete edit of that same file retains the user's manual intent when the SVG becomes valid again.
+    damaged.revision += 1;
+    svg_preview(&mut manager, Some(damaged.clone()), "<svg");
+    damaged.revision += 1;
+    svg_preview(&mut manager, Some(damaged), SVG);
+    assert_eq!(vector(&manager), repaired_zoom);
     svg_preview(&mut manager, None, "");
     assert!(tree(&manager, "svg", "preview").source.is_none());
     manager.disable("svg").unwrap();

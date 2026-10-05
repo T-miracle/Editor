@@ -236,8 +236,10 @@ impl State {
         if changed_file {
             self.pressed_button = None;
             self.hovered_button = None;
-        }
-        if changed_file {
+            // Identity owns manual intent even when the first snapshot is malformed and has no dimensions.
+            // Reset before parsing so repairing a different file cannot inherit its predecessor's zoom.
+            self.view_mode = ViewMode::DefaultSize;
+            self.scale = 1.;
             self.revision = self.revision.saturating_add(1);
         }
         self.document = document;
