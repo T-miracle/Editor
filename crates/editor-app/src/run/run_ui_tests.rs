@@ -271,6 +271,65 @@ fn storage_key_of(workspace: &std::path::Path) -> String {
         .to_string()
 }
 
+/// The run group survives a narrow window, which is where a title-bar control set would collide.
+///
+/// Tickets 01 and 03 both ask for native acceptance that includes a narrow window, and nothing exercised
+/// it: the checks in this file resize only down to 800–1000 points, which leaves the group ample room. At
+/// 520 points the window is narrower than the room the group would like, so this asks that the controls
+/// stay inside the window rather than painting past its edge, that they stay ordered (group, then plugin
+/// icon), and that the dropdown — the interaction a narrow window makes necessary — still opens and closes.
+///
+/// The assertion is containment, not a particular width: how much room the group takes is a layout choice,
+/// while "controls must not extend past the window" holds whatever that choice is.
+#[gpui::test]
+fn the_run_group_stays_inside_a_narrow_window(cx: &mut TestAppContext) {
+    let root = tempfile::tempdir().unwrap();
+    let workspace = root.path().join("project");
+    std::fs::create_dir_all(&workspace).unwrap();
+    let stored = store_configuration(&storage_key_of(&workspace), "本机程序");
+    let (app, cx) = open_editor(cx, &workspace);
+
+    let narrow = size(px(520.), px(420.));
+    cx.simulate_resize(narrow);
+    cx.run_until_parked();
+    let controls = cx
+        .debug_bounds("run-controls")
+        .expect("the run group is still rendered in a narrow window");
+    let plugins = cx
+        .debug_bounds("extensions-trigger")
+        .expect("the plugin icon is still rendered in a narrow window");
+    assert!(
+        controls.origin.x >= px(0.) && controls.origin.x + controls.size.width <= narrow.width,
+        "the run group stays inside the window: {controls:?} in {narrow:?}"
+    );
+    assert!(
+        controls.origin.x < plugins.origin.x,
+        "and the group is still left of the plugin icon: {controls:?} vs {plugins:?}"
+    );
+
+    cx.update(|window, cx| {
+        app.update(cx, |app, cx| {
+            app.open_run_menu(gpui_kit::point(px(300.), px(30.)), window, cx);
+        });
+    });
+    cx.run_until_parked();
+    let popup = cx.update(|_, cx| {
+        app.read(cx)
+            .run_menu
+            .as_ref()
+            .map(|menu| menu.popup.clone())
+            .expect("the selector opens the dropdown in a narrow window")
+    });
+    popup.update(cx, |_, cx| cx.emit(gpui_kit::DismissEvent));
+    cx.run_until_parked();
+    assert!(
+        cx.update(|_, cx| app.read(cx).run_menu.is_none()),
+        "and it closes again"
+    );
+
+    let _ = std::fs::remove_file(stored);
+}
+
 /// The build page edits prepared actions row by row, with structural controls per row.
 #[gpui::test]
 fn the_build_page_edits_prepared_actions_row_by_row(cx: &mut TestAppContext) {
