@@ -696,7 +696,11 @@ probe stop config=<cfg> session=1 is_stopping=true  outstanding=[(<cfg>, 4, 1)] 
 
 **障碍已查明（本轮）：弹层在该夹具中没有被绘制。** 具体读数：调用 `open_run_menu` 并 settle 之后，**菜单状态存在**（`run_menu.is_some()`），但 **`cx.debug_bounds("native-popup-menu")` 找不到任何东西**——即**带 `track_focus` 与 `capture_key_down` 的那层覆盖物从未进入元素树**。**因此在这个夹具里没有任何东西能持有它的焦点，派发按键也就无法到达其处理器。**
 
-**已把这条障碍写成断言**（`run::run_ui_tests::the_dropdown_overlay_is_not_reachable_for_keystrokes_in_this_harness`）：打开菜单 → 断言状态存在 → **断言弹层不存在**，并在断言消息里写明「**若此断言将来失败，说明弹层变得可绘制，那时就可以写 #51 的按键检查**」。**这样下一个人拿到的是一堵有标记的墙，而不是一个空位。**
+**上句的归因是错的，本轮更正**：**弹层并非「无法绘制」，而是这个文件里的检查只 settle 了事件循环、从未真正绘制窗口**——`app/plugins/status_tests.rs` 里那些能驱动按键的检查**会调用 `window.draw(cx).clear(cx)` 两次**。**补上两次绘制后，外壳的弹层确实进入元素树**（`debug_bounds("run-menu")` 能找到）。**因此障碍在检查方法，不在夹具。**
+
+**真正剩下的障碍是焦点**：弹出层的 `focus_handle` **即使显式 `focus()` 并再绘制两次也不持有焦点**，**因此派发的 `escape` 不会到达其处理器、菜单不会关闭**。**该状态已被写成断言**（`the_dropdown_overlay_draws_but_its_popup_does_not_take_focus`）：**绘制成功、焦点与处理器均不可达**，并在断言消息里写明「**焦点一旦可用，这条用例就变成 #51 的按键验收**」。**这样文件既不会宣称一个它没有的检查，也不会留下过期的检查。**
+
+**下一步很窄且已写下**：查 `KitPopupMenu` 如何获得焦点——**对照物是插件状态弹层**，它的 `contains_focused` 在 `tab` 之后**确实通过**。
 
 **该条目的覆盖现状**：菜单**条目**由 `the_selector_opens_the_unified_dropdown` 覆盖，**关闭**由 `the_run_surface_answers_dismissal_and_the_theme_toggle` 覆盖；**唯独弹层自己的按键处理器（上下移动与 Enter 选择）在任何地方都未被驱动**。
 
