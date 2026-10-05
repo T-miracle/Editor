@@ -9,11 +9,28 @@ use std::{
 #[derive(Clone)]
 pub(super) enum Uri {
     Local(String),
+    /// Exact host-issued file path; guests cannot substitute another URI for this resource.
+    CurrentFile,
     Http(String),
 }
 
 /// Authorize before any filesystem or network access; invalid sources become per-node failures.
 pub(super) fn authorize(identity: &Identity) -> Result<Uri, api::Failure> {
+    if matches!(identity.source, api::ContentVersion::File(_)) {
+        if !identity.local {
+            return Err(failure(
+                api::ErrorCode::PermissionDenied,
+                "workspace.read grant required",
+            ));
+        }
+        if identity.uri != "@current-file" {
+            return Err(failure(
+                api::ErrorCode::InvalidPath,
+                "File image requires its current file",
+            ));
+        }
+        return Ok(Uri::CurrentFile);
+    }
     let source = &identity.uri;
     if let Some((scheme, tail)) = source.split_once("://") {
         if !scheme.eq_ignore_ascii_case("http") && !scheme.eq_ignore_ascii_case("https") {
@@ -75,11 +92,11 @@ pub(super) fn load(
 ) -> Result<Loaded, api::Failure> {
     control.check()?;
     match uri {
-        Uri::Local(path) => {
+        Uri::Local(_) | Uri::CurrentFile => {
             let root = Path::new(&identity.workspace)
                 .canonicalize()
                 .map_err(io_failure)?;
-            let document = root.join(&identity.source.path);
+            let document = root.join(identity.source.path());
             let directory = document
                 .parent()
                 .ok_or_else(|| {
@@ -93,7 +110,12 @@ pub(super) fn load(
                     "Image document is outside its workspace",
                 ));
             }
-            let target = directory.join(path).canonicalize().map_err(io_failure)?;
+            let requested = match uri {
+                Uri::Local(path) => directory.join(path),
+                Uri::CurrentFile => document,
+                Uri::Http(_) => unreachable!("local authorization branch"),
+            };
+            let target = requested.canonicalize().map_err(io_failure)?;
             if !target.starts_with(&root) {
                 return Err(failure(
                     api::ErrorCode::PermissionDenied,

@@ -321,7 +321,7 @@ mod tests {
                 (
                     format!("test/preview/image/{index}"),
                     Arc::new(ImageResource {
-                        source: source.clone(),
+                        source: source.clone().into(),
                         uri: format!("{index}.png"),
                         state: ImageState::Ready(bytes.clone()),
                     }),

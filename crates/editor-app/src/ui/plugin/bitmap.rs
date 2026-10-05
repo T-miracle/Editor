@@ -13,6 +13,11 @@ pub(crate) struct Bitmap {
     pub height: u32,
 }
 
+/// Encoding recognition is shared by generic file admission and the decoder, independent of suffixes.
+pub(crate) fn recognizes_encoding(prefix: &[u8]) -> bool {
+    image::guess_format(prefix).is_ok()
+}
+
 /// Detect the actual encoding and validate bounded pixels before a native image gesture is offered.
 /// No supplied filename or platform format hint can change the suffix of the eventual attachment.
 pub(crate) fn input_format(

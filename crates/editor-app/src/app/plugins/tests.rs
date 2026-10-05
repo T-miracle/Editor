@@ -416,12 +416,27 @@ fn removed_html_plugin_resets_aliases_and_preserves_unrelated_state(cx: &mut Tes
             assert_eq!(app.tabs.len(), 3);
             // HTML is plain text before installation; simulate the loaded grammar on both aliases.
             for tab in &app.tabs[..2] {
-                assert_eq!(tab.editor.read(cx).language_name().as_ref(), "text");
-                tab.editor
+                assert_eq!(
+                    tab.text
+                        .as_ref()
+                        .unwrap()
+                        .editor
+                        .read(cx)
+                        .language_name()
+                        .as_ref(),
+                    "text"
+                );
+                tab.text
+                    .as_ref()
+                    .unwrap()
+                    .editor
                     .update(cx, |editor, cx| editor.set_highlighter("html", cx));
             }
             // Set the unrelated tab's loaded state without relying on frame callbacks.
             app.tabs[2]
+                .text
+                .as_ref()
+                .unwrap()
                 .editor
                 .update(cx, |editor, cx| editor.set_highlighter("css", cx));
             app.dynamic_language_ids.insert("html".into());
@@ -429,9 +444,28 @@ fn removed_html_plugin_resets_aliases_and_preserves_unrelated_state(cx: &mut Tes
             app.sync_runtime_contributions(window, cx);
             assert!(app.dynamic_languages.entries.is_empty());
             for tab in &app.tabs[..2] {
-                assert_eq!(tab.editor.read(cx).language_name().as_ref(), "text");
+                assert_eq!(
+                    tab.text
+                        .as_ref()
+                        .unwrap()
+                        .editor
+                        .read(cx)
+                        .language_name()
+                        .as_ref(),
+                    "text"
+                );
             }
-            assert_eq!(app.tabs[2].editor.read(cx).language_name().as_ref(), "css");
+            assert_eq!(
+                app.tabs[2]
+                    .text
+                    .as_ref()
+                    .unwrap()
+                    .editor
+                    .read(cx)
+                    .language_name()
+                    .as_ref(),
+                "css"
+            );
         });
     });
 }

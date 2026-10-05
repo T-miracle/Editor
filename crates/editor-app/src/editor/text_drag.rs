@@ -39,10 +39,7 @@ impl TextDrag {
     /// Document identity, revision and selection must still match the original press.
     fn matches(&self, app: &EditorApp, cx: &App) -> bool {
         app.editor.entity_id() == self.editor
-            && app
-                .active_tab_index()
-                .map(|index| app.tabs[index].session.revision())
-                == self.revision
+            && app.active_text_revision() == self.revision
             && app.editor.read(cx).is_editable()
             && app.editor.read(cx).selected_range() == self.source
     }
@@ -97,9 +94,7 @@ impl EditorApp {
         }
         self.editor_text_drag.gesture = Some(TextDrag {
             editor: self.editor.entity_id(),
-            revision: self
-                .active_tab_index()
-                .map(|index| self.tabs[index].session.revision()),
+            revision: self.active_text_revision(),
             snapshot: editor.text().clone(),
             source,
             press: event.position,

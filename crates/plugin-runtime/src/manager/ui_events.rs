@@ -51,6 +51,78 @@ impl Manager {
                 .into());
             }
         }
+        if let api::Notification::FilePreview { file } = inner {
+            let entry = self
+                .installed
+                .get(id)
+                .ok_or_else(|| api::Failure::new(api::ErrorCode::NotFound, "Unknown plugin"))?;
+            let panel_id = panel.as_ref().ok_or_else(|| {
+                api::Failure::new(
+                    api::ErrorCode::InvalidRequest,
+                    "File preview requires a panel",
+                )
+            })?;
+            if !self.trusted
+                || !self.workspace_open
+                || !entry.grants.contains("editor.read")
+                || entry.manifest.scope != api::InstanceScope::Workspace
+                || !entry
+                    .manifest
+                    .panels
+                    .iter()
+                    .any(|descriptor| descriptor.id == *panel_id && descriptor.position == "editor")
+            {
+                return Err(api::Failure::new(
+                    api::ErrorCode::PermissionDenied,
+                    "File preview requires a trusted workspace-owned surface and editor.read",
+                )
+                .into());
+            }
+            if let Some(file) = file {
+                file.version.validate()?;
+                if file.file_type.len() > 32
+                    || !file.file_type.bytes().all(|byte| {
+                        byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-' | b'+')
+                    })
+                {
+                    return Err(api::Failure::new(
+                        api::ErrorCode::InvalidRequest,
+                        "Invalid file type",
+                    )
+                    .into());
+                }
+            }
+            let instance = self.live.get_mut(id).ok_or_else(|| {
+                api::Failure::new(api::ErrorCode::InvalidState, "File provider is disabled")
+            })?;
+            if !instance
+                .negotiated()
+                .capabilities
+                .contains_key("editor.files")
+            {
+                return Err(api::Failure::new(
+                    api::ErrorCode::CapabilityUnavailable,
+                    "editor.files was not negotiated",
+                )
+                .into());
+            }
+            if let (Some(Some(current)), Some(next)) = (instance.file_sources.get(panel_id), file)
+                && current.version.id == next.version.id
+                && next.version.revision < current.version.revision
+            {
+                return Err(api::Failure::new(
+                    api::ErrorCode::StaleRevision,
+                    "File context is obsolete",
+                )
+                .into());
+            }
+            instance.file_sources.insert(panel_id.clone(), file.clone());
+            // A file-only provider must never retain authority over the preceding text document.
+            instance.preview_sources.insert(
+                panel_id.clone(),
+                file.as_ref().and_then(|context| context.text.clone()),
+            );
+        }
         if let api::Notification::Preview { document, text } = inner {
             let panel_id = panel.as_ref();
             let entry = self

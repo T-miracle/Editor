@@ -7,6 +7,23 @@ mod toolbar;
 pub(crate) mod viewport;
 
 impl ExtensionPanel {
+    /// A failed file decode belongs to this exact current file and can expose the host retry action.
+    pub(crate) fn file_preview_failed(&self) -> bool {
+        let Some(version) = &self.preview_file else {
+            return false;
+        };
+        let prefix = format!(
+            "{}/{}/image/",
+            self.active.as_deref().unwrap_or(""),
+            self.surface_id.as_deref().unwrap_or("")
+        );
+        self.images.photos.iter().any(|(key, photo)| {
+            key.starts_with(&prefix)
+                && photo.resource.source == protocol::api::ContentVersion::File(version.clone())
+                && photo.decoded.is_err()
+        })
+    }
+
     /// Withdraw derived code jobs in every native projection owned by this surface.
     pub(crate) fn invalidate_code_highlighting(&mut self, cx: &mut Context<Self>) {
         for view in self.native_ui.iter().chain(self.native_toolbar.iter()) {
@@ -22,9 +39,96 @@ impl ExtensionPanel {
 }
 
 impl EditorApp {
+    /// Failures explain the currently matching contribution; the file identity and retry target remain live.
+    pub(crate) fn file_view_unavailable_reason(&self, cx: &App) -> String {
+        if let Some(error) = self
+            .active_tab_index()
+            .and_then(|index| self.tabs[index].file_error.as_ref())
+        {
+            return error.clone();
+        }
+        if !self.session_state.workspace_trusted {
+            return t!("file_view.restricted").to_string();
+        }
+        let extension = self
+            .active_path
+            .as_ref()
+            .and_then(|path| path.extension())
+            .and_then(|value| value.to_str())
+            .unwrap_or("");
+        let owner = self.extensions.read(cx);
+        let candidates = owner
+            .entries
+            .iter()
+            .filter(|entry| {
+                entry.manifest.panels.iter().any(|panel| {
+                    panel.position == "editor"
+                        && panel
+                            .readonly_file_extensions
+                            .iter()
+                            .any(|value| value.eq_ignore_ascii_case(extension))
+                })
+            })
+            .collect::<Vec<_>>();
+        if candidates.is_empty() {
+            return t!("file_view.no_provider").to_string();
+        }
+        if let Some(error) = candidates.iter().find_map(|entry| entry.error.as_ref()) {
+            return error.clone();
+        }
+        if candidates.iter().all(|entry| !entry.enabled) {
+            return t!("file_view.disabled").to_string();
+        }
+        t!("file_view.denied").to_string()
+    }
+
+    /// Advancing the file epoch withdraws pending resource consumers and permits a fresh bounded decode.
+    pub(crate) fn retry_file_view(&mut self, cx: &mut Context<Self>) {
+        let Some(index) = self.active_tab_index() else {
+            return;
+        };
+        let extension = self.tabs[index]
+            .path()
+            .extension()
+            .and_then(|value| value.to_str())
+            .unwrap_or("");
+        // Only enabled faulted matches are restarted; retry never grants permission or enables a plugin.
+        let failed = self
+            .extensions
+            .read(cx)
+            .entries
+            .iter()
+            .filter(|entry| {
+                entry.enabled
+                    && entry.error.is_some()
+                    && entry.manifest.panels.iter().any(|panel| {
+                        panel.position == "editor"
+                            && panel
+                                .readonly_file_extensions
+                                .iter()
+                                .any(|value| value.eq_ignore_ascii_case(extension))
+                    })
+            })
+            .map(|entry| entry.manifest.id.clone())
+            .collect::<Vec<_>>();
+        for id in failed {
+            self.extensions
+                .read(cx)
+                .worker
+                .queue_lifecycle(Work::Restart(id));
+        }
+        self.tabs[index].file_revision = self.tabs[index].file_revision.saturating_add(1);
+        self.tabs[index].file_error = None;
+        self.invalidate_editor_previews(cx);
+        self.sync_editor_previews(cx);
+        self.editor_panel.update(cx, |_, cx| cx.notify());
+        cx.notify();
+    }
+
     /// Select one visible, authorized preview deterministically when several plugins match a file.
     pub(crate) fn active_editor_preview(&self, cx: &App) -> Option<Entity<ExtensionPanel>> {
         let extension = self.active_path.as_ref()?.extension()?.to_str()?;
+        let has_text = self.active_text_tab_index().is_some();
         let owner = self.extensions.read(cx);
         let mut matches = owner
             .entries
@@ -35,10 +139,13 @@ impl EditorApp {
             .flat_map(|entry| {
                 entry.manifest.panels.iter().filter_map(|descriptor| {
                     (descriptor.position == "editor"
-                        && descriptor
-                            .file_extensions
-                            .iter()
-                            .any(|candidate| candidate.eq_ignore_ascii_case(extension)))
+                        && (if has_text {
+                            &descriptor.file_extensions
+                        } else {
+                            &descriptor.readonly_file_extensions
+                        })
+                        .iter()
+                        .any(|candidate| candidate.eq_ignore_ascii_case(extension)))
                     .then(|| format!("{}/{}", entry.manifest.id, descriptor.id))
                 })
             })
@@ -63,6 +170,7 @@ impl EditorApp {
                     panel.invalidate_code_highlighting(cx);
                     panel.preview_document = None;
                     panel.preview_version = None;
+                    panel.preview_file = None;
                     panel.preview_error = None;
                 }
             });
@@ -71,16 +179,15 @@ impl EditorApp {
 
     /// Publish unsaved text once per document revision, and clear a surface when its file changes.
     pub(crate) fn sync_editor_previews(&self, cx: &mut Context<Self>) {
+        self.sync_file_previews(cx);
         let selected = self.active_editor_preview(cx);
         let version = self
             .active_tab_index()
             .and_then(|index| self.plugin_document_version(index).ok());
-        let context = self.active_tab_index().map(|index| {
-            (
-                self.tabs[index].session.path().to_path_buf(),
-                self.tabs[index].session.revision(),
-            )
-        });
+        let context = self
+            .active_text_tab_index()
+            .and_then(|index| self.text_tab(index))
+            .map(|text| (text.path().to_path_buf(), text.session.revision()));
         for panel in self.plugin_panels.values() {
             if !panel.read(cx).editor_preview {
                 continue;
@@ -156,6 +263,96 @@ impl EditorApp {
                 }
             });
         }
+    }
+
+    /// Binary files publish resource identity alone. Withdrawing it revokes bytes before a new tree arrives.
+    fn sync_file_previews(&self, cx: &mut Context<Self>) {
+        let selected = self.active_editor_preview(cx);
+        let context = self
+            .active_tab_index()
+            .filter(|index| self.tabs[*index].text.is_none())
+            .map(|index| self.plugin_file_context(index));
+        for panel in self.plugin_panels.values() {
+            if !panel.read(cx).editor_preview {
+                continue;
+            }
+            let active =
+                context.is_some() && selected.as_ref().is_some_and(|selected| selected == panel);
+            panel.update(cx, |panel, cx| {
+                if active {
+                    let file = context
+                        .as_ref()
+                        .and_then(|context| context.as_ref().ok())
+                        .cloned();
+                    let version = file.as_ref().map(|file| file.version.clone());
+                    if panel.preview_file == version && panel.preview_document.is_some() {
+                        return;
+                    }
+                    panel.preview_error = context
+                        .as_ref()
+                        .and_then(|result| result.as_ref().err())
+                        .map(ToString::to_string);
+                    panel.preview_version = None;
+                    panel.preview_file = version;
+                    panel.preview_document = self
+                        .active_path
+                        .clone()
+                        .map(|path| (path, file.as_ref().map_or(0, |file| file.version.revision)));
+                    panel.native_ui = None;
+                    panel.native_toolbar = None;
+                    panel.source_viewport.withdraw();
+                    panel.send(protocol::api::Notification::FilePreview { file });
+                    cx.notify();
+                } else if panel.preview_file.take().is_some() {
+                    panel.send(protocol::api::Notification::FilePreview { file: None });
+                    panel.preview_version = None;
+                    panel.preview_document = None;
+                    panel.preview_error = None;
+                    panel.native_ui = None;
+                    panel.native_toolbar = None;
+                    panel.source_viewport.withdraw();
+                    cx.notify();
+                }
+            });
+        }
+    }
+
+    /// File-resource tokens do not depend on text entities; closed/reopened paths cannot reuse them.
+    pub(crate) fn plugin_file_context(
+        &self,
+        index: usize,
+    ) -> Result<protocol::api::FileContext, protocol::api::Failure> {
+        let file = self.tabs.get(index).ok_or_else(|| {
+            protocol::api::Failure::new(protocol::api::ErrorCode::NotFound, "File is closed")
+        })?;
+        let relative = file
+            .path()
+            .strip_prefix(self.workspace.root())
+            .map_err(|_| {
+                protocol::api::Failure::new(
+                    protocol::api::ErrorCode::PermissionDenied,
+                    "File is outside the owning workspace",
+                )
+            })?;
+        let context = protocol::api::FileContext {
+            version: protocol::api::FileVersion {
+                id: format!("file-{}", file.file_id),
+                path: relative.to_string_lossy().replace('\\', "/"),
+                revision: file
+                    .text
+                    .as_ref()
+                    .map_or(file.file_revision, |text| text.capability_revision),
+            },
+            file_type: file
+                .path()
+                .extension()
+                .and_then(|value| value.to_str())
+                .unwrap_or("")
+                .to_ascii_lowercase(),
+            text: self.plugin_document_version(index).ok(),
+        };
+        context.version.validate()?;
+        Ok(context)
     }
 
     /// Base owns pointer capture and minimum pane sizes; this layer supplies the shared appearance.

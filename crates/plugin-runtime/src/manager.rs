@@ -84,7 +84,7 @@ pub struct Manager {
     image_budget: std::sync::Arc<std::sync::atomic::AtomicUsize>,
     /// Reservations also cover payloads retained by an accepted native writer.
     image_input_budget: std::sync::Arc<std::sync::atomic::AtomicUsize>,
-    retired_image_sources: BTreeMap<String, api::DocumentVersion>,
+    retired_image_sources: BTreeMap<String, api::ContentVersion>,
     /// Host-owned execution sessions started through the public service contract.
     host_sessions: HostSessions,
     /// Retired with this runtime so a queued start cannot outlive the window that requested it.
@@ -703,6 +703,7 @@ mod icon_tests {
                 permissions: BTreeSet::new(),
                 panels: vec![Panel {
                     file_extensions: vec![],
+                    readonly_file_extensions: vec![],
                     id: "main".into(),
                     title: "Main".into(),
                     position: "bottom".into(),

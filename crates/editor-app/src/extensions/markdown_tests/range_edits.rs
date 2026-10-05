@@ -210,7 +210,12 @@ fn delivered_range_edits_guard_utf8_selection_revision_and_cancellation(cx: &mut
     assert_eq!(selection, TextRange { start: 0, end: 6 });
     assert!(ui.update(|_, cx| {
         let app = fixture.app.read(cx);
-        app.tabs[app.active_tab_index().unwrap()].session.is_dirty()
+        app.tabs[app.active_tab_index().unwrap()]
+            .text
+            .as_ref()
+            .unwrap()
+            .session
+            .is_dirty()
     }));
     assert_eq!(
         ui.update(|_, cx| fixture.app.read(cx).editor.read(cx).text().to_string()),

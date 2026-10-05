@@ -1,5 +1,22 @@
 //! Image declarations retain source authority and share one whole-document resource budget.
 use super::*;
+
+/// Binary file previews are versioned without manufacturing a text document revision.
+#[test]
+fn file_images_roundtrip_without_a_text_source() {
+    let mut wire = serde_json::to_value(Document::new(Node::text("image", "pending"))).unwrap();
+    wire["file"] = serde_json::json!({"id":"file-1","path":"picture.png","revision":3});
+    wire["root"]["kind"] = serde_json::json!({
+        "type":"file_image", "alt":"Picture", "sizing":"original_contain"
+    });
+    let document: Document = serde_json::from_value(wire).unwrap();
+    assert!(document.source.is_none());
+    document.validate().unwrap();
+    let mut unbound = serde_json::to_value(document).unwrap();
+    unbound.as_object_mut().unwrap().remove("file");
+    let unbound: Document = serde_json::from_value(unbound).unwrap();
+    assert!(unbound.validate().is_err());
+}
 use serde_json::json;
 
 /// JSON enters the public SDK seam, so an absent node kind is a real compatibility failure.

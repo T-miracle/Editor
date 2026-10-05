@@ -124,6 +124,8 @@ pub struct Instance {
     pub(crate) diagnostics: Vec<crate::faults::Diagnostic>,
     /// UI preview publication is tied to the latest authorized input for each declared surface.
     pub(crate) preview_sources: std::collections::BTreeMap<String, Option<api::DocumentVersion>>,
+    /// File authority is independent of native text revisions and revoked on file/provider changes.
+    pub(crate) file_sources: std::collections::BTreeMap<String, Option<api::FileContext>>,
     /// Configuration belongs to the same owner as its runtime resources, not the currently selected workspace.
     pub(crate) configuration: plugin_protocol::settings::Effective,
     /// Host invocation IDs cannot be confused with stale completions after another call.
@@ -303,6 +305,7 @@ impl Instance {
         let mut instance = Self {
             diagnostics: Vec::new(),
             preview_sources: Default::default(),
+            file_sources: Default::default(),
             configuration: Default::default(),
             next_call: 1,
             store,
@@ -315,6 +318,11 @@ impl Instance {
         Ok(instance)
     }
     /// Every call gets a finite instruction budget; a trap cannot unwind through the host.
+    /// Immutable negotiated authority lets manager ingress reject unavailable optional interfaces.
+    pub(crate) fn negotiated(&self) -> &api::Negotiated {
+        &self.store.data().api
+    }
+
     pub fn call(&mut self, message: api::Input) -> anyhow::Result<api::Output> {
         anyhow::ensure!(
             !self.store.data().roots.retired,
@@ -524,6 +532,7 @@ impl Instance {
     pub fn stop(&mut self) {
         self.quiesce();
         self.preview_sources.clear();
+        self.file_sources.clear();
         self.store.data_mut().roots.retire();
         self.views.clear();
         self.store.data_mut().processes.clear();

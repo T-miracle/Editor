@@ -42,8 +42,18 @@ fn external_edits_preserve_dirty_text_and_track_deletion_and_rename(cx: &mut Tes
                 window,
                 cx,
             );
-            assert_eq!(app.tabs[0].editor.read(cx).value().to_string(), "second");
-            assert!(!app.tabs[0].session.is_dirty());
+            assert_eq!(
+                app.tabs[0]
+                    .text
+                    .as_ref()
+                    .unwrap()
+                    .editor
+                    .read(cx)
+                    .value()
+                    .to_string(),
+                "second"
+            );
+            assert!(!app.tabs[0].text.as_ref().unwrap().session.is_dirty());
         });
     });
 
@@ -51,11 +61,14 @@ fn external_edits_preserve_dirty_text_and_track_deletion_and_rename(cx: &mut Tes
     window_cx.update(|window, cx| {
         app.update(cx, |app, cx| {
             app.tabs[0]
+                .text
+                .as_ref()
+                .unwrap()
                 .editor
                 .update(cx, |editor, cx| editor.set_value("local", window, cx));
             // set_value is silent, so record the user revision represented by this text.
-            app.tabs[0].session.note_edit();
-            assert!(app.tabs[0].session.is_dirty());
+            app.tabs[0].text.as_mut().unwrap().session.note_edit();
+            assert!(app.tabs[0].text.as_ref().unwrap().session.is_dirty());
         });
     });
     std::fs::write(&original, "external").unwrap();
@@ -71,8 +84,21 @@ fn external_edits_preserve_dirty_text_and_track_deletion_and_rename(cx: &mut Tes
                 window,
                 cx,
             );
-            assert_eq!(app.tabs[0].disk_state, DiskState::Conflict);
-            assert_eq!(app.tabs[0].editor.read(cx).value().to_string(), "local");
+            assert_eq!(
+                app.tabs[0].text.as_ref().unwrap().disk_state,
+                DiskState::Conflict
+            );
+            assert_eq!(
+                app.tabs[0]
+                    .text
+                    .as_ref()
+                    .unwrap()
+                    .editor
+                    .read(cx)
+                    .value()
+                    .to_string(),
+                "local"
+            );
         });
     });
 
@@ -83,7 +109,10 @@ fn external_edits_preserve_dirty_text_and_track_deletion_and_rename(cx: &mut Tes
             assert_eq!(std::fs::read_to_string(&original).unwrap(), "external");
             app.save_current(cx);
             assert_eq!(std::fs::read_to_string(&original).unwrap(), "local");
-            assert_eq!(app.tabs[0].disk_state, DiskState::Synced);
+            assert_eq!(
+                app.tabs[0].text.as_ref().unwrap().disk_state,
+                DiskState::Synced
+            );
         });
     });
 
@@ -105,8 +134,21 @@ fn external_edits_preserve_dirty_text_and_track_deletion_and_rename(cx: &mut Tes
                 window,
                 cx,
             );
-            assert_eq!(app.tabs[0].disk_state, DiskState::Deleted);
-            assert_eq!(app.tabs[0].editor.read(cx).value().to_string(), "local");
+            assert_eq!(
+                app.tabs[0].text.as_ref().unwrap().disk_state,
+                DiskState::Deleted
+            );
+            assert_eq!(
+                app.tabs[0]
+                    .text
+                    .as_ref()
+                    .unwrap()
+                    .editor
+                    .read(cx)
+                    .value()
+                    .to_string(),
+                "local"
+            );
         });
     });
 
@@ -139,9 +181,19 @@ fn external_edits_preserve_dirty_text_and_track_deletion_and_rename(cx: &mut Tes
                 window,
                 cx,
             );
-            assert_eq!(app.tabs[0].session.path(), renamed.as_path());
+            assert_eq!(app.tabs[0].path(), renamed.as_path());
             assert_eq!(app.active_path.as_deref(), Some(renamed.as_path()));
-            assert_eq!(app.tabs[0].editor.read(cx).value().to_string(), "local");
+            assert_eq!(
+                app.tabs[0]
+                    .text
+                    .as_ref()
+                    .unwrap()
+                    .editor
+                    .read(cx)
+                    .value()
+                    .to_string(),
+                "local"
+            );
         });
     });
 }

@@ -4,6 +4,7 @@ pub(crate) mod bitmap;
 mod canvas;
 mod code;
 pub(crate) mod controls;
+mod file_image;
 pub(crate) mod images;
 mod layout;
 #[cfg(test)]
@@ -90,10 +91,27 @@ impl PluginView {
     ) {
         let mut photos = BTreeMap::new();
         let mut visit = |node: &plugin_runtime::plugin_protocol::ui::Node| {
-            if let Kind::Image { source, .. } = &node.kind
+            let expected = match &node.kind {
+                Kind::Image { source, .. } => self.document.source.as_ref().map(|version| {
+                    (
+                        plugin_runtime::plugin_protocol::api::ContentVersion::Document(
+                            version.clone(),
+                        ),
+                        source.as_str(),
+                    )
+                }),
+                Kind::FileImage { .. } => self.document.file.as_ref().map(|version| {
+                    (
+                        plugin_runtime::plugin_protocol::api::ContentVersion::File(version.clone()),
+                        "@current-file",
+                    )
+                }),
+                _ => None,
+            };
+            if let Some((version, source)) = expected
                 && let Some(photo) = images.photos.get(&format!("{panel_key}/image/{}", node.id))
-                && self.document.source.as_ref() == Some(&photo.resource.source)
-                && source == &photo.resource.uri
+                && photo.resource.source == version
+                && source == photo.resource.uri
             {
                 photos.insert(node.id.clone(), photo.clone());
             }
@@ -276,11 +294,29 @@ impl PluginView {
         // A removed image or source replacement can retire this tree without another worker update.
         let mut keep = BTreeSet::new();
         let mut visit = |node: &plugin_runtime::plugin_protocol::ui::Node| {
-            if let Kind::Image { source, .. } = &node.kind
-                && let Some(photo) = self.photos.get(&node.id)
-                && self.document.source.as_ref() == Some(&photo.resource.source)
-                && source == &photo.resource.uri
-            {
+            let Some(photo) = self.photos.get(&node.id) else {
+                return;
+            };
+            // Both source types must retain their exact authority, even when the node ID is reused.
+            let current = match &node.kind {
+                Kind::Image { source, .. } => {
+                    self.document
+                        .source
+                        .as_ref()
+                        .is_some_and(|version| photo.resource.source == *version)
+                        && source == &photo.resource.uri
+                }
+                Kind::FileImage { .. } => {
+                    self.document.file.as_ref().is_some_and(|version| {
+                        photo.resource.source
+                            == plugin_runtime::plugin_protocol::api::ContentVersion::File(
+                                version.clone(),
+                            )
+                    }) && photo.resource.uri == "@current-file"
+                }
+                _ => false,
+            };
+            if current {
                 keep.insert(node.id.clone());
             }
         };

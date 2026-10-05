@@ -1,5 +1,6 @@
 //! Coordinates document opening, tab activation, saving, and explorer selection.
 
+use super::file_watch::{DiskContent, WatchedFile};
 use crate::*;
 
 impl EditorApp {
@@ -68,7 +69,7 @@ impl EditorApp {
         for (old, new) in &update.renames {
             // A paired directory rename transfers descendants; ambiguous targets stay put.
             for index in 0..self.tabs.len() {
-                let Some(relative) = self.tabs[index].session.path().strip_prefix(old).ok() else {
+                let Some(relative) = self.tabs[index].path().strip_prefix(old).ok() else {
                     continue;
                 };
                 let target = if relative.as_os_str().is_empty() {
@@ -81,16 +82,20 @@ impl EditorApp {
                         .tabs
                         .iter()
                         .enumerate()
-                        .any(|(other, tab)| other != index && tab.session.path() == target)
+                        .any(|(other, tab)| other != index && tab.path() == target)
                 {
                     continue;
                 }
-                let previous = self.tabs[index].session.path().to_path_buf();
+                let previous = self.tabs[index].path().to_path_buf();
                 self.close_language_document(&previous, cx);
-                self.tabs[index].session.rename(target.clone());
-                self.tabs[index].capability_revision =
-                    self.tabs[index].capability_revision.saturating_add(1);
-                renamed_editors.push((self.tabs[index].editor.clone(), target.clone()));
+                let file = &mut self.tabs[index];
+                file.path = target.clone();
+                file.file_revision = file.file_revision.saturating_add(1);
+                if let Some(text) = &mut file.text {
+                    text.session.rename(target.clone());
+                    text.capability_revision = text.capability_revision.saturating_add(1);
+                    renamed_editors.push((text.editor.clone(), target.clone()));
+                }
                 if self.active_path.as_ref() == Some(&previous) {
                     // The actor can finish before a shell repaint; renaming immediately revokes old consent paths.
                     self.withdraw_bundled_request(cx);
@@ -128,10 +133,35 @@ impl EditorApp {
             if renamed_from.iter().any(|old| path.starts_with(old)) {
                 continue;
             }
-            let Some(index) = self.tabs.iter().position(|tab| tab.session.path() == path) else {
+            let Some(index) = self.tabs.iter().position(|tab| tab.path() == path) else {
                 continue;
             };
-            let tab = &mut self.tabs[index];
+            let file = &mut self.tabs[index];
+            if read_at < file.opened_at {
+                continue;
+            }
+            if file.text.is_none() {
+                let (digest, error) = match disk_contents {
+                    Ok(DiskContent::FileDigest(digest)) => (Some(digest), None),
+                    Err(error) => (None, Some(error.to_string())),
+                    Ok(DiskContent::Text(_)) => continue,
+                };
+                if file.file_digest != digest || file.file_error != error {
+                    file.file_digest = digest;
+                    file.file_error = error;
+                    file.file_revision = file.file_revision.saturating_add(1);
+                    preview_reloaded |= self.active_path.as_ref() == Some(&path);
+                    cx.notify();
+                }
+                continue;
+            }
+            let disk_contents = disk_contents.and_then(|contents| match contents {
+                DiskContent::Text(text) => Ok(text),
+                DiskContent::FileDigest(_) => Err(std::io::ErrorKind::InvalidData.into()),
+            });
+            let Some(tab) = file.text.as_mut() else {
+                continue;
+            };
             if read_at < tab.last_saved_at {
                 continue;
             }
@@ -199,7 +229,10 @@ impl EditorApp {
         self.file_watch.set_documents(
             self.tabs
                 .iter()
-                .map(|tab| tab.session.path().to_path_buf())
+                .map(|tab| WatchedFile {
+                    path: tab.path().to_path_buf(),
+                    text: tab.text.is_some(),
+                })
                 .collect(),
         );
     }
@@ -208,7 +241,7 @@ impl EditorApp {
         self.session_state.open_tabs = self
             .tabs
             .iter()
-            .map(|tab| tab.session.path().to_string_lossy().into_owned())
+            .map(|tab| tab.path().to_string_lossy().into_owned())
             .collect();
         self.session_state.active_file = self
             .active_path
@@ -260,12 +293,28 @@ impl EditorApp {
         cx: &mut Context<Self>,
     ) {
         let path = path.canonicalize().unwrap_or(path);
-        if let Some(index) = self.tabs.iter().position(|tab| tab.session.path() == path) {
+        if let Some(index) = self.tabs.iter().position(|tab| tab.path() == path) {
             self.activate_tab_with_reveal(index, reveal, window, cx);
             return;
         }
 
-        match DocumentSession::open(&self.file_store, path) {
+        if self.file_requires_readonly_view(&path, cx) {
+            self.tabs.push(OpenTab {
+                path,
+                file_id: NEXT_FILE_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
+                file_revision: 0,
+                opened_at: Instant::now(),
+                file_digest: None,
+                text: None,
+                file_error: None,
+            });
+            self.sync_watched_documents();
+            self.activate_tab_with_reveal(self.tabs.len() - 1, reveal, window, cx);
+            cx.notify();
+            return;
+        }
+
+        match DocumentSession::open(&self.file_store, path.clone()) {
             Ok(opened) => {
                 let language = language_for_path(opened.session.path());
                 // Only the selected, permission-checked runtime service can attach to a document.
@@ -307,10 +356,14 @@ impl EditorApp {
                                 this.dismiss_pointer_hover(cx);
                             }
                             // Each tab keeps its own revision, including background edits.
-                            if let Some(index) = this.tabs.iter().position(|tab| {
-                                tab.editor.entity_id() == changed_editor.entity_id()
-                            }) {
-                                let tab = &mut this.tabs[index];
+                            if let Some(index) = this
+                                .tabs
+                                .iter()
+                                .position(|tab| tab.owns_editor(&changed_editor))
+                            {
+                                let Some(tab) = this.tabs[index].text.as_mut() else {
+                                    return;
+                                };
                                 tab.capability_revision = tab.capability_revision.saturating_add(1);
                                 if tab.suppress_change {
                                     return;
@@ -334,30 +387,55 @@ impl EditorApp {
                     }
                 });
                 self.tabs.push(OpenTab {
-                    capability_revision: 0,
-                    session: opened.session,
-                    editor,
-                    disk_digest,
-                    last_saved_at: Instant::now(),
-                    disk_state: DiskState::Synced,
-                    suppress_change: false,
-                    overwrite_confirmed: false,
-                    definition_highlight,
-                    definition_highlight_generation: 0,
-                    diagnostics: Default::default(),
-                    _subscription: subscription,
-                    _observer: observer,
+                    path: document_path,
+                    file_id: NEXT_FILE_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
+                    file_revision: 0,
+                    opened_at: Instant::now(),
+                    file_digest: None,
+                    file_error: None,
+                    text: Some(TextTab {
+                        capability_revision: 0,
+                        session: opened.session,
+                        editor,
+                        disk_digest,
+                        last_saved_at: Instant::now(),
+                        disk_state: DiskState::Synced,
+                        suppress_change: false,
+                        overwrite_confirmed: false,
+                        definition_highlight,
+                        definition_highlight_generation: 0,
+                        diagnostics: Default::default(),
+                        _subscription: subscription,
+                        _observer: observer,
+                    }),
                 });
                 self.sync_watched_documents();
                 self.activate_tab_with_reveal(self.tabs.len() - 1, reveal, window, cx);
                 self.refresh_syntax_diagnostics(self.editor.entity_id(), cx);
-                let editor = self.tabs.last().unwrap().editor.downgrade();
+                let editor = self.editor.downgrade();
                 // Start highlighting only after the loaded text has painted once.
                 window.on_next_frame(move |_, cx| {
                     let _ = editor.update(cx, |editor, cx| editor.set_highlighter(language, cx));
                 });
             }
             Err(error) => {
+                // Unknown binary encodings still have a file identity, even without an installed viewer.
+                if matches!(&error, editor_core::DocumentError::Read { source, .. } if source.kind() == std::io::ErrorKind::InvalidData)
+                {
+                    self.tabs.push(OpenTab {
+                        path,
+                        file_id: NEXT_FILE_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
+                        file_revision: 0,
+                        opened_at: Instant::now(),
+                        file_digest: None,
+                        text: None,
+                        file_error: None,
+                    });
+                    self.sync_watched_documents();
+                    self.activate_tab_with_reveal(self.tabs.len() - 1, reveal, window, cx);
+                    cx.notify();
+                    return;
+                }
                 self.status = t!("status.open_failed", error = error.to_string()).to_string()
             }
         }
@@ -366,7 +444,50 @@ impl EditorApp {
 
     pub(crate) fn active_tab_index(&self) -> Option<usize> {
         let path = self.active_path.as_ref()?;
-        self.tabs.iter().position(|tab| tab.session.path() == path)
+        self.tabs.iter().position(|tab| tab.path() == path)
+    }
+
+    /// Editing commands require the current file's own native session, never a retained background editor.
+    pub(crate) fn active_text_tab_index(&self) -> Option<usize> {
+        self.active_tab_index()
+            .filter(|index| self.tabs[*index].text.is_some())
+    }
+
+    /// Access native text only after narrowing a file's capability; binary files return None.
+    pub(crate) fn text_tab(&self, index: usize) -> Option<&TextTab> {
+        self.tabs.get(index)?.text.as_ref()
+    }
+    /// Mutable access does not manufacture a session for a read-only file.
+    pub(crate) fn text_tab_mut(&mut self, index: usize) -> Option<&mut TextTab> {
+        self.tabs.get_mut(index)?.text.as_mut()
+    }
+    pub(crate) fn active_text_revision(&self) -> Option<u64> {
+        self.text_tab(self.active_text_tab_index()?)
+            .map(|text| text.session.revision())
+    }
+
+    /// Provider metadata chooses opaque files before decoding text. Generic image signature recognition
+    /// also preserves a file tab when no viewer is installed; no extension or plugin ID is built in.
+    fn file_requires_readonly_view(&self, path: &Path, cx: &App) -> bool {
+        let extension = path
+            .extension()
+            .and_then(|value| value.to_str())
+            .unwrap_or("");
+        if self.extensions.read(cx).entries.iter().any(|entry| {
+            entry.manifest.panels.iter().any(|panel| {
+                panel
+                    .readonly_file_extensions
+                    .iter()
+                    .any(|candidate| candidate.eq_ignore_ascii_case(extension))
+            })
+        }) {
+            return true;
+        }
+        use std::io::Read;
+        let mut prefix = [0_u8; 32];
+        std::fs::File::open(path)
+            .and_then(|mut file| file.read(&mut prefix))
+            .is_ok_and(|count| crate::ui::plugin::bitmap::recognizes_encoding(&prefix[..count]))
     }
 
     /// Opens local LSP targets, including sources in the Cargo registry and sysroot.
@@ -398,10 +519,13 @@ impl EditorApp {
         if self.active_path.as_deref() != Some(path.as_path()) {
             return false;
         }
-        let (Some(index), Some(selection)) = (self.active_tab_index(), selection) else {
+        let (Some(index), Some(selection)) = (self.active_text_tab_index(), selection) else {
             return true;
         };
-        let editor = self.tabs[index].editor.clone();
+        let Some(text) = self.tabs[index].text.as_ref() else {
+            return false;
+        };
+        let editor = text.editor.clone();
         let (cursor_position, highlight_range) = editor.update(cx, |editor, cx| {
             // LSP columns use UTF-16, while editor decorations use UTF-8 byte offsets.
             let start = lsp_position_to_offset(editor.text(), selection.start);
@@ -428,7 +552,9 @@ impl EditorApp {
             (cursor_position, highlight_range)
         });
 
-        let tab = &mut self.tabs[index];
+        let Some(tab) = self.tabs[index].text.as_mut() else {
+            return false;
+        };
         tab.definition_highlight_generation = tab.definition_highlight_generation.wrapping_add(1);
         let generation = tab.definition_highlight_generation;
         let marker = tab.definition_highlight.clone();
@@ -470,6 +596,7 @@ impl EditorApp {
                     if let Some(tab) = app
                         .tabs
                         .iter()
+                        .filter_map(|file| file.text.as_ref())
                         .find(|tab| tab.editor.entity_id() == editor_id)
                         && tab.definition_highlight_generation == generation
                     {
@@ -510,21 +637,30 @@ impl EditorApp {
         let Some(tab) = self.tabs.get(index) else {
             return;
         };
-        let path = tab.session.path().to_path_buf();
+        let path = tab.path().to_path_buf();
         let language = language_for_path(&path);
-        let file_name = tab
-            .session
+        let file_name = path
             .file_name()
-            .map(str::to_owned)
-            .unwrap_or_else(|_| t!("editor.untitled").to_string());
+            .map(|name| name.to_string_lossy().into_owned())
+            .unwrap_or_else(|| t!("editor.untitled").to_string());
+        let editor = tab.text.as_ref().map(|text| text.editor.clone());
+        let file_id = tab.file_id;
 
-        if self.editor != tab.editor || self.active_path.as_deref() != Some(path.as_path()) {
+        if editor.as_ref() != Some(&self.editor)
+            || self.active_path.as_deref() != Some(path.as_path())
+        {
             // Revoke queued first-use installation before a different native document becomes active.
             // Re-activating this same document preserves a permission dialog that is already on screen.
             self.withdraw_bundled_request(cx);
         }
         self.active_path = Some(path.clone());
-        self.editor = tab.editor.clone();
+        if let Some(editor) = editor {
+            self.editor = editor;
+        } else {
+            // A binary file has no input target; retain background text state without lending it focus.
+            window.blur(cx);
+            self.dismiss_pointer_hover(cx);
+        }
         // A completion index belongs to one document and must not cross tabs.
         self.completion_popup.reset();
         // Session restoration preserves saved directory states instead of revealing each tab.
@@ -551,18 +687,31 @@ impl EditorApp {
         let max_scroll = (px(190.) * self.tabs.len() - viewport).max(px(0.));
         self.tabs_scroll
             .set_offset(point(-target.clamp(px(0.), max_scroll), px(0.)));
-        let focus = self.editor.focus_handle(cx);
-        window.defer(cx, move |window, cx| focus.focus(window, cx));
+        if self.active_text_tab_index().is_some() {
+            let focus = self.editor.focus_handle(cx);
+            let app = cx.entity().downgrade();
+            window.defer(cx, move |window, cx| {
+                let _ = app.update(cx, |app, cx| {
+                    if app
+                        .active_tab_index()
+                        .is_some_and(|index| app.tabs[index].file_id == file_id)
+                        && app.active_text_tab_index().is_some()
+                    {
+                        focus.focus(window, cx);
+                    }
+                });
+            });
+        }
         self.status = t!("status.opened", file_name = file_name, language = language).to_string();
         self.persist_session();
         cx.notify();
     }
 
     pub(crate) fn close_tab(&mut self, path: PathBuf, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(index) = self.tabs.iter().position(|tab| tab.session.path() == path) else {
+        let Some(index) = self.tabs.iter().position(|tab| tab.path() == path) else {
             return;
         };
-        if self.tabs[index].session.is_dirty() {
+        if self.tabs[index].is_dirty() {
             self.status = t!("status.save_before_close").to_string();
             cx.notify();
             return;
@@ -611,17 +760,13 @@ impl EditorApp {
     }
 
     pub(crate) fn move_tab_before(&mut self, source: &Path, target: &Path, cx: &mut Context<Self>) {
-        let Some(source_index) = self
-            .tabs
-            .iter()
-            .position(|tab| tab.session.path() == source)
-        else {
+        let Some(source_index) = self.tabs.iter().position(|tab| tab.path() == source) else {
             return;
         };
         let Some(tab) = self.tabs.get(source_index) else {
             return;
         };
-        if tab.session.path() == target {
+        if tab.path() == target {
             return;
         }
 
@@ -629,7 +774,7 @@ impl EditorApp {
         let target_index = self
             .tabs
             .iter()
-            .position(|tab| tab.session.path() == target)
+            .position(|tab| tab.path() == target)
             .unwrap_or(self.tabs.len());
         self.tabs.insert(target_index, tab);
         self.persist_session();
@@ -637,38 +782,40 @@ impl EditorApp {
     }
 
     pub(crate) fn save_current(&mut self, cx: &mut Context<Self>) {
-        let Some(index) = self.active_tab_index() else {
+        let Some(index) = self.active_text_tab_index() else {
             self.status = t!("status.nothing_to_save").to_string();
             cx.notify();
             return;
         };
-        if self.plugin_saves.contains(self.tabs[index].session.path()) {
+        let Some(tab) = self.tabs[index].text.as_mut() else {
+            return;
+        };
+        if self.plugin_saves.contains(tab.path()) {
             // Serialize user and plugin saves so a delayed plugin snapshot cannot overwrite a newer save.
             self.status = "此文档正在保存，请稍候".into();
             cx.notify();
             return;
         }
-        if !self.tabs[index].session.is_dirty() && self.tabs[index].disk_state != DiskState::Deleted
-        {
+        if !tab.session.is_dirty() && tab.disk_state != DiskState::Deleted {
             self.status = t!("status.no_changes_to_save").to_string();
             cx.notify();
             return;
         }
 
-        if self.tabs[index].disk_state == DiskState::Synced {
+        if tab.disk_state == DiskState::Synced {
             // A save can precede its native event; compare the disk before overwriting it.
-            let path = self.tabs[index].session.path();
+            let path = tab.path();
             match std::fs::read(path) {
-                Ok(bytes) if Sha256::digest(&bytes).as_slice() != self.tabs[index].disk_digest => {
-                    self.tabs[index].disk_state = DiskState::Conflict;
-                    self.tabs[index].overwrite_confirmed = true;
+                Ok(bytes) if Sha256::digest(&bytes).as_slice() != tab.disk_digest => {
+                    tab.disk_state = DiskState::Conflict;
+                    tab.overwrite_confirmed = true;
                     self.status = t!("status.confirm_disk_overwrite").to_string();
                     cx.notify();
                     return;
                 }
                 Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                    self.tabs[index].disk_state = DiskState::Deleted;
-                    self.tabs[index].overwrite_confirmed = true;
+                    tab.disk_state = DiskState::Deleted;
+                    tab.overwrite_confirmed = true;
                     self.status = t!("status.confirm_disk_restore").to_string();
                     cx.notify();
                     return;
@@ -682,11 +829,10 @@ impl EditorApp {
             }
         }
 
-        if self.tabs[index].disk_state != DiskState::Synced && !self.tabs[index].overwrite_confirmed
-        {
+        if tab.disk_state != DiskState::Synced && !tab.overwrite_confirmed {
             // Saving again is an explicit overwrite confirmation for a disk conflict or deletion.
-            self.tabs[index].overwrite_confirmed = true;
-            self.status = match self.tabs[index].disk_state {
+            tab.overwrite_confirmed = true;
+            self.status = match tab.disk_state {
                 DiskState::Conflict => t!("status.confirm_disk_overwrite").to_string(),
                 DiskState::Deleted => t!("status.confirm_disk_restore").to_string(),
                 DiskState::Synced => unreachable!(),
@@ -697,17 +843,16 @@ impl EditorApp {
 
         let value = self.editor.read(cx).value().to_string();
         if let Some(history) = &self.history {
-            let _ = history.snapshot_file(self.tabs[index].session.path());
+            let _ = history.snapshot_file(tab.path());
         }
-        let tab = &mut self.tabs[index];
         match tab.session.save(&self.file_store, &value) {
             Ok(()) => {
                 tab.disk_digest = Sha256::digest(value.as_bytes()).into();
                 tab.last_saved_at = Instant::now();
                 tab.disk_state = DiskState::Synced;
                 tab.overwrite_confirmed = false;
-                self.status = t!("status.saved", path = tab.session.path().display()).to_string();
-                let path = tab.session.path().to_path_buf();
+                self.status = t!("status.saved", path = tab.path().display()).to_string();
+                let path = tab.path().to_path_buf();
                 self.notify_language_document_saved(&path, value, cx);
             }
             Err(error) => {
@@ -735,11 +880,13 @@ fn reveal_definition_after_layout(
         let _ = app.update(cx, |app, cx| {
             // A later jump, edit, or tab switch must cancel this pending reveal.
             if app.editor.entity_id() != target_editor.entity_id()
-                || app.active_tab_index().is_none_or(|index| {
-                    let tab = &app.tabs[index];
-                    tab.session.revision() != revision
-                        || tab.definition_highlight_generation != generation
-                })
+                || app
+                    .active_text_tab_index()
+                    .and_then(|index| app.text_tab(index))
+                    .is_none_or(|tab| {
+                        tab.session.revision() != revision
+                            || tab.definition_highlight_generation != generation
+                    })
             {
                 return;
             }

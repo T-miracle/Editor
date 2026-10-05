@@ -354,7 +354,12 @@ fn delivered_markdown_code_keeps_source_undo_and_rejects_retired_document_scenes
     assert_source(&fixture, ui, "notes.md", original, original);
     assert!(ui.update(|_, cx| {
         let app = fixture.app.read(cx);
-        !app.tabs[app.active_tab_index().unwrap()].session.is_dirty()
+        !app.tabs[app.active_tab_index().unwrap()]
+            .text
+            .as_ref()
+            .unwrap()
+            .session
+            .is_dirty()
     }));
 
     // Replacing the real query schedules fresh work; closing the source cannot reattach its scene.

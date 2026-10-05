@@ -22,6 +22,9 @@ pub const VERSION: u32 = 1;
 /// Replace a panel's complete view atomically. Revision is echoed in user events.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Document {
+    /// File-resource authority echoed by `editor.files`; no text session or mutable bytes implied.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub file: Option<crate::api::FileVersion>,
     /// Preview replies echo their input version; regular panels leave it absent.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source: Option<crate::api::DocumentVersion>,
@@ -58,6 +61,7 @@ pub struct Document {
 impl Document {
     pub fn new(root: Node) -> Self {
         Self {
+            file: None,
             source: None,
             version: VERSION,
             revision: 0,
@@ -196,6 +200,12 @@ pub struct Layout {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum Kind {
+    /// Display this context's file using controlled decoding. Requires `ui.file_images` and
+    /// `workspace.read`; the guest chooses sizing, while the host performs native layout/painting.
+    FileImage {
+        alt: String,
+        sizing: ImageSizing,
+    },
     /// A keyed, reorderable native item list can be placed anywhere in the ordinary layout tree.
     SideTabs(SideTabs),
     /// Any position in the same layout tree can hold a drawing surface; it has no implicit grid.
@@ -268,6 +278,16 @@ pub enum Kind {
         value: f32,
     },
     Spacer,
+}
+
+/// Generic image geometry policy chosen by a plugin; this has no file-format business rule.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ImageSizing {
+    /// Preserve intrinsic dimensions when they fit; otherwise contain both axes without enlarging.
+    OriginalContain,
+    /// Contain the available area, permitting an explicit enlargement of small images.
+    Contain,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -503,7 +523,7 @@ impl Node {
             Kind::Text { .. } => "text",
             Kind::RichText { .. } => "rich_text",
             Kind::CodeBlock { .. } => "code_block",
-            Kind::Image { .. } => "image",
+            Kind::Image { .. } | Kind::FileImage { .. } => "image",
             Kind::Button { .. } => "button",
             Kind::Input(_) => "input",
             Kind::Checkbox { .. } => "checkbox",

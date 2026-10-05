@@ -90,6 +90,10 @@ pub struct Panel {
     /// Other panel positions leave this list empty and retain their independent dock behavior.
     #[serde(default)]
     pub file_extensions: Vec<String>,
+    /// Non-text file types matched by this provider. They never create a text editing session.
+    /// Requires `editor.files`; the declaration remains meaningful when the viewer is disabled.
+    #[serde(default)]
+    pub readonly_file_extensions: Vec<String>,
     /// Opt-in source/split/preview controls for workspace-owned editor previews.
     /// All three SVG paths belong to this package; declaration requires `editor.presentation`.
     #[serde(default, skip_serializing_if = "Option::is_none")]

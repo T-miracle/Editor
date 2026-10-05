@@ -1,4 +1,19 @@
 _version: 2
+file_view.retry:
+  en: "Retry"
+  zh-CN: "重试"
+file_view.restricted:
+  en: "Trust this workspace to run the file viewer"
+  zh-CN: "信任此工作区后才能运行文件查看插件"
+file_view.no_provider:
+  en: "No file viewer is installed for this format"
+  zh-CN: "尚未安装支持此格式的文件查看插件"
+file_view.disabled:
+  en: "The file viewer is disabled"
+  zh-CN: "文件查看插件已停用"
+file_view.denied:
+  en: "The file viewer requires permission to read this file"
+  zh-CN: "文件查看插件尚未获得读取此文件的权限"
 editor.image_save_first:
   en: "Save the document before importing images"
   zh-CN: "请先保存文档，再导入图片"

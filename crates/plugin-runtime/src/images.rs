@@ -21,7 +21,7 @@ static WORKERS: AtomicUsize = AtomicUsize::new(0);
 #[derive(Clone, Debug)]
 pub struct ImageResource {
     /// Exact open-document identity, path and revision echoed by the owning preview.
-    pub source: api::DocumentVersion,
+    pub source: api::ContentVersion,
     /// Original declared URI; this is metadata, never an ambient file or URL rendering source.
     pub uri: String,
     /// Immutable progress or terminal result for this incarnation/source/node/URI identity.
@@ -43,7 +43,7 @@ pub enum ImageState {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct Identity {
     pub instance: String,
-    pub source: api::DocumentVersion,
+    pub source: api::ContentVersion,
     pub uri: String,
     pub workspace: String,
     pub local: bool,

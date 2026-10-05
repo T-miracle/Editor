@@ -1,4 +1,4 @@
-//! SVG document preview using the host's generic file-scoped surface contract.
+//! Image file viewer: editable SVG source and read-only raster images share the public file surface.
 
 use plugin_protocol::{
     Environment, Paint, Rect, Snapshot, api,
@@ -13,8 +13,6 @@ mod scene;
 const MIN_SCALE: f32 = 0.01;
 const MAX_SCALE: f32 = 32.;
 const HEADER_HEIGHT: f32 = 32.;
-/// A new document starts with a 240-pixel longest edge, independently of its intrinsic size.
-const DEFAULT_DISPLAY_EXTENT: f32 = 240.;
 /// The shared drawing protocol bounds both image extents and coordinates to one million pixels.
 const MAX_EXTENT: f32 = 1_000_000.;
 /// SVG assets stay inside the WASM component and are also included in the installable package.
@@ -40,6 +38,8 @@ struct State {
     height: f32,
     /// Echoed source authority; reopening a path creates a different document identity.
     document: Option<api::DocumentVersion>,
+    /// Raster previews carry file authority without manufacturing a text session or revision.
+    file: Option<api::FileContext>,
     revision: u64,
     source: String,
     intrinsic: Option<(f32, f32)>,
@@ -59,6 +59,7 @@ impl Default for State {
             width: 400.,
             height: 300.,
             document: None,
+            file: None,
             revision: 0,
             source: String::new(),
             intrinsic: None,
@@ -73,9 +74,9 @@ impl Default for State {
 
 thread_local! { static STATE: RefCell<State> = RefCell::new(State::default()); }
 
-struct SvgPreview;
+struct ImagePreview;
 
-impl Guest for SvgPreview {
+impl Guest for ImagePreview {
     /// The typed lifecycle never reads the source document from disk or retains it in snapshots.
     fn dispatch(payload: String) -> Result<String, String> {
         api::guest::dispatch(&payload, |message| {
@@ -118,11 +119,21 @@ impl Guest for SvgPreview {
         })
     }
 }
-export!(SvgPreview);
+export!(ImagePreview);
 impl State {
     /// Preview is the host-managed current-document subscription; unrelated panels cannot retarget it.
     fn event(&mut self, panel: Option<&str>, event: api::Notification) {
         match event {
+            api::Notification::FilePreview { file } if panel == Some("preview") => {
+                self.file = file;
+                self.document = None;
+                self.source.clear();
+                self.intrinsic = None;
+                self.error = None;
+                self.pressed_button = None;
+                self.hovered_button = None;
+                self.revision = self.revision.saturating_add(1);
+            }
             api::Notification::Theme(environment) => self.environment = environment,
             api::Notification::Preview { document, text } if panel == Some("preview") => {
                 self.document(document, text)
@@ -171,6 +182,7 @@ impl State {
 
     /// Parse unsaved source with external image resolution disabled, keeping malformed input recoverable.
     fn document(&mut self, document: Option<api::DocumentVersion>, source: String) {
+        self.file = None;
         if matches!((&self.document, &document), (Some(current), Some(next)) if current.id == next.id && next.revision < current.revision)
         {
             return;
@@ -312,11 +324,12 @@ impl State {
         })
     }
 
-    /// Center a new document at 240 logical pixels on its longest edge, preserving its ratio.
+    /// Preserve intrinsic dimensions, shrinking only when either viewport axis is too small.
     fn default_size(&mut self) {
         self.view_mode = ViewMode::DefaultSize;
         if let Some((width, height)) = self.intrinsic {
-            self.scale = DEFAULT_DISPLAY_EXTENT / width.max(height);
+            let viewport = self.viewport();
+            self.scale = 1_f32.min(viewport.w / width).min(viewport.h / height);
         }
     }
 
@@ -341,23 +354,15 @@ impl State {
     fn max_scale(&self) -> f32 {
         self.intrinsic
             .map(|(width, height)| {
-                (MAX_EXTENT / width.max(height)).min(
-                    MAX_SCALE
-                        .max(DEFAULT_DISPLAY_EXTENT / width.max(height))
-                        .max(self.fit_scale(width, height)),
-                )
+                (MAX_EXTENT / width.max(height)).min(MAX_SCALE.max(self.fit_scale(width, height)))
             })
             .unwrap_or(MAX_SCALE)
     }
 
-    /// Huge canvases must still be able to reach their 240-pixel default below one percent.
+    /// Huge canvases must remain able to reach complete containment below one percent.
     fn min_scale(&self) -> f32 {
         self.intrinsic
-            .map(|(width, height)| {
-                MIN_SCALE
-                    .min(DEFAULT_DISPLAY_EXTENT / width.max(height))
-                    .min(self.fit_scale(width, height))
-            })
+            .map(|(width, height)| MIN_SCALE.min(self.fit_scale(width, height)))
             .unwrap_or(MIN_SCALE)
     }
 

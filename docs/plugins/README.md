@@ -1,6 +1,9 @@
 # 插件文档入口
 
-本目录只索引实际维护的资料。独立插件的方案、工单与验收按用户要求保存在各自包内；不复制正文或继承其他功能的完成状态。
+本目录索引实际维护的插件资料。跨插件平台方案放在本目录的 specs、tickets 与 verification；插件自身的历史专题资料保留在对应包内，不复制正文或继承其他任务的完成状态。
+
+- [插件 UI 解耦与文件显示布局总方案](specs/plugin-ui-decoupling.md)、[五个实施工单（#62–#66）](tickets/plugin-ui-decoupling/README.md)。执行分支为 `codex/plugin-ui-decoupling`，验收完成后逐单更新状态。
+- [工单 01：Image 与文件显示验收](verification/plugin-ui-decoupling/01-image-file-views.md)。
 
 - [Markdown 使用说明](../../plugins/markdown/README.md)、[总方案](../../plugins/markdown/docs/spec.md)、[执行工单](../../plugins/markdown/docs/tickets/README.md)、[逐单验收](../../plugins/markdown/docs/verification/README.md)、[AI 执行入口](../../plugins/markdown/AGENTS.md)。
 - [插件平台规格](../specs/plugin-api-platform.md)、[平台实施工单](../specs/plugin-api-tickets/README.md)、[运行与构建](../runtime-plugins.md)、[公开协议与 SDK](../../crates/plugin-protocol/README.md)。

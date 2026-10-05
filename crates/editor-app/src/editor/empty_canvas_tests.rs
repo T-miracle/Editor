@@ -103,3 +103,30 @@ fn empty_workspace_starts_with_centered_canvas(cx: &mut TestAppContext) {
     assert_centered_canvas(cx);
     cx.update(|_, cx| assert!(view.read(cx).tabs.is_empty()));
 }
+
+/// A missing viewer preserves the binary file tab and never sends input/save to a text editor.
+#[gpui::test]
+fn binary_file_keeps_its_tab_without_mounting_a_text_editor(cx: &mut TestAppContext) {
+    let (directory, view, cx) = canvas_window(cx, false);
+    let path = directory.path().join("picture.png");
+    let bytes = b"\x89PNG\r\n\x1a\n\xff";
+    std::fs::write(&path, bytes).unwrap();
+    cx.update(|window, cx| view.update(cx, |app, cx| app.open_file(path.clone(), window, cx)));
+    cx.run_until_parked();
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+    assert!(cx.debug_bounds("editor-tabs-container").is_some());
+    assert!(cx.debug_bounds("editor-source-pane").is_none());
+    assert!(cx.debug_bounds("file-view-unavailable").is_some());
+    cx.simulate_input("must not edit an image");
+    cx.update(|_, cx| view.update(cx, |app, cx| app.save_current(cx)));
+    assert_eq!(std::fs::read(&path).unwrap(), bytes);
+    cx.update(|window, cx| {
+        view.update(cx, |app, cx| {
+            let active = app.active_path.clone().unwrap();
+            app.close_tab(active, window, cx);
+        })
+    });
+    cx.run_until_parked();
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+    assert_centered_canvas(cx);
+}

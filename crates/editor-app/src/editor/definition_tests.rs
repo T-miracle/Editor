@@ -161,7 +161,12 @@ fn exercise_definition_click(
         let app = view.read(cx);
         let state = app.editor.read(cx);
         assert!(
-            app.tabs[app.active_tab_index().unwrap()].definition_highlight_generation > 0,
+            app.tabs[app.active_tab_index().unwrap()]
+                .text
+                .as_ref()
+                .unwrap()
+                .definition_highlight_generation
+                > 0,
             "navigation must reach the host callback"
         );
         assert_eq!(

@@ -52,7 +52,8 @@ impl Manager {
         })?;
         instance.reconcile_image_inputs();
         if instance.preview_sources.get(panel).and_then(Option::as_ref) != Some(&document)
-            || self.retired_image_sources.get(&format!("{id}/{panel}")) == Some(&document)
+            || self.retired_image_sources.get(&format!("{id}/{panel}"))
+                == Some(&api::ContentVersion::Document(document.clone()))
             || !instance.views.get(panel).is_some_and(|view| {
                 view.editor_image_input && view.source.as_ref() == Some(&document)
             })

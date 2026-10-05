@@ -66,9 +66,14 @@ impl EditorApp {
     /// Tokens use the open entity identity, not merely a path that may later be reopened.
     pub(crate) fn plugin_document_version(&self, index: usize) -> Result<DocumentVersion, Failure> {
         let tab = &self.tabs[index];
+        let text = tab.text.as_ref().ok_or_else(|| {
+            Failure::new(
+                ErrorCode::UnsupportedOperation,
+                "File has no text editing capability",
+            )
+        })?;
         // OpenTab already stores its resolved path. Disk deletion does not end the editor entity's lifetime.
         let path = tab
-            .session
             .path()
             .strip_prefix(self.workspace.root())
             .map_err(|_| {
@@ -78,9 +83,9 @@ impl EditorApp {
                 )
             })?;
         Ok(DocumentVersion {
-            id: format!("{:?}", tab.editor.entity_id()),
+            id: format!("{:?}", text.editor.entity_id()),
             path: path.to_string_lossy().replace('\\', "/"),
-            revision: tab.capability_revision,
+            revision: text.capability_revision,
         })
     }
 
@@ -149,7 +154,7 @@ impl EditorApp {
                     ));
                 }
                 self.open_file(file.clone(), window, cx);
-                if !self.tabs.iter().any(|tab| tab.session.path() == file) {
+                if !self.tabs.iter().any(|tab| tab.path() == file) {
                     return Err(Failure::new(
                         ErrorCode::OperationFailed,
                         "Private file could not be opened",
@@ -186,7 +191,18 @@ impl EditorApp {
                     .active_tab_index()
                     .ok_or_else(|| Failure::new(ErrorCode::NotFound, "No active document"))?;
                 let document = self.plugin_document_version(index)?;
-                let text = self.tabs[index].editor.read(cx).selected_text().to_string();
+                let text = self
+                    .text_tab(index)
+                    .ok_or_else(|| {
+                        Failure::new(
+                            ErrorCode::UnsupportedOperation,
+                            "File has no text selection",
+                        )
+                    })?
+                    .editor
+                    .read(cx)
+                    .selected_text()
+                    .to_string();
                 if text.len() > 1024 * 1024 {
                     return Err(Failure::new(
                         ErrorCode::LimitExceeded,
@@ -262,8 +278,14 @@ impl EditorApp {
             )));
             return;
         };
-        let tab = &self.tabs[index];
-        let path = tab.session.path().to_path_buf();
+        let Some(tab) = self.tabs[index].text.as_ref() else {
+            request.finish(Err(Failure::new(
+                ErrorCode::UnsupportedOperation,
+                "File has no text save capability",
+            )));
+            return;
+        };
+        let path = tab.path().to_path_buf();
         if let Err(error) = self.check_plugin_save_path(&path) {
             request.finish(Err(error));
             return;
@@ -334,9 +356,14 @@ impl EditorApp {
                     "Document changed during save preparation",
                 )
             })?;
-        let path = self.tabs[index].session.path().to_path_buf();
+        let path = self.tabs[index].path().to_path_buf();
         self.check_plugin_save_path(&path)?;
-        let tab = &mut self.tabs[index];
+        let tab = self.text_tab_mut(index).ok_or_else(|| {
+            Failure::new(
+                ErrorCode::UnsupportedOperation,
+                "File has no text save capability",
+            )
+        })?;
         let disk =
             std::fs::read(&path).map_err(|e| Failure::new(ErrorCode::Conflict, e.to_string()))?;
         if tab.disk_state != DiskState::Synced

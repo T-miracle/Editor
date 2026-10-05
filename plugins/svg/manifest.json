@@ -1,18 +1,19 @@
 {
   "id": "svg",
-  "name": "SVG",
-  "version": "0.3.0",
+  "name": "Image",
+  "version": "0.4.0",
   "protocol": 7,
-  "api": {"base":"^1","required":{"ui.native":"^1","ui.canvas":">=1.1, <2","editor.documents":"^1","editor.presentation":"^1"}},
+  "api": {"base":"^1","required":{"ui.native":"^1","ui.canvas":">=1.1, <2","ui.file_images":"^1","editor.files":"^1","editor.documents":"^1","editor.presentation":"^1"}},
   "component": "svg.wasm",
-  "permissions": ["editor.read"],
+  "permissions": ["editor.read", "workspace.read"],
   "storage_limit": 1024,
   "panels": [
     {
       "id": "preview",
-      "title": "SVG",
+      "title": "Image",
       "position": "editor",
       "file_extensions": ["svg"],
+      "readonly_file_extensions": ["png", "jpg", "jpeg", "gif", "webp"],
       "default_visible": true,
       "view_modes": {
         "source": "icons/view-source.svg",

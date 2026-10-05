@@ -236,11 +236,15 @@ impl PluginView {
                     )
                     .into_any_element()
             }
+            Kind::FileImage { alt, sizing } => self.render_file_image(&node.id, alt, *sizing, cx),
             Kind::Text { text } => div().child(text.clone()).into_any_element(),
             Kind::Image { source, alt } => {
                 // Direct retained pixels bypass GPUI's ambient file/URL loader. Height follows the image ratio.
                 let photo = self.photos.get(&node.id).filter(|photo| {
-                    self.document.source.as_ref() == Some(&photo.resource.source)
+                    self.document
+                        .source
+                        .as_ref()
+                        .is_some_and(|source| photo.resource.source == *source)
                         && source == &photo.resource.uri
                 });
                 if let Some(photo) = photo

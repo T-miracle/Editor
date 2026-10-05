@@ -89,7 +89,8 @@ try {
         if (-not [SvgSmokeWindow]::Close($process.Id)) { throw 'Could not close the owned test window' }
         if (-not $process.WaitForExit(10000)) { throw 'Editor did not complete normal shutdown' }
         if ($process.ExitCode -ne 0) { throw "Editor failed: $([IO.File]::ReadAllText("$runRoot/stderr.log"))" }
-        $snapshots = @(Get-ChildItem -LiteralPath "$pluginRoot/data/svg" -Filter 'state-*.json')
+        # Workspace-scoped instances persist state.json beneath their private workspace namespace.
+        $snapshots = @(Get-ChildItem -LiteralPath "$pluginRoot/data/svg" -Recurse -File -Filter 'state.json')
         if ($snapshots.Count -eq 0) { throw 'SVG plugin snapshot was not persisted' }
         Write-Output "PASS: native SVG startup, surface lifecycle and normal shutdown; capture=$captured; logs: $runRoot"
     } finally {

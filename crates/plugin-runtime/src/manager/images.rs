@@ -40,28 +40,52 @@ impl Manager {
                     continue;
                 }
                 for (panel, view) in &instance.views {
-                    let Some(source) = view.source.as_ref() else {
-                        continue;
-                    };
-                    if instance.preview_sources.get(panel).and_then(Option::as_ref) != Some(source)
+                    let text_source = view.source.as_ref().filter(|source| {
+                        instance.preview_sources.get(panel).and_then(Option::as_ref)
+                            == Some(*source)
+                    });
+                    let file_source = view.file.as_ref().filter(|source| {
+                        instance
+                            .file_sources
+                            .get(panel)
+                            .and_then(Option::as_ref)
+                            .map(|context| &context.version)
+                            == Some(*source)
+                    });
+                    if (text_source.is_none() && file_source.is_none())
                         || !installed
                             .manifest
                             .panels
                             .iter()
                             .any(|item| item.id == *panel && item.position == "editor")
-                        || self.retired_image_sources.get(&format!("{plugin}/{panel}"))
-                            == Some(source)
                     {
                         continue;
                     }
                     let mut visit = |node: &ui::Node| {
-                        if let ui::Kind::Image { source: uri, .. } = &node.kind {
+                        let resource = match &node.kind {
+                            ui::Kind::Image { source: uri, .. } => text_source.map(|source| {
+                                (api::ContentVersion::Document(source.clone()), uri.clone())
+                            }),
+                            ui::Kind::FileImage { .. } => file_source.map(|source| {
+                                (
+                                    api::ContentVersion::File(source.clone()),
+                                    "@current-file".into(),
+                                )
+                            }),
+                            _ => None,
+                        };
+                        if let Some((source, uri)) = resource {
+                            if self.retired_image_sources.get(&format!("{plugin}/{panel}"))
+                                == Some(&source)
+                            {
+                                return;
+                            }
                             wanted.insert(
                                 format!("{plugin}/{panel}/image/{}", node.id),
                                 Identity {
                                     instance: incarnation.to_owned(),
-                                    source: source.clone(),
-                                    uri: uri.clone(),
+                                    source,
+                                    uri,
                                     workspace: self.environment.workspace.clone(),
                                     local: authorized("workspace.read"),
                                     network: authorized("network.images"),
@@ -103,10 +127,10 @@ impl Manager {
         for (plugin, instance) in &self.live {
             for (panel, view) in &instance.views {
                 if let Some(source) = &view.source
-                    && source_obsolete(source, change)
+                    && source_obsolete(&api::ContentVersion::Document(source.clone()), change)
                 {
                     self.retired_image_sources
-                        .insert(format!("{plugin}/{panel}"), source.clone());
+                        .insert(format!("{plugin}/{panel}"), source.clone().into());
                 }
             }
         }
@@ -122,7 +146,10 @@ impl Manager {
 }
 
 /// Path participates in source identity even when Save As keeps the text revision unchanged.
-fn source_obsolete(source: &api::DocumentVersion, change: &api::DocumentChange) -> bool {
+fn source_obsolete(source: &api::ContentVersion, change: &api::DocumentChange) -> bool {
+    let api::ContentVersion::Document(source) = source else {
+        return false;
+    };
     source.id == change.document.id
         && (change.closed
             || (change.document.revision >= source.revision && change.document != *source))

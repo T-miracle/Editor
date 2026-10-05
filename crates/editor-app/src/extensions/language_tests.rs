@@ -68,6 +68,9 @@ fn dynamic_selection_survives_primary_load_and_primary_returns_after_removal(
             .tabs
             .last()
             .unwrap()
+            .text
+            .as_ref()
+            .unwrap()
             .editor
             .read(cx)
             .language_name()
@@ -139,6 +142,9 @@ fn unknown_declarative_language_highlights_open_document_without_restart(cx: &mu
             .tabs
             .last()
             .unwrap()
+            .text
+            .as_ref()
+            .unwrap()
             .editor
             .read(cx)
             .language_name()
@@ -164,6 +170,9 @@ fn unknown_declarative_language_highlights_open_document_without_restart(cx: &mu
             .read(cx)
             .tabs
             .last()
+            .unwrap()
+            .text
+            .as_ref()
             .unwrap()
             .editor
             .read(cx)
@@ -198,6 +207,9 @@ fn unknown_declarative_language_highlights_open_document_without_restart(cx: &mu
             .read(cx)
             .tabs
             .last()
+            .unwrap()
+            .text
+            .as_ref()
             .unwrap()
             .editor
             .read(cx)
@@ -307,6 +319,9 @@ fn unknown_declarative_language_highlights_open_document_without_restart(cx: &mu
             .tabs
             .last()
             .unwrap()
+            .text
+            .as_ref()
+            .unwrap()
             .editor
             .read(cx)
             .language_name()
@@ -325,6 +340,9 @@ fn unknown_declarative_language_highlights_open_document_without_restart(cx: &mu
             .tabs
             .last()
             .unwrap()
+            .text
+            .as_ref()
+            .unwrap()
             .editor
             .read(cx)
             .language_name()
@@ -342,6 +360,9 @@ fn unknown_declarative_language_highlights_open_document_without_restart(cx: &mu
             .read(cx)
             .tabs
             .last()
+            .unwrap()
+            .text
+            .as_ref()
             .unwrap()
             .editor
             .read(cx)
@@ -445,14 +466,18 @@ tree_sitter_abi = 15
             let tab = app
                 .tabs
                 .iter()
-                .find(|tab| {
-                    tab.session
-                        .path()
-                        .extension()
-                        .is_some_and(|ext| ext == extension)
-                })
+                .find(|tab| tab.path().extension().is_some_and(|ext| ext == extension))
                 .unwrap();
-            assert_eq!(tab.editor.read(cx).language_name().as_ref(), expected);
+            assert_eq!(
+                tab.text
+                    .as_ref()
+                    .unwrap()
+                    .editor
+                    .read(cx)
+                    .language_name()
+                    .as_ref(),
+                expected
+            );
         }
         assert_eq!(app.plugin_count(PluginPopupKind::Error, cx), 1);
     });
@@ -500,9 +525,15 @@ tree_sitter_abi = 15
             .is_empty()
     );
     assert!(cx.update(|_, cx| {
-        app.read(cx)
-            .tabs
-            .iter()
-            .all(|tab| tab.editor.read(cx).language_name().as_ref() == "text")
+        app.read(cx).tabs.iter().all(|tab| {
+            tab.text
+                .as_ref()
+                .unwrap()
+                .editor
+                .read(cx)
+                .language_name()
+                .as_ref()
+                == "text"
+        })
     }));
 }

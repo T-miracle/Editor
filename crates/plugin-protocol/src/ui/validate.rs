@@ -6,6 +6,9 @@ pub(super) fn document(document: &Document) -> Result<(), String> {
     if document.version != VERSION {
         return Err("Unsupported UI protocol version".into());
     }
+    if let Some(file) = &document.file {
+        file.validate().map_err(|error| error.to_string())?;
+    }
     if document.editor_image_input && document.source.is_none() {
         return Err("Editor image input requires Document.source".into());
     }
@@ -32,6 +35,7 @@ pub(super) fn document(document: &Document) -> Result<(), String> {
         vectors: 0,
         images: 0,
         has_source: document.source.is_some(),
+        has_file: document.file.is_some(),
     };
     validator.node(&document.root, 0)?;
     if let Some(toolbar) = &document.editor_toolbar {
@@ -83,6 +87,8 @@ struct Validator {
     images: usize,
     /// Source mappings are meaningful only in a version-bound preview document.
     has_source: bool,
+    /// Binary image nodes require an independent file-resource authority.
+    has_file: bool,
 }
 impl Validator {
     fn budget(&mut self, count: usize) -> Result<(), String> {
@@ -229,6 +235,16 @@ impl Validator {
                 if let Some(language) = language {
                     self.text(language)?;
                 }
+            }
+            Kind::FileImage { alt, .. } => {
+                if !self.has_file {
+                    return Err("File image requires Document.file".into());
+                }
+                self.images += 1;
+                if self.images > 64 {
+                    return Err("UI image quota exceeded".into());
+                }
+                self.text(alt)?;
             }
             Kind::Image { source, alt } => {
                 if !self.has_source {

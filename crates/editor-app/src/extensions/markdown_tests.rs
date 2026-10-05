@@ -268,6 +268,9 @@ fn delivered_markdown_preview_tracks_unsaved_native_edits_and_reclaims_split(
     );
     assert!(cx.update(|_, cx| {
         !app.read(cx).tabs[app.read(cx).active_tab_index().unwrap()]
+            .text
+            .as_ref()
+            .unwrap()
             .session
             .is_dirty()
     }));

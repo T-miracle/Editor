@@ -293,6 +293,11 @@ pub enum Input {
 /// Native UI notifications contain no legacy canvas or character-grid fields.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum Notification {
+    /// A selected file provider receives a host-issued file identity, independent of text editing.
+    /// Requires `editor.files` and `editor.read`; clearing the context revokes its resource access.
+    FilePreview {
+        file: Option<FileContext>,
+    },
     /// An authorized source-bound preview receives coalesced, readonly native source positions.
     /// Delivery stops outside split mode, while synchronization is disabled, or on owner retirement.
     SourceViewport(SourceViewport),
@@ -357,6 +362,79 @@ pub struct DocumentVersion {
     pub id: String,
     pub path: String,
     pub revision: u64,
+}
+
+/// Identity of one opened file. Revision advances on reload/retry; reopening creates a new ID.
+/// This is a file resource version and does not claim that the file has a text document.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FileVersion {
+    pub id: String,
+    /// Workspace-relative, normalized path; it cannot grant access outside the owning workspace.
+    pub path: String,
+    pub revision: u64,
+}
+
+impl FileVersion {
+    /// Validate transport metadata before issuing file authority; IO still checks canonical boundaries.
+    pub fn validate(&self) -> Result<(), Failure> {
+        if self.id.is_empty()
+            || self.id.len() > 128
+            || self.path.is_empty()
+            || self.path.len() > 4096
+            || self.path.contains(['\\', ':', '?', '#'])
+            || self.path.chars().any(char::is_control)
+            || self.path.split('/').any(|part| {
+                part.is_empty() || part == "." || part == ".." || is_windows_device_segment(part)
+            })
+        {
+            return Err(Failure::new(
+                ErrorCode::InvalidPath,
+                "Invalid opened-file identity or relative path",
+            ));
+        }
+        Ok(())
+    }
+}
+
+/// Immutable context of the selected file. Text capability exists only when a native text session does.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FileContext {
+    pub version: FileVersion,
+    /// Lowercase extension without a dot, used by the plugin's own presentation preferences.
+    pub file_type: String,
+    pub text: Option<DocumentVersion>,
+}
+
+/// Image tasks bind to either unsaved text or an opened file, retaining their distinct authority.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", content = "version", rename_all = "snake_case")]
+pub enum ContentVersion {
+    Document(DocumentVersion),
+    File(FileVersion),
+}
+
+impl ContentVersion {
+    /// Relative path used after permission and canonical workspace-boundary checks.
+    pub fn path(&self) -> &str {
+        match self {
+            Self::Document(version) => &version.path,
+            Self::File(version) => &version.path,
+        }
+    }
+}
+
+impl From<DocumentVersion> for ContentVersion {
+    fn from(value: DocumentVersion) -> Self {
+        Self::Document(value)
+    }
+}
+
+impl PartialEq<DocumentVersion> for ContentVersion {
+    fn eq(&self, other: &DocumentVersion) -> bool {
+        matches!(self, Self::Document(version) if version == other)
+    }
 }
 
 /// Half-open UTF-8 byte offsets in one explicitly versioned document.

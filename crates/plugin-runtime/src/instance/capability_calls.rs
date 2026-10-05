@@ -380,6 +380,26 @@ impl Instance {
             view.document
                 .validate()
                 .map_err(|message| Failure::new(ErrorCode::InvalidRequest, message))?;
+            if view.document.file.as_ref()
+                != self
+                    .file_sources
+                    .get(&view.panel)
+                    .and_then(Option::as_ref)
+                    .map(|context| &context.version)
+            {
+                return Err(Failure::new(
+                    ErrorCode::StaleRevision,
+                    "File view does not match its current input",
+                )
+                .into());
+            }
+            if view.document.file.is_some() && !api.capabilities.contains_key("editor.files") {
+                return Err(Failure::new(
+                    ErrorCode::CapabilityUnavailable,
+                    "editor.files was not negotiated",
+                )
+                .into());
+            }
             if view.document.source.as_ref()
                 != self
                     .preview_sources
@@ -416,6 +436,7 @@ impl Instance {
             let mut enhanced_canvas = false;
             let mut rich_text = false;
             let mut images = false;
+            let mut file_images = false;
             let mut links = view.document.link_events;
             let mut visit = |node: &ui::Node| {
                 links |= !node.links.is_empty();
@@ -426,6 +447,7 @@ impl Instance {
                 }
                 collections |= matches!(node.kind, ui::Kind::SideTabs(_));
                 images |= matches!(node.kind, ui::Kind::Image { .. });
+                file_images |= matches!(node.kind, ui::Kind::FileImage { .. });
                 // Source metadata is part of the same optional interface even on ordinary nodes.
                 rich_text |= node.source_range.is_some()
                     || matches!(
@@ -465,6 +487,7 @@ impl Instance {
                 (collections, "ui.collections"),
                 (rich_text, "ui.richtext"),
                 (images, "ui.images"),
+                (file_images, "ui.file_images"),
             ] {
                 if required && !api.capabilities.contains_key(capability) {
                     return Err(api::Failure::new(

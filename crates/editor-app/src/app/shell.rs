@@ -480,17 +480,19 @@ impl Render for EditorApp {
                             .left(div().max_w(px(320.)).truncate().child(self.status.clone()))
                             // Keep error counts separate from temporary save/loading messages.
                             .when(
-                                self.editor
-                                    .read(cx)
-                                    .diagnostics()
-                                    .is_some_and(|set| !set.is_empty()),
+                                self.active_text_tab_index().is_some()
+                                    && self
+                                        .editor
+                                        .read(cx)
+                                        .diagnostics()
+                                        .is_some_and(|set| !set.is_empty()),
                                 |bar| bar.right(self.render_syntax_error_indicator(cx)),
                             )
                             // Keep plugin indicators immediately before the cursor position.
                             .when_some(plugin_indicator, |bar, kind| {
                                 bar.right(self.render_plugin_indicator(kind, cx))
                             })
-                            .right(if self.active_path.is_some() {
+                            .right(if self.active_text_tab_index().is_some() {
                                 t!(
                                     "status.cursor",
                                     line = cursor.line + 1,

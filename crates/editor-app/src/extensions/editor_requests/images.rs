@@ -25,7 +25,13 @@ impl EditorApp {
                 ));
             }
             let index = self.current_plugin_edit_target(&image.document)?;
-            let editor = self.tabs[index].editor.clone();
+            let editor = self
+                .text_tab(index)
+                .ok_or_else(|| {
+                    Failure::new(ErrorCode::UnsupportedOperation, "File has no text editor")
+                })?
+                .editor
+                .clone();
             if editor.read(cx).selected_range() != (image.selection.start..image.selection.end) {
                 return Err(Failure::new(
                     ErrorCode::StaleRevision,
@@ -41,7 +47,7 @@ impl EditorApp {
                 }
                 Ok(())
             })?;
-            let path = self.tabs[index].session.path().to_path_buf();
+            let path = self.tabs[index].path().to_path_buf();
             self.check_plugin_save_path(&path)?;
             let root = self.workspace.root().to_path_buf();
             let (input, document, bytes, name) = (

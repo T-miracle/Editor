@@ -28,17 +28,19 @@ impl EditorApp {
         let Some(index) = self
             .tabs
             .iter()
-            .position(|tab| tab.editor.entity_id() == editor_id)
+            .position(|tab| tab.owns_editor_id(editor_id))
         else {
             return;
         };
-        let path = self.tabs[index].session.path().to_path_buf();
+        let path = self.tabs[index].path().to_path_buf();
         let language = crate::language::providers::language_for_path(&path);
         let server = language
             .as_ref()
             .and_then(|language| self.language_servers.get(language))
             .cloned();
-        let tab = &mut self.tabs[index];
+        let Some(tab) = self.tabs[index].text.as_mut() else {
+            return;
+        };
         tab.diagnostics.task = None;
         tab.diagnostics.syntax.clear();
         tab.diagnostics.semantic.clear();
@@ -72,6 +74,7 @@ impl EditorApp {
             let Ok(Some(text)) = this.update(cx, |app, cx| {
                 app.tabs
                     .iter()
+                    .filter_map(|file| file.text.as_ref())
                     .find(|tab| tab.editor.entity_id() == editor_id)
                     .filter(|tab| {
                         tab.session.revision() == revision
@@ -123,11 +126,16 @@ impl EditorApp {
                 };
                 let current = this
                     .update(cx, |app, cx| {
-                        let current = app.tabs.iter().any(|tab| {
-                            tab.editor.entity_id() == editor_id
-                                && tab.session.revision() == revision
-                                && tab.diagnostics.generation == generation
-                        }) && app.plugin_loading_generation == plugin_generation;
+                        let current =
+                            app.tabs
+                                .iter()
+                                .filter_map(|file| file.text.as_ref())
+                                .any(|tab| {
+                                    tab.editor.entity_id() == editor_id
+                                        && tab.session.revision() == revision
+                                        && tab.diagnostics.generation == generation
+                                })
+                                && app.plugin_loading_generation == plugin_generation;
                         if current && let Some(diagnostics) = diagnostics {
                             app.apply_semantic_diagnostics(editor_id, diagnostics, cx);
                         }
@@ -158,6 +166,7 @@ impl EditorApp {
         let Some(tab) = self
             .tabs
             .iter_mut()
+            .filter_map(|file| file.text.as_mut())
             .find(|tab| tab.editor.entity_id() == editor_id)
         else {
             return;
@@ -182,6 +191,7 @@ impl EditorApp {
         let Some(tab) = self
             .tabs
             .iter_mut()
+            .filter_map(|file| file.text.as_mut())
             .find(|tab| tab.editor.entity_id() == editor_id)
         else {
             return;
@@ -198,6 +208,7 @@ impl EditorApp {
         let Some(tab) = self
             .tabs
             .iter()
+            .filter_map(|file| file.text.as_ref())
             .find(|tab| tab.editor.entity_id() == editor_id)
         else {
             return;
@@ -268,6 +279,7 @@ impl EditorApp {
         let editors: Vec<_> = self
             .tabs
             .iter_mut()
+            .filter_map(|file| file.text.as_mut())
             .map(|tab| {
                 tab.diagnostics.parser = Default::default();
                 tab.editor.entity_id()
@@ -285,6 +297,9 @@ impl EditorApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.active_text_tab_index().is_none() {
+            return;
+        }
         let state = self.editor.read(cx);
         let entries: Vec<_> = state
             .diagnostics()
@@ -319,8 +334,14 @@ impl EditorApp {
             .diagnostics()
             .map_or(0, |set| set.len());
         // Recovery diagnostics are capped; make the displayed count honest about that limit.
-        let capped = self.active_tab_index().is_some_and(|index| {
-            self.tabs[index].diagnostics.syntax.len()
+        let capped = self.active_text_tab_index().is_some_and(|index| {
+            self.tabs[index]
+                .text
+                .as_ref()
+                .expect("active text capability")
+                .diagnostics
+                .syntax
+                .len()
                 == crate::language::diagnostics::MAX_DIAGNOSTICS
         });
         let display_count = if capped {

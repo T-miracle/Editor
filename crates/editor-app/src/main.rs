@@ -205,7 +205,49 @@ struct DefinitionNotice {
     request_id: u64,
 }
 
+/// Reopening a path issues a fresh identity, preventing delayed results from targeting its new tab.
+static NEXT_FILE_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+
+/// A file tab owns its identity independently of native text editing resources.
 struct OpenTab {
+    path: PathBuf,
+    file_id: u64,
+    file_revision: u64,
+    /// Background checks started before this incarnation opened cannot reload it.
+    opened_at: Instant,
+    /// The watcher retains a hash rather than a second mutable copy of image bytes.
+    file_digest: Option<[u8; 32]>,
+    text: Option<TextTab>,
+    /// File failures retain the tab and its retry target, including unavailable viewer authority.
+    file_error: Option<String>,
+}
+
+impl OpenTab {
+    /// File navigation does not require consulting a text editing session.
+    fn path(&self) -> &Path {
+        &self.path
+    }
+    /// Read-only files never acquire a dirty text revision or a text save obligation.
+    fn is_dirty(&self) -> bool {
+        self.text
+            .as_ref()
+            .is_some_and(|text| text.session.is_dirty())
+    }
+    /// Native entity matching excludes binary tabs rather than lending the previously active editor.
+    fn owns_editor(&self, editor: &Entity<EditorState>) -> bool {
+        self.text
+            .as_ref()
+            .is_some_and(|text| text.editor == *editor)
+    }
+    fn owns_editor_id(&self, id: gpui_kit::EntityId) -> bool {
+        self.text
+            .as_ref()
+            .is_some_and(|text| text.editor.entity_id() == id)
+    }
+}
+
+/// Native text state retains its session, selection/IME entity and derived diagnostics.
+struct TextTab {
     /// Unlike the dirty revision, this also advances on disk reloads and other programmatic changes.
     capability_revision: u64,
     session: DocumentSession,
@@ -224,6 +266,13 @@ struct OpenTab {
     diagnostics: editor::diagnostics::DocumentDiagnostics,
     _subscription: Subscription,
     _observer: Subscription,
+}
+
+impl TextTab {
+    /// Text-specific operations use the session's canonical path after narrowing the file capability.
+    fn path(&self) -> &Path {
+        self.session.path()
+    }
 }
 
 /// Open tabs remain present when their backing file changes or disappears.
@@ -438,9 +487,11 @@ impl EditorApp {
             this.open_file(path, window, cx);
         }
         if let Some(active) = desired_active.map(PathBuf::from) {
-            if let Some(index) = this.tabs.iter().position(|tab| {
-                tab.session.path() == active.canonicalize().unwrap_or(active.clone())
-            }) {
+            if let Some(index) = this
+                .tabs
+                .iter()
+                .position(|tab| tab.path() == active.canonicalize().unwrap_or(active.clone()))
+            {
                 this.activate_tab(index, window, cx);
             }
         }
@@ -541,10 +592,11 @@ impl EditorApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.active_text_tab_index().is_none() {
+            return;
+        }
         let source_path = self.active_path.clone();
-        let source_revision = self
-            .active_tab_index()
-            .map(|index| self.tabs[index].session.revision());
+        let source_revision = self.active_text_revision();
         let request = self.editor.update(cx, |editor, cx| {
             let provider = editor.lsp().hover_provider.clone()?;
             let offset = editor.cursor();
@@ -568,10 +620,7 @@ impl EditorApp {
             let _ = this.update_in(cx, |app, _, cx| {
                 // A tab switch, edit, or cursor move invalidates the requested symbol.
                 if app.active_path != source_path
-                    || app
-                        .active_tab_index()
-                        .map(|index| app.tabs[index].session.revision())
-                        != source_revision
+                    || app.active_text_revision() != source_revision
                     || app.editor.read(cx).cursor() != offset
                 {
                     return;
@@ -595,15 +644,16 @@ impl EditorApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.active_text_tab_index().is_none() {
+            return;
+        }
         self.definition_request_id = self.definition_request_id.wrapping_add(1);
         let request_id = self.definition_request_id;
         if self.definition_notice.take().is_some() {
             cx.notify();
         }
         let source_path = self.active_path.clone();
-        let source_revision = self
-            .active_tab_index()
-            .map(|index| self.tabs[index].session.revision());
+        let source_revision = self.active_text_revision();
         let task = self.editor.update(cx, |editor, cx| {
             let provider = editor.lsp_mut().definition_provider.clone()?;
             Some(provider.definitions(editor.text(), editor.cursor(), window, cx))
@@ -623,10 +673,7 @@ impl EditorApp {
                 // An edit, tab switch, or newer request invalidates this result.
                 if app.definition_request_id != request_id
                     || app.active_path != source_path
-                    || app
-                        .active_tab_index()
-                        .map(|index| app.tabs[index].session.revision())
-                        != source_revision
+                    || app.active_text_revision() != source_revision
                 {
                     return;
                 }

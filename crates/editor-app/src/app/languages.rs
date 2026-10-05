@@ -252,9 +252,9 @@ impl EditorApp {
             });
         }
         let current = providers::languages();
-        for tab in &self.tabs {
-            let language = editor::language_for_path(tab.session.path());
-            if providers::handles_path(tab.session.path())
+        for tab in self.tabs.iter().filter_map(|file| file.text.as_ref()) {
+            let language = editor::language_for_path(tab.path());
+            if providers::handles_path(tab.path())
                 || current.contains(&language)
                 || self
                     .dynamic_language_ids

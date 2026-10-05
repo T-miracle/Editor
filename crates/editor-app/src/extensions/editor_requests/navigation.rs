@@ -73,7 +73,7 @@ impl EditorApp {
         self.open_file(target.clone(), window, cx);
         let index = self
             .active_tab_index()
-            .filter(|index| self.tabs[*index].session.path() == target)
+            .filter(|index| self.tabs[*index].path() == target)
             .ok_or_else(|| {
                 Failure::new(ErrorCode::OperationFailed, "Document could not be opened")
             })?;

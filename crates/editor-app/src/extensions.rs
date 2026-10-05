@@ -16,6 +16,8 @@ use crate::ui::plugin::images;
 #[cfg(test)]
 mod dock_tests;
 #[cfg(test)]
+mod file_view_tests;
+#[cfg(test)]
 mod hot_update_tests;
 mod installation;
 #[cfg(test)]
@@ -99,6 +101,8 @@ pub struct ExtensionPanel {
     preview_document: Option<(PathBuf, u64)>,
     /// New previews echo the open-document token so old drawing results cannot replace a newer file.
     preview_version: Option<protocol::api::DocumentVersion>,
+    /// File-only scenes use their own resource authority, never a fake source revision.
+    preview_file: Option<protocol::api::FileVersion>,
     /// A host transport limit is shown against the current source instead of leaving an empty preview.
     preview_error: Option<String>,
     /// Only an authorized visible split enables either semantic viewport stream.
@@ -278,6 +282,7 @@ impl ExtensionPanel {
             source_viewport: Default::default(),
             preview_document: None,
             preview_version: None,
+            preview_file: None,
             preview_error: None,
             panel_title: "插件管理".into(),
             panel_icons: [None, None],
@@ -381,6 +386,7 @@ impl ExtensionPanel {
             source_viewport: Default::default(),
             preview_document: None,
             preview_version: None,
+            preview_file: None,
             preview_error: None,
             panel_title: panel.title,
             panel_icons,
@@ -540,6 +546,7 @@ impl ExtensionPanel {
                     self.last_size = (0., 0., 0., 0.);
                     self.preview_document = None;
                     self.preview_version = None;
+                    self.preview_file = None;
                     self.preview_error = None;
                     // A replacement can reuse source/UI revisions; instance retirement still revokes its locate.
                     self.source_viewport.withdraw();
@@ -736,7 +743,11 @@ impl ExtensionPanel {
                     self.surface_id.as_deref().unwrap_or_default()
                 ))
             })
-            .filter(|document| !self.editor_preview || document.source == self.preview_version)
+            .filter(|document| {
+                !self.editor_preview
+                    || (document.source == self.preview_version
+                        && document.file == self.preview_file)
+            })
             .cloned()
     }
     /// Dispatch manifest shortcuts without registering terminal-specific native actions.

@@ -407,19 +407,25 @@ impl EditorApp {
         cx: &mut Context<Self>,
     ) -> Result<(), editor_core::DocumentError> {
         let index = self
-            .active_tab_index()
+            .active_text_tab_index()
             .expect("capture still targets the active document");
-        let contents = self.tabs[index].editor.read(cx).text().to_string();
+        let contents = self
+            .text_tab(index)
+            .expect("capture text capability")
+            .editor
+            .read(cx)
+            .text()
+            .to_string();
         let store =
             platform_windows::NewWorkspaceFileStore::at(self.workspace.root().to_path_buf());
-        let tab = &mut self.tabs[index];
+        let tab = self.text_tab_mut(index).expect("capture text capability");
         debug_assert_eq!(tab.capability_revision, capture.document.revision);
         tab.session.save(&store, &contents)?;
         tab.disk_digest = Sha256::digest(contents.as_bytes()).into();
         tab.disk_state = DiskState::Synced;
         tab.overwrite_confirmed = false;
         tab.last_saved_at = Instant::now();
-        let path = tab.session.path().to_path_buf();
+        let path = tab.path().to_path_buf();
         self.notify_language_document_saved(&path, contents, cx);
         cx.notify();
         Ok(())

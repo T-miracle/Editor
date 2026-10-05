@@ -283,7 +283,7 @@ impl State {
                 && app
                     .tabs
                     .iter()
-                    .position(|tab| tab.editor == app.editor)
+                    .position(|tab| tab.owns_editor(&app.editor))
                     .and_then(|index| app.plugin_document_version(index).ok())
                     .is_some_and(|document| document.id == source.document)
                 && crate::language::providers::language_for_path(&source.file).is_none()
@@ -317,7 +317,7 @@ impl EditorApp {
         let source = self
             .tabs
             .iter()
-            .position(|tab| tab.editor == self.editor)
+            .position(|tab| tab.owns_editor(&self.editor))
             .and_then(|index| self.plugin_document_version(index).ok())
             .zip(self.active_path.clone())
             .map(|(document, file)| Source {

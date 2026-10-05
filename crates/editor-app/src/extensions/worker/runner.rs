@@ -324,7 +324,9 @@ impl Worker {
                             if epoch == current {
                                 let native_callback = matches!(
                                     event,
-                                    api::Notification::Ui(_) | api::Notification::Preview { .. }
+                                    api::Notification::Ui(_)
+                                        | api::Notification::Preview { .. }
+                                        | api::Notification::FilePreview { .. }
                                 );
                                 match manager.event(&id, panel, event) {
                                     Err(error)

@@ -31,6 +31,8 @@ pub(crate) fn negotiate(manifest: &Manifest) -> anyhow::Result<api::Negotiated> 
         ("ui.code_highlighting".into(), Version::new(1, 0, 0)),
         ("ui.links".into(), Version::new(1, 0, 0)),
         ("ui.images".into(), Version::new(1, 0, 0)),
+        ("ui.file_images".into(), Version::new(1, 0, 0)),
+        ("editor.files".into(), Version::new(1, 0, 0)),
         ("ui.canvas".into(), Version::new(1, 1, 0)),
         ("ui.collections".into(), Version::new(1, 0, 0)),
         ("ui.grid".into(), Version::new(1, 0, 0)),

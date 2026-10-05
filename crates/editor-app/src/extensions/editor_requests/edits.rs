@@ -9,7 +9,7 @@ impl EditorApp {
         &self,
         document: &DocumentVersion,
     ) -> Result<usize, Failure> {
-        self.active_tab_index()
+        self.active_text_tab_index()
             .filter(|index| {
                 self.plugin_document_version(*index)
                     .is_ok_and(|now| now == *document)
@@ -30,30 +30,35 @@ impl EditorApp {
         cx: &mut Context<Self>,
     ) -> Result<Value, Failure> {
         let index = self.current_plugin_edit_target(document)?;
-        self.tabs[index].editor.update(cx, |editor, cx| {
-            if editor.marked_text_range(window, cx).is_some() {
-                return Err(Failure::new(
-                    ErrorCode::InvalidState,
-                    "Finish the input composition first",
-                ));
-            }
-            let range = editor.selected_range();
-            let text = editor.selected_text().to_string();
-            if text.len() > 1024 * 1024 {
-                return Err(Failure::new(
-                    ErrorCode::LimitExceeded,
-                    "Selection exceeds 1 MiB",
-                ));
-            }
-            Ok(Value::DocumentSelection {
-                document: document.clone(),
-                range: TextRange {
-                    start: range.start,
-                    end: range.end,
-                },
-                text,
+        self.text_tab(index)
+            .ok_or_else(|| {
+                Failure::new(ErrorCode::UnsupportedOperation, "File has no text editor")
+            })?
+            .editor
+            .update(cx, |editor, cx| {
+                if editor.marked_text_range(window, cx).is_some() {
+                    return Err(Failure::new(
+                        ErrorCode::InvalidState,
+                        "Finish the input composition first",
+                    ));
+                }
+                let range = editor.selected_range();
+                let text = editor.selected_text().to_string();
+                if text.len() > 1024 * 1024 {
+                    return Err(Failure::new(
+                        ErrorCode::LimitExceeded,
+                        "Selection exceeds 1 MiB",
+                    ));
+                }
+                Ok(Value::DocumentSelection {
+                    document: document.clone(),
+                    range: TextRange {
+                        start: range.start,
+                        end: range.end,
+                    },
+                    text,
+                })
             })
-        })
     }
 
     /// Validate every byte range before entering the effect, then publish after DocumentSession observes Change.
@@ -75,7 +80,13 @@ impl EditorApp {
         };
         let result = (|| {
             let index = self.current_plugin_edit_target(document)?;
-            let editor = self.tabs[index].editor.clone();
+            let editor = self
+                .text_tab(index)
+                .ok_or_else(|| {
+                    Failure::new(ErrorCode::UnsupportedOperation, "File has no text editor")
+                })?
+                .editor
+                .clone();
             let before = editor.read(cx).text().to_string();
             validate_edit(&before, range, text, selection)?;
             if expected_selection.as_ref().is_some_and(|expected| {
@@ -129,12 +140,22 @@ impl EditorApp {
                     .update(cx, |app, cx| {
                         app.tabs
                             .iter()
-                            .position(|tab| tab.editor.entity_id() == identity)
+                            .position(|tab| tab.owns_editor_id(identity))
                             .ok_or_else(|| {
                                 Failure::new(ErrorCode::StaleRevision, "Edited document was closed")
                             })
                             .and_then(|index| {
-                                let range = app.tabs[index].editor.read(cx).selected_range();
+                                let range = app
+                                    .text_tab(index)
+                                    .ok_or_else(|| {
+                                        Failure::new(
+                                            ErrorCode::StaleRevision,
+                                            "Text editor was closed",
+                                        )
+                                    })?
+                                    .editor
+                                    .read(cx)
+                                    .selected_range();
                                 Ok(Value::Edited {
                                     document: app.plugin_document_version(index)?,
                                     selection: TextRange {

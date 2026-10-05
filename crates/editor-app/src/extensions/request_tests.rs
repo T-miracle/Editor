@@ -360,10 +360,5 @@ fn typed_editor_requests_read_selection_and_save_without_switching_documents(
         }
     ));
     let expected = private.canonicalize().unwrap();
-    assert!(cx.update(|_, cx| {
-        app.read(cx)
-            .tabs
-            .iter()
-            .any(|tab| tab.session.path() == expected)
-    }));
+    assert!(cx.update(|_, cx| { app.read(cx).tabs.iter().any(|tab| tab.path() == expected) }));
 }

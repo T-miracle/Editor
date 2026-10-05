@@ -134,6 +134,8 @@ impl EditorApp {
         &self,
         cx: &mut Context<Self>,
     ) -> Option<AnyElement> {
+        // File-only viewers do not offer a source-editing entry or borrow a previous text session.
+        self.active_text_tab_index()?;
         let preview = self.active_editor_preview(cx)?;
         let has_modes = self.editor_preview_key(&preview, cx).is_some();
         let has_viewport = preview

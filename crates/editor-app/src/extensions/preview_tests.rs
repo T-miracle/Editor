@@ -308,7 +308,14 @@ fn svg_preview_follows_open_documents_and_unsaved_edits(cx: &mut TestAppContext)
     });
     cx.update(|_, cx| {
         let app = app.read(cx);
-        assert!(!app.tabs[app.active_tab_index().unwrap()].session.is_dirty());
+        assert!(
+            !app.tabs[app.active_tab_index().unwrap()]
+                .text
+                .as_ref()
+                .unwrap()
+                .session
+                .is_dirty()
+        );
         let owner = app.extensions.read(cx);
         assert!(
             owner

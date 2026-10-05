@@ -242,16 +242,19 @@ impl EditorApp {
         let tab_styles = component_styles(cx, ThemeComponent::EditorTab);
         let close_styles = component_styles(cx, ThemeComponent::EditorTabClose);
         let tabs = self.tabs.iter().enumerate().map(|(index, tab)| {
-            let path = tab.session.path().to_path_buf();
+            let path = tab.path().to_path_buf();
             let is_active = self.active_path.as_ref() == Some(&path);
             let is_external = !path.starts_with(self.workspace.root());
-            let is_dirty = tab.session.is_dirty();
-            let disk_state = tab.disk_state;
+            let is_dirty = tab.is_dirty();
+            let disk_state = tab
+                .text
+                .as_ref()
+                .map_or(DiskState::Synced, |text| text.disk_state);
             let name = tab
-                .session
+                .path()
                 .file_name()
-                .map(str::to_owned)
-                .unwrap_or_else(|_| t!("editor.untitled").to_string());
+                .map(|name| name.to_string_lossy().into_owned())
+                .unwrap_or_else(|| t!("editor.untitled").to_string());
             let icon = file_icon(&path, false, &theme::active_theme(self.dark_theme));
             let activate_path = path.clone();
             let close_path = path.clone();
@@ -386,10 +389,8 @@ impl EditorApp {
                 )
                 .on_click(cx.listener(move |this, _, window, cx| {
                     // A tab click activates existing content and follows the explorer preference.
-                    if let Some(index) = this
-                        .tabs
-                        .iter()
-                        .position(|tab| tab.session.path() == activate_path)
+                    if let Some(index) =
+                        this.tabs.iter().position(|tab| tab.path() == activate_path)
                     {
                         this.activate_tab(index, window, cx);
                     }
@@ -436,6 +437,7 @@ impl EditorApp {
 
         div()
             .id("editor-tabs-container")
+            .debug_selector(|| "editor-tabs-container".into())
             .relative()
             .w_full()
             .h(px(PANEL_HEADER_HEIGHT))
@@ -523,6 +525,76 @@ impl EditorApp {
                     style.background.unwrap_or(cx.theme().background),
                     cx.theme().muted_foreground,
                 ))
+                .into_any_element();
+        }
+        if self.active_text_tab_index().is_none() {
+            // A file-only body never mounts the retained background editor or its native input handler.
+            if self.editor.focus_handle(cx).is_focused(window) {
+                window.blur(cx);
+            }
+            let body = if let Some(preview) = self.active_editor_preview(cx) {
+                let failed = preview.read(cx).file_preview_failed();
+                let file_id = self
+                    .active_tab_index()
+                    .map(|index| self.tabs[index].file_id);
+                div()
+                    .flex_1()
+                    .min_h_0()
+                    .overflow_hidden()
+                    .relative()
+                    .child(preview)
+                    .when(failed, |body| {
+                        body.child(
+                            div().absolute().top_2().right_2().child(
+                                Button::new("retry-image-resource")
+                                    .label(t!("file_view.retry").to_string())
+                                    .small()
+                                    .on_click(cx.listener(move |app, _, _, cx| {
+                                        if app
+                                            .active_tab_index()
+                                            .map(|index| app.tabs[index].file_id)
+                                            == file_id
+                                        {
+                                            app.retry_file_view(cx);
+                                        }
+                                    })),
+                            ),
+                        )
+                    })
+                    .into_any_element()
+            } else {
+                let message = self.file_view_unavailable_reason(cx);
+                let file_id = self
+                    .active_tab_index()
+                    .map(|index| self.tabs[index].file_id);
+                v_flex()
+                    .debug_selector(|| "file-view-unavailable".into())
+                    .flex_1()
+                    .min_h_0()
+                    .items_center()
+                    .justify_center()
+                    .gap_3()
+                    .child(div().text_color(cx.theme().muted_foreground).child(message))
+                    .child(
+                        Button::new("retry-file-view")
+                            .label(t!("file_view.retry").to_string())
+                            .small()
+                            .on_click(cx.listener(move |app, _, _, cx| {
+                                if app.active_tab_index().map(|index| app.tabs[index].file_id)
+                                    == file_id
+                                {
+                                    app.retry_file_view(cx);
+                                }
+                            })),
+                    )
+                    .into_any_element()
+            };
+            return v_flex()
+                .debug_selector(|| "editor-panel-content".into())
+                .size_full()
+                .min_h_0()
+                .child(self.render_tabs(window, cx))
+                .child(body)
                 .into_any_element();
         }
         // Modal surfaces own the window until dismissed; ordinary floating

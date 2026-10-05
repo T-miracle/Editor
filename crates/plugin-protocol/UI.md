@@ -1,5 +1,28 @@
 # 插件原生界面协议 v1
 
+## 文件显示与只读图片
+
+`editor.files ^1` 提供 `Notification::FilePreview { file: Option<FileContext> }`：
+文件版本含独立 ID、工作区相对路径和单调 revision；`file_type` 为规范化扩展名，
+`text` 仅在文件实际具有文本能力时提供 `DocumentVersion`。关闭、切换及同路径重开
+撤销旧资源；非文本文件不创建文本会话，也不借用上一文件的 revision。该入口只允许
+已声明编辑区面板的工作区实例，需要受信任工作区、协商能力和 `editor.read`。
+
+编辑区声明的 `file_extensions` 匹配文本，`readonly_file_extensions` 匹配只读文件，
+总数不超过 32。后者要求 `editor.files`，已安装但停用的声明仍能识别文件模型。
+没有查看器时，宿主使用通用内容识别保留非文本文件 Tab，并提供错误与重试。
+
+`ui.file_images ^1` 的 `Kind::FileImage { alt, sizing }` 必须绑定 `Document.file`
+且精确回显当前文件版本。该节点只读取当前文件，不能替换资源 URI；
+受控后台读取需要 `workspace.read`，规范化路径、实例归属及工作区边界均须通过。
+最多 64 图片节点，编码字节上限 8 MiB；原生解码支持 PNG、JPEG、GIF、WebP，
+独立检查像素、内存预算和错误。GIF／WebP 首期静态帧。失败只影响对应资源。
+
+`OriginalContain` 以当前内容区域计算
+`min(1, available_width/image_width, available_height/image_height)`，
+保持宽高比、居中、完整显示并禁止自动放大；`Contain` 是插件显式请求允许放大的适配。
+插件选择显示策略，宿主通用解码、执行原生绘制；资源改变、权限撤销和实例退出均撤销旧结果。
+
 `Document.editor_viewport` 以活动 Scroll ID 绑定源视口通知及 `Action::Viewport`。需要 `editor.viewport`、`ui.richtext`、`editor.read` 和精确 source；分栏、同步开关、来源标记、定位与撤销契约见 [VIEWPORT.md](VIEWPORT.md)。
 
 `ui.code_highlighting ^1` 通过默认关闭的 `Document.code_highlighting` 请求已选动态 WASM 语言提供者高亮只读 CodeBlock；仍需 `ui.richtext`、`editor.read`、当前 source 与本实例工作区编辑区面板。缺失、失败或停用提供者降级为等宽文字，不拒绝整份合法视图。版本、取消、预算与原生主题绘制契约见 [CODE_HIGHLIGHTING.md](CODE_HIGHLIGHTING.md)。
