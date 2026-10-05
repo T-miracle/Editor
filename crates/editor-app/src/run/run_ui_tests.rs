@@ -316,6 +316,19 @@ fn the_dropdown_overlay_draws_but_its_popup_does_not_take_focus(cx: &mut TestApp
         cx.update(|window, cx| window.draw(cx).clear(cx));
     }
     cx.run_until_parked();
+    // Failing a direct focus call, the plugin-status checks move focus in with a keystroke instead — `tab`
+    // is how a keyboard reaches a popup at all — so that path is tried before concluding anything about it.
+    let direct = cx.update(|window, cx| {
+        popup.update(cx, |_, cx| cx.focus_handle().contains_focused(window, cx))
+    });
+    if !direct {
+        cx.simulate_keystrokes("tab");
+        for _ in 0..2 {
+            cx.run_until_parked();
+            cx.update(|window, cx| window.draw(cx).clear(cx));
+        }
+        cx.run_until_parked();
+    }
     let focused = cx.update(|window, cx| {
         popup.update(cx, |_, cx| cx.focus_handle().contains_focused(window, cx))
     });
