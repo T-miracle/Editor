@@ -382,7 +382,7 @@ impl FileVersion {
             || self.id.len() > 128
             || self.path.is_empty()
             || self.path.len() > 4096
-            || self.path.contains(['\\', ':', '?', '#'])
+            || self.path.contains(['\\', ':', '?'])
             || self.path.chars().any(char::is_control)
             || self.path.split('/').any(|part| {
                 part.is_empty() || part == "." || part == ".." || is_windows_device_segment(part)

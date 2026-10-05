@@ -53,7 +53,7 @@ fn image_file_resources_follow_public_file_context_and_permissions() {
     let data = tempfile::tempdir().unwrap();
     // Resource loading is encoding-independent. Pixel decoding is verified by native UI tests.
     let bytes = b"opaque image bytes, including invalid UTF-8: \xff";
-    std::fs::write(workspace.path().join("photo.png"), bytes).unwrap();
+    std::fs::write(workspace.path().join("photo#1.png"), bytes).unwrap();
     for id in ["svg", "independent-image-viewer"] {
         let package = image_package(id);
         let environment = Environment {
@@ -67,7 +67,7 @@ fn image_file_resources_follow_public_file_context_and_permissions() {
         let file = api::FileContext {
             version: api::FileVersion {
                 id: "opened-file".into(),
-                path: "photo.png".into(),
+                path: "photo#1.png".into(),
                 revision: 2,
             },
             file_type: "png".into(),
