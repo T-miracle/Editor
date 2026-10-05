@@ -120,18 +120,27 @@ fn choose(
         .center();
     cx.simulate_mouse_down(tab, MouseButton::Right, Modifiers::default());
     cx.simulate_mouse_up(tab, MouseButton::Right, Modifiers::default());
+    // Drain tab activation's deferred focus before exercising the popup's keyboard owner.
+    cx.run_until_parked();
     cx.update(|window, cx| window.draw(cx).clear(cx));
-    let item = cx
-        .debug_bounds(
-            [
-                "native-menu-provider-0",
-                "native-menu-provider-1",
-                "native-menu-provider-2",
-            ][index],
-        )
-        .unwrap()
-        .center();
-    cx.simulate_click(item, Modifiers::default());
+    cx.simulate_keystrokes("escape");
+    cx.run_until_parked();
+    assert!(cx.update(|_, cx| app.read(cx).file_view_menu.is_none()));
+    cx.simulate_mouse_down(tab, MouseButton::Right, Modifiers::default());
+    cx.simulate_mouse_up(tab, MouseButton::Right, Modifiers::default());
+    cx.run_until_parked();
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+    let steps = cx.update(|_, cx| {
+        let items = &app.read(cx).file_view_menu.as_ref().unwrap().read(cx).items;
+        assert!(!items[index].disabled);
+        items
+            .iter()
+            .take(index)
+            .filter(|item| !item.disabled)
+            .count()
+    });
+    // Navigation skips disabled candidates just as the ordinary native popup does.
+    cx.simulate_keystrokes(&format!("home {}enter", "down ".repeat(steps)));
     draw(app, manager, cx);
 }
 

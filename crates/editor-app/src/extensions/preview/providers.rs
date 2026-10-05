@@ -219,6 +219,11 @@ impl EditorApp {
             choices.push(FileProviderChoice::Plugin(candidate.key));
         }
         let parent = cx.entity().downgrade();
+        // Escape restores the clicked file's input target, rather than a previously active Tab.
+        // A content-only layout has no mounted native handler and will retire this focus on redraw.
+        if self.active_text_tab_index().is_some() {
+            self.editor.focus_handle(cx).focus(window, cx);
+        }
         self.file_view_menu = Some(cx.new(|cx| {
             PopupMenu::new(
                 items,

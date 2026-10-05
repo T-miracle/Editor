@@ -707,6 +707,8 @@ impl EditorApp {
                         .active_tab_index()
                         .is_some_and(|index| app.tabs[index].file_id == file_id)
                         && app.active_text_tab_index().is_some()
+                        // A right-click popup owns keyboard input until selection or dismissal.
+                        && app.file_view_menu.is_none()
                     {
                         focus.focus(window, cx);
                     }
