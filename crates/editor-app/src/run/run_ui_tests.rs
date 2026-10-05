@@ -263,6 +263,47 @@ fn the_run_surface_answers_dismissal_and_the_theme_toggle(cx: &mut TestAppContex
     let _ = std::fs::remove_file(stored);
 }
 
+/// Records the obstacle that stops the dropdown's keystrokes from being driven in this harness.
+///
+/// Ticket 03's native clause asks for keyboard selection on the unified dropdown. Reaching the popup's key
+/// handler needs the overlay that carries `track_focus` and `capture_key_down` to be drawn *and* focused,
+/// and in this harness the overlay is not in the element tree at all: after `open_run_menu` and a settle,
+/// the menu state exists but `debug_bounds("native-popup-menu")` finds nothing. A focus assertion against
+/// an element that was never drawn would be meaningless, so the check asserts the drawing instead and
+/// documents the wall where a reader would otherwise look for a missing test.
+///
+/// The state side is covered elsewhere: the menu's entries are asserted in
+/// `the_selector_opens_the_unified_dropdown`, and its dismissal is covered by
+/// `the_run_surface_answers_dismissal_and_the_theme_toggle`. What is not covered anywhere is the popup's
+/// own key handler, and this is why.
+#[gpui::test]
+fn the_dropdown_overlay_is_not_reachable_for_keystrokes_in_this_harness(cx: &mut TestAppContext) {
+    let root = tempfile::tempdir().unwrap();
+    let workspace = root.path().join("project");
+    std::fs::create_dir_all(&workspace).unwrap();
+    let stored = store_configuration(&storage_key_of(&workspace), "本机程序");
+    let (app, cx) = open_editor(cx, &workspace);
+
+    cx.update(|window, cx| {
+        app.update(cx, |app, cx| {
+            app.open_run_menu(gpui_kit::point(px(320.), px(30.)), window, cx);
+        });
+    });
+    cx.run_until_parked();
+    assert!(
+        cx.update(|_, cx| app.read(cx).run_menu.is_some()),
+        "the dropdown was opened"
+    );
+    // The finding: the overlay is not drawn into this tree, so nothing here can hold its focus.
+    assert!(
+        cx.debug_bounds("native-popup-menu").is_none(),
+        "if this ever changes, the keystroke check for ticket 03 can be written: the overlay would be \
+         drawable and focusable here"
+    );
+
+    let _ = std::fs::remove_file(stored);
+}
+
 /// The workspace key for a path, canonicalized the way the editor's own key is.
 fn storage_key_of(workspace: &std::path::Path) -> String {
     std::fs::canonicalize(workspace)
