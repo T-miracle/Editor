@@ -95,8 +95,15 @@ pub(crate) struct PluginView {
 }
 
 impl PluginView {
-    /// Suspend guest input while retaining old geometry and the separate native text entity.
+    /// Suspend guest input and pending locations while retaining paint and the native text entity.
     pub(crate) fn set_scene_current(&mut self, current: bool, cx: &mut Context<Self>) {
+        if !current {
+            // Accepted requests may still await the next layout. Losing source authority
+            // withdraws their effects too, without undoing an already applied Base offset.
+            self.scene_layout.cancel_reveal();
+            self.viewport.reset_scene();
+            self.link_press = None;
+        }
         if self.scene_current.replace(current) != current {
             cx.notify();
         }

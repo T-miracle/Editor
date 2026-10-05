@@ -332,6 +332,33 @@ fn viewport_disabling_withdraws_deferred_events_and_preserves_link_reveal(cx: &m
     assert!((row.top() - viewport.top()).abs() < px(0.1));
 }
 
+/// A retained readonly tree may paint, but an accepted old reveal cannot move its next native layout.
+#[gpui::test]
+fn stale_readonly_scene_cancels_navigation_before_native_layout(cx: &mut TestAppContext) {
+    for synchronized in [false, true] {
+        let (view, events, visual) = mount(cx, fixture(0), synchronized);
+        events.borrow_mut().clear();
+        let first = visual.debug_bounds("plugin-ui-row-0").unwrap();
+        visual.update(|_, cx| {
+            view.update(cx, |view, cx| {
+                view.reveal_node("row-12", 0, cx).unwrap();
+                // The host retains this same tree while a newer source snapshot is pending.
+                view.set_scene_current(false, cx);
+            });
+        });
+        settle(visual);
+        assert_eq!(
+            visual.debug_bounds("plugin-ui-row-0").unwrap(),
+            first,
+            "an obsolete reveal must not move retained readonly content"
+        );
+        assert!(
+            events.borrow().is_empty(),
+            "retired scenes cannot emit geometry"
+        );
+    }
+}
+
 /// Existing heading navigation reports only its final visible leaf; newer locates supersede queued reveals.
 #[gpui::test]
 fn viewport_link_reveal_waits_for_current_geometry_and_latest_intent(cx: &mut TestAppContext) {

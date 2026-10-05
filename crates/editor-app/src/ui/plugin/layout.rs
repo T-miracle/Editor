@@ -104,7 +104,7 @@ impl PluginView {
         revision: u64,
         cx: &mut Context<Self>,
     ) -> Result<(), api::Failure> {
-        if revision != self.document.revision {
+        if !self.scene_current.get() || revision != self.document.revision {
             return Err(api::Failure::new(
                 api::ErrorCode::StaleRevision,
                 "Preview scene changed",
@@ -128,7 +128,7 @@ impl PluginView {
     /// Native keyboard focus uses the live active tree, including ordinary linked images without source maps.
     /// A pointer focus does not call this path: moving an image before MouseUp would invalidate its click.
     pub(super) fn reveal_focused_link(&mut self, node: &str, cx: &mut Context<Self>) {
-        if self.scene_layout.scroll_owner.contains_key(node) {
+        if self.scene_current.get() && self.scene_layout.scroll_owner.contains_key(node) {
             self.viewport.cancel_locate();
             self.scene_layout.pending = Some(Reveal {
                 node: node.into(),
