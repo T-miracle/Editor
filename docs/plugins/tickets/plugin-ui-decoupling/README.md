@@ -2,9 +2,12 @@
 
 日期：2026-10-05
 
-状态：用户已确认方案、Image 补充及五张粗粒度工单，并授权连续实现。工单已发布为 #62–#66，标签、正文与四条原生阻塞关系已读回；01–04 已验收、推送并关闭；05 正在集成验收。总方案 [#61](https://github.com/T-miracle/Editor/issues/61) 保持原状。
+状态：用户已确认方案、Image 补充及五张粗粒度工单，并授权连续实现。#62–#66 均已实现、验收、审查、推送并读回为 closed／completed；四条原生阻塞关系保持原状。总方案 [#61](https://github.com/T-miracle/Editor/issues/61) 读回为 open，保持原状。
 
 实现位于独立工作区和 `codex/plugin-ui-decoupling` 分支，审查起点为 `4d4a7b6d90130cf6e687c46c610c5ca38f1f89c1`；原工作区已有改动不纳入本分支。
+
+最终源码 `a04f0d8` 双轴审查剩余 0 项；#66 在已推送 `5dd0665` 后关闭并核对完整正文。
+[总验收记录](../../verification/plugin-ui-decoupling/05-integration-and-contract.md)汇总有效测试、U01–U20、I01–I03 和实际限制。
 
 依据：[总方案](../../specs/plugin-ui-decoupling.md)。引用会话“插件解耦实施方案”提出五批次和减少重复验证的建议；其内容作为参考，不替代已确认产品边界或仓库验证约定。
 
