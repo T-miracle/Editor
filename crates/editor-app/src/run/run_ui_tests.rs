@@ -176,6 +176,101 @@ fn storage_key(app: &Entity<EditorApp>, cx: &mut TestAppContext) -> String {
     cx.update(|cx| app.read(cx).workspace_key())
 }
 
+/// The unified dropdown answers dismissal, and switching theme leaves the run surface usable.
+///
+/// Ticket 10's last acceptance item asks for the run surface to be checked for keyboard and for both
+/// themes. **What this covers, stated narrowly**: the dropdown's dismissal path — the event its own key
+/// handler produces and the subscription that closes the menu — and the editor's theme toggle followed by
+/// the configuration dialog still opening with all four pages available.
+///
+/// **What it does not cover**: the keystroke itself is not injected, so the popup's key handler is not
+/// exercised here; a check that dispatches a real Escape would need a `VisualTestContext`, which the
+/// dialog-based checks in this file do not use. The record notes this so the item is not read as fully
+/// measured.
+#[gpui::test]
+fn the_run_surface_answers_dismissal_and_the_theme_toggle(cx: &mut TestAppContext) {
+    let root = tempfile::tempdir().unwrap();
+    let workspace = root.path().join("project");
+    std::fs::create_dir_all(&workspace).unwrap();
+    let stored = store_configuration(&storage_key_of(&workspace), "本机程序");
+    let (app, cx) = open_editor(cx, &workspace);
+
+    // Opening the dropdown puts focus on the popup, which is what makes a keystroke reach it.
+    cx.update(|window, cx| {
+        app.update(cx, |app, cx| {
+            app.open_run_menu(gpui_kit::point(px(320.), px(30.)), window, cx);
+        });
+    });
+    cx.run_until_parked();
+    let popup = cx.update(|_, cx| {
+        app.read(cx)
+            .run_menu
+            .as_ref()
+            .map(|menu| menu.popup.clone())
+            .expect("the selector opened the dropdown")
+    });
+    // Escape is the dropdown's own dismissal: its key handler finishes with `Action::Dismiss`, which the
+    // menu's subscription turns into a closed menu. That event is what is emitted here, so this covers
+    // the dismissal path rather than the keystroke that would produce it.
+    popup.update(cx, |_, cx| cx.emit(gpui_kit::DismissEvent));
+    cx.run_until_parked();
+    assert!(
+        cx.update(|_, cx| app.read(cx).run_menu.is_none()),
+        "the dropdown answers dismissal and closes"
+    );
+
+    // Both themes keep the run surface usable. The editor's own toggle is used rather than setting a
+    // field, so the path that re-applies the theme and refreshes open dialogs is the one exercised.
+    let before = cx.update(|_, cx| app.read(cx).dark_theme);
+    cx.update(|window, cx| {
+        app.update(cx, |app, cx| app.toggle_theme(window, cx));
+    });
+    cx.run_until_parked();
+    let after = cx.update(|_, cx| app.read(cx).dark_theme);
+    assert_ne!(
+        before, after,
+        "the theme toggle changes the active theme rather than being a no-op"
+    );
+
+    // And the run surface still opens and renders its pages in the theme now active.
+    let pages = cx.update(|window, cx| {
+        let key = app.read(cx).workspace_key();
+        let form = cx.new(|cx| {
+            crate::run::RunConfigForm::open(
+                &crate::run::RunControls::default(),
+                &key,
+                None,
+                window,
+                cx,
+            )
+        });
+        form.read(cx)
+            .tab_labels()
+            .into_iter()
+            .map(|(label, available)| (label.to_owned(), available))
+            .collect::<Vec<_>>()
+    });
+    assert_eq!(
+        pages.len(),
+        4,
+        "the configuration dialog still renders its pages after the theme change"
+    );
+    assert!(
+        pages.iter().all(|(_, available)| *available),
+        "and every page is available: {pages:?}"
+    );
+
+    let _ = std::fs::remove_file(stored);
+}
+
+/// The workspace key for a path, canonicalized the way the editor's own key is.
+fn storage_key_of(workspace: &std::path::Path) -> String {
+    std::fs::canonicalize(workspace)
+        .unwrap()
+        .display()
+        .to_string()
+}
+
 /// The build page edits prepared actions row by row, with structural controls per row.
 #[gpui::test]
 fn the_build_page_edits_prepared_actions_row_by_row(cx: &mut TestAppContext) {
