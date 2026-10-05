@@ -104,6 +104,33 @@ fn empty_workspace_starts_with_centered_canvas(cx: &mut TestAppContext) {
     cx.update(|_, cx| assert!(view.read(cx).tabs.is_empty()));
 }
 
+/// ASCII magic strings in notes must retain the native session and editable file bytes.
+#[gpui::test]
+fn image_like_text_prefixes_keep_text_editing(cx: &mut TestAppContext) {
+    let (directory, view, cx) = canvas_window(cx, false);
+    for (index, contents) in [
+        "P2 bug: example",
+        "BMI is a label",
+        "GIF89a is a format",
+        "GIF89a 是格式说明",
+    ]
+    .iter()
+    .enumerate()
+    {
+        let path = directory.path().join(format!("notes-{index}.txt"));
+        std::fs::write(&path, contents).unwrap();
+        cx.update(|window, cx| {
+            view.update(cx, |app, cx| {
+                app.open_file(path.clone(), window, cx);
+                let tab = app
+                    .text_tab(app.active_text_tab_index().expect("notes must be editable"))
+                    .unwrap();
+                assert_eq!(tab.editor.read(cx).text().to_string(), *contents);
+            })
+        });
+    }
+}
+
 /// A missing viewer preserves the binary file tab and never sends input/save to a text editor.
 #[gpui::test]
 fn binary_file_keeps_its_tab_without_mounting_a_text_editor(cx: &mut TestAppContext) {

@@ -13,9 +13,19 @@ pub(crate) struct Bitmap {
     pub height: u32,
 }
 
-/// Encoding recognition is shared by generic file admission and the decoder, independent of suffixes.
+/// Guess only supported binary encodings. ASCII magic strings alone cannot remove text capability.
+/// An incomplete UTF-8 character at the probe boundary is not evidence of a binary file.
 pub(crate) fn recognizes_encoding(prefix: &[u8]) -> bool {
-    image::guess_format(prefix).is_ok()
+    let binary = prefix.contains(&0)
+        || std::str::from_utf8(prefix).is_err_and(|error| error.error_len().is_some());
+    binary
+        && matches!(
+            image::guess_format(prefix),
+            Ok(image::ImageFormat::Png
+                | image::ImageFormat::Jpeg
+                | image::ImageFormat::Gif
+                | image::ImageFormat::WebP)
+        )
 }
 
 /// Detect the actual encoding and validate bounded pixels before a native image gesture is offered.
