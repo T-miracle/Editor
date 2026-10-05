@@ -3,6 +3,14 @@
 use super::blocks;
 use plugin_protocol::ui;
 
+/// Limits apply before a rejected event tree can exhaust guest fuel or produce an oversized native scene.
+#[test]
+fn oversized_derived_work_returns_a_limit_without_weakening_small_previews() {
+    assert!(blocks(&"paragraph\n\n".repeat(10_000), "zh-CN").is_err());
+    assert!(blocks(&"a".repeat(65_537), "en").is_err());
+    assert!(blocks("# 正常\n\n- [ ] Task\n", "zh-CN").is_ok());
+}
+
 /// Traverse only the public node tree, keeping assertions independent of the parser's internal representation.
 fn descendants(nodes: &[ui::Node]) -> Vec<&ui::Node> {
     let mut result = Vec::new();
@@ -24,7 +32,7 @@ fn descendants(nodes: &[ui::Node]) -> Vec<&ui::Node> {
 /// The guest declares an image with literal author alt text and a source range; it never reads its resource.
 #[test]
 fn standalone_image_declares_source_alt_and_original_utf8_range() {
-    let nodes = blocks("![中文](img.png)", "zh-CN");
+    let nodes = blocks("![中文](img.png)", "zh-CN").unwrap();
     let images: Vec<_> = descendants(&nodes)
         .into_iter()
         .filter(|node| matches!(node.kind, ui::Kind::Image { .. }))
@@ -53,7 +61,7 @@ fn standalone_image_declares_source_alt_and_original_utf8_range() {
 #[test]
 fn inline_images_preserve_text_emphasis_and_distinct_ranges() {
     let source = "**前 ![甲](a.png) 中 ![乙](b.png) 后** 和 \u{0060}代码\u{0060}";
-    let nodes = blocks(source, "zh-CN");
+    let nodes = blocks(source, "zh-CN").unwrap();
     let all = descendants(&nodes);
     let images: Vec<_> = all
         .iter()
@@ -93,7 +101,7 @@ fn inline_images_preserve_text_emphasis_and_distinct_ranges() {
 #[test]
 fn nested_quote_lists_preserve_images_and_styled_neighboring_text() {
     let source = "> - **前** ![甲](a.png) *后*\n>   - ![乙](b.png)\n";
-    let nodes = blocks(source, "en-US");
+    let nodes = blocks(source, "en-US").unwrap();
     let all = descendants(&nodes);
     let images: Vec<_> = all
         .iter()
@@ -125,7 +133,7 @@ fn nested_quote_lists_preserve_images_and_styled_neighboring_text() {
 fn table_images_preserve_header_cell_layout_and_rich_text() {
     let source =
         "| **标题** ![头](h.png) | 描述 |\n| --- | --- |\n| 左 ![图](a.png) 右 | *后文* |\n";
-    let nodes = blocks(source, "zh-CN");
+    let nodes = blocks(source, "zh-CN").unwrap();
     assert_eq!(nodes.len(), 1);
     let ui::Kind::Column { children: rows } = &nodes[0].kind else {
         panic!("an image table must keep its native row and cell structure");
@@ -160,7 +168,7 @@ fn table_images_preserve_header_cell_layout_and_rich_text() {
 #[test]
 fn raw_html_and_code_never_declare_implicit_images() {
     let source = "<img src=\"evil.png\" alt=\"字\">\n\n文字 <img src=\"inline.png\"> \u{0060}![伪](code.png)\u{0060}\n\n![真](img.png)";
-    let nodes = blocks(source, "zh-CN");
+    let nodes = blocks(source, "zh-CN").unwrap();
     let all = descendants(&nodes);
     let images: Vec<_> = all
         .iter()
@@ -198,7 +206,7 @@ fn empty_and_oversized_image_sources_leave_localized_alt_and_surrounding_text() 
                 oversized_reason,
             ),
         ] {
-            let nodes = blocks(&source, locale);
+            let nodes = blocks(&source, locale).unwrap();
             let all = descendants(&nodes);
             assert!(
                 all.iter()

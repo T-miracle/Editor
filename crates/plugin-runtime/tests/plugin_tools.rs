@@ -212,6 +212,50 @@ fn captured_file_tools_recheck_current_editor_read_grant() {
     assert_eq!(selected(&manager), "tool-row");
 }
 
+/// One-time native data import obeys plugin storage consent and never overwrites existing intent.
+#[test]
+#[ignore = "build actual SDK fixture with scripts/build-layout-example.ps1 first"]
+fn private_preference_import_preserves_existing_values_and_requires_consent() {
+    let workspace = tempfile::tempdir().unwrap();
+    let data = tempfile::tempdir().unwrap();
+    let pkg = package("normal");
+    let mut manager =
+        Manager::open(data.path().to_path_buf(), environment(workspace.path())).unwrap();
+    manager
+        .install(&pkg, pkg.manifest.permissions.clone())
+        .unwrap();
+    let key = api::PreferenceKey {
+        file_type: "layout".into(),
+        name: "display".into(),
+    };
+    assert!(
+        manager
+            .import_preference("layout-example", key.clone(), serde_json::json!(2))
+            .unwrap()
+    );
+    assert!(
+        !manager
+            .import_preference("layout-example", key.clone(), serde_json::json!(1))
+            .unwrap()
+    );
+    preview(&mut manager, Some(file("first", "first.layout"))).unwrap();
+    assert_eq!(selected(&manager), "tool-content");
+    manager
+        .installed
+        .get_mut("layout-example")
+        .unwrap()
+        .grants
+        .remove("storage");
+    let error = manager
+        .import_preference("layout-example", key, serde_json::json!(0))
+        .unwrap_err();
+    assert_eq!(
+        error.downcast_ref::<api::Failure>().unwrap().code,
+        api::ErrorCode::PermissionDenied
+    );
+    assert_eq!(selected(&manager), "tool-content");
+}
+
 /// A live scoped watch observes a newer record; corrupt external writes are preserved and terminate it.
 #[test]
 #[ignore = "build actual SDK fixture with scripts/build-layout-example.ps1 first"]
@@ -245,6 +289,21 @@ fn private_preference_watch_converges_and_reports_corruption() {
     manager.poll();
     assert_eq!(selected(&manager), "tool-content");
     std::fs::write(&path, b"corrupt").unwrap();
+    // Native migration shares the same strict private reader; it cannot replace damaged user data.
+    let error = manager
+        .import_preference(
+            "layout-example",
+            api::PreferenceKey {
+                file_type: "layout".into(),
+                name: "display".into(),
+            },
+            serde_json::json!(0),
+        )
+        .unwrap_err();
+    assert_eq!(
+        error.downcast_ref::<api::Failure>().unwrap().code,
+        api::ErrorCode::InvalidState
+    );
     manager.poll();
     assert_eq!(std::fs::read(&path).unwrap(), b"corrupt");
     assert_eq!(manager.live["layout-example"].resource_count(), 1);

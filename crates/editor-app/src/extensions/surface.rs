@@ -108,6 +108,7 @@ impl ExtensionPanel {
             self.surface_id.as_deref().unwrap_or_default()
         );
         let view = self.native_ui.as_ref().unwrap().clone();
+        let interactive = self.current_document().is_some();
         let parent = self.parent.clone();
         let expected_key = key.clone();
         let epoch = self.instance_epoch;
@@ -116,19 +117,25 @@ impl ExtensionPanel {
                 .update(cx, |app, cx| {
                     let index = app.active_text_tab_index()?;
                     let selected = app.active_editor_preview(cx)?;
-                    if app.plugin_document_version(index).ok().as_ref() != Some(target)
+                    let current = app.plugin_document_version(index).ok()?;
+                    // Borrowing current text for retained geometry grants no stale guest edit authority.
+                    if current.id != target.id
+                        || current.path != target.path
+                        || target.revision > current.revision
                         || app.editor_preview_owner_key(&selected, cx).as_ref()
                             != Some(&expected_key)
                         || selected.read(cx).instance_epoch != epoch
                     {
                         return None;
                     }
-                    Some(app.render_native_editor(window, cx))
+                    let source = app.render_native_editor(window, cx);
+                    Some(app.render_source_viewport_probe(source, selected, cx))
                 })
                 .ok()
                 .flatten()
         });
         view.update(cx, |view, cx| {
+            view.set_scene_current(interactive, cx);
             view.native_editor = Some(editor);
             view.set_viewport_enabled(self.viewport_sync_enabled, cx);
             view.update_images(&key, &self.images, window, cx)
@@ -596,7 +603,15 @@ impl Render for ExtensionPanel {
                 .child(error.clone())
                 .into_any_element();
         }
-        if let Some(document) = self.current_document().map(|document| (*document).clone()) {
+        if let Some(mut document) = self
+            .renderable_document()
+            .map(|document| (*document).clone())
+        {
+            if self.current_document().is_none() {
+                // Old modals/menus cannot capture current input while a source refresh is pending.
+                document.dialog = None;
+                document.menu = None;
+            }
             let view = self.native_document(document, window, cx);
             return div()
                 .size_full()

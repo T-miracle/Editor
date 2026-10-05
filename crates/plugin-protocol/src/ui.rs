@@ -28,6 +28,10 @@ pub const VERSION: u32 = 1;
 /// Replace a panel's complete view atomically. Revision is echoed in user events.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Document {
+    /// Plugin-owned RGB defaults keyed by `role.property`, overridden by user theme tokens.
+    /// Requires `ui.content_colors`; native control behavior and general chrome remain host-owned.
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub content_colors: std::collections::BTreeMap<String, u32>,
     /// Bottom-bar functions remain guest-owned, independently of this surface's layout contribution.
     /// Requires `ui.tools`; file targets also require the exact `Document.file` context.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -75,6 +79,7 @@ pub struct Document {
 impl Document {
     pub fn new(root: Node) -> Self {
         Self {
+            content_colors: Default::default(),
             tools: Vec::new(),
             editor_layout: false,
             file: None,
@@ -223,6 +228,9 @@ pub struct SourceRange {
 /// Layout contains geometry only. Color and typography always come from the active theme.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct Layout {
+    /// Native adjustable panes on a Row/Column, requiring `ui.native >=1.1`; cannot combine with wrap.
+    #[serde(default)]
+    pub resizable: bool,
     pub width: Option<f32>,
     pub height: Option<f32>,
     #[serde(default)]
@@ -550,6 +558,12 @@ impl Node {
         self.layout.height = Some(height);
         self
     }
+    /// Request native pane handles for this Row/Column without handing scroll or document state to the guest.
+    pub fn resizable(mut self) -> Self {
+        self.layout.resizable = true;
+        self
+    }
+
     pub fn grow(mut self) -> Self {
         self.layout.grow = true;
         self

@@ -3,6 +3,48 @@ use plugin_runtime::{Manager, Package, plugin_protocol::Environment};
 use serde_json::{Value, json};
 use std::io::{Cursor, Write};
 
+/// Owned content defaults and adjustable native panes are independently negotiated before publication.
+#[test]
+#[ignore = "build current capability-example through the host SDK first"]
+fn content_defaults_require_capability_and_adjustable_panes_use_current_native_version() {
+    for negotiated in [false, true] {
+        let package = package_with_ui(
+            |manifest| {
+                manifest["settings_hook"] = json!(false);
+                manifest["settings"]["label"]["default"] = json!("composable-ui");
+                manifest["api"]["required"]["ui.native"] = json!(">=1.1,<2");
+                if negotiated {
+                    manifest["api"]["required"]["ui.content_colors"] = json!("^1");
+                }
+            },
+            |tree| {
+                tree["content_colors"] = json!({"text.foreground":1122867});
+                tree["root"] = json!({"id":"panes","layout":{"grow":true,"resizable":true},"kind":{"type":"row","children":[{"id":"a","kind":{"type":"text","text":"A"}},{"id":"b","kind":{"type":"text","text":"B"}}]}});
+            },
+        );
+        let directory = tempfile::tempdir().unwrap();
+        let mut manager =
+            Manager::open(directory.path().join("plugins"), Environment::default()).unwrap();
+        let result = manager.install(&package, package.manifest.permissions.clone());
+        if negotiated {
+            result.unwrap();
+            let document = &manager.live["capability-example"].views["welcome"];
+            assert_eq!(document.content_colors["text.foreground"], 0x112233);
+            assert!(document.root.layout.resizable);
+        } else {
+            let error = result.unwrap_err();
+            assert_eq!(
+                error
+                    .downcast_ref::<plugin_runtime::plugin_protocol::api::Failure>()
+                    .unwrap()
+                    .code,
+                plugin_runtime::plugin_protocol::api::ErrorCode::CapabilityUnavailable
+            );
+            assert!(manager.live.is_empty());
+        }
+    }
+}
+
 /// Repackage a real SDK guest to verify capability negotiation and typed preview authority.
 fn package(edit: impl FnOnce(&mut Value)) -> Package {
     package_with_ui(edit, |_| {})

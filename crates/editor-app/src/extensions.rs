@@ -121,8 +121,8 @@ pub struct ExtensionPanel {
     panel_title: String,
     /// Cache package-owned artwork so repainting does not read from disk.
     panel_icons: [Option<Vec<u8>>; 2],
-    /// Validated package-owned mode artwork shares the panel digest cache and has no ambient paths.
-    mode_icons: [Option<Vec<u8>>; 3],
+    /// One import attempt per live incarnation/type; failures retain the session record for retry.
+    legacy_import: Option<(u64, String)>,
     panel_icon_digest: Option<String>,
     /// Immutable package icons are loaded once per version, outside the render path.
     tool_icons: HashMap<String, Option<Icon>>,
@@ -299,7 +299,7 @@ impl ExtensionPanel {
             preview_error: None,
             panel_title: "插件管理".into(),
             panel_icons: [None, None],
-            mode_icons: [None, None, None],
+            legacy_import: None,
             panel_icon_digest: None,
             tool_icons: HashMap::new(),
             focus: cx.focus_handle(),
@@ -363,16 +363,6 @@ impl ExtensionPanel {
             })
             .unwrap_or_default();
         let panel_icon_digest = icon_entry.map(|entry| entry.digest.clone());
-        let mode_icons = icon_entry
-            .map(|entry| {
-                [
-                    protocol::PreviewMode::Source,
-                    protocol::PreviewMode::Split,
-                    protocol::PreviewMode::Preview,
-                ]
-                .map(|mode| entry.preview_mode_icon(&root, &panel.id, mode))
-            })
-            .unwrap_or_default();
         let task = cx.spawn(async move |this, cx| {
             loop {
                 cx.background_executor()
@@ -405,7 +395,7 @@ impl ExtensionPanel {
             preview_error: None,
             panel_title: panel.title,
             panel_icons,
-            mode_icons,
+            legacy_import: None,
             panel_icon_digest,
             tool_icons: HashMap::new(),
             focus: cx.focus_handle(),
@@ -589,16 +579,6 @@ impl ExtensionPanel {
                             ]
                         })
                         .unwrap_or_default();
-                    self.mode_icons = entry
-                        .map(|entry| {
-                            [
-                                protocol::PreviewMode::Source,
-                                protocol::PreviewMode::Split,
-                                protocol::PreviewMode::Preview,
-                            ]
-                            .map(|mode| entry.preview_mode_icon(&self.root, panel_id, mode))
-                        })
-                        .unwrap_or_default();
                     self.panel_icon_digest = digest;
                     changed = true;
                 }
@@ -767,6 +747,31 @@ impl ExtensionPanel {
                         && document.file == self.preview_file)
             })
             .cloned()
+    }
+    /// Retain readonly geometry during same-session parsing; exact `current_document` alone
+    /// authorizes guest actions. A file switch or reopened session cannot reuse this tree.
+    fn renderable_document(&self) -> Option<Arc<protocol::ui::Document>> {
+        self.current_document().or_else(|| {
+            let key = format!("{}/{}", self.active.as_ref()?, self.surface_id.as_ref()?);
+            let scene = self.views.get(&key)?;
+            let previous = scene.source.as_ref()?;
+            let current = self.preview_version.as_ref()?;
+            let same_file = match (&scene.file, &self.preview_file) {
+                (None, None) => true,
+                (Some(previous), Some(current)) => {
+                    previous.id == current.id
+                        && previous.path == current.path
+                        && previous.revision <= current.revision
+                }
+                _ => false,
+            };
+            (self.editor_preview
+                && same_file
+                && previous.id == current.id
+                && previous.path == current.path
+                && previous.revision <= current.revision)
+                .then(|| scene.clone())
+        })
     }
     /// Dispatch manifest shortcuts without registering terminal-specific native actions.
     pub fn shortcut(
@@ -1035,6 +1040,7 @@ impl EditorApp {
     }
     /// Register and remove native panels directly from installed manifest contributions.
     pub(crate) fn sync_plugin_panels(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.finish_preference_imports(cx);
         let contributions: Vec<_> = self
             .extensions
             .read(cx)

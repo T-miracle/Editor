@@ -17,6 +17,8 @@ File 目标必须等于当前 `Document.file`；Window 目标只能是本贡献�
 
 `storage.private >=1.1, <2` 增加 `ReadPreference/WritePreference`，需要 `storage` 权限。
 SDK 提供 `read_preference(key, watch)` 与 `write_preference(key, expected_revision, data)`。
+访客 `PreferenceBinding` 负责绑定／撤销 watch、校验新通知和 CAS 冲突后重读；
+插件自行解码 schema。切换文件类型或退出内容时调用 `bind(None)`／`close()`，不存储文本和原生会话状态。
 宿主给定插件与工作区命名空间，`PreferenceKey` 只包含规范化文件类型和插件本地名称。
 名称不能指定路径或其他所有者；空文件类型可以保存工作区窗口意图。
 
@@ -29,3 +31,8 @@ SDK 提供 `read_preference(key, watch)` 与 `write_preference(key, expected_rev
 数据是不透明显示意图，不授予实际窗口、布局或文本权力。各实例须校验订阅与 revision，
 冲突后重新读取并应用当前意图，不盲目重试覆盖；原生编辑会话、选择和 Undo 保持各文档独立。
 独立示例：`layout-example` 使用工具及按类型偏好；`tools-example` 同时贡献辅助工具和独立窗口。
+
+旧宿主 session 的模式、同步及工具栏记录只作为有限导入源。后台 `Manager::import_preference`
+将不透明 bundle 放入当前插件／工作区／类型的 `imported-presentation` 键；已有记录优先，
+损坏、权限、配额和实例变化明确失败。仅成功收据可以删除对应且内容未变化的旧 bundle，
+其他设置继续保留。插件随后转成自己的 `display` schema，已有新版意图不被导入覆盖。

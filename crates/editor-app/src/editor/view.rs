@@ -609,11 +609,10 @@ impl EditorApp {
                 .child(body)
                 .into_any_element();
         }
-        let source = self.render_native_editor(window, cx);
         let body = if let Some(preview) = self.active_editor_preview(cx) {
-            self.render_editor_preview_body(source, preview, window, cx)
+            self.render_editor_preview_body(preview, window, cx)
         } else {
-            source
+            self.render_native_editor(window, cx)
         };
         v_flex()
             // Expose the editor extent for layout regression checks when docks disappear.

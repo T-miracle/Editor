@@ -10,7 +10,11 @@ impl EditorApp {
         cx: &mut Context<Self>,
     ) -> Option<AnyElement> {
         let panel = self.active_editor_preview(cx)?;
-        if self.editor_preview_mode(&panel, cx) == protocol::PreviewMode::Preview {
+        if panel
+            .read(cx)
+            .current_document()
+            .is_none_or(|scene| scene.active_native_editor().is_none())
+        {
             panel.update(cx, |panel, _| panel.native_toolbar = None);
             return None;
         }
@@ -29,33 +33,6 @@ impl EditorApp {
 }
 
 impl ExtensionPanel {
-    /// A source-only layout hides preview content while keeping its exclusive dialog/menu visible.
-    pub(super) fn source_overlay(
-        &mut self,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) -> Option<Entity<crate::ui::plugin::PluginView>> {
-        let Some(mut document) = self.current_document().map(|document| (*document).clone()) else {
-            self.native_ui = None;
-            return None;
-        };
-        // Reuse the root identity without drawing its preview content or introducing another modal.
-        document.root =
-            protocol::ui::Node::new(document.root.id.clone(), protocol::ui::Kind::Spacer);
-        let visible = document.dialog.is_some() || document.menu.is_some();
-        if !visible && self.native_ui.is_none() {
-            return None;
-        }
-        // Reconcile dismissal before retirement so the native modal/menu returns its previous focus.
-        let view = self.native_document(document, window, cx);
-        if visible {
-            Some(view)
-        } else {
-            self.native_ui = None;
-            None
-        }
-    }
-
     /// Keep keyed controls across publication updates, but never revive a missing or stale source tree.
     fn source_toolbar(
         &mut self,

@@ -7,6 +7,7 @@ use plugin_protocol::{
 };
 use std::cell::RefCell;
 
+mod display;
 mod format;
 mod formatting;
 mod imports;
@@ -25,9 +26,15 @@ struct Source {
 /// Only derived view state and task ownership are mutable; the editor owns IME, selection and undo.
 #[derive(Default)]
 struct State {
+    /// File authority and opaque scoped intent never contain another editable document session.
+    file: Option<api::FileContext>,
+    display: display::Display,
+    preferences: api::PreferenceBinding,
     environment: Environment,
     source: Option<Source>,
     blocks: Vec<ui::Node>,
+    /// Early parser limits share the existing native preview fallback without losing text authority.
+    preview_limited: bool,
     /// The pending intent stores request ownership only; source text remains a readonly host snapshot.
     formatting: formatting::Formatting,
     /// Image imports preserve complete-file receipts independently of the current source snapshot.
@@ -74,7 +81,7 @@ impl Guest for MarkdownPlugin {
                         if state.viewport_event(panel.as_deref(), &event) {
                             return Ok(api::Output::default());
                         }
-                        state.event(panel.as_deref(), event);
+                        state.event(panel.as_deref(), event)?;
                     }
                     api::Input::Snapshot => {
                         // Source text and derived trees are transient and cannot revive a closed document.
@@ -87,6 +94,18 @@ impl Guest for MarkdownPlugin {
                         });
                     }
                     api::Input::Activate => {}
+                }
+                // File identity precedes text. No intervening receipt or theme event may
+                // publish old blocks as the new file; Preview replaces them atomically.
+                if state
+                    .file
+                    .as_ref()
+                    .and_then(|file| file.text.as_ref())
+                    .is_some_and(|next| {
+                        state.source.as_ref().map(|source| &source.version) != Some(next)
+                    })
+                {
+                    return Ok(api::Output::default());
                 }
                 Ok(api::Output {
                     views: vec![state.view()],
@@ -137,13 +156,24 @@ impl State {
         }
     }
     /// Only the file-scoped preview notification may replace this readonly source snapshot.
-    fn event(&mut self, panel: Option<&str>, event: api::Notification) {
+    fn event(&mut self, panel: Option<&str>, event: api::Notification) -> Result<(), api::Failure> {
         match event {
+            api::Notification::FilePreview { file } if panel == Some("preview") => {
+                self.bind_display(file)?
+            }
+            api::Notification::Tool(event) if panel == Some("preview") => {
+                self.display_tool(event)?
+            }
+            event @ (api::Notification::PreferenceChanged { .. }
+            | api::Notification::SubscriptionFailed { .. }) => {
+                // A failed owned watch is retired by the SDK binding before a later scope retries.
+                self.display_changed(&event)?
+            }
             api::Notification::Preview { document, text } if panel == Some("preview") => {
                 if matches!((&self.source, &document), (Some(current), Some(next))
                     if current.version.id == next.id && next.revision < current.version.revision)
                 {
-                    return;
+                    return Ok(());
                 }
                 let changed = match (&self.source, &document) {
                     (Some(current), Some(next)) => current.version != *next || current.text != text,
@@ -218,6 +248,7 @@ impl State {
             // Only parsed tasks and declared toolbar actions can edit; other preview content remains readonly.
             _ => {}
         }
+        Ok(())
     }
 
     /// File-scoped actions bind to the current UI revision before resolving a parsed task, link or toolbar intent.
@@ -278,12 +309,17 @@ impl State {
             self.navigation
                 .controls_viewport(self.source.as_ref().map(|source| &source.version)),
         );
+        self.preview_limited = false;
         self.blocks = self.source.as_ref().map_or_else(Vec::new, |source| {
-            preview::blocks(&source.text, &self.environment.locale)
+            preview::blocks(&source.text, &self.environment.locale).unwrap_or_else(|_| {
+                self.preview_limited = true;
+                Vec::new()
+            })
         });
         self.navigation_index = self
             .source
             .as_ref()
+            .filter(|_| !self.preview_limited)
             .map_or_else(navigation::Index::default, |source| {
                 navigation::Index::parse(&source.text)
             });
@@ -345,7 +381,7 @@ impl State {
         }
         // A large or deeply nested document should leave the guest alive and preserve its source authority.
         // The same public quotas apply to this preview and every other native plugin view.
-        if document.validate().is_err() {
+        if self.preview_limited || document.validate().is_err() {
             // The quota fallback has no displayed source blocks; withdraw its viewport stream as well.
             document.editor_viewport = None;
             let message = if english {
@@ -361,6 +397,7 @@ impl State {
                 .padding(12.),
             );
         }
+        document = self.compose_display(document);
         api::View {
             panel: "preview".into(),
             document,

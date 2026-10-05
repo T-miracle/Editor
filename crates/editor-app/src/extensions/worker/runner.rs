@@ -91,6 +91,7 @@ impl Worker {
                         }
                         Some(
                             Work::SetSetting { .. }
+                            | Work::ImportPreference { .. }
                             | Work::SetServiceProvider { .. }
                             | Work::Enable(_)
                             | Work::Restart(_)
@@ -313,6 +314,46 @@ impl Worker {
                             manager.set_project_enabled(&id, enabled)
                         }
                         Some(Work::Uninstall(id, delete)) => manager.uninstall(&id, delete),
+                        Some(Work::ImportPreference {
+                            plugin,
+                            epoch,
+                            owner,
+                            workspace,
+                            key,
+                            data,
+                        }) => {
+                            let current = output
+                                .lock()
+                                .unwrap()
+                                .instance_epochs
+                                .get(&plugin)
+                                .copied()
+                                .unwrap_or(0);
+                            let result = if current != epoch || manager.workspace() != workspace {
+                                Err(api::Failure::new(
+                                    api::ErrorCode::StaleRevision,
+                                    "Preference import owner changed",
+                                )
+                                .into())
+                            } else {
+                                manager
+                                    .import_preference(&plugin, key, data.clone())
+                                    .map(|_| ())
+                            };
+                            let mut published = output.lock().unwrap();
+                            // Missing UI acknowledgements cannot grow worker memory without bound;
+                            // discarded receipts leave the legacy source intact for a later restart.
+                            if published.preference_imports.len() >= 256 {
+                                published.preference_imports.remove(0);
+                            }
+                            published.preference_imports.push(PreferenceImport {
+                                owner,
+                                workspace,
+                                data,
+                                succeeded: result.is_ok(),
+                            });
+                            result
+                        }
                         Some(Work::Event(id, epoch, panel, event)) => {
                             let current = output
                                 .lock()

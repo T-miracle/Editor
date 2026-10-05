@@ -45,6 +45,29 @@ pub(super) fn pump(app: &Entity<EditorApp>, manager: &mut Manager, cx: &mut App)
         .try_iter()
         .collect::<Vec<_>>();
     for work in work {
+        let work = match work {
+            Work::ImportPreference {
+                plugin,
+                owner,
+                workspace,
+                key,
+                data,
+                ..
+            } => {
+                let succeeded = manager
+                    .import_preference(&plugin, key, data.clone())
+                    .is_ok();
+                owner_receipt(
+                    &owner,
+                    &workspace,
+                    data,
+                    succeeded,
+                    &app.read(cx).extensions.read(cx).worker,
+                );
+                continue;
+            }
+            work => work,
+        };
         if let Work::Event(id, _, panel, event) = work {
             let result = manager.event(&id, panel, event);
             assert!(
@@ -97,6 +120,26 @@ pub(super) fn pump(app: &Entity<EditorApp>, manager: &mut Manager, cx: &mut App)
     for panel in panels {
         panel.update(cx, |panel, cx| panel.poll(cx));
     }
+}
+/// Native harnesses acknowledge actual Manager writes; they never synthesize stored intent.
+pub(super) fn owner_receipt(
+    owner: &str,
+    workspace: &str,
+    data: serde_json::Value,
+    succeeded: bool,
+    worker: &Worker,
+) {
+    worker
+        .state
+        .lock()
+        .unwrap()
+        .preference_imports
+        .push(worker::PreferenceImport {
+            owner: owner.into(),
+            workspace: workspace.into(),
+            data,
+            succeeded,
+        });
 }
 
 /// Flush two ordinary render/notification turns; resize publications settle without private test APIs.

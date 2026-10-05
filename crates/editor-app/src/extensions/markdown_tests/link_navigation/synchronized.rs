@@ -176,7 +176,7 @@ fn delivered_markdown_fragment_sync_preserves_both_arrival_orders_and_clamped_ta
             let heading = ui
                 .debug_bounds("plugin-ui-b-1610-heading")
                 .expect("native target heading");
-            let pane = ui.debug_bounds("editor-preview-pane").unwrap();
+            let pane = ui.debug_bounds("plugin-ui-preview-root").unwrap();
             if index == 0 || opened_first {
                 assert!(
                     heading.top() >= pane.top() && heading.bottom() <= pane.bottom(),
@@ -260,7 +260,7 @@ fn delivered_markdown_link_cancels_queued_sync_before_opening_target(cx: &mut Te
         }
     ));
     let link = ui.debug_bounds("plugin-ui-b-0-paragraph").unwrap();
-    let pane = ui.debug_bounds("editor-preview-pane").unwrap();
+    let pane = ui.debug_bounds("plugin-ui-preview-root").unwrap();
     assert!(
         link.top() >= pane.top() && link.bottom() <= pane.bottom(),
         "the withheld locate leaves the link visible"
@@ -345,7 +345,7 @@ fn delivered_markdown_link_cancels_queued_sync_before_opening_target(cx: &mut Te
     );
     fixture.settle(ui);
     let heading = ui.debug_bounds("plugin-ui-b-1610-heading").unwrap();
-    let pane = ui.debug_bounds("editor-preview-pane").unwrap();
+    let pane = ui.debug_bounds("plugin-ui-preview-root").unwrap();
     assert!(heading.top() >= pane.top() && heading.bottom() <= pane.bottom());
     assert_eq!(
         ui.update(|_, cx| fixture.app.read(cx).editor.read(cx).text().to_string()),

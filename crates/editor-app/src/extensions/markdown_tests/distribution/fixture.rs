@@ -263,6 +263,7 @@ pub(super) fn independent_preview(extension: &str) -> Package {
     let mut manifest: serde_json::Value = serde_json::from_slice(&files["manifest.json"]).unwrap();
     manifest["id"] = serde_json::json!("bundled-opaque-preview");
     manifest["settings_hook"] = serde_json::json!(false);
+    manifest["api"]["required"]["editor.layout"] = serde_json::json!("^1");
     manifest["settings"]["label"]["default"] = serde_json::json!("composable-ui");
     manifest["panels"][0]["position"] = serde_json::json!("editor");
     manifest["panels"][0]["file_extensions"] = serde_json::json!([extension]);
@@ -271,13 +272,33 @@ pub(super) fn independent_preview(extension: &str) -> Package {
         "manifest.json".into(),
         serde_json::to_vec(&manifest).unwrap(),
     );
+    // The unfamiliar guest owns its split and explicitly borrows the existing source once.
+    let editor = protocol::ui::Node::new(
+        "bundle-editor",
+        protocol::ui::Kind::NativeEditor {
+            document: protocol::api::DocumentVersion {
+                id: "template".into(),
+                path: "template".into(),
+                revision: 0,
+            },
+        },
+    )
+    .grow();
+    let mut document = protocol::ui::Document::new(
+        protocol::ui::Node::row(
+            "bundle-layout",
+            vec![
+                editor,
+                protocol::ui::Node::text("bundle-greeting", "Independent public SDK preview")
+                    .grow(),
+            ],
+        )
+        .grow(),
+    );
+    document.editor_layout = true;
     files.insert(
         "composed-ui.json".into(),
-        serde_json::to_vec(&protocol::ui::Document::new(protocol::ui::Node::text(
-            "bundle-greeting",
-            "Independent public SDK preview",
-        )))
-        .unwrap(),
+        serde_json::to_vec(&document).unwrap(),
     );
     language_tests::packages::repack(files).unwrap()
 }

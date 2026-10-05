@@ -233,7 +233,7 @@ fn delivered_markdown_pending_links_cannot_follow_edits_tabs_close_or_disable(
             );
         }
         if name == "disable.md" {
-            assert!(ui.debug_bounds("editor-preview-pane").is_none());
+            assert!(ui.debug_bounds("plugin-ui-preview-root").is_none());
         }
     }
 }
@@ -458,7 +458,7 @@ fn delivered_independent_navigation_peer_guards_txt_browser_grants_and_revision(
         .install(&peer, peer.manifest.permissions.clone())
         .unwrap();
     fixture.open("source.txt", ui);
-    assert!(ui.debug_bounds("editor-preview-pane").is_none());
+    assert!(ui.debug_bounds("plugin-ui-preview-root").is_none());
     let version = refuse_ungranted_browser(&mut fixture, ui);
     probe(
         &mut fixture,

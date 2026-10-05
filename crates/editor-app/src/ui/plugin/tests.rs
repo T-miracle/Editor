@@ -712,9 +712,12 @@ fn live_theme_roles_override_native_control_colors_and_fonts(cx: &mut TestAppCon
                 ..Default::default()
             },
         );
-        let view = cx.new(|cx| {
-            PluginView::new("test".into(), fixture(), environment, |_, _| {}, window, cx)
-        });
+        let mut document = fixture();
+        document
+            .content_colors
+            .insert("button.foreground".into(), 0x987654);
+        let view = cx
+            .new(|cx| PluginView::new("test".into(), document, environment, |_, _| {}, window, cx));
         assert_eq!(
             view.read(cx).colors("button", cx).foreground,
             gpui_kit::rgb(0x123456).into()
@@ -730,11 +733,16 @@ fn live_theme_roles_override_native_control_colors_and_fonts(cx: &mut TestAppCon
             Some(gpui_kit::FontWeight::BOLD)
         );
         view.update(cx, |view, cx| {
-            view.update_document(fixture(), Environment::default(), window, cx)
+            let mut document = fixture();
+            document
+                .content_colors
+                .insert("button.foreground".into(), 0x987654);
+            view.update_document(document, Environment::default(), window, cx)
         });
-        assert_ne!(
+        // Removing a user override restores this document's owned default, not another plugin's token.
+        assert_eq!(
             view.read(cx).colors("button", cx).foreground,
-            gpui_kit::rgb(0x123456).into()
+            gpui_kit::rgb(0x987654).into()
         );
         Root::new(view, window, cx)
     });

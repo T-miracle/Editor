@@ -11,6 +11,7 @@ mod harness;
 mod image_import;
 mod image_preview;
 mod link_navigation;
+mod migration;
 mod modes;
 mod navigation_safety;
 mod range_edits;
@@ -31,6 +32,10 @@ fn language_package() -> Package {
         "queries/highlights.scm",
         "queries/injections.scm",
         "queries/inline.scm",
+        // File artwork is now a declared language resource and follows ordinary package validation.
+        "icons.json",
+        "icons/file.svg",
+        "icons/file_dark.svg",
     ] {
         files.insert(path.into(), std::fs::read(root.join(path)).unwrap());
     }
@@ -102,9 +107,12 @@ fn delivered_markdown_preview_tracks_unsaved_native_edits_and_reclaims_split(
         pump(&mut manager, &app, cx);
         publish(&mut manager, &mut renderer, &app, cx);
     }
-    let preview = cx.debug_bounds("editor-preview-pane").unwrap();
+    let preview = cx.debug_bounds("plugin-ui-preview-root").unwrap();
     assert!(preview.size.width > px(100.) && preview.size.height > px(100.));
-    assert!(cx.debug_bounds("editor-preview-divider").is_some());
+    assert!(
+        cx.debug_bounds("plugin-split-divider-markdown-layout")
+            .is_some()
+    );
     let tree = &manager.live["markdown"].views["preview"];
     let serialized = serde_json::to_string(tree).unwrap();
     for expected in [
@@ -214,14 +222,14 @@ fn delivered_markdown_preview_tracks_unsaved_native_edits_and_reclaims_split(
         pump(&mut manager, &app, cx);
         publish(&mut manager, &mut renderer, &app, cx);
     }
-    assert!(cx.debug_bounds("editor-preview-pane").is_none());
+    assert!(cx.debug_bounds("plugin-ui-preview-root").is_none());
     cx.update(|window, cx| app.update(cx, |app, cx| app.open_file(path.clone(), window, cx)));
     cx.run_until_parked();
     for _ in 0..2 {
         pump(&mut manager, &app, cx);
         publish(&mut manager, &mut renderer, &app, cx);
     }
-    assert!(cx.debug_bounds("editor-preview-pane").is_some());
+    assert!(cx.debug_bounds("plugin-ui-preview-root").is_some());
     // A clean document reload uses the production reconciliation path rather than an editor edit.
     let reload_path = root.path().join("reloaded.md");
     std::fs::write(&reload_path, "# Before reload\n").unwrap();
@@ -391,7 +399,7 @@ fn delivered_markdown_preview_tracks_unsaved_native_edits_and_reclaims_split(
     }));
     manager.disable("markdown").unwrap();
     publish(&mut manager, &mut renderer, &app, cx);
-    assert!(cx.debug_bounds("editor-preview-pane").is_none());
+    assert!(cx.debug_bounds("plugin-ui-preview-root").is_none());
     manager.uninstall("markdown", false).unwrap();
     publish(&mut manager, &mut renderer, &app, cx);
     assert!(cx.update(|_, cx| app.read(cx).plugin_panels.is_empty()));

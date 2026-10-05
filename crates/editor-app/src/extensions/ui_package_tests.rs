@@ -74,11 +74,14 @@ fn delivered_ui_packages_follow_native_input_and_reclaim_layout(cx: &mut TestApp
         pump(&mut manager, &app, cx);
         publish(&mut manager, &mut renderer, &app, cx);
     }
-    assert!(cx.debug_bounds("editor-preview-pane").is_some());
+    assert!(cx.debug_bounds("editor-plugin-layout").is_some());
     let canvas = cx.debug_bounds("plugin-ui-preview-canvas").unwrap();
     let drawing = |manager: &plugin_runtime::Manager| {
-        let protocol::ui::Kind::Canvas(canvas) =
-            &manager.live["svg"].views["preview"].as_ref().root.kind
+        // Image composes a native source beside this canvas through the public layout contract.
+        let protocol::ui::Kind::Canvas(canvas) = &manager.live["svg"].views["preview"]
+            .active_node("preview-canvas")
+            .unwrap()
+            .kind
         else {
             panic!("canvas required")
         };
@@ -135,6 +138,10 @@ fn delivered_ui_packages_follow_native_input_and_reclaim_layout(cx: &mut TestApp
     pump(&mut manager, &app, cx);
     publish(&mut manager, &mut renderer, &app, cx);
     assert!(cx.debug_bounds("plugin-preview-error").is_some());
+    assert!(
+        cx.debug_bounds("editor-source-pane").is_some(),
+        "preview transport limits must preserve editable text"
+    );
     assert!(cx.debug_bounds("plugin-ui-preview-canvas").is_none());
     cx.simulate_keystrokes("ctrl-a");
     cx.simulate_input(original);
@@ -146,7 +153,7 @@ fn delivered_ui_packages_follow_native_input_and_reclaim_layout(cx: &mut TestApp
     assert!(manager.installed["svg"].error.is_none());
     manager.disable("svg").unwrap();
     publish(&mut manager, &mut renderer, &app, cx);
-    assert!(cx.debug_bounds("editor-preview-pane").is_none());
+    assert!(cx.debug_bounds("editor-plugin-layout").is_none());
     for id in ["svg", "example"] {
         manager.uninstall(id, false).unwrap();
     }

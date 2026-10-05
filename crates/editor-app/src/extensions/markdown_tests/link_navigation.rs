@@ -93,7 +93,7 @@ fn delivered_markdown_heading_link_reveals_duplicate_title(cx: &mut TestAppConte
     // GPUI's diagnostic selector takes a static string; assert the fixture offset before using it.
     assert_eq!(original.rfind("# 标题"), Some(1439));
     let selector = "plugin-ui-b-1439-heading";
-    let pane = ui.debug_bounds("editor-preview-pane").unwrap();
+    let pane = ui.debug_bounds("plugin-ui-preview-root").unwrap();
     assert!(
         ui.debug_bounds(selector)
             .is_none_or(|bounds| bounds.top() >= pane.bottom()),
@@ -141,7 +141,7 @@ fn delivered_markdown_relative_fragment_uses_opened_target(cx: &mut TestAppConte
     let title = ui
         .debug_bounds("plugin-ui-b-1610-heading")
         .expect("actual opened target heading is drawn");
-    let pane = ui.debug_bounds("editor-preview-pane").unwrap();
+    let pane = ui.debug_bounds("plugin-ui-preview-root").unwrap();
     assert!(
         title.top() >= pane.top() && title.bottom() <= pane.bottom(),
         "target heading is visible: {title:?}, {pane:?}"
@@ -197,7 +197,7 @@ fn delivered_markdown_links_activate_each_href_from_keyboard(cx: &mut TestAppCon
     let original = "[甲](https://example.com/one) 与 [乙](https://example.com/two)\n";
     let (mut fixture, ui) = NativeMarkdown::mount(cx, &[("notes.md", original)]);
     fixture.open("notes.md", ui);
-    fixture.click("editor-preview-preview-mode", ui);
+    fixture.click("plugin-tool-markdown/preview/display-preview", ui);
     for _ in 0..36 {
         activate_key(ui, "tab");
         ui.run_until_parked();
@@ -244,7 +244,7 @@ fn delivered_markdown_keyboard_link_focus_reveals_the_distant_target(cx: &mut Te
     assert_eq!(original.find("[尾部]"), Some(640));
     let (mut fixture, ui) = NativeMarkdown::mount(cx, &[("notes.md", &original)]);
     fixture.open("notes.md", ui);
-    fixture.click("editor-preview-preview-mode", ui);
+    fixture.click("plugin-tool-markdown/preview/display-preview", ui);
     for _ in 0..36 {
         activate_key(ui, "tab");
         ui.run_until_parked();
@@ -259,7 +259,7 @@ fn delivered_markdown_keyboard_link_focus_reveals_the_distant_target(cx: &mut Te
     let cue = ui
         .debug_bounds("plugin-link-focus-b-640-paragraph-0")
         .expect("distant href has its own actual keyboard focus");
-    let pane = ui.debug_bounds("editor-preview-pane").unwrap();
+    let pane = ui.debug_bounds("plugin-ui-preview-root").unwrap();
     assert!(
         cue.top() >= pane.top() && cue.bottom() <= pane.bottom(),
         "focused target must be visible before activation: {cue:?}, {pane:?}"
@@ -293,7 +293,7 @@ fn delivered_markdown_preview_only_link_failures_remain_visible_in_both_locales(
         .map(|(file, (chinese, english))| (file, chinese, english))
     {
         fixture.open(name, ui);
-        fixture.click("editor-preview-preview-mode", ui);
+        fixture.click("plugin-tool-markdown/preview/display-preview", ui);
         assert!(ui.debug_bounds("editor-source-toolbar").is_none());
         assert!(
             ui.debug_bounds("plugin-ui-preview-navigation-feedback")
@@ -323,7 +323,7 @@ fn delivered_markdown_preview_only_link_failures_remain_visible_in_both_locales(
                 let document = &fixture.manager.live["markdown"].views["preview"];
                 panic!("visible navigation feedback missing: file={name}, locale={locale}, header={:?}, toolbar={:?}, paragraph={:?}", document.active_node("preview-navigation-feedback"), document.active_node("format-error"), ui.debug_bounds("plugin-ui-b-0-paragraph"));
             });
-            let pane = ui.debug_bounds("editor-preview-pane").unwrap();
+            let pane = ui.debug_bounds("plugin-ui-preview-root").unwrap();
             assert!(feedback.top() >= pane.top() && feedback.bottom() <= pane.bottom());
             let node = fixture.manager.live["markdown"].views["preview"]
                 .active_node("preview-navigation-feedback")

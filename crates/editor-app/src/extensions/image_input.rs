@@ -265,7 +265,11 @@ impl EditorApp {
         let Some(panel) = self.active_editor_preview(cx) else {
             return Ok(None);
         };
-        if self.editor_preview_mode(&panel, cx) == protocol::PreviewMode::Preview {
+        if panel
+            .read(cx)
+            .current_document()
+            .is_none_or(|scene| scene.active_native_editor().is_none())
+        {
             return Ok(None);
         }
         let (plugin, surface, epoch, document) = {

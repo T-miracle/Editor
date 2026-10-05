@@ -203,7 +203,7 @@ fn delivered_markdown_images_render_native_pixels_and_individual_errors(cx: &mut
     // GPUI's test selector API takes static names; these few test-only IDs live for the test process.
     let selector: &'static str = Box::leak(format!("plugin-image-{}", loaded.0).into_boxed_str());
     let bounds = ui.debug_bounds(selector).expect("native pixel image");
-    let preview = ui.debug_bounds("editor-preview-pane").unwrap();
+    let preview = ui.debug_bounds("plugin-ui-preview-root").unwrap();
     assert!(
         bounds.size.height >= px(700.),
         "image completion must change block height"
@@ -265,9 +265,12 @@ fn delivered_markdown_wide_image_height_follows_the_native_preview_width(cx: &mu
     let selector = "plugin-image-pixels-b-0-image";
     let before = ui.debug_bounds(selector).expect("wide native image");
     assert!((before.size.height * 2. - before.size.width).abs() < px(2.));
-    let preview = ui.debug_bounds("editor-preview-pane").unwrap();
+    let preview = ui.debug_bounds("plugin-ui-preview-root").unwrap();
     assert!(before.size.width <= preview.size.width);
-    let divider = ui.debug_bounds("editor-preview-divider").unwrap().center();
+    let divider = ui
+        .debug_bounds("plugin-split-divider-markdown-layout")
+        .unwrap()
+        .center();
     let target = point(preview.right() - px(180.), divider.y);
     ui.simulate_mouse_down(divider, MouseButton::Left, Default::default());
     ui.run_until_parked();

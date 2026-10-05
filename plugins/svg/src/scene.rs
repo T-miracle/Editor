@@ -72,7 +72,9 @@ impl State {
 
     /// The public tree carries the exact memory revision used to draw this frame.
     pub(super) fn view(&self) -> api::View {
-        if let Some(file) = &self.file {
+        if let Some(file) = &self.file
+            && file.text.is_none()
+        {
             // The plugin chooses original-size containment; decoding and painting are public host services.
             let mut document = ui::Document::new(
                 ui::Node::new(
@@ -86,6 +88,7 @@ impl State {
             )
             .revision(self.revision);
             document.file = Some(file.version.clone());
+            document.editor_layout = true;
             return api::View {
                 panel: "preview".into(),
                 document,
@@ -96,6 +99,9 @@ impl State {
         )
         .revision(self.revision);
         document.source = self.document.clone();
+        if let Some(file) = &self.file {
+            document = self.display.compose(document, file);
+        }
         api::View {
             panel: "preview".into(),
             document,

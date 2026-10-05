@@ -2,6 +2,7 @@
 
 use super::*;
 
+mod preference_import;
 mod presentation;
 mod providers;
 mod toolbar;
@@ -216,8 +217,8 @@ impl EditorApp {
                             cx.notify();
                             return;
                         }
-                        // Retain control focus only for this same source identity. The exact version
-                        // gate still hides old trees until the new guest publication has arrived.
+                        // Retain focus and readonly paint only for this same source identity.
+                        // Guest events still require the exact version until fresh publication arrives.
                         panel.invalidate_code_highlighting(cx);
                         if panel
                             .native_ui
@@ -267,6 +268,10 @@ impl EditorApp {
                 continue;
             }
             let participates = self.file_panel_is_active(panel, &selected, cx);
+            let owner = self.editor_preview_owner_key(panel, cx);
+            let legacy = owner
+                .as_deref()
+                .and_then(|owner| self.session_state.legacy_display_payload(owner));
             let panel_state = panel.read(cx);
             let file_contract = self.active_text_tab_index().is_none()
                 || panel_state.entries.iter().any(|entry| {
@@ -283,6 +288,31 @@ impl EditorApp {
                         .cloned();
                     let version = file.as_ref().map(|file| file.version.clone());
                     let source = file.as_ref().and_then(|file| file.text.clone());
+                    // Queue import before FilePreview in this same actor channel so guest binding
+                    // sees the stored legacy bundle; acknowledgement is required before session cleanup.
+                    if let (Some(owner), Some(data), Some(file)) = (&owner, &legacy, &file)
+                        && file.text.is_some()
+                        && panel.legacy_import.as_ref()
+                            != Some(&(panel.instance_epoch, file.file_type.clone()))
+                        && panel.entries.iter().any(|entry| {
+                            Some(&entry.manifest.id) == panel.active.as_ref()
+                                && entry.grants.contains("storage")
+                                && entry.supports_capability("storage.private")
+                        })
+                    {
+                        panel.legacy_import = Some((panel.instance_epoch, file.file_type.clone()));
+                        let _ = panel.worker.tx.send(Work::ImportPreference {
+                            plugin: panel.active.clone().expect("owned preview"),
+                            epoch: panel.instance_epoch,
+                            owner: owner.clone(),
+                            workspace: self.session_state.workspace.clone(),
+                            key: protocol::api::PreferenceKey {
+                                file_type: file.file_type.clone(),
+                                name: "imported-presentation".into(),
+                            },
+                            data: data.clone(),
+                        });
+                    }
                     if panel.preview_file == version
                         && panel.preview_version == source
                         && panel.preview_document.is_some()
@@ -364,49 +394,10 @@ impl EditorApp {
         context.version.validate()?;
         Ok(context)
     }
-
-    /// Base owns pointer capture and minimum pane sizes; this layer supplies the shared appearance.
-    pub(crate) fn render_editor_preview_split(
-        &self,
-        source: gpui_kit::AnyElement,
-        preview: Entity<ExtensionPanel>,
-        cx: &App,
-    ) -> gpui_kit::AnyElement {
-        gpui_base::h_resizable("editor-preview-split")
-            .with_handle_appearance(Rc::new(|_, _, cx| {
-                Some(
-                    div()
-                        .debug_selector(|| "editor-preview-divider".into())
-                        .w(px(1.))
-                        .h_full()
-                        .bg(cx.theme().border)
-                        .into_any_element(),
-                )
-            }))
-            .child(
-                gpui_base::resizable_panel()
-                    .size_range(px(100.)..Pixels::MAX)
-                    .child(source),
-            )
-            .child(
-                gpui_base::resizable_panel()
-                    .size_range(px(100.)..Pixels::MAX)
-                    .child(
-                        v_flex()
-                            .debug_selector(|| "editor-preview-pane".into())
-                            .size_full()
-                            .min_h_0()
-                            .overflow_hidden()
-                            .bg(cx.theme().background)
-                            .child(preview),
-                    ),
-            )
-            .into_any_element()
-    }
 }
 
 impl ExtensionPanel {
-    /// A temporary publication gap retains focus metadata, never displays or routes its stale tree.
+    /// A publication gap retains same-source readonly paint; obsolete event authority is withdrawn.
     pub(super) fn retire_unowned_native_view(&mut self, cx: &App) {
         let retained = self.editor_preview
             && self.preview_version.as_ref().is_some_and(|version| {

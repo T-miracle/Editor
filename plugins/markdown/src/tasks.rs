@@ -94,7 +94,7 @@ mod tests {
     fn parsed_ascii_blank_tasks_keep_original_selection_and_neighboring_text() {
         for blank in [' ', '\t', '\u{000b}', '\u{000c}'] {
             let source = format!("- [{blank}] 中文🙂\n- [ ] 相邻\n");
-            let nodes = blocks(&source, "zh-CN");
+            let nodes = blocks(&source, "zh-CN").unwrap();
             let selection = 3..source.len();
             let edit = change(&nodes, &source, "b-2-task", true)
                 .expect("the enabled parser checkbox must accept its blank marker")
@@ -105,7 +105,7 @@ mod tests {
             let mut replaced = source;
             replaced.replace_range(edit.range, &edit.text);
             assert_eq!(replaced, "- [x] 中文🙂\n- [ ] 相邻\n");
-            let updated = blocks(&replaced, "zh-CN");
+            let updated = blocks(&replaced, "zh-CN").unwrap();
             assert!(matches!(
                 &find(&updated, "b-2-task").unwrap().kind,
                 ui::Kind::Checkbox { checked: true, .. }
@@ -118,7 +118,7 @@ mod tests {
     fn blank_task_plan_rejects_changed_marker_and_invalid_utf8_selection() {
         for blank in [' ', '\t', '\u{000b}', '\u{000c}'] {
             let source = format!("- [{blank}] 中文🙂\n");
-            let nodes = blocks(&source, "en-US");
+            let nodes = blocks(&source, "en-US").unwrap();
             let replacement = if blank == ' ' { '\t' } else { ' ' };
             let changed = format!("- [{replacement}] 中文🙂\n");
             assert!(
@@ -143,7 +143,7 @@ mod tests {
     fn task_syntax_with_line_breaks_or_unicode_spaces_stays_readonly() {
         for marker in ["[\n]", "[\r]", "[\r\n]", "[\u{00a0}]", "[\u{3000}]", "[  ]"] {
             let source = format!("- {marker} 普通文字\n");
-            let nodes = blocks(&source, "zh-CN");
+            let nodes = blocks(&source, "zh-CN").unwrap();
             assert!(change(&nodes, &source, "b-2-task", true).is_none());
         }
     }

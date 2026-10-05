@@ -20,7 +20,7 @@
 
 ## 当前能力协议
 
-协议传输标记 `protocol = 7` 选择 `api` 模块的类型化消息；它不是所有功能共用的接口版本。清单 `api.base` 使用基础协议 SemVer 范围，`api.required` / `api.optional` 分别声明能力 ID 与版本范围。当前基础 API 为 1.0.0，支持 `package.assets` 1.0.0 和 `ui.native` 1.0.0；插件包版本仍单独管理。必需接口缺失或版本不匹配在包检查及实例恢复时拒绝，可选接口不可用则不出现在 Prepare 的协商结果中。
+协议传输标记 `protocol = 7` 选择 `api` 模块的类型化消息；它不是所有功能共用的接口版本。清单 `api.base` 使用基础协议 SemVer 范围，`api.required` / `api.optional` 分别声明能力 ID 与版本范围。当前基础 API 为 1.0.0，支持 `package.assets` 1.0.0 和 `ui.native` 1.1.0（可调整的 Row／Column 分栏）；插件包版本仍单独管理。`ui.content_colors 1.0` 允许插件提供有界内容默认配色，用户主题覆盖优先。必需接口缺失或版本不匹配在包检查及实例恢复时拒绝，可选接口不可用则不出现在 Prepare 的协商结果中。
 
 插件使用 `api::guest::dispatch` 接收类型化生命周期，并用 `api::guest::read_asset` 读取资源。SDK 自动生成非零请求 ID、编码消息和校验响应 ID。缺少方法、错误参数、未知操作、未协商能力、权限不足、非法路径与配额超限以 `Failure` 返回；真正无法解码或调用的组件传输错误仍走 WIT 错误。同步资源读取直接返回最终结果，不伪造“处理中”阶段。
 

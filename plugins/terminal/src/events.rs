@@ -62,6 +62,21 @@ impl Terminal {
             } => Event::ProcessOutput { handle, bytes },
             api::Notification::Process { handle, .. } => Event::ProcessExit { handle },
             api::Notification::Theme(environment) => Event::Theme(environment),
+            api::Notification::Tool(event)
+                if event.revision == self.ui_revision
+                    && event.target
+                        == (ui::ToolTarget::Window {
+                            panel: "terminal".into(),
+                        })
+                    && matches!(event.tool.as_str(), "terminal.new" | "terminal.menu") =>
+            {
+                Event::Command {
+                    id: event.tool,
+                    cwd: None,
+                    text: None,
+                    arguments: None,
+                }
+            }
             api::Notification::Command { id, arguments } => Event::Command {
                 id,
                 cwd: None,

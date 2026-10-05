@@ -3,10 +3,12 @@ mod atlas;
 pub(crate) mod bitmap;
 mod canvas;
 mod code;
+mod containers;
 pub(crate) mod controls;
 mod file_image;
 pub(crate) mod images;
 mod layout;
+mod leaf;
 #[cfg(test)]
 mod link_tests;
 mod links;
@@ -30,6 +32,7 @@ use plugin_runtime::plugin_protocol::{
     ui::{Action, Document, Kind, UiEvent},
 };
 use std::{
+    cell::Cell,
     collections::{BTreeMap, BTreeSet},
     rc::Rc,
 };
@@ -57,6 +60,8 @@ pub(crate) struct PluginView {
     document: Document,
     environment: Environment,
     sink: EventSink,
+    /// Nested canvas/control sinks share the gate; retained readonly trees cannot dispatch stale input.
+    scene_current: Rc<Cell<bool>>,
     inputs: BTreeMap<String, NativeInput>,
     scrolls: BTreeMap<String, ScrollHandle>,
     /// Read-only source block ownership and one revision-bound reveal; native scroll remains in Base.
@@ -90,6 +95,12 @@ pub(crate) struct PluginView {
 }
 
 impl PluginView {
+    /// Suspend guest input while retaining old geometry and the separate native text entity.
+    pub(crate) fn set_scene_current(&mut self, current: bool, cx: &mut Context<Self>) {
+        if self.scene_current.replace(current) != current {
+            cx.notify();
+        }
+    }
     /// Image decoding belongs to the worker; native children only borrow the matching immutable raster.
     pub(crate) fn update_images(
         &mut self,
@@ -211,12 +222,19 @@ impl PluginView {
             }
         })
         .detach();
+        let scene_current = Rc::new(Cell::new(true));
+        let gate = scene_current.clone();
         let mut this = Self {
             native_editor: None,
             plugin,
             document,
             environment,
-            sink: Rc::new(sink),
+            sink: Rc::new(move |event, cx| {
+                if gate.get() {
+                    sink(event, cx)
+                }
+            }),
+            scene_current,
             inputs: BTreeMap::new(),
             scrolls: BTreeMap::new(),
             scene_layout: Default::default(),

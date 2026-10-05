@@ -8,7 +8,7 @@ impl EditorApp {
         &mut self,
         plugin: &str,
         request: EditorRequest,
-        _: &mut Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         let result = (|| {
@@ -32,7 +32,6 @@ impl EditorApp {
                     Failure::new(ErrorCode::NotFound, "Viewport owner is unavailable")
                 })?;
             if self.active_editor_preview(cx).as_ref() != Some(&owner)
-                || self.editor_preview_mode(&owner, cx) != protocol::PreviewMode::Split
                 || !self.editor_preview_sync_enabled(&owner, cx)
             {
                 return Err(Failure::new(
@@ -107,15 +106,17 @@ impl EditorApp {
                             "Viewport block no longer matches source",
                         ));
                     }
-                    let native = projection.native_ui.clone().ok_or_else(|| {
-                        Failure::new(ErrorCode::InvalidState, "Viewport has not been drawn")
-                    })?;
                     if !request.enter_side_effect() {
                         return Err(Failure::new(
                             ErrorCode::Cancelled,
                             "Viewport location cancelled",
                         ));
                     }
+                    // An exact current publication may arrive before its first paint.
+                    // Native preparation keeps the locate pending until ordinary geometry is available.
+                    let native = owner.update(cx, |panel, cx| {
+                        panel.native_document((*scene).clone(), window, cx)
+                    });
                     native.update(cx, |view, cx| {
                         view.locate_viewport(node, *fraction, *origin, *ui_revision, cx)
                     })?;

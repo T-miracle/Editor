@@ -74,52 +74,32 @@ impl SourceTracking {
 }
 
 impl EditorApp {
-    /// This workspace's last explicit preference survives file switches; new previews default on.
+    /// The guest opts into synchronization by mounting both its mapped Scroll and native source.
     pub(crate) fn editor_preview_sync_enabled(
         &self,
         preview: &Entity<ExtensionPanel>,
         cx: &App,
     ) -> bool {
-        self.editor_preview_owner_key(preview, cx)
-            .is_some_and(|key| {
-                preview
-                    .read(cx)
-                    .current_document()
-                    .is_some_and(|scene| scene.editor_viewport.is_some())
-                    && self
-                        .session_state
-                        .editor_preview_sync
-                        .get(&key)
-                        .copied()
-                        .unwrap_or(true)
-            })
+        preview.read(cx).current_document().is_some_and(|scene| {
+            scene.editor_viewport.is_some() && scene.active_native_editor().is_some()
+        })
     }
 
     /// Observe manual input without consuming it; Base continues to own keys, wheel and scrollbar behavior.
-    pub(super) fn render_source_viewport_probe(
+    pub(in crate::extensions) fn render_source_viewport_probe(
         &self,
         source: AnyElement,
         preview: Entity<ExtensionPanel>,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let enabled = self.editor_preview_mode(&preview, cx) == protocol::PreviewMode::Split
-            && self.editor_preview_sync_enabled(&preview, cx);
-        let source_hidden =
-            self.editor_preview_mode(&preview, cx) == protocol::PreviewMode::Preview;
-        preview.update(cx, |panel, cx| {
-            panel.viewport_sync_enabled = enabled;
-            if source_hidden {
-                panel.source_viewport.withdraw();
-            } else if !enabled {
-                panel.source_viewport.reset();
-            }
-            if let Some(view) = &panel.native_ui {
-                view.update(cx, |view, cx| view.set_viewport_enabled(enabled, cx));
-            }
-        });
+        // This renderer can run inside PluginView.render. Configure the view in the parent
+        // before mounting it; updating that same entity here would violate GPUI borrowing.
         let owner = cx.entity().downgrade();
         div()
             .size_full()
+            // The borrowed editor grows inside this probe just as it does in the native fallback.
+            .flex()
+            .flex_col()
             .min_h_0()
             .relative()
             .capture_key_down(cx.listener(|app, _, window, cx| {
@@ -221,7 +201,6 @@ impl EditorApp {
     ) {
         if !self.session_state.workspace_trusted
             || self.active_editor_preview(cx).as_ref() != Some(panel)
-            || self.editor_preview_mode(panel, cx) != protocol::PreviewMode::Split
             || !self.editor_preview_sync_enabled(panel, cx)
         {
             panel.update(cx, |panel, _| panel.source_viewport.reset());

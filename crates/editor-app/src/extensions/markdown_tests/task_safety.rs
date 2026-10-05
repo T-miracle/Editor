@@ -170,7 +170,7 @@ fn delivered_markdown_task_requests_cannot_follow_tabs_close_or_disable(cx: &mut
     execute(&mut fixture, &retired, ui);
     assert!(matches!(retired.status(), RequestUpdate::Cancelled { .. }));
     assert!(ui.debug_bounds("plugin-checkbox-marker-b-2-task").is_none());
-    assert!(ui.debug_bounds("editor-preview-pane").is_none());
+    assert!(ui.debug_bounds("plugin-ui-preview-root").is_none());
     assert_eq!(
         ui.update(|_, cx| fixture.app.read(cx).editor.read(cx).text().to_string()),
         second

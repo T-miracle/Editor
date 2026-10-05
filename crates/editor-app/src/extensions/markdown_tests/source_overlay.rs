@@ -11,31 +11,29 @@ fn overlay_peer(dialog: bool, svg: bool) -> Package {
     )
     .unwrap()
     .files;
-    let icons = Package::read(
-        &PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../dist/plugins/markdown.zip"),
-    )
-    .unwrap();
     let mut manifest: serde_json::Value = serde_json::from_slice(&files["manifest.json"]).unwrap();
     manifest["settings_hook"] = serde_json::json!(false);
     manifest["settings"]["label"]["default"] = serde_json::json!("composable-ui");
     manifest["api"]["required"]["editor.toolbar"] = serde_json::json!("^1");
-    manifest["api"]["required"]["editor.presentation"] = serde_json::json!("^1");
+    manifest["api"]["required"]["editor.layout"] = serde_json::json!("^1");
     manifest["api"]["required"]["ui.collections"] = serde_json::json!("^1");
     manifest["panels"][0]["position"] = serde_json::json!("editor");
     manifest["panels"][0]["file_extensions"] = serde_json::json!(["md"]);
     manifest["panels"][0]["default_visible"] = serde_json::json!(true);
-    manifest["panels"][0]["view_modes"] = serde_json::json!({
-        "source": "icons/view-source.svg", "split": "icons/view-split.svg",
-        "preview": "icons/view-preview.svg"
-    });
-    for path in [
-        "icons/view-source.svg",
-        "icons/view-split.svg",
-        "icons/view-preview.svg",
-    ] {
-        files.insert(path.into(), icons.files[path].clone());
-    }
-    let mut document = Document::new(Node::text("fixture-body", "Preview body"));
+    let mut document = Document::new(
+        Node::new(
+            "fixture-editor",
+            protocol::ui::Kind::NativeEditor {
+                document: protocol::api::DocumentVersion {
+                    id: "template".into(),
+                    path: "notes.md".into(),
+                    revision: 0,
+                },
+            },
+        )
+        .grow(),
+    );
+    document.editor_layout = true;
     document.editor_toolbar = Some(Node::button("fixture-toolbar", "Toolbar"));
     if svg {
         let rect = protocol::Rect {
@@ -96,36 +94,24 @@ fn overlay_peer(dialog: bool, svg: bool) -> Package {
 fn source_only_toolbar_keeps_sdk_dialog_and_popup_visible(cx: &mut TestAppContext) {
     for dialog in [true, false] {
         let original = "Source text";
-        let (mut fixture, ui) = NativeMarkdown::mount(cx, &[("notes.md", original)]);
         let peer = overlay_peer(dialog, false);
-        fixture
-            .manager
-            .install(&peer, peer.manifest.permissions.clone())
-            .unwrap();
-        // Restore the same serialized workspace preference consumed by native mode controls.
-        ui.update(|_, cx| {
-            fixture.app.update(cx, |app, _| {
-                app.session_state.editor_preview_modes.insert(
-                    "capability-example/welcome".into(),
-                    protocol::PreviewMode::Source,
-                );
-                app.persist_session();
-            })
-        });
+        let (mut fixture, ui) = NativeMarkdown::mount_package(cx, &[("notes.md", original)], &peer);
         fixture.open("notes.md", ui);
         let published = &fixture.manager.live["capability-example"].views["welcome"];
         assert!(
             published.source.is_some() && published.editor_toolbar.is_some(),
             "the real guest must publish a version-bound toolbar: {published:?}"
         );
-        assert!(ui.debug_bounds("editor-preview-pane").is_none());
+        assert!(ui.debug_bounds("plugin-ui-fixture-body").is_none());
         assert!(
             ui.debug_bounds("editor-source-toolbar").is_some(),
             "active document {:?}",
             ui.update(|_, cx| fixture.app.read(cx).active_path.clone())
         );
         assert!(
-            ui.debug_bounds("editor-source-plugin-overlay").is_some(),
+            (ui.debug_bounds("plugin-ui-fixture-dialog-content")
+                .is_some()
+                || ui.debug_bounds("plugin-popup-menu").is_some()),
             "the source-only contribution must keep its dialog/menu visible"
         );
         if dialog {
@@ -143,7 +129,10 @@ fn source_only_toolbar_keeps_sdk_dialog_and_popup_visible(cx: &mut TestAppContex
         ui.simulate_keystrokes("escape");
         ui.run_until_parked();
         fixture.settle(ui);
-        assert!(ui.debug_bounds("editor-source-plugin-overlay").is_none());
+        assert!(
+            ui.debug_bounds("plugin-ui-fixture-dialog-content")
+                .is_none()
+        );
         assert!(ui.debug_bounds("editor-source-toolbar").is_some());
         let tree = &fixture.manager.live["capability-example"].views["welcome"];
         assert!(
@@ -166,12 +155,9 @@ fn source_only_toolbar_keeps_sdk_dialog_and_popup_visible(cx: &mut TestAppContex
 #[gpui::test]
 #[ignore = "build markdown and current capability-example through the public SDK first"]
 fn source_toolbar_svg_uses_the_public_canvas_raster_path(cx: &mut TestAppContext) {
-    let (mut fixture, ui) = NativeMarkdown::mount(cx, &[("notes.md", "Source text")]);
     let peer = overlay_peer(true, true);
-    fixture
-        .manager
-        .install(&peer, peer.manifest.permissions.clone())
-        .unwrap();
+    let (mut fixture, ui) =
+        NativeMarkdown::mount_package(cx, &[("notes.md", "Source text")], &peer);
     fixture.open("notes.md", ui);
     assert!(
         ui.debug_bounds("plugin-ui-fixture-toolbar-canvas")

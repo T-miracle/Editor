@@ -151,7 +151,7 @@ fn delivered_markdown_toolbar_formats_chinese_and_selects_templates(cx: &mut Tes
         ui.update(|_, cx| fixture.app.read(cx).editor.read(cx).text().to_string())
             .contains("[新的链接](")
     );
-    fixture.click("editor-preview-source-mode", ui);
+    fixture.click("plugin-tool-markdown/preview/display-source", ui);
     assert!(ui.debug_bounds("editor-source-toolbar").is_some());
     for selector in [
         "plugin-ui-format-heading",
@@ -170,9 +170,9 @@ fn delivered_markdown_toolbar_formats_chinese_and_selects_templates(cx: &mut Tes
     ] {
         assert!(ui.debug_bounds(selector).is_some());
     }
-    fixture.click("editor-preview-preview-mode", ui);
+    fixture.click("plugin-tool-markdown/preview/display-preview", ui);
     assert!(ui.debug_bounds("editor-source-toolbar").is_none());
-    fixture.click("editor-preview-split-mode", ui);
+    fixture.click("plugin-tool-markdown/preview/display-split", ui);
     assert!(ui.debug_bounds("editor-source-toolbar").is_some());
     fixture.manager.disable("markdown").unwrap();
     fixture.settle(ui);
@@ -202,7 +202,10 @@ fn delivered_markdown_toolbar_wraps_all_commands_and_cancels_superseded_intent(
         );
     }
     let source = ui.debug_bounds("editor-source-pane").unwrap();
-    let divider = ui.debug_bounds("editor-preview-divider").unwrap().center();
+    let divider = ui
+        .debug_bounds("plugin-split-divider-markdown-layout")
+        .unwrap()
+        .center();
     let target = point(source.left() + px(120.), divider.y);
     ui.simulate_mouse_down(divider, MouseButton::Left, Default::default());
     ui.run_until_parked();

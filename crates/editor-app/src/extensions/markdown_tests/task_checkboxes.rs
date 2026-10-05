@@ -121,7 +121,7 @@ fn delivered_markdown_nested_tasks_support_preview_keyboard_and_keep_other_conte
         unchecked,
         "only the nested uppercase marker changes"
     );
-    fixture.click("editor-preview-preview-mode", ui);
+    fixture.click("plugin-tool-markdown/preview/display-preview", ui);
     assert!(ui.debug_bounds("editor-source-pane").is_none());
     fixture.click("plugin-checkbox-marker-b-20-task", ui);
     assert_eq!(
@@ -155,7 +155,7 @@ fn delivered_markdown_nested_tasks_support_preview_keyboard_and_keep_other_conte
             Some(protocol::ui::Kind::Checkbox { checked: false, .. })
         ));
     }
-    fixture.click("editor-preview-source-mode", ui);
+    fixture.click("plugin-tool-markdown/preview/display-source", ui);
     fixture.focus_editor(ui);
     ui.simulate_keystrokes("ctrl-z");
     ui.run_until_parked();

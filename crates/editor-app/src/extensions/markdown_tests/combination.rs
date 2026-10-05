@@ -176,7 +176,10 @@ fn delivered_markdown_combines_edits_images_tasks_links_ime_and_scaled_layout(
             );
             assert!(bounds.bottom() <= toolbar.bottom() + px(1.));
         }
-        assert!(ui.debug_bounds("editor-preview-sync-scroll").is_some());
+        assert!(
+            ui.debug_bounds("plugin-tool-markdown/preview/display-sync")
+                .is_some()
+        );
         assert_eq!(text(&fixture, ui), edited);
     }
     let position = ui
@@ -260,7 +263,7 @@ fn delivered_markdown_combines_edits_images_tasks_links_ime_and_scaled_layout(
     assert_eq!(text(&fixture, ui), edited);
     fixture.manager.disable("markdown").unwrap();
     fixture.settle(ui);
-    assert!(ui.debug_bounds("editor-preview-pane").is_none());
+    assert!(ui.debug_bounds("plugin-ui-preview-root").is_none());
     assert!(ui.debug_bounds("editor-source-toolbar").is_none());
     assert_eq!(text(&fixture, ui), edited);
 }

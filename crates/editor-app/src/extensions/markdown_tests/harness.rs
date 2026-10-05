@@ -38,6 +38,15 @@ pub(super) struct NativeMarkdown {
 }
 
 impl NativeMarkdown {
+    /// Observe the guest's published selected state rather than an obsolete host preference field.
+    pub fn selected_tool(&self, id: &str) -> bool {
+        self.manager.live["markdown"].views["preview"]
+            .tools
+            .iter()
+            .find(|tool| tool.id == id)
+            .unwrap()
+            .selected
+    }
     /// Mount the public ZIP with the same private root used by the existing native test worker.
     pub fn mount<'a>(
         cx: &'a mut TestAppContext,
@@ -67,6 +76,8 @@ impl NativeMarkdown {
         let mut manager = plugin_runtime::Manager::open(
             workspace.root().join(".runtime-plugin-test"),
             protocol::Environment {
+                // Match production metadata so an ordinary process plugin chooses the native shell.
+                os: std::env::consts::OS.into(),
                 workspace: workspace.root().display().to_string(),
                 ..Default::default()
             },

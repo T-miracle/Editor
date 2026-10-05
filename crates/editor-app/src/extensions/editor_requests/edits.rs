@@ -116,14 +116,25 @@ impl EditorApp {
             })?;
             let preview = self.active_editor_preview(cx);
             let source_visible = preview.as_ref().is_none_or(|preview| {
-                self.editor_preview_mode(preview, cx) != protocol::PreviewMode::Preview
-            });
-            let preview_focused = preview.as_ref().is_some_and(|preview| {
                 preview
                     .read(cx)
-                    .native_ui
+                    .renderable_document()
+                    .is_some_and(|scene| scene.active_native_editor().is_some())
+            });
+            let preview_focused = preview.as_ref().is_some_and(|preview| {
+                let panel = preview.read(cx);
+                // The complete plugin layout now contains its borrowed source. Only preview
+                // content retains keyboard focus; a source toolbar still returns to native input.
+                let toolbar_focused = panel
+                    .native_toolbar
                     .as_ref()
-                    .is_some_and(|view| view.read(cx).contains_focus(window, cx))
+                    .is_some_and(|view| view.read(cx).contains_focus(window, cx));
+                !toolbar_focused
+                    && !editor.read(cx).focus_handle(cx).is_focused(window)
+                    && panel
+                        .native_ui
+                        .as_ref()
+                        .is_some_and(|view| view.read(cx).contains_focus(window, cx))
             });
             // A task or other preview control keeps its keyboard target. The separate source toolbar
             // still hands focus back to the editor so placeholders can be typed immediately.

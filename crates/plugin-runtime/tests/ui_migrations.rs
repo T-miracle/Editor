@@ -42,6 +42,34 @@ fn action(manager: &mut Manager, id: &str, panel: &str, node: &str, action: ui::
     );
 }
 
+/// A text-capable image receives file identity before its exact memory snapshot, like the native host.
+fn svg_preview(manager: &mut Manager, document: Option<api::DocumentVersion>, text: &str) {
+    let file = document.as_ref().map(|source| api::FileContext {
+        version: api::FileVersion {
+            id: format!("file:{}", source.id),
+            path: source.path.clone(),
+            revision: source.revision,
+        },
+        file_type: "svg".into(),
+        text: Some(source.clone()),
+    });
+    notify(
+        manager,
+        "svg",
+        "preview",
+        api::Notification::FilePreview { file },
+    );
+    notify(
+        manager,
+        "svg",
+        "preview",
+        api::Notification::Preview {
+            document,
+            text: text.into(),
+        },
+    );
+}
+
 /// No native permission is needed for snapshots, counters, notes or standard controls.
 #[test]
 #[ignore = "build example and svg packages through the host SDK first"]
@@ -111,7 +139,10 @@ const SVG: &str = "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"200\" heigh
 #[ignore = "build example and svg packages through the host SDK first"]
 fn svg_uses_versioned_memory_and_discards_obsolete_content() {
     let package = package("svg");
-    assert_eq!(package.manifest.permissions, ["editor.read".into()].into());
+    assert!(
+        package.manifest.permissions.contains("editor.read")
+            && package.manifest.permissions.contains("storage")
+    );
     let root = tempfile::tempdir().unwrap();
     let mut manager = manager(root.path());
     assert!(manager.install(&package, Default::default()).is_err());
@@ -123,19 +154,15 @@ fn svg_uses_versioned_memory_and_discards_obsolete_content() {
         path: "unsaved.svg".into(),
         revision: 7,
     };
-    notify(
-        &mut manager,
-        "svg",
-        "preview",
-        api::Notification::Preview {
-            document: Some(version.clone()),
-            text: SVG.into(),
-        },
-    );
+    svg_preview(&mut manager, Some(version.clone()), SVG);
     let view = tree(&manager, "svg", "preview");
     assert_eq!(view.source.as_ref(), Some(&version));
     let vector = |manager: &Manager| {
-        let ui::Kind::Canvas(canvas) = &tree(manager, "svg", "preview").root.kind else {
+        let ui::Kind::Canvas(canvas) = &tree(manager, "svg", "preview")
+            .active_node("preview-canvas")
+            .unwrap()
+            .kind
+        else {
             panic!("canvas required")
         };
         canvas
@@ -194,29 +221,13 @@ fn svg_uses_versioned_memory_and_discards_obsolete_content() {
         revision: 0,
         ..version
     };
-    notify(
-        &mut manager,
-        "svg",
-        "preview",
-        api::Notification::Preview {
-            document: Some(reopened.clone()),
-            text: SVG.into(),
-        },
-    );
+    svg_preview(&mut manager, Some(reopened.clone()), SVG);
     assert_eq!(
         tree(&manager, "svg", "preview").source.as_ref(),
         Some(&reopened)
     );
     assert_eq!(vector(&manager).w, initial.w);
-    notify(
-        &mut manager,
-        "svg",
-        "preview",
-        api::Notification::Preview {
-            document: None,
-            text: String::new(),
-        },
-    );
+    svg_preview(&mut manager, None, "");
     assert!(tree(&manager, "svg", "preview").source.is_none());
     manager.disable("svg").unwrap();
     assert!(manager.live.is_empty());

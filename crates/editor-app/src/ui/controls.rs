@@ -15,6 +15,7 @@ mod scrollbar;
 mod segmented_tabs;
 pub(crate) mod side_tabs;
 mod spinner;
+mod split;
 mod status_bar;
 mod status_icon;
 mod tabs;
@@ -35,6 +36,7 @@ pub(crate) use scrollbar::{
 };
 pub(crate) use segmented_tabs::SegmentedTabs;
 pub(crate) use spinner::Spinner;
+pub(crate) use split::split_container;
 pub(crate) use status_bar::StatusBar;
 pub(crate) use status_icon::StatusIcon;
 pub(crate) use tabs::tab_strip;

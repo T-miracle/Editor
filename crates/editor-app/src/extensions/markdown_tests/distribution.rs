@@ -13,7 +13,7 @@ fn fresh_markdown_first_use_confirms_real_package_and_retains_disabled_choice(
     fixture.open("notes.md", ui);
     assert!(fixture.consent(ui));
     assert!(fixture.native.manager.installed.is_empty() && fixture.native.manager.live.is_empty());
-    assert!(ui.debug_bounds("editor-preview-pane").is_none());
+    assert!(ui.debug_bounds("editor-plugin-layout").is_none());
     assert!(ui.debug_bounds("editor-source-toolbar").is_none());
     assert!(
         !fixture
@@ -29,11 +29,14 @@ fn fresh_markdown_first_use_confirms_real_package_and_retains_disabled_choice(
         fixture.native.manager.installed["markdown"]
             .manifest
             .version,
-        "0.11.1"
+        "0.12.0"
     );
-    assert!(ui.debug_bounds("editor-preview-pane").is_some());
+    assert!(ui.debug_bounds("editor-plugin-layout").is_some());
     assert!(ui.debug_bounds("editor-source-toolbar").is_some());
-    assert!(ui.debug_bounds("editor-preview-sync-scroll").is_some());
+    assert!(
+        ui.debug_bounds("plugin-tool-markdown/preview/display-sync")
+            .is_some()
+    );
     assert_eq!(
         ui.update(|_, cx| fixture
             .native
@@ -47,7 +50,7 @@ fn fresh_markdown_first_use_confirms_real_package_and_retains_disabled_choice(
     );
     fixture.native.manager.disable("markdown").unwrap();
     fixture.settle(ui);
-    assert!(ui.debug_bounds("editor-preview-pane").is_none());
+    assert!(ui.debug_bounds("editor-plugin-layout").is_none());
     let (mut fixture, ui) = fixture.reopen(cx);
     fixture.open("notes.md", ui);
     assert!(!fixture.native.manager.installed["markdown"].enabled);
@@ -115,7 +118,7 @@ fn fresh_markdown_restricted_workspace_and_revoked_consent_never_execute_guest(
     });
     fixture.settle(ui);
     assert!(fixture.native.manager.installed.is_empty() && fixture.native.manager.live.is_empty());
-    assert!(ui.debug_bounds("editor-preview-pane").is_none());
+    assert!(ui.debug_bounds("editor-plugin-layout").is_none());
 }
 
 /// A queued candidate cannot install into a document that has been switched away or closed.
@@ -143,7 +146,7 @@ fn fresh_markdown_late_confirm_is_withdrawn_on_switch_and_close(cx: &mut TestApp
         assert!(
             fixture.native.manager.installed.is_empty() && fixture.native.manager.live.is_empty()
         );
-        assert!(ui.debug_bounds("editor-preview-pane").is_none());
+        assert!(ui.debug_bounds("editor-plugin-layout").is_none());
     }
 }
 
@@ -268,7 +271,7 @@ fn fresh_markdown_withdrawn_late_offer_is_available_when_returning_to_file(
     );
     fixture.click_consent("plugin-install-confirm", ui);
     fixture.settle(ui);
-    assert!(ui.debug_bounds("editor-preview-pane").is_some());
+    assert!(ui.debug_bounds("editor-plugin-layout").is_some());
 }
 
 /// Invalid shipped integrity or private choice metadata fails closed before permission or guest startup.
@@ -348,7 +351,7 @@ fn first_use_catalog_installs_an_independent_sdk_preview_with_an_opaque_identity
     );
     assert!(!fixture.native.manager.installed.contains_key("markdown"));
     assert!(ui.debug_bounds("plugin-ui-bundle-greeting").is_some());
-    assert!(ui.debug_bounds("editor-preview-pane").is_some());
+    assert!(ui.debug_bounds("editor-plugin-layout").is_some());
     fixture
         .native
         .manager
@@ -386,7 +389,7 @@ fn fresh_markdown_keeps_an_independent_preview_provider_across_restart(cx: &mut 
                 .disable("bundled-opaque-preview")
                 .unwrap();
             fixture.settle(ui);
-            assert!(ui.debug_bounds("editor-preview-pane").is_none());
+            assert!(ui.debug_bounds("editor-plugin-layout").is_none());
         }
         let (mut fixture, ui) = fixture.reopen(cx);
         fixture.open("notes.md", ui);
@@ -460,5 +463,5 @@ fn fresh_markdown_same_frame_return_replaces_cancelled_consent(cx: &mut TestAppC
     assert_ne!(old.request.token, current.request.token);
     fixture.click_consent("plugin-install-confirm", ui);
     fixture.settle(ui);
-    assert!(ui.debug_bounds("editor-preview-pane").is_some());
+    assert!(ui.debug_bounds("editor-plugin-layout").is_some());
 }

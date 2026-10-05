@@ -1,4 +1,4 @@
-//! Resolve every visible role against the live editor theme, never against plugin literals.
+//! User theme tokens override bounded plugin content defaults and generic native chrome.
 use super::*;
 use gpui_kit::{FontWeight, Hsla, Styled, component::ActiveTheme as _, px, rgb};
 
@@ -18,6 +18,12 @@ impl PluginView {
         let color = |key: &str, fallback: Hsla| {
             self.environment
                 .color(&self.plugin, &format!("ui.{role}.{key}"))
+                .or_else(|| {
+                    self.document
+                        .content_colors
+                        .get(&format!("{role}.{key}"))
+                        .copied()
+                })
                 .map(|c| rgb(c).into())
                 .unwrap_or(fallback)
         };

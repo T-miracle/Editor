@@ -17,6 +17,14 @@ fn image_package(id: &str) -> Package {
         .files;
     let mut manifest: serde_json::Value = serde_json::from_slice(&files["manifest.json"]).unwrap();
     manifest["id"] = id.into();
+    // Resource declarations follow the same independent identity as its inspected executable manifest.
+    let declaration = String::from_utf8(files["plugin.toml"].clone()).unwrap();
+    files.insert(
+        "plugin.toml".into(),
+        declaration
+            .replacen("id = \"svg\"", &format!("id = \"{id}\""), 1)
+            .into_bytes(),
+    );
     files.insert(
         "manifest.json".into(),
         serde_json::to_vec(&manifest).unwrap(),

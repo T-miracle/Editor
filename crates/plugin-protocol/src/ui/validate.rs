@@ -6,6 +6,18 @@ pub(super) fn document(document: &Document) -> Result<(), String> {
     if document.version != VERSION {
         return Err("Unsupported UI protocol version".into());
     }
+    if document.content_colors.len() > 64
+        || document.content_colors.iter().any(|(role, color)| {
+            role.is_empty()
+                || role.len() > 128
+                || !role
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-'))
+                || *color > 0xffffff
+        })
+    {
+        return Err("Content color defaults require bounded role keys and RGB values".into());
+    }
     if let Some(file) = &document.file {
         file.validate().map_err(|error| error.to_string())?;
     }
@@ -170,6 +182,15 @@ impl Validator {
         }
         self.budget(1)?;
         self.id(&node.id)?;
+        if node.layout.resizable
+            && (node.layout.wrap
+                || !matches!(&node.kind,
+            Kind::Row {children}|Kind::Column{children} if (2..=16).contains(&children.len())))
+        {
+            return Err(
+                "Resizable panes require 2..16 Row/Column children without wrapping".into(),
+            );
+        }
         if !node.links.is_empty() {
             if !matches!(
                 node.kind,

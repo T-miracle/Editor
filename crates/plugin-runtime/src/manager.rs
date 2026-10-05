@@ -16,6 +16,7 @@ mod image_input;
 mod images;
 mod language;
 mod plugin_services;
+mod preferences;
 mod preparation;
 mod recovery;
 pub use data_updates::PreparedInstallation;

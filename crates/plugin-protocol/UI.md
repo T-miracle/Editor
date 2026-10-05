@@ -52,6 +52,19 @@
 
 ## 可组合布局（清单 protocol 7）
 
+`ui.native >=1.1, <2` 增加 `Layout.resizable`：仅用于有 2–16 个子节点且不换行的 Row／Column。
+插件决定分栏结构；宿主复用原生尺寸状态、指针捕获与拖动行为，并绘制本地分隔线。
+该声明不新增文本会话，NativeEditor 仍借用唯一的编辑状态。
+
+`ui.content_colors ^1` 为 `Document.content_colors` 提供最多 64 项 `role.property` RGB 默认值。
+键为至多 128 字节的 ASCII 字母、数字、点、下划线或短横线，值不得超过 `0xffffff`。
+绘制按用户主题 `plugins[id].ui`、当前插件文档默认值、通用原生主题的顺序解析；
+不读取另一插件的默认值，不改变控件的行为或宿主公共外观。终端 ANSI／Markdown 内容配色由各自包提供。
+
+同一文本会话解析期间可以保留此前只读树和几何布局。旧树的控件事件、菜单与模态输入暂停；
+已有 NativeEditor 显示当前原生文本并保留焦点。旧树不能提交编辑、定位或复用新文件资源，
+新快照仍须回显精确 source/file；换文件、重开、换提供者或实例退休不得保留这条接缝。
+
 `ui.collections ^1` 增加 `Kind::SideTabs` 与 `Document.menu`。SideTabs 是普通布局节点，可在行列树任意位置组合；节点 ID 与集合 ID 相同，条目动作仍按稳定 ID 返回。插件通过节点宽度响应 `Resize(width)`，相邻画布会得到独立的实际尺寸测量。PopupMenu 锚点相对文档，覆盖正文、不占布局空间；显示时只接受该菜单的选择或关闭，Dialog 优先。
 
 `ui.canvas >=1.1` 增加 `Canvas.font` 和 `Canvas.scroll: Option<ScrollRange>`。字体覆盖画布继承值并参与网格测量；范围的 `content/offset` 使用逻辑像素，拖动原生滚动条产生 `CanvasEvent::Scroll { offset }`，宿主不保存第二份终端内容。字符网格的行滚轮以 `GridMetrics.cell_height` 换算，普通画布保持像素事件。

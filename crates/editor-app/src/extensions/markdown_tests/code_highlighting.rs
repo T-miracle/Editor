@@ -150,7 +150,7 @@ fn assert_source(
 /// The fenced block must still occupy the visible preview rather than merely exist in guest data.
 fn assert_visible_code(ui: &mut VisualTestContext) {
     let bounds = ui.debug_bounds(CODE).expect("visible native code block");
-    let pane = ui.debug_bounds("editor-preview-pane").unwrap();
+    let pane = ui.debug_bounds("plugin-ui-preview-root").unwrap();
     assert!(bounds.top() >= pane.top() && bounds.bottom() <= pane.bottom());
 }
 
@@ -183,7 +183,7 @@ fn delivered_markdown_code_uses_an_independent_enabled_language_provider(cx: &mu
     let bounds = ui
         .debug_bounds("plugin-ui-b-0-code")
         .expect("visible native code block");
-    let pane = ui.debug_bounds("editor-preview-pane").unwrap();
+    let pane = ui.debug_bounds("plugin-ui-preview-root").unwrap();
     assert!(bounds.top() >= pane.top() && bounds.bottom() <= pane.bottom());
     assert_eq!(
         scene.source,

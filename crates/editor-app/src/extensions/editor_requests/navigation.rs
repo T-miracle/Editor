@@ -33,6 +33,7 @@ impl EditorApp {
                     node,
                     *ui_revision,
                     &request,
+                    window,
                     cx,
                 ),
             }
@@ -92,6 +93,7 @@ impl EditorApp {
         node: &str,
         ui_revision: u64,
         request: &EditorRequest,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Result<Value, Failure> {
         let key = format!("{plugin}/{panel}");
@@ -99,9 +101,7 @@ impl EditorApp {
             self.plugin_panels.get(&key).cloned().ok_or_else(|| {
                 Failure::new(ErrorCode::NotFound, "Owned preview is not available")
             })?;
-        if self.active_editor_preview(cx).as_ref() != Some(&owner)
-            || self.editor_preview_mode(&owner, cx) == protocol::PreviewMode::Source
-        {
+        if self.active_editor_preview(cx).as_ref() != Some(&owner) {
             return Err(Failure::new(
                 ErrorCode::InvalidState,
                 "Preview is not visible",
@@ -137,11 +137,12 @@ impl EditorApp {
                 "Block range no longer matches source",
             ));
         }
-        let native = projection
-            .native_ui
-            .clone()
-            .ok_or_else(|| Failure::new(ErrorCode::InvalidState, "Preview has not been drawn"))?;
         enter_navigation(request, "Preview navigation cancelled")?;
+        // Publication can precede the first paint after a file switch. Prepare this exact
+        // authorized scene now; its normal next layout measures and executes the queued reveal.
+        let native = owner.update(cx, |panel, cx| {
+            panel.native_document((*scene).clone(), window, cx)
+        });
         native.update(cx, |view, cx| view.reveal_node(node, ui_revision, cx))?;
         Ok(Value::Unit)
     }

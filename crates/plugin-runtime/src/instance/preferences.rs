@@ -11,6 +11,38 @@ use std::sync::Mutex;
 /// The bounded disk work happens on runtime workers, never the GPUI input/render thread.
 static WRITES: Mutex<()> = Mutex::new(());
 
+impl Instance {
+    /// The host importer shares this instance's scoped IO, validation, quota and atomic CAS.
+    pub(crate) fn import_preference(
+        &mut self,
+        key: PreferenceKey,
+        data: serde_json::Value,
+    ) -> Result<bool, Failure> {
+        let state = self.store.data_mut();
+        let Value::Preference(current) =
+            state.preference_request(api::Operation::ReadPreference {
+                key: key.clone(),
+                watch: false,
+            })?
+        else {
+            unreachable!("typed preference read")
+        };
+        if current.value.data.is_some() {
+            return Ok(false);
+        }
+        match state.preference_request(api::Operation::WritePreference {
+            key,
+            expected_revision: 0,
+            data,
+        }) {
+            Ok(_) => Ok(true),
+            // Another writer's valid record wins; acknowledging import never replaces its intent.
+            Err(error) if error.code == ErrorCode::Conflict => Ok(false),
+            Err(error) => Err(error),
+        }
+    }
+}
+
 pub(super) struct Subscription {
     handle: ResourceHandle,
     key: PreferenceKey,

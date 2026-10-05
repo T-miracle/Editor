@@ -10,7 +10,7 @@ use plugin_protocol::{api, ui};
 /// Production attaches metadata after both the parsed index and final native tree have been derived.
 fn annotated(source: &str) -> (Index, Vec<ui::Node>) {
     let index = Index::parse(source);
-    let mut nodes = blocks(source, "zh-CN");
+    let mut nodes = blocks(source, "zh-CN").unwrap();
     index.annotate(&mut nodes);
     (index, nodes)
 }

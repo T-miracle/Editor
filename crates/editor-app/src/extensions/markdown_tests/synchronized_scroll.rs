@@ -40,7 +40,7 @@ fn delivered_markdown_source_scroll_reveals_the_corresponding_native_block(
         .active_node(&format!("b-{source_offset}-paragraph"))
         .expect("the visible source paragraph has a derived block");
     let selector = Box::leak(format!("plugin-ui-{}", block.id).into_boxed_str());
-    let pane = ui.debug_bounds("editor-preview-pane").unwrap();
+    let pane = ui.debug_bounds("plugin-ui-preview-root").unwrap();
     let paragraph = ui
         .debug_bounds(selector)
         .expect("corresponding native paragraph layout");
@@ -83,7 +83,7 @@ fn delivered_markdown_source_scroll_reveals_the_corresponding_native_block(
         source
     );
 
-    fixture.click("editor-preview-sync-scroll", ui);
+    fixture.click("plugin-tool-markdown/preview/display-sync", ui);
     let stationary = ui.update(|_, cx| fixture.app.read(cx).editor.read(cx).scroll_offset());
     wheel(ui, "plugin-ui-preview-scroll", 850.);
     fixture.settle(ui);
@@ -155,23 +155,23 @@ fn delivered_markdown_sync_scroll_control_remembers_workspace_and_withdraws_on_d
         .root()
         .to_path_buf();
     fixture.open("notes.md", ui);
-    let modes = ui.debug_bounds("editor-preview-preview-mode").unwrap();
-    let chain = ui.debug_bounds("editor-preview-sync-scroll").unwrap();
+    let modes = ui
+        .debug_bounds("plugin-tool-markdown/preview/display-preview")
+        .unwrap();
+    let chain = ui
+        .debug_bounds("plugin-tool-markdown/preview/display-sync")
+        .unwrap();
     assert!(
         modes.right() <= chain.left(),
         "chain follows the three mode buttons"
     );
     let saved = crate::app::session::SessionState::load(&workspace_root);
     assert!(
-        saved.editor_preview_sync.is_empty(),
+        saved.legacy_display_payload("markdown/preview").is_none(),
         "missing preference defaults on"
     );
-    fixture.click("editor-preview-sync-scroll", ui);
-    let saved = crate::app::session::SessionState::load(&workspace_root);
-    assert_eq!(
-        saved.editor_preview_sync.get("markdown/preview"),
-        Some(&false)
-    );
+    fixture.click("plugin-tool-markdown/preview/display-sync", ui);
+    assert_eq!(fixture.selected_tool("display-sync"), false);
     // Complete key-down and key-up: Base activates a focused button on release.
     for (key, expected) in [("space", true), ("enter", false)] {
         let keystroke = gpui_kit::Keystroke::parse(key).unwrap();
@@ -184,69 +184,48 @@ fn delivered_markdown_sync_scroll_control_remembers_workspace_and_withdraws_on_d
         ui.run_until_parked();
         fixture.settle(ui);
         assert_eq!(
-            crate::app::session::SessionState::load(&workspace_root)
-                .editor_preview_sync
-                .get("markdown/preview"),
-            Some(&expected),
+            fixture.selected_tool("display-sync"),
+            expected,
             "native {key} toggles the focused chain"
         );
     }
+    assert_eq!(fixture.selected_tool("display-sync"), false);
+    fixture.click("plugin-tool-markdown/preview/display-source", ui);
+    fixture.click("plugin-tool-markdown/preview/display-sync", ui);
     assert_eq!(
-        crate::app::session::SessionState::load(&workspace_root)
-            .editor_preview_sync
-            .get("markdown/preview"),
-        Some(&false)
-    );
-    fixture.click("editor-preview-source-mode", ui);
-    fixture.click("editor-preview-sync-scroll", ui);
-    assert_eq!(
-        crate::app::session::SessionState::load(&workspace_root)
-            .editor_preview_sync
-            .get("markdown/preview"),
-        Some(&false),
+        fixture.selected_tool("display-sync"),
+        false,
         "source-only chain is disabled"
     );
-    fixture.click("editor-preview-preview-mode", ui);
-    fixture.click("editor-preview-sync-scroll", ui);
+    fixture.click("plugin-tool-markdown/preview/display-preview", ui);
+    fixture.click("plugin-tool-markdown/preview/display-sync", ui);
     assert_eq!(
-        crate::app::session::SessionState::load(&workspace_root)
-            .editor_preview_sync
-            .get("markdown/preview"),
-        Some(&false),
+        fixture.selected_tool("display-sync"),
+        false,
         "preview-only chain is disabled"
     );
-    fixture.click("editor-preview-split-mode", ui);
+    fixture.click("plugin-tool-markdown/preview/display-split", ui);
     fixture.open("other.md", ui);
-    assert_eq!(
-        crate::app::session::SessionState::load(&workspace_root)
-            .editor_preview_sync
-            .get("markdown/preview"),
-        Some(&false)
-    );
+    assert_eq!(fixture.selected_tool("display-sync"), false);
     let workspace = Workspace::open(fixture.directory.path()).unwrap();
     let (app, reopened) = NativeMarkdown::window(workspace, cx);
     fixture.app = app;
     fixture.open("notes.md", reopened);
-    fixture.click("editor-preview-sync-scroll", reopened);
-    assert_eq!(
-        crate::app::session::SessionState::load(&workspace_root)
-            .editor_preview_sync
-            .get("markdown/preview"),
-        Some(&true)
-    );
+    fixture.click("plugin-tool-markdown/preview/display-sync", reopened);
+    assert_eq!(fixture.selected_tool("display-sync"), true);
     fixture.manager.disable("markdown").unwrap();
     fixture.settle(reopened);
     assert!(
         reopened
-            .debug_bounds("editor-preview-sync-scroll")
+            .debug_bounds("plugin-tool-markdown/preview/display-sync")
             .is_none()
     );
-    assert!(reopened.debug_bounds("editor-preview-pane").is_none());
+    assert!(reopened.debug_bounds("plugin-ui-preview-root").is_none());
     let other = tempfile::tempdir().unwrap();
     assert!(
         crate::app::session::SessionState::load(other.path())
-            .editor_preview_sync
-            .is_empty()
+            .legacy_display_payload("markdown/preview")
+            .is_none()
     );
 }
 
@@ -302,8 +281,15 @@ fn delivered_markdown_sync_scroll_refreshes_image_table_wrap_and_divider_geometr
     image_preview::complete(&mut fixture, ui);
     server.join().unwrap();
     assert_source_matches_preview(&fixture, ui);
-    let old_width = ui.debug_bounds("editor-preview-pane").unwrap().size.width;
-    let divider = ui.debug_bounds("editor-preview-divider").unwrap().center();
+    let old_width = ui
+        .debug_bounds("plugin-ui-preview-root")
+        .unwrap()
+        .size
+        .width;
+    let divider = ui
+        .debug_bounds("plugin-split-divider-markdown-layout")
+        .unwrap()
+        .center();
     ui.simulate_mouse_down(divider, gpui_kit::MouseButton::Left, Default::default());
     ui.run_until_parked();
     // Base starts the native drag after the threshold; a following movement resizes the panes.
@@ -324,7 +310,13 @@ fn delivered_markdown_sync_scroll_refreshes_image_table_wrap_and_divider_geometr
     ui.run_until_parked();
     fixture.settle(ui);
     assert!(
-        (ui.debug_bounds("editor-preview-pane").unwrap().size.width - old_width).abs() > px(100.),
+        (ui.debug_bounds("plugin-ui-preview-root")
+            .unwrap()
+            .size
+            .width
+            - old_width)
+            .abs()
+            > px(100.),
         "real divider drag changes wrap geometry"
     );
     assert_source_matches_preview(&fixture, ui);
@@ -348,7 +340,7 @@ fn delivered_markdown_sync_scroll_refreshes_image_table_wrap_and_divider_geometr
         })
     });
     fixture.settle(ui);
-    assert!(ui.debug_bounds("editor-preview-pane").is_none());
+    assert!(ui.debug_bounds("plugin-ui-preview-root").is_none());
     ui.simulate_mouse_up(position, gpui_kit::MouseButton::Left, Default::default());
     ui.update(|window, cx| {
         let panel = fixture.app.read(cx).plugin_panels["markdown/preview"].clone();
@@ -369,7 +361,7 @@ fn delivered_markdown_sync_scroll_refreshes_image_table_wrap_and_divider_geometr
 /// A valid independent SDK panel can expose and disable synchronization without optional presentation icons.
 #[gpui::test]
 #[ignore = "verify the current public SDK with scripts/verify-plugin-sdk.ps1 first"]
-fn independent_viewport_without_mode_icons_exposes_a_native_chain(cx: &mut TestAppContext) {
+fn independent_viewport_without_tools_adds_no_host_functions(cx: &mut TestAppContext) {
     use serde_json::json;
     let package = Package::read(
         &PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -381,7 +373,7 @@ fn independent_viewport_without_mode_icons_exposes_a_native_chain(cx: &mut TestA
     manifest["id"] = json!("independent-viewport");
     manifest["scope"] = json!("workspace");
     manifest["api"]["required"] = json!({"package.assets":"^1", "ui.native":"^1", "ui.richtext":"^1",
-        "editor.viewport":"^1", "editor.documents":"^1", "configuration":"^1"});
+        "editor.viewport":"^1", "editor.documents":"^1", "editor.layout":"^1", "configuration":"^1"});
     manifest["api"]["optional"] = json!({});
     manifest["permissions"] = json!(["assets.read", "editor.read"]);
     manifest["settings_hook"] = json!(false);
@@ -392,6 +384,25 @@ fn independent_viewport_without_mode_icons_exposes_a_native_chain(cx: &mut TestA
         "viewport",
         protocol::ui::Node::text("source", "independent").source_range(0..12),
     ));
+    document.editor_layout = true;
+    document.root = protocol::ui::Node::row(
+        "independent-layout",
+        vec![
+            protocol::ui::Node::new(
+                "editor",
+                protocol::ui::Kind::NativeEditor {
+                    document: protocol::api::DocumentVersion {
+                        id: "template".into(),
+                        path: "notes.sample".into(),
+                        revision: 0,
+                    },
+                },
+            )
+            .grow(),
+            document.root.grow(),
+        ],
+    )
+    .grow();
     document.editor_viewport = Some("viewport".into());
     files.insert(
         "manifest.json".into(),
@@ -405,23 +416,27 @@ fn independent_viewport_without_mode_icons_exposes_a_native_chain(cx: &mut TestA
     let (mut fixture, ui) =
         NativeMarkdown::mount_package(cx, &[("notes.sample", "independent\n")], &package);
     fixture.open("notes.sample", ui);
+    assert!(ui.debug_bounds("editor-source-pane").is_some());
+    assert!(ui.debug_bounds("plugin-ui-viewport").is_some());
     assert!(
-        ui.debug_bounds("editor-source-pane").is_some()
-            && ui.debug_bounds("editor-preview-pane").is_some()
+        ui.debug_bounds("plugin-tool-markdown/preview/display-source")
+            .is_none()
     );
-    assert!(ui.debug_bounds("editor-preview-source-mode").is_none());
-    assert!(ui.debug_bounds("editor-preview-sync-scroll").is_some());
-    fixture.click("editor-preview-sync-scroll", ui);
-    let workspace = Workspace::open(fixture.directory.path()).unwrap();
-    assert_eq!(
-        crate::app::session::SessionState::load(workspace.root())
-            .editor_preview_sync
-            .get("independent-viewport/welcome"),
-        Some(&false)
+    assert!(
+        ui.debug_bounds("plugin-tool-markdown/preview/display-sync")
+            .is_none()
+    );
+    assert!(
+        fixture.manager.live["independent-viewport"].views["welcome"]
+            .editor_viewport
+            .is_some()
     );
     fixture.manager.disable("independent-viewport").unwrap();
     fixture.settle(ui);
-    assert!(ui.debug_bounds("editor-preview-sync-scroll").is_none());
+    assert!(
+        ui.debug_bounds("plugin-tool-markdown/preview/display-sync")
+            .is_none()
+    );
 }
 
 /// Revoking a source observer ends its pointer ownership even when release occurs in an ordinary file.
@@ -439,7 +454,7 @@ fn delivered_markdown_sync_scroll_hidden_source_does_not_keep_a_released_pointer
     let position = ui.debug_bounds("editor-source-pane").unwrap().center();
     ui.simulate_mouse_down(position, gpui_kit::MouseButton::Left, Default::default());
     fixture.open("ordinary.txt", ui);
-    assert!(ui.debug_bounds("editor-preview-pane").is_none());
+    assert!(ui.debug_bounds("plugin-ui-preview-root").is_none());
     ui.simulate_mouse_up(position, gpui_kit::MouseButton::Left, Default::default());
     fixture.open("notes.md", ui);
     wheel(ui, "plugin-ui-preview-scroll", -1600.);
@@ -584,7 +599,7 @@ fn delivered_markdown_sync_scroll_late_locations_cannot_follow_changed_or_retire
             );
         }
         if name == "disable.md" {
-            assert!(ui.debug_bounds("editor-preview-pane").is_none());
+            assert!(ui.debug_bounds("plugin-ui-preview-root").is_none());
         }
     }
 }

@@ -72,12 +72,18 @@ try {
             # The panel manifest selects the matching SVG when the editor theme changes.
             $packageFiles += ,@('icons/terminal_light.svg', 'plugins/terminal/icons/terminal_light.svg')
             $packageFiles += ,@('icons/terminal_dark.svg', 'plugins/terminal/icons/terminal_dark.svg')
+            $packageFiles += ,@('theme.json', 'plugins/terminal/theme.json')
+            foreach ($icon in @('plus','chevron-down')) {
+                $packageFiles += ,@("icons/$icon.svg", "plugins/terminal/icons/$icon.svg")
+            }
         }
         if ($plugin[0] -eq 'svg') {
             # Keep editable vector sources beside the component that embeds the same toolbar assets.
-            foreach ($icon in @('zoom-in', 'zoom-out', 'actual-size', 'fit-window', 'view-source', 'view-split', 'view-preview')) {
+            foreach ($icon in @('zoom-in', 'zoom-out', 'actual-size', 'fit-window', 'view-source', 'view-split', 'view-preview', 'file', 'file_dark')) {
                 $packageFiles += ,@("icons/$icon.svg", "plugins/svg/icons/$icon.svg")
             }
+            $packageFiles += ,@('plugin.toml', 'plugins/svg/plugin.toml')
+            $packageFiles += ,@('icons.json', 'plugins/svg/icons.json')
         }
         foreach ($item in $packageFiles) {
             $entry = $archive.CreateEntry($item[0])

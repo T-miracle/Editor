@@ -380,7 +380,13 @@ impl EditorApp {
         } else {
             slots.saturating_sub(1)
         };
-        let mut row = h_flex().tab_group().items_center().gap_1().flex_shrink_0();
+        let mut row = h_flex()
+            // Native verification and accessibility tooling can distinguish the two contribution groups.
+            .debug_selector(move || format!("plugin-{group}-group").into())
+            .tab_group()
+            .items_center()
+            .gap_1()
+            .flex_shrink_0();
         for entry in entries.iter().take(visible) {
             let id = entry.id.clone();
             let button = Button::new(SharedString::from(id.clone()))

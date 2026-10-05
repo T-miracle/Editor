@@ -409,9 +409,11 @@ mod tests {
                 .keys()
                 .filter(|key| key.starts_with("terminal.ansi."))
                 .count();
-            assert_eq!(ansi, 16, "{} must define all ANSI colors", theme.id);
+            assert_eq!(
+                ansi, 0,
+                "{} must leave terminal domain defaults to its package",
+                theme.id
+            );
         }
-        assert_eq!(light.plugin_colors()["terminal.ansi.yellow"], "#8a5a00");
-        assert_eq!(dark.plugin_colors()["terminal.ansi.yellow"], "#d7ba7d");
     }
 }

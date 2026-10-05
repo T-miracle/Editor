@@ -14,6 +14,15 @@ use std::{
 };
 
 pub(super) enum Work {
+    /// One-time opaque migration uses current scoped storage consent, never the UI filesystem thread.
+    ImportPreference {
+        plugin: String,
+        epoch: u64,
+        owner: String,
+        workspace: String,
+        key: api::PreferenceKey,
+        data: serde_json::Value,
+    },
     /// Provider choices are explicit host actions, never executable project configuration.
     SetServiceProvider {
         request: u64,
@@ -73,6 +82,7 @@ impl Work {
     fn plugin_id(&self) -> Option<&str> {
         match self {
             Self::SetSetting { plugin, .. }
+            | Self::ImportPreference { plugin, .. }
             | Self::Invoke { plugin, .. }
             | Self::ImageInput { plugin, .. } => Some(plugin),
             Self::Install(package) => Some(&package.manifest.id),
@@ -158,6 +168,8 @@ pub(super) struct InstallationProgress {
 }
 #[derive(Default)]
 pub(super) struct Published {
+    /// Completion bundles let the session discard only the historical data actually stored.
+    pub preference_imports: Vec<PreferenceImport>,
     /// True only after successful private-store recovery and the actor's first complete entry publication.
     pub ready: bool,
     /// A single first-use reply is consumed only by the main editor owner; it grants no installation rights.
@@ -189,6 +201,13 @@ pub(super) struct Published {
     /// Changes when a plugin instance is replaced, even by the same package digest.
     pub instance_epochs: BTreeMap<String, u64>,
     pub processes: BTreeMap<String, usize>,
+}
+/// The worker's receipt carries no guest document/resource authority and is consumed once by its UI.
+pub(super) struct PreferenceImport {
+    pub owner: String,
+    pub workspace: String,
+    pub data: serde_json::Value,
+    pub succeeded: bool,
 }
 /// One transient operation error retains its target; manager failures cannot become another plugin's log.
 #[derive(Clone, Debug)]

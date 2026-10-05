@@ -1,6 +1,6 @@
 # 04 — 现有插件与用户数据迁移
 
-**Status:** ready-for-agent — 已确认并发布，等待前置工单完成。
+**Status:** in_progress — 前置 #64 已验收并关闭，在独立分支连续迁移真实插件与旧显示偏好。
 
 议题：[工单 #65](https://github.com/T-miracle/Editor/issues/65)。
 

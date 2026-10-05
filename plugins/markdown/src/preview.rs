@@ -28,14 +28,23 @@ impl Part<'_> {
     }
 }
 
-/// Parse only the approved extensions, then discard the intermediate event tree.
-pub(super) fn blocks(source: &str, locale: &str) -> Vec<ui::Node> {
+/// Parse approved extensions with finite intermediate work before native quota validation.
+/// Oversized events/depth return a limit result, preserving source editing and the guest instance.
+pub(super) fn blocks(source: &str, locale: &str) -> Result<Vec<ui::Node>, ()> {
     let mut stack = vec![Element {
         tag: None,
         range: 0..source.len(),
         children: Vec::new(),
     }];
-    for (event, range) in parser(source).into_offset_iter() {
+    for (count, (event, range)) in parser(source).into_offset_iter().enumerate() {
+        // Native scenes allow 2048 nodes, depth 32 and 64 KiB per leaf. Bound the
+        // earlier event tree as well so rejected previews cannot exhaust dispatch fuel.
+        if count >= 8192
+            || stack.len() >= 32
+            || matches!(&event,Event::Text(text)|Event::Code(text)|Event::Html(text)|Event::InlineHtml(text) if text.len()>65536)
+        {
+            return Err(());
+        }
         match event {
             Event::Start(tag) => stack.push(Element {
                 tag: Some(tag),
@@ -61,7 +70,7 @@ pub(super) fn blocks(source: &str, locale: &str) -> Vec<ui::Node> {
                 .push(Part::Event(event, range)),
         }
     }
-    Renderer { locale }.blocks(&stack.pop().unwrap().children)
+    Ok(Renderer { locale }.blocks(&stack.pop().unwrap().children))
 }
 
 /// Navigation and visible blocks use exactly the same approved Markdown extensions and source events.

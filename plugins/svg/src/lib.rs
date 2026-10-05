@@ -7,6 +7,7 @@ use plugin_protocol::{
 };
 use std::cell::RefCell;
 
+mod display;
 mod scene;
 
 /// Zoom is the absolute scale of the SVG's intrinsic dimensions.
@@ -33,6 +34,8 @@ enum ViewMode {
 
 /// A preview owns transient view state; the editor remains the authority for document contents.
 struct State {
+    /// Plugin intent applies only to editable SVG, independently of raster file identity.
+    display: display::Display,
     environment: Environment,
     width: f32,
     height: f32,
@@ -55,6 +58,7 @@ impl Default for State {
     /// Start with an empty preview, using dimensions that the first native resize will replace.
     fn default() -> Self {
         Self {
+            display: Default::default(),
             environment: Environment::default(),
             width: 400.,
             height: 300.,
@@ -99,7 +103,7 @@ impl Guest for ImagePreview {
                             ..Default::default()
                         };
                     }
-                    api::Input::Event { panel, event } => state.event(panel.as_deref(), event),
+                    api::Input::Event { panel, event } => state.event(panel.as_deref(), event)?,
                     api::Input::Snapshot => {
                         return Ok(api::Output {
                             snapshot: Some(Snapshot {
@@ -122,17 +126,41 @@ impl Guest for ImagePreview {
 export!(ImagePreview);
 impl State {
     /// Preview is the host-managed current-document subscription; unrelated panels cannot retarget it.
-    fn event(&mut self, panel: Option<&str>, event: api::Notification) {
+    fn event(&mut self, panel: Option<&str>, event: api::Notification) -> Result<(), api::Failure> {
         match event {
             api::Notification::FilePreview { file } if panel == Some("preview") => {
+                self.display.bind(file.as_ref())?;
                 self.file = file;
-                self.document = None;
-                self.source.clear();
-                self.intrinsic = None;
-                self.error = None;
-                self.pressed_button = None;
-                self.hovered_button = None;
+                if self.file.as_ref().and_then(|file| file.text.as_ref()) != self.document.as_ref()
+                {
+                    self.document = None;
+                    self.source.clear();
+                    self.intrinsic = None;
+                    self.error = None;
+                    self.pressed_button = None;
+                    self.hovered_button = None;
+                }
                 self.revision = self.revision.saturating_add(1);
+            }
+            api::Notification::Tool(event) if panel == Some("preview") => {
+                if event.revision == self.revision
+                    && self.file.as_ref().is_some_and(|file| {
+                        event.target
+                            == (ui::ToolTarget::File {
+                                version: file.version.clone(),
+                            })
+                    })
+                    && self.display.select(&event)?
+                {
+                    self.revision = self.revision.saturating_add(1);
+                }
+            }
+            event @ (api::Notification::PreferenceChanged { .. }
+            | api::Notification::SubscriptionFailed { .. }) => {
+                // Revoked watches must reach the binding so reopening the scope can read again.
+                if self.display.changed(&event)? {
+                    self.revision = self.revision.saturating_add(1);
+                }
             }
             api::Notification::Theme(environment) => self.environment = environment,
             api::Notification::Preview { document, text } if panel == Some("preview") => {
@@ -147,6 +175,7 @@ impl State {
             }
             _ => {}
         }
+        Ok(())
     }
     /// Coordinates are local to this ordinary canvas; the host never interprets SVG zoom or toolbar commands.
     fn canvas_event(&mut self, event: ui::CanvasEvent) {
@@ -182,7 +211,9 @@ impl State {
 
     /// Parse unsaved source with external image resolution disabled, keeping malformed input recoverable.
     fn document(&mut self, document: Option<api::DocumentVersion>, source: String) {
-        self.file = None;
+        if let Some(file) = &mut self.file {
+            file.text = document.clone();
+        }
         if matches!((&self.document, &document), (Some(current), Some(next)) if current.id == next.id && next.revision < current.revision)
         {
             return;

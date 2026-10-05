@@ -124,8 +124,13 @@ impl Demo {
     }
     /// The preview uses unsaved source supplied by the host, never a disk reread.
     pub(super) fn preview(&mut self, source: Option<api::DocumentVersion>, text: &str) {
-        self.document.source = source;
+        self.document.source = source.clone();
         visit(&mut self.document.root, &mut |node| {
+            if let Kind::NativeEditor { document } = &mut node.kind
+                && let Some(source) = &source
+            {
+                *document = source.clone();
+            }
             if let Kind::Canvas(canvas) = &mut node.kind {
                 canvas.paint = if text.trim_start().starts_with("<svg") {
                     vec![Paint::Svg {
@@ -162,6 +167,7 @@ impl Demo {
     pub(super) fn document(&self) -> ui::Document {
         let mut document = self.document.clone();
         if document.source.is_none() {
+            document.editor_layout = false;
             // Source controls cannot publish until their immutable document identity is available.
             document.editor_toolbar = None;
             document.editor_image_input = false;
@@ -184,6 +190,9 @@ impl Demo {
 
 /// Hide source-bound resources only in the publication clone; preserve the asset for later previews.
 fn unbind_source(node: &mut Node) {
+    if matches!(node.kind, Kind::NativeEditor { .. }) {
+        node.kind = Kind::Spacer;
+    }
     node.source_range = None;
     if let Kind::Image { alt, .. } = &node.kind {
         node.kind = Kind::Text { text: alt.clone() };

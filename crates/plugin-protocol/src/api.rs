@@ -11,6 +11,10 @@ mod viewport;
 pub use viewport::{PreviewViewport, SourceViewport, ViewportTarget};
 mod preferences;
 pub use preferences::{PreferenceKey, PreferenceRead, PreferenceValue};
+#[cfg(feature = "guest")]
+mod preference_binding;
+#[cfg(feature = "guest")]
+pub use preference_binding::PreferenceBinding;
 
 #[cfg(test)]
 mod images_tests;

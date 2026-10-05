@@ -18,7 +18,7 @@ fn heading_id(source: &str, heading: &str) -> String {
 fn parsed_heading_slugs_are_unicode_lowercase_and_collision_free() {
     let source = "# 标题\n\n# 标题\n\n# 标题-1\n\n# 标题\n\n# HELLO_ World！\n\n# !!!\n";
     let index = Index::parse(source);
-    let nodes = blocks(source, "zh-CN");
+    let nodes = blocks(source, "zh-CN").unwrap();
     let starts: Vec<_> = source.match_indices("# ").map(|(start, _)| start).collect();
     for (slug, start) in [
         "标题",
@@ -48,7 +48,7 @@ fn parsed_heading_slugs_are_unicode_lowercase_and_collision_free() {
 fn natural_suffix_before_duplicate_title_is_not_reused() {
     let source = "# item-1\n\n# item\n\n# item\n\n# item-2\n";
     let index = Index::parse(source);
-    let nodes = blocks(source, "en-US");
+    let nodes = blocks(source, "en-US").unwrap();
     let starts: Vec<_> = source.match_indices("# ").map(|(start, _)| start).collect();
     for (slug, start) in ["item-1", "item", "item-2", "item-2-1"]
         .into_iter()
@@ -66,7 +66,7 @@ fn natural_suffix_before_duplicate_title_is_not_reused() {
 fn heading_targets_follow_images_quotes_setext_and_literal_html() {
     let source = "# ![图像](img.png)\n\n> ## 内嵌 标题\n\nSetext\n====\n\n<h1>伪标题</h1>\n\n```\n# 假标题\n```\n";
     let index = Index::parse(source);
-    let nodes = blocks(source, "zh-CN");
+    let nodes = blocks(source, "zh-CN").unwrap();
     assert_eq!(index.heading(&nodes, "图像"), Some("b-2-image".into()));
     assert_eq!(
         index.heading(&nodes, "内嵌-标题"),
@@ -86,7 +86,7 @@ fn raw_html_code_and_unrelated_text_cannot_supply_link_events() {
     let source =
         "[真的](next.md)\n\n普通文字\n\n<a href=\"next.md\">假</a>\n\n```\n[代码](next.md)\n```\n";
     let index = Index::parse(source);
-    let nodes = blocks(source, "zh-CN");
+    let nodes = blocks(source, "zh-CN").unwrap();
     assert_eq!(
         index.resolve(&nodes, "b-0-paragraph", "next.md"),
         Some("next.md")
@@ -110,6 +110,7 @@ fn raw_html_code_and_unrelated_text_cannot_supply_link_events() {
 /// Observe the actual safe preview HTML instead of computing an expected href with the production matcher.
 fn emitted_href(source: &str) -> String {
     let markup = blocks(source, "zh-CN")
+        .unwrap()
         .into_iter()
         .find_map(|node| match node.kind {
             ui::Kind::RichText { html } => Some(html),
@@ -155,7 +156,7 @@ fn rendered_hrefs_match_exactly_and_recover_original_parsed_uris() {
     ] {
         assert_eq!(emitted_href(source), attribute, "{source}");
         let index = Index::parse(source);
-        let nodes = blocks(source, "zh-CN");
+        let nodes = blocks(source, "zh-CN").unwrap();
         assert_eq!(
             index.resolve(&nodes, "b-0-paragraph", native),
             Some(parsed),
@@ -177,7 +178,7 @@ fn rendered_href_matching_preserves_reserved_delimiters_and_double_encoding() {
     let native = "%252e%252e/a.md#%E6%A0%87%E9%A2%98";
     assert_eq!(emitted_href(source), native);
     let index = Index::parse(source);
-    let nodes = blocks(source, "zh-CN");
+    let nodes = blocks(source, "zh-CN").unwrap();
     let parsed = index.resolve(&nodes, "b-0-paragraph", native).unwrap();
     assert_eq!(
         destination(parsed),
@@ -202,7 +203,7 @@ fn rendered_href_matching_preserves_reserved_delimiters_and_double_encoding() {
     ] {
         assert_eq!(emitted_href(source), native);
         let index = Index::parse(source);
-        let nodes = blocks(source, "zh-CN");
+        let nodes = blocks(source, "zh-CN").unwrap();
         assert_eq!(index.resolve(&nodes, "b-0-paragraph", native), Some(native));
         assert!(index.resolve(&nodes, "b-0-paragraph", altered).is_none());
     }
@@ -214,7 +215,7 @@ fn email_autolinks_match_writer_prefix_without_becoming_external_browser_request
     let source = "<user@example.com>";
     assert_eq!(emitted_href(source), "mailto:user@example.com");
     let index = Index::parse(source);
-    let nodes = blocks(source, "en-US");
+    let nodes = blocks(source, "en-US").unwrap();
     let parsed = index
         .resolve(&nodes, "b-0-paragraph", "mailto:user@example.com")
         .unwrap();
@@ -231,7 +232,7 @@ fn email_autolinks_with_markdown_suffixes_cannot_become_relative_document_links(
         let href = format!("mailto:{address}");
         assert_eq!(emitted_href(&source), href);
         let index = Index::parse(&source);
-        let nodes = blocks(&source, "en-US");
+        let nodes = blocks(&source, "en-US").unwrap();
         let parsed = index.resolve(&nodes, "b-0-paragraph", &href).unwrap();
         assert_eq!(destination(parsed), Err(Reason::Unsupported));
         assert_eq!(parsed, href);
@@ -240,7 +241,7 @@ fn email_autolinks_with_markdown_suffixes_cannot_become_relative_document_links(
         let source = format!("[user]({address})");
         assert_eq!(emitted_href(&source), address);
         let index = Index::parse(&source);
-        let nodes = blocks(&source, "en-US");
+        let nodes = blocks(&source, "en-US").unwrap();
         let parsed = index.resolve(&nodes, "b-0-paragraph", &address).unwrap();
         assert_eq!(parsed, address);
         assert_eq!(

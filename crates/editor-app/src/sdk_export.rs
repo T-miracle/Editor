@@ -6,6 +6,10 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 const SDK_FILES: &[(&str, &[u8])] = &[
+    (
+        "src/api/preference_binding.rs",
+        include_bytes!("../../plugin-protocol/src/api/preference_binding.rs"),
+    ),
     ("TOOLS.md", include_bytes!("../../plugin-protocol/TOOLS.md")),
     (
         "src/ui/layout_tests.rs",

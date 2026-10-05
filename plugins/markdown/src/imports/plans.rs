@@ -211,6 +211,7 @@ mod tests {
         }
         assert!(
             crate::preview::blocks(&result, "en")
+                .unwrap()
                 .iter()
                 .any(has_imported_image)
         );

@@ -478,7 +478,7 @@ fn partial_external_theme_keeps_plugin_ansi_fallbacks() {
     assert_eq!(terminal.color(1), 0xff7673);
 }
 
-/// Native control colors stay in the host; canvas errors still use the guest theme API.
+/// User tokens override owned control defaults; undeclared roles retain generic theme colors.
 #[test]
 fn external_theme_overrides_terminal_window_colors() {
     let mut terminal = app();
@@ -528,6 +528,13 @@ fn external_theme_overrides_terminal_window_colors() {
     assert_eq!(
         terminal.ui_color("tab_bar.background", terminal.env.muted),
         0xeeeeee
+    );
+    let mut dark = terminal.env.clone();
+    dark.dark = true;
+    terminal.event(Event::Theme(dark));
+    assert_eq!(
+        terminal.ui_color("tab_bar.background", terminal.env.muted),
+        0x2b2d30
     );
 }
 

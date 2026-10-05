@@ -448,9 +448,6 @@ impl Render for EditorApp {
                     .child(
                         StatusBar::new()
                             .left(self.render_plugin_toolbar(explorer_panel_icon(cx), window, cx))
-                            .when_some(self.render_editor_preview_controls(cx), |bar, controls| {
-                                bar.left(controls)
-                            })
                             .left(
                                 div()
                                     .flex_1()

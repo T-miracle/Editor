@@ -1,6 +1,6 @@
 # 03 — 两组底栏与共享显示偏好
 
-**Status:** completed — 两组底栏、公开工具事件与共享偏好已验收，固定候选 `1ee5ae9` 两轴审查通过；推送并核对远端后关闭 #64。
+**Status:** completed — 两组底栏、公开工具事件与共享偏好已验收，固定候选 `1ee5ae9` 两轴审查通过；`d105aa0` 已推送并读回确认 #64 已关闭。
 
 议题：[工单 #64](https://github.com/T-miracle/Editor/issues/64)。
 

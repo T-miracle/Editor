@@ -231,7 +231,7 @@ fn composed_wasm_preview_follows_memory_and_reclaims_the_editor_split(cx: &mut T
     cx.run_until_parked();
     pump(&mut manager, &app, cx);
     publish(&mut manager, &mut renderer, &app, cx);
-    assert!(cx.debug_bounds("editor-preview-pane").is_some());
+    assert!(cx.debug_bounds("editor-plugin-layout").is_some());
     assert!(cx.debug_bounds("plugin-ui-caption").is_some());
     cx.update(|_, cx| {
         let owner = app.read(cx).extensions.read(cx);
@@ -268,7 +268,7 @@ fn composed_wasm_preview_follows_memory_and_reclaims_the_editor_split(cx: &mut T
     assert!(tree.source.is_some());
     manager.uninstall("capability-example", true).unwrap();
     publish(&mut manager, &mut renderer, &app, cx);
-    assert!(cx.debug_bounds("editor-preview-pane").is_none());
+    assert!(cx.debug_bounds("editor-plugin-layout").is_none());
     assert!(cx.debug_bounds("plugin-ui-viewport").is_none());
     assert!(cx.update(|_, cx| app.read(cx).plugin_panels.is_empty()));
 }
@@ -291,6 +291,31 @@ pub(super) fn pump(
             .collect()
     });
     for work in work {
+        let work = match work {
+            Work::ImportPreference {
+                plugin,
+                owner,
+                workspace,
+                key,
+                data,
+                ..
+            } => {
+                let succeeded = manager
+                    .import_preference(&plugin, key, data.clone())
+                    .is_ok();
+                cx.update(|_, cx| {
+                    super::package_ui_test_support::owner_receipt(
+                        &owner,
+                        &workspace,
+                        data,
+                        succeeded,
+                        &app.read(cx).extensions.read(cx).worker,
+                    )
+                });
+                continue;
+            }
+            work => work,
+        };
         if let Work::ImageInput {
             plugin,
             panel,

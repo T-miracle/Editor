@@ -397,6 +397,20 @@ impl Instance {
                 .validate()
                 .map_err(|message| Failure::new(ErrorCode::InvalidRequest, message))?;
             self.check_tool_authority(&view.panel, &view.document)?;
+            if !view.document.content_colors.is_empty()
+                && !self
+                    .store
+                    .data()
+                    .api
+                    .capabilities
+                    .contains_key("ui.content_colors")
+            {
+                return Err(api::Failure::new(
+                    api::ErrorCode::CapabilityUnavailable,
+                    "Content colors require ui.content_colors",
+                )
+                .into());
+            }
             if view.document.file.as_ref()
                 != self
                     .file_sources
@@ -471,6 +485,7 @@ impl Instance {
                     .check_editor_viewport_authority(&view.panel)?;
             }
             let mut canvas = false;
+            let mut resizable = false;
             let mut grid = false;
             let mut collections = view.document.menu.is_some();
             let mut enhanced_canvas = false;
@@ -486,6 +501,7 @@ impl Instance {
                     enhanced_canvas |= value.scroll.is_some() || value.font != Default::default();
                 }
                 collections |= matches!(node.kind, ui::Kind::SideTabs(_));
+                resizable |= node.layout.resizable;
                 images |= matches!(node.kind, ui::Kind::Image { .. });
                 file_images |= matches!(node.kind, ui::Kind::FileImage { .. });
                 // Source metadata is part of the same optional interface even on ordinary nodes.
@@ -501,6 +517,18 @@ impl Instance {
             }
             if let Some(dialog) = &view.document.dialog {
                 dialog.content.visit(&mut visit);
+            }
+            if resizable
+                && !api
+                    .capabilities
+                    .get("ui.native")
+                    .is_some_and(|version| *version >= semver::Version::new(1, 1, 0))
+            {
+                return Err(Failure::new(
+                    ErrorCode::CapabilityUnavailable,
+                    "Resizable containers require ui.native 1.1",
+                )
+                .into());
             }
             if links && !api.capabilities.contains_key("ui.links") {
                 return Err(Failure::new(
