@@ -2,7 +2,7 @@
 
 日期：2026-10-06。议题：[#65](https://github.com/T-miracle/Editor/issues/65)。
 分支：`codex/plugin-ui-decoupling`；固定审查起点：`4d4a7b6`。
-状态：阶段验收通过，等待固定提交审查，尚未关闭工单。
+状态：实现、阶段验收与固定提交 `f153d6b` 双轴复核通过；推送及议题关闭读回待核对。
 
 ## 交付范围
 
@@ -62,10 +62,23 @@ Markdown 仍按只读源快照派生预览，本批未复制原工作区未提�
 超出原生节点、深度、事件或单叶文本预算时显示明确限制，编辑器继续可用；不承诺任意大文档完整预览。
 原生交互证据来自 GPUI 测试窗口真实事件和绘制，不把编译或内部状态断言当作手工 UI 验收。
 
+## 审查回归
+
+固定候选 `ec7b8ec` 审查发现 3 项 P2，随后复核增加 1 项缩放边界，均通过原生界面或实际 WASM 包先复现再修复：
+
+- 已接受的旧定位在新 revision 到达前尚未绘制，旧树只读时仍改变滚动。新原生回归先复现 480 像素偏移；撤销场景权限时同时撤销排队定位，原生视口相关 11 项通过，包含关闭同步后仍可执行有效链接定位。
+- 673 个段落（2,019 字节）的 Markdown 预览在加入编辑器、分栏与工具后超出节点配额，实际 Manager 复现 `UI node quota exceeded`。改为验证完整组合树；实际包回归确认限制提示、精确当前编辑器、实例继续存活及缩短后恢复，Markdown guest 66 项仍通过。
+- SVG 放大后只改 `fill`，完整 `FilePreview → Preview` 路径先复现宽度从 224 恢复为 200。仅保留缩放所属文档身份，清除过期文本和图像权限；实际包回归确认同身份编辑保留缩放、旧文本拒绝及重开文件恢复默认尺寸，Image guest 7 项仍通过。
+- 换到首帧损坏的新 SVG 后修复，先复现继承前一文件的 224 像素宽度。身份改变时在解析前恢复自动尺寸意图；新文件修复恢复 200 像素，而同文件放大后损坏再修复仍保留 224 像素。实际包与 Image guest 7 项通过，见 `migration-svg-damaged-{red,green,guest}.log`。
+
+记录：`migration-stale-navigation-{red,green}.log`、`migration-composed-quota-{red,green,guest}.log`、`migration-svg-zoom-{red,green,guest}.log`。最新完整格式回执 3 项、旧导航在编辑／切 Tab／关闭／停用后不能写回 1 项也通过，见 `migration-final-format-receipts.log`、`migration-final-navigation-retirement.log`。
+
+最终配额修复后的 500,008 字节真实 Markdown 原生输入复核通过，耗时 377.33 毫秒，见 `migration-quota-native-input.log`。最终基础检查三项通过，日志为 `migration-reviewed-{fmt,workspace,check}.log`，非 UI workspace 125 项通过、122 项 ignored；新增实际包用例已单独显式执行。
+
 ## Standards
 
-等待固定提交双轴审查。
+候选 `ec7b8ec`：1 项 P2（排队定位生命周期）。修复及 `f153d6b` 复核：剩余 0 项，未发现新的规范违反或需修复的坏味道。
 
 ## Spec
 
-等待固定提交双轴审查。旧公开呈现契约的彻底收缩与全 U01–U20 组合验收归 #66，不提前记为完成。
+候选 `ec7b8ec`：2 项 P2（最终组合配额、SVG 缩放身份）；`aee3def` 复核增加首帧损坏新文件的缩放边界 1 项。均已修复；`f153d6b` 最终复核剩余 0 项，没有需求缺失或范围扩张。旧公开呈现契约的彻底收缩与全 U01–U20 组合验收归 #66，不提前记为完成。
