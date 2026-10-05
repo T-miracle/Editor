@@ -233,8 +233,17 @@ fn image_views_withdraw_files_before_svg(
     draw(app, manager, visual);
     choose_named("A Image", app, manager, visual);
     assert!(manager.installed["image-a"].error.is_none());
-    assert!(manager.live["image-a"].views["preview"].source.is_some());
-    assert!(manager.live["image-a"].views["preview"].file.is_none());
+    // Editable SVG now carries both file-targeted tools and the exact text source; the preceding
+    // raster must lose its visible stage rather than requiring the new file context to be absent.
+    let context = visual.update(|_, cx| {
+        let app = app.read(cx);
+        app.plugin_file_context(app.active_tab_index().unwrap())
+            .unwrap()
+    });
+    let view = &manager.live["image-a"].views["preview"];
+    assert_eq!(view.file.as_ref(), Some(&context.version));
+    assert_eq!(view.source, context.text);
+    assert!(visual.debug_bounds("plugin-file-image").is_none());
     assert!(visual.debug_bounds("editor-source-pane").is_some());
 }
 

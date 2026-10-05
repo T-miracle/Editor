@@ -39,5 +39,7 @@ notify.workspace = true
 
 [dev-dependencies]
 gpui-kit = { workspace = true, features = ["test-support"] }
+# Reidentified hybrid fixtures retain their declarative resources through a parsed TOML manifest.
+toml.workspace = true
 # Build independent declarative package fixtures through the public ZIP inspection boundary.
 zip = { version = "4", default-features = false, features = ["deflate"] }

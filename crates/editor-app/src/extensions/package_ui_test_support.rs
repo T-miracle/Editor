@@ -20,6 +20,18 @@ pub(super) fn identify(package: Package, id: &str, name: &str) -> Package {
     let mut manifest: serde_json::Value = serde_json::from_slice(&files["manifest.json"]).unwrap();
     manifest["id"] = id.into();
     manifest["name"] = name.into();
+    if let Some(path) = manifest["contributions"].as_str() {
+        // Hybrid packages declare the same owner in both manifests; preserve artwork and other
+        // contributions while changing identity instead of weakening the public admission checks.
+        let source = std::str::from_utf8(&files[path]).unwrap();
+        let mut contributions: toml::Value = toml::from_str(source).unwrap();
+        contributions["plugin"]["id"] = toml::Value::String(id.into());
+        contributions["plugin"]["name"] = toml::Value::String(name.into());
+        files.insert(
+            path.into(),
+            toml::to_string(&contributions).unwrap().into_bytes(),
+        );
+    }
     files.insert(
         "manifest.json".into(),
         serde_json::to_vec(&manifest).unwrap(),
@@ -69,6 +81,11 @@ pub(super) fn pump(app: &Entity<EditorApp>, manager: &mut Manager, cx: &mut App)
             work => work,
         };
         if let Work::Event(id, _, panel, event) = work {
+            // A direct lifecycle call can retire the guest between native frames; its queued callbacks
+            // lose authority just as production callbacks do when publication advances the instance epoch.
+            if manager.instance_id(&id).is_none() {
+                continue;
+            }
             let result = manager.event(&id, panel, event);
             assert!(
                 result.is_ok()
