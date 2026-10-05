@@ -2,7 +2,8 @@
 
 日期：2026-10-06。议题：[#66](https://github.com/T-miracle/Editor/issues/66)。
 分支：`codex/plugin-ui-decoupling`；固定审查起点：`4d4a7b6`。
-状态：实现、最终包、事务、权限、仓库基线及总验收通过，等待固定提交双轴审查；未关闭议题。
+状态：实现、最终包、事务、权限、仓库基线及总验收通过，固定提交双轴审查剩余 0 项。
+最终源码 `a04f0d8d0439f0ec83e0c133acabcd55e9d2d958` 已推送并核对远端；等待 #66 关闭读回。
 
 ## 最终边界
 
@@ -75,9 +76,10 @@ PNG 故障保留 Tab、撤销图片资源，实际“重试”按钮经标准生
 | 原生两组底栏 | 1 passed、0 ignored：实际窗口／文件目标、共享意图、键盘、独立溢出、主题及 DPI |
 | 真实插件原生迁移 | 4 passed、0 ignored：Markdown 旧偏好及重启、Image 的 SVG／PNG 边界、Terminal 显隐／功能、持续输入 |
 | 实际 UI 包与语言切换 | 各 1 passed、0 ignored：示例／Image 原生输入与清理、语言提供者选择／替换／普通回退 |
-| 旧 UI 安装记录 | 2 passed、0 ignored：启动／重开／启用拒绝／当前包更新、设置与私有数据／授权保留，以及未知字段仍拒绝 |
-| 真实 SDK 安装升级 | 1 passed、0 ignored：旧元数据阻止组件运行，当前合法包重新安装后恢复实例并保留私有文件与用户设置 |
+| 旧 UI 安装记录 | 2 passed、0 ignored：启动／重开／启用及设置拒绝／当前包更新、设置与私有数据／授权保留，以及未知字段仍拒绝 |
+| 真实 SDK 安装升级 | 1 passed、0 ignored：旧元数据阻止组件及配置钩子运行，当前合法包重新安装后恢复实例并保留私有文件与用户设置 |
 | 历史安装目录迁移 | 1 passed、0 ignored：旧协议含 null 工具字段，两份工作区、原始备份及旧私有数据可恢复；93.24 秒 |
+| 当前合法插件配置 | 1 passed、0 ignored：工作区／用户配置隔离、禁用组件不激活、卸载／删除数据的设置边界；185.63 秒 |
 
 上述检查与 9 项实际包原生场景均有有效通过结果，完整基线中的 ignored 不计为通过。
 日志在隔离工作区 `target/final-*.log`，不提交二进制和完整输出。
@@ -87,9 +89,9 @@ cargo build -p editor-app
 ./scripts/build-plugins.ps1 -Packages terminal,example,svg,rust,toml,html,javascript,markdown -HostExe ./target/debug/editor-app.exe
 ./scripts/build-layout-example.ps1 -HostExe ./target/debug/editor-app.exe
 ./scripts/verify-plugin-sdk.ps1 -HostExe ./target/debug/editor-app.exe
-cargo test -p plugin-runtime --test retired_ui_contract
-cargo test -p plugin-runtime --test registry_ui_migration --test retired_ui_contract
+cargo test -p plugin-runtime --test registry_ui_migration --test retired_ui_contract --test settings
 cargo test -p plugin-runtime --test registry_ui_migration retired_ui_install_updates_through_sdk_and_preserves_private_data -- --ignored --test-threads=1
+cargo test -p plugin-runtime --test settings configuration_changes_are_isolated_and_disabled_guests_stay_disabled -- --ignored --test-threads=1
 cargo test -p plugin-runtime --test installed_migration -- --ignored --test-threads=1
 cargo test -p plugin-runtime --test sdk_distribution --test composable_layouts --test file_views --test ui_migrations --test tool_artwork --test plugin_tools --test terminal_migration -- --ignored --test-threads=1
 cargo test -p plugin-runtime --test data_migration upgrades_private_data_on_an_isolated_copy -- --ignored --test-threads=1
@@ -137,7 +139,10 @@ TOML 资源清单；SVG 新布局已携带精确 FileContext，旧断言仍要�
 公开 `update_setting` 回归先红；现在在改变设置候选及读取组件前检查安装兼容性，
 旧记录的原设置与私有数据保持原样。常规目标 4 项通过；真实 SDK 包设置拒绝、合法安装与
 重开恢复用例再次通过，55.71 秒。记录为 `final-registry-setting-{red,green,sdk}.log`。
-两个审查轴已核对其余实例创建／恢复接缝，未发现其他同类遗漏；最终修复候选仍需固定提交复核。
+当前合法插件的真实配置回归也通过，185.63 秒，见 `final-registry-setting-current.log`。
+两个审查轴已核对其余实例创建／恢复接缝，未发现其他同类遗漏，并对 `a04f0d8` 复核至剩余 0 项。
+最终格式、非 UI 128 项／120 ignored、workspace 编译及宿主构建再次通过，
+日志为 `final-setting-reviewed-*`；完整应用和最终原生包证据不受此设置拒绝入口变化影响，继续复用。
 
 ## 实际限制
 
@@ -149,8 +154,10 @@ Markdown 仍派生只读快照，本批没有复制原工作区未提交的增�
 
 ## Standards
 
-等待最终固定提交双轴审查。
+`dd10c46` 原 P1（旧注册表阻断）已通过有限导入修复；`7f0362b` 复核的设置执行入口遗漏也已修复。
+`a04f0d8` 固定提交最终复核：剩余 0 项，未发现新的规范违反或需修复的坏味道。
 
 ## Spec
 
-等待最终固定提交双轴审查。父议题 #61 保持原状，工单 #66 只在最终验收、推送及读回后关闭。
+同一旧安装记录 P1 及设置入口缺口均有公开回归和真实 SDK 包证据，`a04f0d8` 最终复核剩余 0 项。
+没有需求缺失或范围扩张。父议题 #61 保持原状，工单 #66 只在最终验收、推送及读回后关闭。
