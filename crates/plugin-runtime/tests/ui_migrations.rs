@@ -149,7 +149,7 @@ fn svg_uses_versioned_memory_and_discards_obsolete_content() {
     manager
         .install(&package, package.manifest.permissions.clone())
         .unwrap();
-    let version = api::DocumentVersion {
+    let mut version = api::DocumentVersion {
         id: "open-svg".into(),
         path: "unsaved.svg".into(),
         revision: 7,
@@ -170,7 +170,7 @@ fn svg_uses_versioned_memory_and_discards_obsolete_content() {
             .iter()
             .rev()
             .find_map(|paint| match paint {
-                Paint::Svg { rect, source, .. } if source == SVG => Some(*rect),
+                Paint::Svg { rect, source, .. } if source.contains("<circle") => Some(*rect),
                 _ => None,
             })
             .unwrap()
@@ -189,7 +189,18 @@ fn svg_uses_versioned_memory_and_discards_obsolete_content() {
             y: 150.,
         }),
     );
-    assert!(vector(&manager).w > initial.w);
+    let zoomed = vector(&manager);
+    assert!(zoomed.w > initial.w);
+    // Follow the host's full file-then-text path: an edit changes revision, not the open SVG's zoom intent.
+    version.revision += 1;
+    let edited = SVG.replace("<circle", "<circle fill=\"blue\"");
+    svg_preview(&mut manager, Some(version.clone()), &edited);
+    assert_eq!(vector(&manager), zoomed);
+    assert!(
+        serde_json::to_string(tree(&manager, "svg", "preview"))
+            .unwrap()
+            .contains("blue")
+    );
     let error = manager
         .event(
             "svg",

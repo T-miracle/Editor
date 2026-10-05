@@ -41,6 +41,8 @@ struct State {
     height: f32,
     /// Echoed source authority; reopening a path creates a different document identity.
     document: Option<api::DocumentVersion>,
+    /// Zoom belongs to the open SVG identity even while a newer exact text snapshot is pending.
+    zoom_document: Option<String>,
     /// Raster previews carry file authority without manufacturing a text session or revision.
     file: Option<api::FileContext>,
     revision: u64,
@@ -63,6 +65,7 @@ impl Default for State {
             width: 400.,
             height: 300.,
             document: None,
+            zoom_document: None,
             file: None,
             revision: 0,
             source: String::new(),
@@ -131,8 +134,18 @@ impl State {
             api::Notification::FilePreview { file } if panel == Some("preview") => {
                 self.display.bind(file.as_ref())?;
                 self.file = file;
+                if self
+                    .file
+                    .as_ref()
+                    .and_then(|file| file.text.as_ref())
+                    .is_none()
+                {
+                    // Closing the text or switching to a raster withdraws its transient zoom intent.
+                    self.zoom_document = None;
+                }
                 if self.file.as_ref().and_then(|file| file.text.as_ref()) != self.document.as_ref()
                 {
+                    // Clear old pixels and authority, retaining only the identity needed to preserve manual zoom.
                     self.document = None;
                     self.source.clear();
                     self.intrinsic = None;
@@ -218,8 +231,8 @@ impl State {
         {
             return;
         }
-        let changed_file = self.document.as_ref().map(|source| &source.id)
-            != document.as_ref().map(|source| &source.id);
+        let changed_file =
+            self.zoom_document.as_ref() != document.as_ref().map(|source| &source.id);
         if changed_file {
             self.pressed_button = None;
             self.hovered_button = None;
@@ -228,6 +241,7 @@ impl State {
             self.revision = self.revision.saturating_add(1);
         }
         self.document = document;
+        self.zoom_document = self.document.as_ref().map(|source| source.id.clone());
         self.intrinsic = None;
         self.error = None;
         self.source.clear();
