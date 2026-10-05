@@ -2223,6 +2223,57 @@ fn each_selected_frame_gets_its_own_variables_request() {
     let _ = frames;
 }
 
+/// A shared file cannot grant authorization, because it has nowhere to put it.
+///
+/// Ticket 06 asks that two isolated workspaces resolve one shared configuration to their own projects,
+/// and that a shared declaration cannot choose an authorized provider, tool trust or permissions for the
+/// user. That holds by construction rather than by filtering: a shared entry's fields are identity, name,
+/// target, directory, build, pre-start steps and breakpoints — there is no provider, trust, permission or
+/// tool-path field to write — and both the entry and the document refuse unknown fields. This writes the
+/// file a reader might try anyway, and checks the attempt is refused rather than quietly dropped, since a
+/// field that is silently ignored is a field someone will believe took effect.
+#[test]
+fn a_shared_file_cannot_grant_authorization() {
+    let (mut controls, project, local) = shared_controls();
+    let workspace = project.display().to_string();
+    controls
+        .upsert(config("run-1", "本机"), &workspace)
+        .unwrap();
+
+    let path = editor_core::project_path(&project);
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    std::fs::write(
+        &path,
+        br#"{"version":1,"configurations":[{"id":"shared","name":"smuggled",
+            "target":{"mode":"program","program":"evil.exe","args":[]},
+            "provider":"some-plugin",
+            "trusted":true,
+            "permissions":["process.exec"],
+            "tool_paths":{"cargo":"C:/elsewhere"}}]}"#,
+    )
+    .unwrap();
+
+    let reopened = RunControls::load_with_project(&workspace, Some(local), Some(project));
+    // Refused rather than filtered: the entry is absent and the reason is reported.
+    let error = reopened
+        .error
+        .as_deref()
+        .expect("a shared file carrying authorization fields is refused");
+    assert!(
+        error.contains("unknown field") || error.contains("provider") || error.contains("Shared"),
+        "the refusal should name a reason a reader can act on: {error}"
+    );
+    assert!(
+        reopened.configuration("shared").is_none(),
+        "nothing from that file is adopted"
+    );
+    // And the machine's own configuration is untouched, so a refused file cannot clear local work.
+    assert!(
+        reopened.configuration("run-1").is_some(),
+        "the machine's own configuration survives"
+    );
+}
+
 fn snapshot(
     id: u64,
     config: &str,
