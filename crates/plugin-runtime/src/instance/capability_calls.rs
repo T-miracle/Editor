@@ -41,6 +41,8 @@ impl State {
                 "find_files",
                 "describe_sdk",
                 "open_data",
+                "read_preference",
+                "write_preference",
                 "read_file",
                 "write_file",
                 "close_resource",
@@ -68,6 +70,8 @@ impl State {
                     &request.operation,
                     api::Operation::ReadAsset { .. }
                         | api::Operation::OpenData
+                        | api::Operation::ReadPreference { watch: false, .. }
+                        | api::Operation::WritePreference { .. }
                         | api::Operation::ReadFile { .. }
                         | api::Operation::WriteFile { .. }
                         | api::Operation::CloseResource { .. }
@@ -84,6 +88,8 @@ impl State {
                     &request.operation,
                     api::Operation::ReadAsset { .. }
                         | api::Operation::OpenData
+                        | api::Operation::ReadPreference { watch: false, .. }
+                        | api::Operation::WritePreference { .. }
                         | api::Operation::ReadFile { .. }
                         | api::Operation::WriteFile { .. }
                         | api::Operation::CloseResource { .. }
@@ -114,6 +120,7 @@ impl State {
                     api::Operation::ReadAsset { .. }
                         | api::Operation::OpenWorkspace { .. }
                         | api::Operation::OpenData { .. }
+                        | api::Operation::ReadPreference { watch: false, .. }
                         | api::Operation::ReadFile { .. }
                         | api::Operation::FindFiles { .. }
                         | api::Operation::DescribeSdk
@@ -148,6 +155,8 @@ impl State {
                         .map(api::Value::Cancellation)
                 }
                 api::Operation::ReadAsset { path } => self.read_capability_asset(&path),
+                operation @ (api::Operation::ReadPreference { .. }
+                | api::Operation::WritePreference { .. }) => self.preference_request(operation),
                 api::Operation::DescribeSdk => self.describe_sdk(),
                 api::Operation::Editor {
                     operation,
@@ -157,7 +166,14 @@ impl State {
             };
             // Record all delegated allocations at the common boundary, including file and request handles.
             if let (
-                Ok(api::Value::Resource(handle) | api::Value::Accepted(handle)),
+                Ok(
+                    api::Value::Resource(handle)
+                    | api::Value::Accepted(handle)
+                    | api::Value::Preference(api::PreferenceRead {
+                        subscription: Some(handle),
+                        ..
+                    }),
+                ),
                 Some(context),
             ) = (&result, &self.plugin_services.context)
             {
@@ -380,6 +396,7 @@ impl Instance {
             view.document
                 .validate()
                 .map_err(|message| Failure::new(ErrorCode::InvalidRequest, message))?;
+            self.check_tool_authority(&view.panel, &view.document)?;
             if view.document.file.as_ref()
                 != self
                     .file_sources

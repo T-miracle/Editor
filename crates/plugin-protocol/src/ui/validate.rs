@@ -44,6 +44,37 @@ pub(super) fn document(document: &Document) -> Result<(), String> {
         editors: 0,
     };
     validator.node(&document.root, 0)?;
+    if document.tools.len() > 32 {
+        return Err("Too many toolbar contributions".into());
+    }
+    for tool in &document.tools {
+        validator.id(&tool.id)?;
+        validator.budget(1)?;
+        for text in [
+            &tool.label.zh_cn,
+            &tool.label.en,
+            &tool.tooltip.zh_cn,
+            &tool.tooltip.en,
+        ] {
+            if text.is_empty() || text.len() > 512 || text.chars().any(char::is_control) {
+                return Err("Tool labels and tooltips require bounded bilingual text".into());
+            }
+            validator.text(text)?;
+        }
+        tool.icon.validate()?;
+        match &tool.target {
+            ToolTarget::File { version } if document.file.as_ref() == Some(version) => {
+                version.validate().map_err(|error| error.to_string())?;
+            }
+            ToolTarget::Window { panel }
+                if !panel.is_empty()
+                    && panel.len() <= 100
+                    && panel.bytes().all(|byte| {
+                        byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.')
+                    }) => {}
+            _ => return Err("Tool target requires this file or an owned window".into()),
+        }
+    }
     // Auxiliary surfaces never mount a second native input/IME target.
     validator.allow_editor = false;
     if let Some(toolbar) = &document.editor_toolbar {

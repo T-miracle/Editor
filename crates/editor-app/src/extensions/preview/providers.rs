@@ -11,6 +11,40 @@ struct Candidate {
 }
 
 impl EditorApp {
+    /// Auxiliary functions receive only compatible authorized files; only selection grants layout ownership.
+    pub(super) fn file_panel_is_active(
+        &self,
+        panel: &Entity<ExtensionPanel>,
+        selected: &Option<Entity<ExtensionPanel>>,
+        cx: &App,
+    ) -> bool {
+        if selected.as_ref() == Some(panel) {
+            return true;
+        }
+        let panel = panel.read(cx);
+        if !panel.editor_auxiliary || !panel.visible.get() {
+            return false;
+        }
+        let Some(extension) = self.file_provider_type() else {
+            return false;
+        };
+        panel.entries.iter().any(|entry| {
+            entry.enabled
+                && entry.error.is_none()
+                && entry.grants.contains("editor.read")
+                && Some(&entry.manifest.id) == panel.active.as_ref()
+                && entry.manifest.panels.iter().any(|descriptor| {
+                    Some(&descriptor.id) == panel.surface_id.as_ref()
+                        && (if self.active_text_tab_index().is_some() {
+                            &descriptor.file_extensions
+                        } else {
+                            &descriptor.readonly_file_extensions
+                        })
+                        .iter()
+                        .any(|kind| kind.eq_ignore_ascii_case(&extension))
+                })
+        })
+    }
     /// Retain the chosen identity even when no corresponding live surface is currently available.
     pub(super) fn remembered_file_provider_key(&self) -> Option<String> {
         match self

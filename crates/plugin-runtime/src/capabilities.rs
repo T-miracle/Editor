@@ -27,6 +27,7 @@ pub(crate) fn negotiate(manifest: &Manifest) -> anyhow::Result<api::Negotiated> 
     let available = [
         ("package.assets".into(), Version::new(1, 0, 0)),
         ("ui.native".into(), Version::new(1, 0, 0)),
+        ("ui.tools".into(), Version::new(1, 0, 0)),
         ("ui.richtext".into(), Version::new(1, 0, 0)),
         ("ui.code_highlighting".into(), Version::new(1, 0, 0)),
         ("ui.links".into(), Version::new(1, 0, 0)),
@@ -39,7 +40,7 @@ pub(crate) fn negotiate(manifest: &Manifest) -> anyhow::Result<api::Negotiated> 
         ("plugin.services".into(), Version::new(1, 0, 0)),
         ("workspace.files".into(), Version::new(1, 1, 0)),
         ("host.sdk".into(), Version::new(1, 0, 0)),
-        ("storage.private".into(), Version::new(1, 0, 0)),
+        ("storage.private".into(), Version::new(1, 1, 0)),
         ("storage.editor".into(), Version::new(1, 0, 0)),
         ("storage.migration".into(), Version::new(1, 0, 0)),
         ("editor.documents".into(), Version::new(1, 0, 0)),

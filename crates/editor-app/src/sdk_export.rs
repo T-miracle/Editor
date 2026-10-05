@@ -6,6 +6,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 const SDK_FILES: &[(&str, &[u8])] = &[
+    ("TOOLS.md", include_bytes!("../../plugin-protocol/TOOLS.md")),
     (
         "src/ui/layout_tests.rs",
         include_bytes!("../../plugin-protocol/src/ui/layout_tests.rs"),
@@ -51,6 +52,14 @@ const SDK_FILES: &[(&str, &[u8])] = &[
         include_bytes!("../../plugin-protocol/src/ui/events.rs"),
     ),
     (
+        "src/ui/tools.rs",
+        include_bytes!("../../plugin-protocol/src/ui/tools.rs"),
+    ),
+    (
+        "src/ui/tools_tests.rs",
+        include_bytes!("../../plugin-protocol/src/ui/tools_tests.rs"),
+    ),
+    (
         "src/ui/canvas.rs",
         include_bytes!("../../plugin-protocol/src/ui/canvas.rs"),
     ),
@@ -82,6 +91,10 @@ const SDK_FILES: &[(&str, &[u8])] = &[
     (
         "src/api/guest.rs",
         include_bytes!("../../plugin-protocol/src/api/guest.rs"),
+    ),
+    (
+        "src/api/preferences.rs",
+        include_bytes!("../../plugin-protocol/src/api/preferences.rs"),
     ),
     (
         "src/ui/controls.rs",

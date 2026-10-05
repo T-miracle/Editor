@@ -9,6 +9,8 @@ pub use navigation::{
 };
 mod viewport;
 pub use viewport::{PreviewViewport, SourceViewport, ViewportTarget};
+mod preferences;
+pub use preferences::{PreferenceKey, PreferenceRead, PreferenceValue};
 
 #[cfg(test)]
 mod images_tests;
@@ -231,6 +233,19 @@ pub enum Operation {
     /// Describe a host-owned SDK without accepting a guest-chosen native path.
     DescribeSdk,
     OpenData,
+    /// Read opaque plugin preferences under the owning workspace and file type; requires storage.private 1.1.
+    /// A watch returns an instance-owned resource revoked through CloseResource or retirement.
+    ReadPreference {
+        key: PreferenceKey,
+        watch: bool,
+    },
+    /// Compare-and-set prevents another instance's newer intent from being silently overwritten.
+    /// Returns the actual persisted revision; values grant no layout, window or document authority.
+    WritePreference {
+        key: PreferenceKey,
+        expected_revision: u64,
+        data: serde_json::Value,
+    },
     ReadFile {
         handle: ResourceHandle,
         path: String,
@@ -256,6 +271,7 @@ pub struct Request {
 /// Result variants carry structured values, never JSON hidden inside a string result.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum Value {
+    Preference(PreferenceRead),
     Files(FileMatches),
     Sdk(SdkDescriptor),
     Process(crate::process::Update),
@@ -338,11 +354,19 @@ pub enum Notification {
         subscription: ResourceHandle,
         error: Failure,
     },
+    /// Shared private intent changed; delivery belongs to this exact live watch, not a document session.
+    PreferenceChanged {
+        subscription: ResourceHandle,
+        key: PreferenceKey,
+        value: PreferenceValue,
+    },
     Request {
         handle: ResourceHandle,
         update: RequestUpdate,
     },
     Ui(crate::ui::UiEvent),
+    /// Bottom-bar functions retain the captured file/window target after native focus changes.
+    Tool(crate::ui::ToolEvent),
     Theme(crate::Environment),
     Command {
         id: String,

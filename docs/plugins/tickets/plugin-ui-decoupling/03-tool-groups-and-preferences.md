@@ -1,6 +1,6 @@
 # 03 — 两组底栏与共享显示偏好
 
-**Status:** ready-for-agent — 已确认并发布，等待前置工单完成。
+**Status:** in_progress — 前置 #63 已交付，正在独立分支实现两组底栏、公开工具事件与共享偏好。
 
 议题：[工单 #64](https://github.com/T-miracle/Editor/issues/64)。
 

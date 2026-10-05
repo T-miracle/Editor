@@ -36,11 +36,17 @@ mod markdown_tests;
 mod native_controls;
 #[cfg(test)]
 mod native_ui_tests;
+#[cfg(test)]
+mod package_ui_test_support;
 mod preview;
 #[cfg(test)]
 mod preview_tests;
 mod recovery;
+mod tools;
+#[cfg(test)]
+mod tools_tests;
 pub(crate) use recovery::{level_label, log_time, severity_icon};
+pub(crate) use tools::FunctionContext;
 #[cfg(test)]
 mod recovery_tests;
 #[cfg(test)]
@@ -99,6 +105,8 @@ pub struct ExtensionPanel {
     surface_id: Option<String>,
     /// Editor-local surfaces are selected by the active document instead of the outer dock tree.
     editor_preview: bool,
+    /// Auxiliary file functions receive compatible contexts but never own the center layout.
+    editor_auxiliary: bool,
     /// The editor's revision token avoids copying unchanged documents on every shell repaint.
     preview_document: Option<(PathBuf, u64)>,
     /// New previews echo the open-document token so old drawing results cannot replace a newer file.
@@ -116,6 +124,8 @@ pub struct ExtensionPanel {
     /// Validated package-owned mode artwork shares the panel digest cache and has no ambient paths.
     mode_icons: [Option<Vec<u8>>; 3],
     panel_icon_digest: Option<String>,
+    /// Immutable package icons are loaded once per version, outside the render path.
+    tool_icons: HashMap<String, Option<Icon>>,
     focus: FocusHandle,
     bounds: Bounds<Pixels>,
     /// Keyed native controls own text editing, canvas input and composition.
@@ -280,6 +290,7 @@ impl ExtensionPanel {
             active: None,
             surface_id: None,
             editor_preview: false,
+            editor_auxiliary: false,
             viewport_sync_enabled: false,
             source_viewport: Default::default(),
             preview_document: None,
@@ -290,6 +301,7 @@ impl ExtensionPanel {
             panel_icons: [None, None],
             mode_icons: [None, None, None],
             panel_icon_digest: None,
+            tool_icons: HashMap::new(),
             focus: cx.focus_handle(),
             bounds: Bounds::default(),
             native_ui: None,
@@ -384,6 +396,7 @@ impl ExtensionPanel {
             active: Some(id),
             surface_id: Some(panel.id),
             editor_preview: panel.position == "editor",
+            editor_auxiliary: panel.auxiliary,
             viewport_sync_enabled: false,
             source_viewport: Default::default(),
             preview_document: None,
@@ -394,6 +407,7 @@ impl ExtensionPanel {
             panel_icons,
             mode_icons,
             panel_icon_digest,
+            tool_icons: HashMap::new(),
             focus: cx.focus_handle(),
             bounds: Bounds::default(),
             native_ui: None,
@@ -565,6 +579,7 @@ impl ExtensionPanel {
                 let entry = self.entries.iter().find(|entry| &entry.manifest.id == id);
                 let digest = entry.map(|entry| entry.digest.clone());
                 if self.panel_icon_digest != digest {
+                    self.tool_icons.clear();
                     // A hot update replaces the cached artwork with the new package version.
                     self.panel_icons = entry
                         .map(|entry| {
@@ -653,6 +668,7 @@ impl ExtensionPanel {
                 });
             });
         }
+        self.refresh_tool_icons();
         if changed {
             cx.notify();
             if self.surface_id.is_none() || self.editor_preview {
@@ -1017,74 +1033,6 @@ impl EditorApp {
         })
         .detach();
     }
-    /// Each installed dock contribution has its own visibility toggle in the editor status bar.
-    pub(crate) fn plugin_panel_buttons(&self, cx: &mut Context<Self>) -> Vec<AnyElement> {
-        // Keep the status order declarative; plugin identities remain opaque to the host.
-        let selected_style = component_styles(cx, ThemeComponent::PanelToggle).selected;
-        let orders = self
-            .extensions
-            .read(cx)
-            .entries
-            .iter()
-            .flat_map(|entry| {
-                entry.manifest.panels.iter().map(|panel| {
-                    (
-                        format!("{}/{}", entry.manifest.id, panel.id),
-                        panel.status_order.unwrap_or(1000),
-                    )
-                })
-            })
-            .collect::<HashMap<_, _>>();
-        let mut panels = self.plugin_panels.iter().collect::<Vec<_>>();
-        panels.sort_by_key(|(key, _)| (orders.get(*key).copied().unwrap_or(1000), (*key).clone()));
-        panels
-            .into_iter()
-            .map(|(key, panel)| {
-                let panel = panel.clone();
-                let key = key.clone();
-                let title = panel.read(cx).panel_title.clone();
-                let icon = panel.read(cx).panel_icon(cx.theme().is_dark());
-                let visible = panel.read(cx).visible.get();
-                // A declared panel icon replaces its label while the tooltip keeps its name.
-                let button =
-                    Button::new(SharedString::from(format!("toggle-{key}"))).tooltip(title.clone());
-                let button = if let Some(icon) = icon {
-                    button.icon(icon)
-                } else {
-                    button.label(title)
-                };
-                button
-                    .small()
-                    .compact()
-                    .ghost()
-                    // Match the existing 24px compact icon width without changing button widths.
-                    .h(px(24.))
-                    .when(visible, |button| {
-                        button
-                            .bg(selected_style.background.unwrap_or(cx.theme().list_active))
-                            .text_color(selected_style.foreground.unwrap_or(cx.theme().foreground))
-                    })
-                    .on_click(cx.listener(move |app, _, window, cx| {
-                        panel.update(cx, |panel, cx| {
-                            let visible = !panel.visible.get();
-                            if visible {
-                                panel.show(window, cx);
-                            } else {
-                                panel.hide();
-                            }
-                            cx.notify();
-                        });
-                        app.dock_area.update(cx, |_, cx| cx.notify());
-                        app.session_state
-                            .plugin_panel_visibility
-                            .insert(key.clone(), panel.read(cx).visible.get());
-                        app.persist_session();
-                        cx.notify();
-                    }))
-                    .into_any_element()
-            })
-            .collect()
-    }
     /// Register and remove native panels directly from installed manifest contributions.
     pub(crate) fn sync_plugin_panels(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let contributions: Vec<_> = self
@@ -1139,6 +1087,7 @@ impl EditorApp {
             if let Some(panel) = self.plugin_panels.get(&key) {
                 // Editor-local contributions are rendered inside the current document's panel.
                 if descriptor.position == "editor" {
+                    panel.update(cx, |panel, _| panel.editor_auxiliary = descriptor.auxiliary);
                     continue;
                 }
                 // Reattach a hidden panel when reopened after its empty region was removed.

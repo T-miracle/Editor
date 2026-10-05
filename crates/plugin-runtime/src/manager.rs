@@ -46,6 +46,12 @@ pub struct Installed {
     pub error: Option<String>,
 }
 impl Installed {
+    /// Whether this manifest negotiates `id` against the current host; false includes incompatible packages.
+    /// This metadata query executes no guest and grants no permission, workspace or instance authority.
+    pub fn supports_capability(&self, id: &str) -> bool {
+        crate::capabilities::negotiate(&self.manifest)
+            .is_ok_and(|api| api.capabilities.contains_key(id))
+    }
     /// Compatibility is derived without executing guest code or changing the user's enablement preference.
     pub fn compatibility_error(&self) -> Option<String> {
         crate::capabilities::require_current(&self.manifest)

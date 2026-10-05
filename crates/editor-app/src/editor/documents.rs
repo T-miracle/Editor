@@ -707,8 +707,9 @@ impl EditorApp {
                         .active_tab_index()
                         .is_some_and(|index| app.tabs[index].file_id == file_id)
                         && app.active_text_tab_index().is_some()
-                        // A right-click popup owns keyboard input until selection or dismissal.
+                        // Captured file/tool popups own keys until dismissal, even after a target switch.
                         && app.file_view_menu.is_none()
+                        && app.tool_overflow.is_none()
                     {
                         focus.focus(window, cx);
                     }

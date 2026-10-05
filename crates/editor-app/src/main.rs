@@ -188,6 +188,12 @@ struct EditorApp {
     plugin_popup: Option<(PluginPopupKind, Point<Pixels>)>,
     /// A native file context menu captures the opened identity before presenting provider choices.
     file_view_menu: Option<Entity<ui::controls::menu::PopupMenu>>,
+    /// Native toolbar focus does not replace the last valid file or independent plugin-window target.
+    function_context: Option<extensions::FunctionContext>,
+    /// Tracks toolbar ancestry so ordinary host focus can return tools to the current file.
+    toolbar_focus: FocusHandle,
+    /// Each group opens its own captured overflow list through the same native popup behavior.
+    tool_overflow: Option<Entity<ui::controls::menu::PopupMenu>>,
     /// An immutable summary boundary separates reminder confirmation from visible-record reading.
     plugin_popup_snapshot: Option<PluginPopupSnapshot>,
     dark_theme: bool,
@@ -389,6 +395,9 @@ impl EditorApp {
             plugin_documents: Default::default(),
             plugin_popup: None,
             file_view_menu: None,
+            function_context: None,
+            toolbar_focus: cx.focus_handle(),
+            tool_overflow: None,
             plugin_popup_snapshot: None,
             dark_theme: false,
             session_state,

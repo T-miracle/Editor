@@ -4,6 +4,13 @@ use plugin_protocol::{PreviewMode, api::InstanceScope};
 use std::{io::Read, path::Path};
 
 impl Installed {
+    /// Resolve a runtime-validated tool path within this exact immutable package version.
+    /// Missing, escaped, oversized or unsafe SVG resources return None without granting file authority.
+    pub fn tool_icon(&self, root: &Path, path: &str) -> Option<Vec<u8>> {
+        let bytes = self.icon_bytes(root, path)?;
+        crate::package::icons::svg(&bytes).ok()?;
+        Some(bytes)
+    }
     /// Resolve only a declared SVG from this installed package version.
     pub fn panel_icon(&self, root: &Path, panel_id: &str, dark: bool) -> Option<Vec<u8>> {
         let panel = self

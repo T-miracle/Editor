@@ -1,0 +1,18 @@
+{
+  "id": "tools-example",
+  "name": "Tools Example",
+  "version": "0.1.0",
+  "protocol": 7,
+  "api": {"base":"^1","required":{"ui.native":"^1","ui.tools":"^1","editor.files":"^1","editor.documents":"^1"}},
+  "component": "tools-example.wasm",
+  "permissions": ["editor.read"],
+  "panels": [
+    {"id":"auxiliary","title":"Auxiliary tools","position":"editor","auxiliary":true,"file_extensions":["layout"],"readonly_file_extensions":["png"]},
+    {"id":"window-a","title":"Window A","position":"bottom","default_visible":false,"status_order":10,"icon_light":"icons/tool.svg","icon_dark":"icons/tool.svg"},
+    {"id":"window-b","title":"Window B","position":"bottom","default_visible":false,"status_order":11,"icon_light":"icons/tool.svg","icon_dark":"icons/tool.svg"},
+    {"id":"window-c","title":"Window C","position":"bottom","default_visible":false,"status_order":12,"icon_light":"icons/tool.svg","icon_dark":"icons/tool.svg"},
+    {"id":"window-d","title":"Window D","position":"bottom","default_visible":false,"status_order":13,"icon_light":"icons/tool.svg","icon_dark":"icons/tool.svg"},
+    {"id":"window-e","title":"Window E","position":"bottom","default_visible":false,"status_order":14,"icon_light":"icons/tool.svg","icon_dark":"icons/tool.svg"}
+  ],
+  "storage_limit": 1024
+}

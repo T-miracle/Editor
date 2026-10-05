@@ -195,6 +195,35 @@ impl Manager {
             // Reject stale host callbacks before calling WASM; they are not plugin crashes.
             document.validate_event(event)?;
         }
+        if let api::Notification::Tool(event) = inner {
+            let instance = self.live.get(id).ok_or_else(|| {
+                api::Failure::new(api::ErrorCode::InvalidState, "Tool owner is disabled")
+            })?;
+            let panel = panel.as_ref().ok_or_else(|| {
+                api::Failure::new(
+                    api::ErrorCode::InvalidRequest,
+                    "Tool requires one owning panel",
+                )
+            })?;
+            let document = instance.views.get(panel).ok_or_else(|| {
+                api::Failure::new(api::ErrorCode::InvalidHandle, "Tool surface was withdrawn")
+            })?;
+            document.validate_tool_event(event)?;
+            if let ui::ToolTarget::File { version } = &event.target
+                && instance
+                    .file_sources
+                    .get(panel)
+                    .and_then(Option::as_ref)
+                    .map(|file| &file.version)
+                    != Some(version)
+            {
+                return Err(api::Failure::new(
+                    api::ErrorCode::StaleRevision,
+                    "File function target is obsolete",
+                )
+                .into());
+            }
+        }
         let instance = self
             .live
             .get_mut(id)

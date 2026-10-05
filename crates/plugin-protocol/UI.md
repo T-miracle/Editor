@@ -1,5 +1,7 @@
 # 插件原生界面协议 v1
 
+底栏 `Document.tools`、窗口／文件目标、包内图标、双语提示与偏好 CAS／watch 见 [TOOLS.md](TOOLS.md)。
+
 ## 文件中心布局（editor.layout 1.0）
 
 协商 `editor.layout ^1` 后，所选工作区文件提供者可以发布 `Document.editor_layout = true`，

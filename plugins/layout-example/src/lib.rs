@@ -5,6 +5,7 @@ use plugin_protocol::{
     ui,
 };
 use std::cell::RefCell;
+mod intent;
 
 /// Only view intent and immutable capability tokens are retained; the host owns native text/Undo.
 #[derive(Default)]
@@ -14,6 +15,7 @@ struct State {
     revision: u64,
     mode: u8,
     locale: String,
+    intent: intent::Intent,
 }
 thread_local! { static STATE: RefCell<State> = RefCell::new(State::default()); }
 struct Example;
@@ -71,13 +73,18 @@ impl State {
                 ..
             } => {
                 self.source = document;
-                self.file = None;
+                if let Some(file) = &mut self.file {
+                    file.text = self.source.clone();
+                }
             }
             api::Input::Event {
                 event: api::Notification::FilePreview { file },
                 ..
             } => {
-                self.source = None;
+                self.source = file.as_ref().and_then(|file| file.text.clone());
+                if let Some(mode) = self.intent.bind(file.as_ref())? {
+                    self.mode = mode;
+                }
                 self.file = file;
             }
             api::Input::Event {
@@ -85,12 +92,24 @@ impl State {
                 ..
             } => {
                 if matches!(event.action, ui::Action::Click) {
-                    self.mode = match event.node.as_str() {
-                        "layout-row" => 0,
-                        "layout-column" => 1,
-                        "layout-content" => 2,
-                        _ => self.mode,
-                    };
+                    self.select(&event.node)?;
+                }
+            }
+            api::Input::Event {
+                event: api::Notification::Tool(event),
+                ..
+            } => self.select(&event.tool)?,
+            api::Input::Event {
+                event:
+                    api::Notification::PreferenceChanged {
+                        subscription,
+                        key,
+                        value,
+                    },
+                ..
+            } => {
+                if let Some(mode) = self.intent.changed(&subscription, &key, &value)? {
+                    self.mode = mode;
                 }
             }
             _ => {}
@@ -136,26 +155,28 @@ impl State {
                 .grow(),
             );
         }
-        children.push(if self.file.is_some() {
-            ui::Node::new(
-                "file-image",
-                ui::Kind::FileImage {
-                    alt: "Image".into(),
-                    sizing: ui::ImageSizing::OriginalContain,
-                },
-            )
-            .grow()
-        } else {
-            ui::Node::text(
-                "plugin-content",
-                if chinese {
-                    "插件布局内容"
-                } else {
-                    "Plugin layout content"
-                },
-            )
-            .grow()
-        });
+        children.push(
+            if self.file.as_ref().is_some_and(|file| file.text.is_none()) {
+                ui::Node::new(
+                    "file-image",
+                    ui::Kind::FileImage {
+                        alt: "Image".into(),
+                        sizing: ui::ImageSizing::OriginalContain,
+                    },
+                )
+                .grow()
+            } else {
+                ui::Node::text(
+                    "plugin-content",
+                    if chinese {
+                        "插件布局内容"
+                    } else {
+                        "Plugin layout content"
+                    },
+                )
+                .grow()
+            },
+        );
         let layout = if self.mode == 1 {
             ui::Node::column("work-area", children).grow()
         } else {
@@ -175,6 +196,37 @@ impl State {
         document.editor_layout = self.source.is_some() || self.file.is_some();
         document.source = self.source.clone();
         document.file = self.file.as_ref().map(|file| file.version.clone());
+        if let Some(file) = &self.file {
+            for (index, (id, zh, en, icon)) in [
+                ("row", "并排显示", "Side by side", "row"),
+                ("column", "上下显示", "Stacked", "column"),
+                ("content", "仅插件内容", "Content only", "content"),
+            ]
+            .into_iter()
+            .enumerate()
+            {
+                let label = ui::LocalizedText {
+                    zh_cn: zh.into(),
+                    en: en.into(),
+                };
+                document.tools.push(ui::ToolButton {
+                    id: format!("tool-{id}"),
+                    label: label.clone(),
+                    tooltip: label,
+                    icon: ui::ToolIcon {
+                        light: format!("icons/{icon}.svg"),
+                        dark: format!("icons/{icon}.svg"),
+                    },
+                    target: ui::ToolTarget::File {
+                        version: file.version.clone(),
+                    },
+                    visible: true,
+                    selected: self.mode == index as u8,
+                    disabled: false,
+                    order: index as i32,
+                });
+            }
+        }
         Ok(api::Output {
             views: vec![api::View {
                 panel: "layout".into(),
@@ -182,5 +234,17 @@ impl State {
             }],
             ..Default::default()
         })
+    }
+
+    /// Both native content buttons and bottom-bar contributions invoke this guest-owned display choice.
+    fn select(&mut self, id: &str) -> Result<(), api::Failure> {
+        let selected = match id {
+            "layout-row" | "tool-row" => 0,
+            "layout-column" | "tool-column" => 1,
+            "layout-content" | "tool-content" => 2,
+            _ => return Ok(()),
+        };
+        self.mode = self.intent.select(selected)?;
+        Ok(())
     }
 }

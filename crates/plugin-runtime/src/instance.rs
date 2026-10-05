@@ -11,15 +11,18 @@ use wasmtime::{
 };
 use wasmtime_wasi::{ResourceTable, WasiCtx, WasiCtxView, WasiView};
 mod capability_calls;
+mod data_files;
 mod document_events;
 mod editor_requests;
 mod file_discovery;
 mod image_inputs;
 mod plugin_services;
+mod preferences;
 mod process_calls;
 mod resource_roots;
 mod settings;
 mod stdio;
+mod tools;
 use resource_roots::ResourceRoots;
 wasmtime::component::bindgen!({path:"../plugin-protocol/wit",world:"plugin",require_store_data_send:true});
 
@@ -43,6 +46,7 @@ struct State {
     /// Auxiliary tools never gain authority to publish the whole file layout.
     declared_layout_panels: BTreeSet<String>,
     subscriptions: std::collections::BTreeMap<u64, crate::document_events::Subscription>,
+    preference_subscriptions: std::collections::BTreeMap<u64, preferences::Subscription>,
     wasi: WasiCtx,
     table: ResourceTable,
     limits: crate::faults::MemoryBudget,
@@ -260,6 +264,7 @@ impl Instance {
             editor_requests: Default::default(),
             image_inputs: Default::default(),
             subscriptions: Default::default(),
+            preference_subscriptions: Default::default(),
             declared_panels: manifest
                 .panels
                 .iter()
@@ -532,6 +537,7 @@ impl Instance {
         self.clear_image_inputs();
         self.store.data_mut().plugin_services.clear();
         self.store.data_mut().subscriptions.clear();
+        self.store.data_mut().preference_subscriptions.clear();
         for request in self.store.data_mut().editor_requests.values() {
             request.call.retire();
         }
@@ -591,8 +597,9 @@ impl Instance {
         self.poll_service_requests()?;
         self.poll_editor_requests()?;
         self.poll_document_events()?;
+        let preferences_changed = self.poll_preferences()?;
         let events = self.store.data_mut().poll_processes()?;
-        let changed = revoked || !events.is_empty();
+        let changed = revoked || preferences_changed || !events.is_empty();
         for event in events {
             // Exit removes its slot, but the last callback still inherits the originating service authority.
             let context = if let api::Notification::Process { handle, .. } = &event {

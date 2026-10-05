@@ -1,6 +1,6 @@
 [package]
-name = "layout-example-guest"
-version = "0.2.0"
+name = "tools-example-guest"
+version = "0.1.0"
 edition = "2024"
 rust-version = "1.95"
 license = "MIT"
@@ -9,7 +9,7 @@ license = "MIT"
 crate-type = ["cdylib"]
 
 [dependencies]
-# Independent build resolves the published SDK through --plugin-cargo, never repository crate paths.
+# The independently resolved guest SDK is supplied by the host's --plugin-cargo entry.
 plugin-protocol = { version = "=0.2.0", features = ["guest"] }
 serde_json = "1.0"
 

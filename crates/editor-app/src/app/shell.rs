@@ -287,33 +287,7 @@ impl Render for EditorDockPanel {
     }
 }
 
-impl EditorApp {
-    fn render_panel_buttons(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let selected_style = component_styles(cx, ThemeComponent::PanelToggle).selected;
-        h_flex()
-            .debug_selector(|| "editor-panel-tools".into())
-            .items_center()
-            .gap_1()
-            .child(
-                Button::new("explorer-panel-toggle")
-                    .icon(explorer_panel_icon(cx))
-                    .small()
-                    .compact()
-                    .ghost()
-                    // Match the existing 24px compact icon width for a rounded square highlight.
-                    .h(px(24.))
-                    .tooltip(t!("panel.explorer").to_string())
-                    .when(self.explorer_visible, |button| {
-                        button
-                            .bg(selected_style.background.unwrap_or(cx.theme().list_active))
-                            .text_color(selected_style.foreground.unwrap_or(cx.theme().foreground))
-                    })
-                    .on_click(cx.listener(|this, _, _, cx| this.toggle_explorer(cx))),
-            )
-            // The explorer owns the first status slot; plugin panels follow it.
-            .children(self.plugin_panel_buttons(cx))
-    }
-}
+impl EditorApp {}
 
 impl Render for EditorApp {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
@@ -473,11 +447,18 @@ impl Render for EditorApp {
                     .border_color(status_style.border.unwrap_or(cx.theme().border))
                     .child(
                         StatusBar::new()
-                            .left(self.render_panel_buttons(cx))
+                            .left(self.render_plugin_toolbar(explorer_panel_icon(cx), window, cx))
                             .when_some(self.render_editor_preview_controls(cx), |bar, controls| {
                                 bar.left(controls)
                             })
-                            .left(div().max_w(px(320.)).truncate().child(self.status.clone()))
+                            .left(
+                                div()
+                                    .flex_1()
+                                    .min_w_0()
+                                    .max_w(px(320.))
+                                    .truncate()
+                                    .child(self.status.clone()),
+                            )
                             // Keep error counts separate from temporary save/loading messages.
                             .when(
                                 self.active_text_tab_index().is_some()
@@ -508,6 +489,9 @@ impl Render for EditorApp {
             .child(self.render_plugin_popup(window, cx))
             .child(self.render_explorer_menu(window, cx))
             .when_some(self.file_view_menu.as_ref(), |body, menu| {
+                body.child(menu.clone())
+            })
+            .when_some(self.tool_overflow.as_ref(), |body, menu| {
                 body.child(menu.clone())
             })
             .child(self.render_explorer_edit(cx))

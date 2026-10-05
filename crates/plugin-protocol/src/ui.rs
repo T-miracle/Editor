@@ -10,6 +10,8 @@ pub use controls::*;
 mod canvas;
 pub use canvas::*;
 mod events;
+mod tools;
+pub use tools::*;
 
 #[cfg(test)]
 mod images_tests;
@@ -17,6 +19,8 @@ mod images_tests;
 mod layout_tests;
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod tools_tests;
 mod validate;
 
 pub const VERSION: u32 = 1;
@@ -24,6 +28,10 @@ pub const VERSION: u32 = 1;
 /// Replace a panel's complete view atomically. Revision is echoed in user events.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Document {
+    /// Bottom-bar functions remain guest-owned, independently of this surface's layout contribution.
+    /// Requires `ui.tools`; file targets also require the exact `Document.file` context.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tools: Vec<ToolButton>,
     /// The selected file provider owns this complete center tree. Requires `editor.layout`.
     /// NativeEditor nodes borrow the existing source session; omitting them hides its input surface.
     #[serde(default)]
@@ -67,6 +75,7 @@ pub struct Document {
 impl Document {
     pub fn new(root: Node) -> Self {
         Self {
+            tools: Vec::new(),
             editor_layout: false,
             file: None,
             source: None,

@@ -183,7 +183,7 @@ impl EditorApp {
             if !panel.read(cx).editor_preview {
                 continue;
             }
-            let active = selected.as_ref().is_some_and(|selected| selected == panel);
+            let active = self.file_panel_is_active(panel, &selected, cx);
             panel.update(cx, |panel, cx| {
                 if active && (panel.preview_document != context || panel.preview_version != version)
                 {
@@ -261,14 +261,20 @@ impl EditorApp {
         let selected = self.active_editor_preview(cx);
         let context = self
             .active_tab_index()
-            .filter(|index| self.tabs[*index].text.is_none())
             .map(|index| self.plugin_file_context(index));
         for panel in self.plugin_panels.values() {
             if !panel.read(cx).editor_preview {
                 continue;
             }
-            let active =
-                context.is_some() && selected.as_ref().is_some_and(|selected| selected == panel);
+            let participates = self.file_panel_is_active(panel, &selected, cx);
+            let panel_state = panel.read(cx);
+            let file_contract = self.active_text_tab_index().is_none()
+                || panel_state.entries.iter().any(|entry| {
+                    Some(&entry.manifest.id) == panel_state.active.as_ref()
+                        && entry.supports_capability("ui.tools")
+                        && entry.supports_capability("editor.files")
+                });
+            let active = context.is_some() && participates && file_contract;
             panel.update(cx, |panel, cx| {
                 if active {
                     let file = context
@@ -276,22 +282,35 @@ impl EditorApp {
                         .and_then(|context| context.as_ref().ok())
                         .cloned();
                     let version = file.as_ref().map(|file| file.version.clone());
-                    if panel.preview_file == version && panel.preview_document.is_some() {
+                    let source = file.as_ref().and_then(|file| file.text.clone());
+                    if panel.preview_file == version
+                        && panel.preview_version == source
+                        && panel.preview_document.is_some()
+                    {
                         return;
                     }
+                    let same_file = panel
+                        .preview_file
+                        .as_ref()
+                        .zip(version.as_ref())
+                        .is_some_and(|(old, new)| old.id == new.id && old.path == new.path);
                     panel.preview_error = context
                         .as_ref()
                         .and_then(|result| result.as_ref().err())
                         .map(ToString::to_string);
-                    panel.preview_version = None;
+                    panel.preview_version = source;
                     panel.preview_file = version;
+                    // Text receives its new snapshot below even when the disk-file epoch is unchanged.
                     panel.preview_document = self
                         .active_path
                         .clone()
+                        .filter(|_| self.active_text_tab_index().is_none())
                         .map(|path| (path, file.as_ref().map_or(0, |file| file.version.revision)));
-                    panel.native_ui = None;
-                    panel.native_toolbar = None;
-                    panel.source_viewport.withdraw();
+                    if !same_file {
+                        panel.native_ui = None;
+                        panel.native_toolbar = None;
+                        panel.source_viewport.withdraw();
+                    }
                     panel.send(protocol::api::Notification::FilePreview { file });
                     cx.notify();
                 } else if panel.preview_file.take().is_some() {

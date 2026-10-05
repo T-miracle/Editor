@@ -725,6 +725,12 @@ settings.visible:
 settings.hidden:
   en: "Hidden"
   zh-CN: "隐藏"
+toolbar.more_windows:
+  en: "More windows"
+  zh-CN: "更多窗口"
+toolbar.more_tools:
+  en: "More plugin tools"
+  zh-CN: "更多插件工具"
 settings.resize_hint:
   en: "Resize panels by dragging the dividers."
   zh-CN: "拖动分隔线可调整面板大小。"
