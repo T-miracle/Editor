@@ -28,6 +28,20 @@ pub(crate) fn recognizes_encoding(prefix: &[u8]) -> bool {
         )
 }
 
+/// Both document and file image surfaces report the same localized resource/decode failure.
+pub(super) fn status_key(error: Option<&Failure>) -> &'static str {
+    match error.map(|error| &error.code) {
+        None => "preview.image_loading",
+        Some(ErrorCode::PermissionDenied) => "preview.image_denied",
+        Some(ErrorCode::InvalidPath) => "preview.image_path",
+        Some(ErrorCode::NotFound) => "preview.image_missing",
+        Some(ErrorCode::TimedOut) => "preview.image_timeout",
+        Some(ErrorCode::LimitExceeded) => "preview.image_limit",
+        Some(ErrorCode::UnsupportedOperation) => "preview.image_unsupported",
+        _ => "preview.image_failed",
+    }
+}
+
 /// Detect the actual encoding and validate bounded pixels before a native image gesture is offered.
 /// No supplied filename or platform format hint can change the suffix of the eventual attachment.
 pub(crate) fn input_format(

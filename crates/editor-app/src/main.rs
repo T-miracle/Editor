@@ -16,9 +16,7 @@ use editor_core::{DocumentSession, Workspace, WorkspaceSnapshot};
 use futures::StreamExt;
 use gpui_base::dock::{DockArea, DockEvent, DockLayout, PanelEvent};
 use gpui_base::input::RopeExt as _;
-use gpui_base::input::{
-    EditorState, InputEvent, TabSize, TextDecoration, TextDecorationCollection,
-};
+use gpui_base::input::{EditorState, InputEvent, TabSize, TextDecoration};
 use gpui_base::{TreeEvent, TreeItem, TreeState};
 use gpui_kit::{
     App, AppContext as _, Bounds, ClickEvent, Context, Entity, EventEmitter, FocusHandle,
@@ -205,83 +203,7 @@ struct DefinitionNotice {
     request_id: u64,
 }
 
-/// Reopening a path issues a fresh identity, preventing delayed results from targeting its new tab.
-static NEXT_FILE_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
-
-/// A file tab owns its identity independently of native text editing resources.
-struct OpenTab {
-    path: PathBuf,
-    file_id: u64,
-    file_revision: u64,
-    /// Background checks started before this incarnation opened cannot reload it.
-    opened_at: Instant,
-    /// The watcher retains a hash rather than a second mutable copy of image bytes.
-    file_digest: Option<[u8; 32]>,
-    text: Option<TextTab>,
-    /// File failures retain the tab and its retry target, including unavailable viewer authority.
-    file_error: Option<String>,
-}
-
-impl OpenTab {
-    /// File navigation does not require consulting a text editing session.
-    fn path(&self) -> &Path {
-        &self.path
-    }
-    /// Read-only files never acquire a dirty text revision or a text save obligation.
-    fn is_dirty(&self) -> bool {
-        self.text
-            .as_ref()
-            .is_some_and(|text| text.session.is_dirty())
-    }
-    /// Native entity matching excludes binary tabs rather than lending the previously active editor.
-    fn owns_editor(&self, editor: &Entity<EditorState>) -> bool {
-        self.text
-            .as_ref()
-            .is_some_and(|text| text.editor == *editor)
-    }
-    fn owns_editor_id(&self, id: gpui_kit::EntityId) -> bool {
-        self.text
-            .as_ref()
-            .is_some_and(|text| text.editor.entity_id() == id)
-    }
-}
-
-/// Native text state retains its session, selection/IME entity and derived diagnostics.
-struct TextTab {
-    /// Unlike the dirty revision, this also advances on disk reloads and other programmatic changes.
-    capability_revision: u64,
-    session: DocumentSession,
-    editor: Entity<EditorState>,
-    /// Hash of the last disk text, avoiding a second full copy of every open document.
-    disk_digest: [u8; 32],
-    /// Ignore worker reads that began before the latest successful local save.
-    last_saved_at: Instant,
-    disk_state: DiskState,
-    suppress_change: bool,
-    overwrite_confirmed: bool,
-    /// A separate decoration layer keeps a definition jump visible for two seconds.
-    definition_highlight: TextDecorationCollection,
-    definition_highlight_generation: u64,
-    /// Diagnostics retain only derived parser state; EditorState owns the editable text.
-    diagnostics: editor::diagnostics::DocumentDiagnostics,
-    _subscription: Subscription,
-    _observer: Subscription,
-}
-
-impl TextTab {
-    /// Text-specific operations use the session's canonical path after narrowing the file capability.
-    fn path(&self) -> &Path {
-        self.session.path()
-    }
-}
-
-/// Open tabs remain present when their backing file changes or disappears.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum DiskState {
-    Synced,
-    Conflict,
-    Deleted,
-}
+use editor::tabs::{DiskState, NEXT_FILE_ID, OpenTab, TextTab};
 
 impl EditorApp {
     fn new(

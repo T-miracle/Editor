@@ -12,6 +12,7 @@ mod file_watch_tests;
 #[cfg(test)]
 mod hover_hit_test;
 mod pointer_hover;
+pub(crate) mod tabs;
 pub(crate) use popovers::{CompletionPopupState, DefinitionPopupFocus};
 mod popovers;
 pub(crate) use text_drag::TextDragState;

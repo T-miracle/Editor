@@ -276,18 +276,9 @@ impl PluginView {
                         })
                         .into_any_element()
                 } else {
-                    let key = match photo.map(|photo| &photo.decoded) {
-                        Some(Err(error)) => match error.code {
-                            plugin_runtime::plugin_protocol::api::ErrorCode::PermissionDenied => "preview.image_denied",
-                            plugin_runtime::plugin_protocol::api::ErrorCode::InvalidPath => "preview.image_path",
-                            plugin_runtime::plugin_protocol::api::ErrorCode::NotFound => "preview.image_missing",
-                            plugin_runtime::plugin_protocol::api::ErrorCode::TimedOut => "preview.image_timeout",
-                            plugin_runtime::plugin_protocol::api::ErrorCode::LimitExceeded => "preview.image_limit",
-                            plugin_runtime::plugin_protocol::api::ErrorCode::UnsupportedOperation => "preview.image_unsupported",
-                            _ => "preview.image_failed",
-                        },
-                        _ => "preview.image_loading",
-                    };
+                    let key = super::bitmap::status_key(
+                        photo.and_then(|photo| photo.decoded.as_ref().err()),
+                    );
                     let label = rust_i18n::t!(key, locale = self.environment.locale.as_str());
                     let status_id = format!("plugin-image-status-{}-{key}", node.id);
                     div()

@@ -317,12 +317,12 @@ impl Instance {
         instance.prepare_state(environment, snapshot)?;
         Ok(instance)
     }
-    /// Every call gets a finite instruction budget; a trap cannot unwind through the host.
     /// Immutable negotiated authority lets manager ingress reject unavailable optional interfaces.
     pub(crate) fn negotiated(&self) -> &api::Negotiated {
         &self.store.data().api
     }
 
+    /// Every call gets a finite instruction budget; a trap cannot unwind through the host.
     pub fn call(&mut self, message: api::Input) -> anyhow::Result<api::Output> {
         anyhow::ensure!(
             !self.store.data().roots.retired,
