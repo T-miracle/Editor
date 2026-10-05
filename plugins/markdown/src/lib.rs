@@ -379,8 +379,9 @@ impl State {
                 (!messages.is_empty()).then_some(messages.as_str()),
             ));
         }
-        // A large or deeply nested document should leave the guest alive and preserve its source authority.
-        // The same public quotas apply to this preview and every other native plugin view.
+        // The editor, split container and functions count toward the same public quota as preview blocks.
+        // Validate the complete scene so adding the native editor cannot turn a valid body into a fatal view.
+        document = self.compose_display(document);
         if self.preview_limited || document.validate().is_err() {
             // The quota fallback has no displayed source blocks; withdraw its viewport stream as well.
             document.editor_viewport = None;
@@ -396,8 +397,9 @@ impl State {
                 )
                 .padding(12.),
             );
+            // Recompose only the small fallback body; it retains the exact source editor and function target.
+            document = self.compose_display(document);
         }
-        document = self.compose_display(document);
         api::View {
             panel: "preview".into(),
             document,

@@ -233,3 +233,60 @@ fn svg_uses_versioned_memory_and_discards_obsolete_content() {
     assert!(manager.live.is_empty());
     manager.uninstall("svg", false).unwrap();
 }
+
+/// Quotas apply to the complete split scene; an oversized preview must leave its editor and guest alive.
+#[test]
+#[ignore = "build markdown through the host SDK first"]
+fn markdown_composed_quota_preserves_editor_and_recovers_after_shortening() {
+    let package = package("markdown");
+    let root = tempfile::tempdir().unwrap();
+    let mut manager = manager(root.path());
+    manager
+        .install(&package, package.manifest.permissions.clone())
+        .unwrap();
+    let instance = manager.instance_id("markdown").unwrap().to_owned();
+    for (revision, text, limited) in [
+        (2, "x\n\n".repeat(673), true),
+        (3, "# Shorter\n".into(), false),
+    ] {
+        let source = api::DocumentVersion {
+            id: "quota-source".into(),
+            path: "quota.md".into(),
+            revision,
+        };
+        notify(
+            &mut manager,
+            "markdown",
+            "preview",
+            api::Notification::FilePreview {
+                file: Some(api::FileContext {
+                    version: api::FileVersion {
+                        id: "quota-file".into(),
+                        path: source.path.clone(),
+                        revision,
+                    },
+                    file_type: "md".into(),
+                    text: Some(source.clone()),
+                }),
+            },
+        );
+        notify(
+            &mut manager,
+            "markdown",
+            "preview",
+            api::Notification::Preview {
+                document: Some(source.clone()),
+                text,
+            },
+        );
+        let scene = tree(&manager, "markdown", "preview");
+        scene.validate().unwrap();
+        assert_eq!(scene.active_node("preview-limit").is_some(), limited);
+        assert!(matches!(
+            &scene.active_node("markdown-native-editor").unwrap().kind,
+            ui::Kind::NativeEditor { document } if document == &source
+        ));
+        assert_eq!(manager.instance_id("markdown"), Some(instance.as_str()));
+        assert!(manager.installed["markdown"].error.is_none());
+    }
+}
