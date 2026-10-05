@@ -205,6 +205,33 @@ impl Manager {
                     "Tool requires one owning panel",
                 )
             })?;
+            // Captured buttons outlive their publication; installed consent, trust and ownership
+            // must still hold now, rather than relying on the instance's initialization snapshot.
+            let entry = self
+                .installed
+                .get(id)
+                .ok_or_else(|| api::Failure::new(api::ErrorCode::NotFound, "Unknown tool owner"))?;
+            let owned = entry.manifest.panels.iter().any(|descriptor| {
+                descriptor.id == *panel
+                    && match &event.target {
+                        ui::ToolTarget::File { .. } => descriptor.position == "editor",
+                        ui::ToolTarget::Window { panel: target } => {
+                            descriptor.position != "editor" && target == panel
+                        }
+                    }
+            });
+            let file_authorized = !matches!(event.target, ui::ToolTarget::File { .. })
+                || (self.trusted
+                    && self.workspace_open
+                    && entry.grants.contains("editor.read")
+                    && entry.manifest.scope == api::InstanceScope::Workspace);
+            if !owned || !file_authorized {
+                return Err(api::Failure::new(
+                    api::ErrorCode::PermissionDenied,
+                    "Tool target requires current consent and an owned declared surface",
+                )
+                .into());
+            }
             let document = instance.views.get(panel).ok_or_else(|| {
                 api::Failure::new(api::ErrorCode::InvalidHandle, "Tool surface was withdrawn")
             })?;

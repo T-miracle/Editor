@@ -180,6 +180,38 @@ fn tools_persist_private_intent_and_reject_late_file_events() {
     assert_eq!(manager.resource_count(), 0);
 }
 
+/// A captured file button cannot reuse publication-time consent after the current grant is revoked.
+#[test]
+#[ignore = "build actual SDK fixture with scripts/build-layout-example.ps1 first"]
+fn captured_file_tools_recheck_current_editor_read_grant() {
+    let workspace = tempfile::tempdir().unwrap();
+    let data = tempfile::tempdir().unwrap();
+    let pkg = package("normal");
+    let mut manager =
+        Manager::open(data.path().to_path_buf(), environment(workspace.path())).unwrap();
+    manager
+        .install(&pkg, pkg.manifest.permissions.clone())
+        .unwrap();
+    preview(&mut manager, Some(file("first", "first.layout"))).unwrap();
+    let event = select(&mut manager, "tool-content");
+    manager
+        .installed
+        .get_mut("layout-example")
+        .unwrap()
+        .grants
+        .remove("editor.read");
+    let error = manager
+        .event("layout-example", Some("layout".into()), event)
+        .unwrap_err();
+    assert_eq!(
+        error.downcast_ref::<api::Failure>().unwrap().code,
+        api::ErrorCode::PermissionDenied
+    );
+    // Rejection stays outside WASM: the healthy instance and its previous intent remain intact.
+    assert!(manager.live.contains_key("layout-example"));
+    assert_eq!(selected(&manager), "tool-row");
+}
+
 /// A live scoped watch observes a newer record; corrupt external writes are preserved and terminate it.
 #[test]
 #[ignore = "build actual SDK fixture with scripts/build-layout-example.ps1 first"]
