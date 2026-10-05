@@ -2274,6 +2274,63 @@ fn a_shared_file_cannot_grant_authorization() {
     );
 }
 
+/// A stop that is answered leaves the sequence blocked, and the answer is taken exactly once.
+///
+/// This is the model half of the native case that has been failing: that one drives a real program and
+/// never converges, so this states the same transition without a window or a provider. If this passes
+/// while the native one fails, the difference is in what reaches the controls, not in what the controls
+/// do with it.
+#[test]
+fn an_answered_stop_blocks_the_preparation() {
+    let mut controls = controls();
+    let workspace = "C:/work".to_owned();
+    controls
+        .upsert(config("run-1", "第一个"), &workspace)
+        .unwrap();
+    let plan = controls
+        .prepare_launch("run-1", &workspace, 16)
+        .expect("the plan is usable");
+    let launch = controls.begin("run-1");
+    controls.begin_sequence("run-1", plan, launch);
+    // The step reaches a provider, so the sequence owns a session to stop.
+    let step = controls.begin("run-1");
+    controls.note_step_request("run-1", 0, step);
+    controls.adopt_step_sessions(&[(7, step, Some("1".into()))]);
+    assert_eq!(
+        controls
+            .preparation("run-1")
+            .and_then(|sequence| sequence.current_session()),
+        Some(7),
+        "the premise: the sequence owns the step's session"
+    );
+    assert!(controls.preparation_blocked("run-1").is_none());
+
+    // The stop is requested and sent, as the driver does it.
+    let stopped = controls.stop_preparations();
+    assert_eq!(stopped, vec![("run-1".to_owned(), Some(7))]);
+    let request = controls.begin_stop("run-1", 7);
+    assert!(controls.is_stopping("run-1"), "the stop is outstanding");
+
+    // The provider answers it.
+    let reported = controls.reconcile_stops(&[("run-1".to_owned(), request, Ok(()))]);
+    assert_eq!(reported, vec![(7, Ok(()))], "the answer is taken once");
+    assert!(
+        !controls.is_stopping("run-1"),
+        "and it is no longer outstanding"
+    );
+    // The stop's acknowledgement is not the program having ended, so the step is closed by the answer
+    // and the launch is blocked rather than left to continue.
+    let notes = controls.note_preparation_stopped(7);
+    assert_eq!(notes.as_deref(), Some("run-1"));
+    let reason = controls.preparation_blocked("run-1");
+    assert!(
+        reason
+            .as_deref()
+            .is_some_and(|reason| reason.contains("停止")),
+        "a stopped preparation reports why: {reason:?}"
+    );
+}
+
 fn snapshot(
     id: u64,
     config: &str,

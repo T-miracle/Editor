@@ -514,6 +514,22 @@ probe pending_stop=true active_session=Some(1) reason=None
 
 **仓库状态**：所有尝试已撤回；`native_build_tests` 5 条用例、4 通过、1 稳定失败；`native_run_tests` 7/7；`native_discovery_tests` 1/1。
 
+**通道核对的结果（本轮实测，指向了最后一处）**：
+
+1. **发布端与读取端是同一个字段**：`Work::StopRun` 的回答由 `runner.rs` 写入 `published.stop_results`；夹具的 `publish_frame` 也写进 `state.stop_results`（`composable_tests.rs:482`）；编辑器读的正是它（`extensions.rs:1084` 的 `take_host_runs` 用 `std::mem::take`）。**通道本身没有问题。**
+2. **模型端也没有问题**：本轮新增 `run::tests::an_answered_stop_blocks_the_preparation`，**不用窗口、不用提供者**，把「停止被应答 → 序列阻塞」逐步走通——**它通过**。因此**控制做到的事是对的**。
+3. **决定性读数**：在 `reconcile_stops` 入口打印每一帧的实参：
+
+```
+probe reconcile_stops published=0 outstanding=[]
+```
+
+**每一帧的 `outstanding` 都是空的**，即 `self.stops` 里**从来没有过待处理项**；而 `begin_stop` 是唯一往这里写的地方。**因此 `stop_preparation_step` 从未被调用。**
+
+**这把问题定位到最后一处**：用例里被发现的那个 `Work::StopRun` **不是序列为准备步骤发出的那一次**（很可能是启动路径留下的），也就是说 **`drive_preparation` 在本用例的驱动节奏下从未走到 `SequenceAction::Stop` 分支**——既没有停止请求、也没有应答、也没有阻塞。
+
+**下一步入口很具体**：查 `next_action` 走到 `Stop` 所需的条件（步骤处于 `Running` 且 `stopping` 为真），**以及本用例里那个步骤是否真的到达过 `Running`**。**这也解释了前十次改动为何全部无效：它们改的都是这条分支之后的逻辑，而这条分支从未被进入。**
+
 因此**序列无从得知它拥有的步骤已经结束**：`preparation_blocked` 需要 `!is_active()`，而序列既没收到「停止已应答」（测试是直接调 manager、没走 UI 的 StopRun 应答路径），也**收不到「会话已结束」**——**因为编辑器从未把 `stop_execution` 的结果映射成会话的终态**。
 
 **这就是那条缺失的连线，而且它比本文件先前猜测的「停止请求的所有权」更靠下**：**问题不在谁有权发停止，而在「程序已经结束」这个事实从未到达 `RunControls`**。`RunSession::is_active()` 只在状态为 `Failed` 时返回 false，而 `stop_execution` 之后状态并未变为 `Failed`（仍是 `Running`）。
