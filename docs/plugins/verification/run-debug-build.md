@@ -498,6 +498,22 @@ probe blocked=None  session_known=true  active=true
 
 **即使测试已经直接调用 `manager.stop_execution(session)` 结束了那个程序，编辑器侧的会话仍然是 `active=true`。**
 
+**第十次尝试（本轮，已撤回）**：按设计把用例改成**不再自己调 `manager.stop_execution`**，而由 `frame` 内的 `pump_recording` 沿生产路径执行停止（该函数确实会 `manager.stop_execution` 并把结果发布到 `stop_results`），断言也改为只查下游效果。
+
+**结果**：用例在**更靠后**的一行失败，并给出决定性事实：
+
+```
+probe pending_stop=true active_session=Some(1) reason=None
+```
+
+**停止请求已经发出（`pending_stop=true`），但它一直没有得到应答**——`stops` 里那条待处理记录从未被 `reconcile_stops` 收走（收走需要 `stop_results` 里出现匹配的 `request_id`），因此 `note_preparation_stopped` 从未运行，序列自然不阻塞。
+
+**这把根因又下推了一层**：**问题不在「谁有权发停止」，也不在「会话已结束没人告诉序列」，而在「这条停止请求的应答没有回到编辑器」**——`Work::StopRun` 由 `pump_recording` 执行其结果也发布了，但编辑器侧的 `sync_run_controls` 在本用例的驱动节奏下没有把它收下来。**这解释了为什么前九次改动都在别处使劲而无效果**：它们都在改「应答到达之后」的逻辑，而**应答从未到达**。
+
+**下一步应当从这里入手**：核对 `pump_recording` 把 `stop_results` 发布到了哪里、以及 `sync_run_controls` 读的是不是同一处（本文件「工单 12 逐条进度」节记录过 status 与 stop 的发布通道）。**这仍然是一个可以定位的具体问题**，只是不在我本轮剩余的空间里。
+
+**仓库状态**：所有尝试已撤回；`native_build_tests` 5 条用例、4 通过、1 稳定失败；`native_run_tests` 7/7；`native_discovery_tests` 1/1。
+
 因此**序列无从得知它拥有的步骤已经结束**：`preparation_blocked` 需要 `!is_active()`，而序列既没收到「停止已应答」（测试是直接调 manager、没走 UI 的 StopRun 应答路径），也**收不到「会话已结束」**——**因为编辑器从未把 `stop_execution` 的结果映射成会话的终态**。
 
 **这就是那条缺失的连线，而且它比本文件先前猜测的「停止请求的所有权」更靠下**：**问题不在谁有权发停止，而在「程序已经结束」这个事实从未到达 `RunControls`**。`RunSession::is_active()` 只在状态为 `Failed` 时返回 false，而 `stop_execution` 之后状态并未变为 `Failed`（仍是 `Running`）。
