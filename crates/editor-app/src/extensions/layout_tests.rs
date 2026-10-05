@@ -7,12 +7,17 @@ use std::io::{Cursor, Write};
 
 /// Repack one independent component under two identities through the ordinary package validator.
 fn package(id: &str, name: &str) -> Package {
-    let mut files = Package::read(
+    let package = Package::read(
         &Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../../target/plugin-layout-test/layout-example.zip"),
     )
-    .expect("build-layout-example.ps1 first")
-    .files;
+    .expect("build-layout-example.ps1 first");
+    identify(package, id, name)
+}
+
+/// Alternate identities retain the actual shipped component and pass the public archive validator.
+fn identify(package: Package, id: &str, name: &str) -> Package {
+    let mut files = package.files;
     let mut manifest: serde_json::Value = serde_json::from_slice(&files["manifest.json"]).unwrap();
     manifest["id"] = id.into();
     manifest["name"] = name.into();
@@ -115,7 +120,7 @@ fn choose(
 ) {
     let active = cx.update(|_, cx| app.read(cx).active_tab_index().unwrap());
     let tab = cx
-        .debug_bounds(["editor-tab-0", "editor-tab-1"][active])
+        .debug_bounds(["editor-tab-0", "editor-tab-1", "editor-tab-2"][active])
         .unwrap()
         .center();
     cx.simulate_mouse_down(tab, MouseButton::Right, Modifiers::default());
@@ -304,6 +309,76 @@ fn real_layout_packages_preserve_native_edits_and_explicit_provider_choice(
     );
     ime_composition_survives_layouts_without_hidden_input(&app, &mut manager, visual);
     binary_views_can_switch_providers(directory.path(), &app, &mut manager, visual);
+    image_views_withdraw_files_before_svg(directory.path(), &app, &mut manager, visual);
+}
+
+/// Named providers are found through the real menu, then activated through its native keyboard path.
+fn choose_named(
+    name: &str,
+    app: &Entity<EditorApp>,
+    manager: &mut Manager,
+    visual: &mut VisualTestContext,
+) {
+    let active = visual.update(|_, cx| app.read(cx).active_tab_index().unwrap());
+    let tab = visual
+        .debug_bounds(["editor-tab-0", "editor-tab-1", "editor-tab-2"][active])
+        .unwrap()
+        .center();
+    visual.simulate_mouse_down(tab, MouseButton::Right, Modifiers::default());
+    visual.simulate_mouse_up(tab, MouseButton::Right, Modifiers::default());
+    visual.run_until_parked();
+    visual.update(|window, cx| window.draw(cx).clear(cx));
+    let index = visual.update(|_, cx| {
+        app.read(cx)
+            .file_view_menu
+            .as_ref()
+            .unwrap()
+            .read(cx)
+            .items
+            .iter()
+            .position(|item| item.label.starts_with(name))
+            .unwrap()
+    });
+    visual.simulate_keystrokes("escape");
+    visual.run_until_parked();
+    choose(index, app, manager, visual);
+}
+
+/// Two still-enabled Image packages relinquish PNG ownership before one returns to editable SVG.
+fn image_views_withdraw_files_before_svg(
+    directory: &Path,
+    app: &Entity<EditorApp>,
+    manager: &mut Manager,
+    visual: &mut VisualTestContext,
+) {
+    let image_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../dist/plugins/svg.zip");
+    for (id, name) in [("image-a", "A Image"), ("image-b", "B Image")] {
+        let package = identify(Package::read(&image_path).unwrap(), id, name);
+        manager
+            .install(&package, package.manifest.permissions.clone())
+            .unwrap();
+    }
+    draw(app, manager, visual);
+    choose_named("A Image", app, manager, visual);
+    assert!(visual.debug_bounds("plugin-file-image").is_some());
+    choose_named("B Image", app, manager, visual);
+    assert!(visual.debug_bounds("plugin-file-image").is_some());
+    assert!(
+        !manager
+            .image_resources()
+            .keys()
+            .any(|key| key.starts_with("image-a/"))
+    );
+    assert!(manager.live["image-a"].views["preview"].file.is_none());
+    let svg = directory.join("drawing.svg");
+    std::fs::write(&svg, "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"40\" height=\"30\"><rect width=\"40\" height=\"30\" fill=\"red\"/></svg>").unwrap();
+    visual.update(|window, cx| app.update(cx, |app, cx| app.open_file(svg, window, cx)));
+    draw(app, manager, visual);
+    choose_named("A Image", app, manager, visual);
+    assert!(manager.installed["image-a"].error.is_none());
+    assert!(manager.live["image-a"].views["preview"].source.is_some());
+    assert!(manager.live["image-a"].views["preview"].file.is_none());
+    assert!(visual.debug_bounds("editor-source-pane").is_some());
 }
 
 /// The native preedit stays in its original editor while an omitted surface accepts no committed input.

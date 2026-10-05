@@ -157,9 +157,10 @@ impl EditorApp {
                     panel.source_viewport.reset();
                     // A retained focus handle does not authorize a background result from the previous source.
                     panel.invalidate_code_highlighting(cx);
-                    panel.preview_document = None;
+                    // Keep the last published input records until synchronization can revoke
+                    // an unselected provider. Clearing them here loses FilePreview(None).
+                    // Text acceptance is invalidated independently by its exact source token.
                     panel.preview_version = None;
-                    panel.preview_file = None;
                     panel.preview_error = None;
                 }
             });
