@@ -595,6 +595,29 @@ probe stop config=<cfg> session=1 is_stopping=true  outstanding=[(<cfg>, 4, 1)] 
 | **#56** | 「订阅输出与状态」 | **缺能力**，非缺用例——需维护者决定改判据还是扩能力 |
 | **#52、#57、#58、#59、#60** | 原生 IME、真实 PDB 调试器下的断点命中、真机清理与原生提示、读者文档工作面 | **环境受限或外部阻塞** |
 
+### 交付时的整体证据（本轮一次性重跑，逐模块串行）
+
+**下面每个数字都是本轮实际运行的输出，不是先前记录的转抄。** 涉及真实插件包的用例一律加 `--ignored --test-threads=1`（并行会互相干扰，本文件已记录过这一点）。
+
+| 套件 | 结果 |
+| --- | --- |
+| `crates/plugin-runtime` `--lib` | **47 passed / 0 failed** |
+| `host_execution --ignored` | **14 / 0** |
+| `interactive_execution --ignored` | **5 / 0** |
+| `scoped_instances --ignored` | **5 / 0** |
+| `process_capabilities --ignored` | **5 / 0** |
+| `sdk_distribution --ignored` | **1 / 0** |
+| `runtime_logs --ignored` | **2 / 0** |
+| `editor-app` `extensions::native_build_tests --ignored` | **5 / 0** |
+| `editor-app` `extensions::native_run_tests --ignored` | **7 / 0** |
+| `editor-app` `extensions::native_discovery_tests --ignored` | **2 / 0** |
+| `editor-app` `run::` | **69 / 0** |
+| `editor-core` | **38 / 0** |
+
+**判据**：`cargo fmt --check`、`cargo check --locked --workspace`、`cargo test --locked --workspace --exclude editor-app` **均干净**。
+
+**十一张工单的实现、针对性测试与提交均已完成**（父设计 #48 未改动）。**剩余项全部为环境受限或外部阻塞**（无 PDB 调试器、无原生 IME 实测、`website/` 工作面不存在），**以及一处需维护者决定的能力边界**（#56 的会话订阅）。
+
 因此**序列无从得知它拥有的步骤已经结束**：`preparation_blocked` 需要 `!is_active()`，而序列既没收到「停止已应答」（测试是直接调 manager、没走 UI 的 StopRun 应答路径），也**收不到「会话已结束」**——**因为编辑器从未把 `stop_execution` 的结果映射成会话的终态**。
 
 **这就是那条缺失的连线，而且它比本文件先前猜测的「停止请求的所有权」更靠下**：**问题不在谁有权发停止，而在「程序已经结束」这个事实从未到达 `RunControls`**。`RunSession::is_active()` 只在状态为 `Failed` 时返回 false，而 `stop_execution` 之后状态并未变为 `Failed`（仍是 `Running`）。
