@@ -1,5 +1,7 @@
 # 03 — 原生视图模式验收
 
+> 历史验收记录：以下结论仅对应 Markdown 0.3.0 和当时提交。2026-10-06 的插件 UI 解耦已移除 `editor.presentation`、`view_modes` 及 `editor_presentation` 测试；当前模式、图标与共享偏好由插件通过 `editor.layout`、`ui.tools` 和 `storage.private` 提供。现行证据见 [插件迁移验收](../../../../docs/plugins/verification/plugin-ui-decoupling/04-plugin-migration.md) 与 [最终契约验收](../../../../docs/plugins/verification/plugin-ui-decoupling/05-integration-and-contract.md)，不要把下面的旧命令作为当前构建入口。
+
 日期：2026-10-04。基线：`3f1ff579de2e96c495736c3c04660ed960a3ee89`。Markdown 包版本：`0.3.0`。对应工单 [#29](https://github.com/T-miracle/Editor/issues/29)。状态：原生模式、公开契约、仓库必需检查及 Standards / Spec 双轴审查通过。
 
 提交 `4f2c9bd1411c9b64c4058a74d1db016e39e15387` 已推送 `origin/codex/markdown-plugin`，远端 SHA 一致。2026-10-04 读回 #29 为 closed / completed。

@@ -12,3 +12,6 @@ cargo build -p editor-app
 ```
 
 构建产物在 `target/plugin-layout-test/`，不作为内置产品插件发行。
+
+`diagnostic-trap` 是显式诊断命令，不贡献菜单或功能按钮；通过公开 Manager 调用它可模拟 WASM 故障，
+验证文本会话、图片标签、资源撤销与手动重试。宿主无需为示例身份添加专属分支。

@@ -1,6 +1,5 @@
 //! Native artwork reads only declared assets from the selected installed package version.
 use super::Installed;
-use plugin_protocol::{PreviewMode, api::InstanceScope};
 use std::{io::Read, path::Path};
 
 impl Installed {
@@ -29,41 +28,6 @@ impl Installed {
             .trim_start()
             .starts_with("<svg")
             .then_some(bytes)
-    }
-
-    /// Read a selected editor mode SVG from `root`, the host's installed-package directory.
-    /// Missing declarations, invalid ownership, unsafe SVGs and I/O failures return `None`.
-    /// Artwork reading grants no guest document access and performs no file/network resolution.
-    pub fn preview_mode_icon(
-        &self,
-        root: &Path,
-        panel_id: &str,
-        mode: PreviewMode,
-    ) -> Option<Vec<u8>> {
-        let panel = self
-            .manifest
-            .panels
-            .iter()
-            .find(|panel| panel.id == panel_id)?;
-        if panel.position != "editor"
-            || self.manifest.scope != InstanceScope::Workspace
-            || !self
-                .manifest
-                .api
-                .as_ref()
-                .is_some_and(|api| api.required.contains_key("editor.presentation"))
-        {
-            return None;
-        }
-        let modes = panel.view_modes.as_ref()?;
-        let path = match mode {
-            PreviewMode::Source => &modes.source,
-            PreviewMode::Split => &modes.split,
-            PreviewMode::Preview => &modes.preview,
-        };
-        let bytes = self.icon_bytes(root, path)?;
-        crate::package::icons::svg(&bytes).ok()?;
-        Some(bytes)
     }
 
     /// Bound reads before allocating and keep canonical paths inside this immutable version owner.

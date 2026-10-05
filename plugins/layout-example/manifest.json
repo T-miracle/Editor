@@ -1,11 +1,12 @@
 {
   "id": "layout-example",
   "name": "Layout Example",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "protocol": 7,
   "api": {"base": "^1", "required": {"ui.native": "^1", "ui.tools": "^1", "storage.private": "^1.1", "editor.documents": "^1", "editor.files": "^1", "editor.layout": "^1", "ui.file_images": "^1"}},
   "component": "layout-example.wasm",
   "permissions": ["editor.read", "workspace.read", "storage"],
+  "commands": [{"id":"diagnostic-trap", "title":"Simulate a plugin fault"}],
   "panels": [{"id": "layout", "title": "File Layout", "position": "editor", "file_extensions": ["layout"], "readonly_file_extensions": ["png"]}],
   "storage_limit": 8192
 }

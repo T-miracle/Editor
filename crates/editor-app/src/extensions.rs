@@ -25,6 +25,8 @@ mod installer_tests;
 #[cfg(test)]
 pub(crate) mod language_tests;
 #[cfg(test)]
+mod layout_fault_tests;
+#[cfg(test)]
 mod layout_tests;
 #[cfg(test)]
 pub(crate) mod lsp_tests;
@@ -921,39 +923,11 @@ impl dock::BasePanel for ExtensionPanel {
     }
 }
 impl DockPanel for ExtensionPanel {
-    /// Toolbar labels and commands come from installed manifests.
+    /// Native window chrome remains generic; domain functions are drawn from the plugin's live tools.
     fn title(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let title = self.panel_title.clone();
-        // Toolbar callbacks retain the incarnation that declared their commands.
-        let epoch = self.instance_epoch;
         let icon = self.panel_icon(cx.theme().is_dark());
-        let mut controls = h_flex().items_center();
-        if let Some(entry) = self
-            .entries
-            .iter()
-            .find(|p| Some(&p.manifest.id) == self.active.as_ref())
-        {
-            for command in &entry.manifest.commands {
-                if command.toolbar.is_some() || command.toolbar_icon.is_some() {
-                    let id = command.id.clone();
-                    // Plugin toolbars may request a shared host icon or retain a text fallback.
-                    let button =
-                        Button::new(SharedString::from(id.clone())).tooltip(command.title.clone());
-                    let button = if let Some(path) = &command.toolbar_icon {
-                        button.icon(Icon::default().path(path.clone()))
-                    } else {
-                        button.label(command.toolbar.clone().unwrap_or_default())
-                    };
-                    controls = controls.child(button.small().compact().ghost().on_click(
-                        cx.listener(move |this, _, _, _| {
-                            if this.instance_epoch == epoch {
-                                this.command(id.clone());
-                            }
-                        }),
-                    ));
-                }
-            }
-        }
+        let controls = h_flex().items_center();
         h_flex()
             .w_full()
             .justify_between()
@@ -969,7 +943,7 @@ impl DockPanel for ExtensionPanel {
                     .child(
                         Button::new("plugin-command-menu")
                             .icon(Icon::default().path("icons/menu.svg"))
-                            .tooltip("插件命令")
+                            .tooltip(t!("plugins.command_menu").to_string())
                             .small()
                             .compact()
                             .ghost()
@@ -981,7 +955,7 @@ impl DockPanel for ExtensionPanel {
                     .child(
                         Button::new("plugin-hide")
                             .icon(Icon::default().path("icons/window-minimize.svg"))
-                            .tooltip("隐藏面板")
+                            .tooltip(t!("plugins.hide_panel").to_string())
                             .small()
                             .compact()
                             .ghost()

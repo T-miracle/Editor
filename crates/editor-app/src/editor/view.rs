@@ -588,16 +588,19 @@ impl EditorApp {
                     .gap_3()
                     .child(div().text_color(cx.theme().muted_foreground).child(message))
                     .child(
-                        Button::new("retry-file-view")
-                            .label(t!("file_view.retry").to_string())
-                            .small()
-                            .on_click(cx.listener(move |app, _, _, cx| {
-                                if app.active_tab_index().map(|index| app.tabs[index].file_id)
-                                    == file_id
-                                {
-                                    app.retry_file_view(cx);
-                                }
-                            })),
+                        // Recovery remains separately measurable even when the failure message changes size.
+                        div().debug_selector(|| "file-view-retry".into()).child(
+                            Button::new("retry-file-view")
+                                .label(t!("file_view.retry").to_string())
+                                .small()
+                                .on_click(cx.listener(move |app, _, _, cx| {
+                                    if app.active_tab_index().map(|index| app.tabs[index].file_id)
+                                        == file_id
+                                    {
+                                        app.retry_file_view(cx);
+                                    }
+                                })),
+                        ),
                     )
                     .into_any_element()
             };

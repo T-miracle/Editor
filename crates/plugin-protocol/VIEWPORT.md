@@ -6,7 +6,7 @@ This additive capability binds a native source editor to a source-mapped preview
 
 Set `Document.editor_viewport` to the ID of one active root `Scroll`. `Document.source` must echo the exact authorized Preview input. An owned workspace editor panel must negotiate `editor.viewport`, `ui.richtext` and have `editor.read`. Ordinary panels default to no binding. Nodes use existing bounded `SourceRange` UTF-8 mappings; the host validates actual source boundaries before locating.
 
-The host presents a local chain control beside optional editor presentation buttons; a panel without `view_modes` still gets the chain and defaults to split. Synchronization defaults on, persists per workspace/contribution, and operates only in split mode. Turning it off, hiding a side, changing source, opening a modal, retiring the instance or removing the contribution withdraws pending measurements and locations.
+The plugin owns its synchronization control, default and workspace/file-type preference through `ui.tools` and `storage.private`. It publishes `editor_viewport` only while its current layout and intent request synchronization. The host owns no chain control or fixed display modes. Withdrawing the binding, hiding a side, changing source, opening a modal, retiring the instance or removing the contribution cancels pending measurements and locations; retained readonly paint cannot execute an old reveal.
 
 ## Notifications and requests
 

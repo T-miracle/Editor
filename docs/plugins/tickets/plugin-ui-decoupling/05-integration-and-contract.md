@@ -1,6 +1,6 @@
 # 05 — 故障边界、契约收缩与总验收
 
-**Status:** ready-for-agent — 已确认并发布，等待前置工单完成。
+**Status:** in_progress — 前置 #65 已验收、推送并关闭；在独立分支收缩旧公开契约，集中复核最终包与 U01–U20。
 
 议题：[工单 #66](https://github.com/T-miracle/Editor/issues/66)。
 

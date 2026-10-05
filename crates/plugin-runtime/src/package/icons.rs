@@ -1,22 +1,12 @@
-//! Preview-mode artwork is a bounded geometry-only SVG, never an ambient resource loader.
-use std::collections::BTreeMap;
-
-/// Inspect a declared icon from this archive before package extraction or guest execution.
-pub(super) fn validate(files: &BTreeMap<String, Vec<u8>>, path: &str) -> anyhow::Result<()> {
-    super::validate_relative(path)?;
-    let bytes = files
-        .get(path)
-        .ok_or_else(|| anyhow::anyhow!("Missing preview mode icon: {path}"))?;
-    svg(bytes)
-}
+//! Tool artwork is a bounded geometry-only SVG, never an ambient resource loader.
 
 /// Recheck installed artwork before handing bytes to native rendering; XML resolves no entities.
 pub(crate) fn svg(bytes: &[u8]) -> anyhow::Result<()> {
-    anyhow::ensure!(bytes.len() <= 64 * 1024, "Preview mode SVG exceeds 64 KiB");
+    anyhow::ensure!(bytes.len() <= 64 * 1024, "Tool SVG exceeds 64 KiB");
     let source = std::str::from_utf8(bytes)?;
     anyhow::ensure!(
         !source.to_ascii_lowercase().contains("<!doctype"),
-        "Preview mode SVG cannot declare a DTD"
+        "Tool SVG cannot declare a DTD"
     );
     let document = roxmltree::Document::parse_with_options(
         source,
@@ -31,14 +21,11 @@ pub(crate) fn svg(bytes: &[u8]) -> anyhow::Result<()> {
         "Invalid SVG root"
     );
     for node in document.descendants() {
-        anyhow::ensure!(
-            !node.is_pi(),
-            "Preview mode SVG cannot load XML stylesheets"
-        );
+        anyhow::ensure!(!node.is_pi(), "Tool SVG cannot load XML stylesheets");
         if node.is_text() {
             anyhow::ensure!(
                 node.text().is_some_and(|text| text.trim().is_empty()),
-                "Preview mode SVG cannot render text"
+                "Tool SVG cannot render text"
             );
         }
         if !node.is_element() {
@@ -52,7 +39,7 @@ pub(crate) fn svg(bytes: &[u8]) -> anyhow::Result<()> {
                 ]
                 .contains(&tag.name())
                 && node.ancestors().count() <= 18,
-            "Preview mode SVG permits only bounded geometric elements"
+            "Tool SVG permits only bounded geometric elements"
         );
         for attribute in node.attributes() {
             // A whitelist rejects href regardless of prefix/whitespace, plus CSS, event handlers and filters.
@@ -92,7 +79,7 @@ pub(crate) fn svg(bytes: &[u8]) -> anyhow::Result<()> {
                         "vector-effect"
                     ]
                     .contains(&attribute.name()),
-                "Unsupported preview mode SVG attribute: {}",
+                "Unsupported tool SVG attribute: {}",
                 attribute.name()
             );
             let compact: String = attribute
@@ -102,7 +89,7 @@ pub(crate) fn svg(bytes: &[u8]) -> anyhow::Result<()> {
                 .collect();
             anyhow::ensure!(
                 !compact.to_ascii_lowercase().contains("url("),
-                "Preview mode SVG cannot reference URL paints"
+                "Tool SVG cannot reference URL paints"
             );
             if matches!(attribute.name(), "fill" | "stroke") {
                 // Theme tinting needs currentColor; literal color names and hex need no paint servers.
@@ -115,7 +102,7 @@ pub(crate) fn svg(bytes: &[u8]) -> anyhow::Result<()> {
                             .strip_prefix('#')
                             .is_some_and(|hex| [3, 4, 6, 8].contains(&hex.len())
                                 && hex.bytes().all(|byte| byte.is_ascii_hexdigit())),
-                    "Preview mode SVG requires a literal or currentColor paint"
+                    "Tool SVG requires a literal or currentColor paint"
                 );
             }
         }

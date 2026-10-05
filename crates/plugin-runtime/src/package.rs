@@ -112,7 +112,10 @@ impl Package {
             files
                 .get("manifest.json")
                 .ok_or_else(|| anyhow::anyhow!("Missing manifest.json"))?,
-        )?;
+        )
+        .map_err(|error| {
+            anyhow::anyhow!("插件清单不兼容或无效，请使用新版 SDK 更新插件：{error}")
+        })?;
         // New archives keep their declared identity; historical aliases belong exclusively to data import.
         anyhow::ensure!(
             manifest.id.len() <= 100
@@ -425,20 +428,6 @@ impl Package {
                 },
                 "Editor previews require document read authority and valid file extensions"
             );
-            if let Some(modes) = &panel.view_modes {
-                // Mode controls alter editor layout, so optional negotiation cannot admit a declaration.
-                anyhow::ensure!(
-                    panel.position == "editor"
-                        && manifest.scope == plugin_protocol::api::InstanceScope::Workspace
-                        && manifest.api.as_ref().is_some_and(|api| {
-                            api.required.contains_key("editor.presentation")
-                        }),
-                    "Preview modes require a workspace editor preview and required editor.presentation"
-                );
-                for icon in [&modes.source, &modes.split, &modes.preview] {
-                    icons::validate(&files, icon)?;
-                }
-            }
             // Panel artwork must come from this package and remain small enough for native UI.
             for icon in [&panel.icon_light, &panel.icon_dark].into_iter().flatten() {
                 validate_relative(icon)?;

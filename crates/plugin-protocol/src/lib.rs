@@ -80,8 +80,9 @@ pub struct DataFormat {
     pub migration_hook: bool,
 }
 
-/// Dock and command contributions are data, not host-side feature branches.
+/// Dock and file contributions declare placement; their domain controls arrive through `ui::Document`.
 #[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Panel {
     /// Editor-local auxiliary contributions may publish tools but cannot become a whole-layout provider.
     #[serde(default)]
@@ -97,10 +98,6 @@ pub struct Panel {
     /// Requires `editor.files`; the declaration remains meaningful when the viewer is disabled.
     #[serde(default)]
     pub readonly_file_extensions: Vec<String>,
-    /// Opt-in source/split/preview controls for workspace-owned editor previews.
-    /// All three SVG paths belong to this package; declaration requires `editor.presentation`.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub view_modes: Option<PreviewModes>,
     /// Used only when this panel has no saved visibility preference yet.
     #[serde(default = "panel_visible_by_default")]
     pub default_visible: bool,
@@ -115,38 +112,13 @@ pub struct Panel {
     pub icon_dark: Option<String>,
 }
 
-/// Package-owned artwork for the host's three fixed editor presentation modes.
-/// Paths use package-relative `/` separators and reference safe geometric SVGs under 64 KiB.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct PreviewModes {
-    /// Package-relative SVG for showing only the source editor.
-    pub source: String,
-    /// Package-relative SVG for showing source on the left and preview on the right.
-    pub split: String,
-    /// Package-relative SVG for showing only the preview.
-    pub preview: String,
-}
-
-/// Workspace-persisted editor layout; the initial presentation shows both source and preview.
-/// This changes host layout only and never creates a second mutable document or undo stack.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum PreviewMode {
-    /// Hide the preview while retaining the current source document session.
-    Source,
-    #[default]
-    /// Show the source editor and preview together.
-    Split,
-    /// Hide the source editor without discarding its text, selection or undo history.
-    Preview,
-}
-
 /// Existing manifests continue to open their panels unless they opt out.
 fn panel_visible_by_default() -> bool {
     true
 }
+/// Menu and shortcut invocations remain commands; domain footer buttons use `ui::Document::tools`.
 #[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Command {
     pub id: String,
     pub title: String,
@@ -154,11 +126,6 @@ pub struct Command {
     pub shortcut: Option<String>,
     #[serde(default)]
     pub menu: bool,
-    #[serde(default)]
-    pub toolbar: Option<String>,
-    /// Optional icon path from the host's shared `gpui-kit-assets` catalog.
-    #[serde(default)]
-    pub toolbar_icon: Option<String>,
 }
 
 /// Opaque plugin-owned data; the host never interprets or migrates its contents.

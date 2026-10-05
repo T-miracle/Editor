@@ -96,7 +96,7 @@ fn refusal(result: anyhow::Result<()>, code: api::ErrorCode) {
     );
 }
 
-/// This independently named panel has no editor.presentation or view_modes dependency.
+/// This independently named panel opts into viewport reporting without any host display-mode controls.
 #[test]
 #[ignore = "build current capability-example through the host SDK first"]
 fn viewport_independent_binding_checks_capabilities_source_revision_and_event_ranges() {

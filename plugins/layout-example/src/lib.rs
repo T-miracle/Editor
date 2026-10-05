@@ -69,6 +69,13 @@ impl State {
                 });
             }
             api::Input::Event {
+                event: api::Notification::Command { id, .. },
+                ..
+            } if id == "diagnostic-trap" => {
+                // An explicit SDK diagnostic exercises real fault retirement without a host fixture branch.
+                panic!("Independent layout diagnostic trap");
+            }
+            api::Input::Event {
                 event: api::Notification::Preview { document, .. },
                 ..
             } => {

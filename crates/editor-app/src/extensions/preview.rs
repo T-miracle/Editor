@@ -207,7 +207,7 @@ impl EditorApp {
                             // The source token remains current while the oversized text never crosses WASM.
                             panel.preview_version = Some(version.clone());
                             panel.preview_document = context.clone();
-                            panel.preview_error = Some("文档超过 1 MiB，无法预览".into());
+                            panel.preview_error = Some(t!("preview.document_limit").to_string());
                             panel.native_ui = None;
                             panel.native_toolbar = None;
                             panel.send(protocol::api::Notification::Preview {

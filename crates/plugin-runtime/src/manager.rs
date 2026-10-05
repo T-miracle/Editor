@@ -719,7 +719,6 @@ mod icon_tests {
                     status_order: None,
                     icon_light: Some("icons/light.svg".into()),
                     icon_dark: Some("icons/dark.svg".into()),
-                    view_modes: None,
                 }],
                 commands: vec![],
                 storage_limit: 1024,
