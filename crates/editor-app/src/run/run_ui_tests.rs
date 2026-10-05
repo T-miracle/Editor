@@ -263,21 +263,21 @@ fn the_run_surface_answers_dismissal_and_the_theme_toggle(cx: &mut TestAppContex
     let _ = std::fs::remove_file(stored);
 }
 
-/// Records the obstacle that stops the dropdown's keystrokes from being driven in this harness.
+/// What the dropdown's keyboard check reaches, and the one step it does not.
 ///
-/// Ticket 03's native clause asks for keyboard selection on the unified dropdown. Reaching the popup's key
-/// handler needs the overlay that carries `track_focus` and `capture_key_down` to be drawn *and* focused,
-/// and in this harness the overlay is not in the element tree at all: after `open_run_menu` and a settle,
-/// the menu state exists but `debug_bounds("native-popup-menu")` finds nothing. A focus assertion against
-/// an element that was never drawn would be meaningless, so the check asserts the drawing instead and
-/// documents the wall where a reader would otherwise look for a missing test.
+/// Ticket 03's native clause asks for keyboard selection on the unified dropdown. Reaching its key handler
+/// needs the overlay drawn and the popup focused. Drawing is the part I had wrong: the checks in this file
+/// only settled the event loop, while the plugin-status checks that drive keys call `window.draw` — and
+/// with two draws the overlay is in the tree and `debug_bounds("run-menu")` finds it. So there is no harness
+/// wall, and that much is asserted here.
 ///
-/// The state side is covered elsewhere: the menu's entries are asserted in
-/// `the_selector_opens_the_unified_dropdown`, and its dismissal is covered by
-/// `the_run_surface_answers_dismissal_and_the_theme_toggle`. What is not covered anywhere is the popup's
-/// own key handler, and this is why.
+/// What remains is focus: the popup's handle does not take focus, even after `focus()` and further draws,
+/// so a dispatched Escape never reaches its handler and the menu stays open. That is recorded as an
+/// assertion about the obstacle rather than a passing claim: when this flips, the handler is reachable and
+/// the case becomes ticket 03's keystroke acceptance. The next step is concrete — how `KitPopupMenu`
+/// acquires focus, against the plugin-status popup whose `contains_focused` does pass after `tab`.
 #[gpui::test]
-fn the_dropdown_overlay_is_not_reachable_for_keystrokes_in_this_harness(cx: &mut TestAppContext) {
+fn the_dropdown_overlay_draws_but_its_popup_does_not_take_focus(cx: &mut TestAppContext) {
     let root = tempfile::tempdir().unwrap();
     let workspace = root.path().join("project");
     std::fs::create_dir_all(&workspace).unwrap();
@@ -289,16 +289,46 @@ fn the_dropdown_overlay_is_not_reachable_for_keystrokes_in_this_harness(cx: &mut
             app.open_run_menu(gpui_kit::point(px(320.), px(30.)), window, cx);
         });
     });
+    // Two draws, as the plugin-status checks do: this is what puts the shell's overlay in the tree, and the
+    // element a check can point at is the overlay rather than the popup deferred inside it.
+    for _ in 0..2 {
+        cx.run_until_parked();
+        cx.update(|window, cx| window.draw(cx).clear(cx));
+    }
     cx.run_until_parked();
     assert!(
-        cx.update(|_, cx| app.read(cx).run_menu.is_some()),
-        "the dropdown was opened"
+        cx.debug_bounds("run-menu").is_some(),
+        "the dropdown's overlay is in the tree once the window draws"
     );
-    // The finding: the overlay is not drawn into this tree, so nothing here can hold its focus.
+
+    let popup = cx.update(|_, cx| {
+        app.read(cx)
+            .run_menu
+            .as_ref()
+            .map(|menu| menu.popup.clone())
+            .expect("the selector opened the dropdown")
+    });
+    cx.update(|window, cx| {
+        popup.update(cx, |_, cx| cx.focus_handle().focus(window, cx));
+    });
+    for _ in 0..2 {
+        cx.run_until_parked();
+        cx.update(|window, cx| window.draw(cx).clear(cx));
+    }
+    cx.run_until_parked();
+    let focused = cx.update(|window, cx| {
+        popup.update(cx, |_, cx| cx.focus_handle().contains_focused(window, cx))
+    });
+    cx.simulate_keystrokes("escape");
+    cx.run_until_parked();
+    let closed = cx.update(|_, cx| app.read(cx).run_menu.is_none());
+    // One assertion covering the state of the obstacle, so this file cannot report a keystroke acceptance
+    // it does not have and cannot silently keep a stale one either.
     assert!(
-        cx.debug_bounds("native-popup-menu").is_none(),
-        "if this ever changes, the keystroke check for ticket 03 can be written: the overlay would be \
-         drawable and focusable here"
+        !focused && !closed,
+        "the popup does not take focus here, so the dispatched key never reaches its handler \
+         (popup focused: {focused}, menu closed: {closed}); when focus starts working, the key reaches the \
+         handler and this case becomes ticket 03's keystroke acceptance"
     );
 
     let _ = std::fs::remove_file(stored);
