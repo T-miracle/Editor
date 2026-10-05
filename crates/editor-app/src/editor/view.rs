@@ -1,7 +1,6 @@
 //! Renders the explorer, document tabs, and editor.
 
 use crate::*;
-use gpui_kit::component::WindowExt as _;
 
 #[derive(Clone)]
 /// Carries a tab's identity while it is dragged in the tab strip.
@@ -257,6 +256,7 @@ impl EditorApp {
                 .unwrap_or_else(|| t!("editor.untitled").to_string());
             let icon = file_icon(&path, false, &theme::active_theme(self.dark_theme));
             let activate_path = path.clone();
+            let context_path = path.clone();
             let close_path = path.clone();
             let middle_close_path = path.clone();
             let drop_path = path.clone();
@@ -396,6 +396,18 @@ impl EditorApp {
                     }
                 }))
                 .on_drag(drag_payload, |drag, _, _, cx| cx.new(|_| drag.clone()))
+                .on_mouse_down(
+                    MouseButton::Right,
+                    cx.listener(move |app, event: &MouseDownEvent, window, cx| {
+                        cx.stop_propagation();
+                        if let Some(index) =
+                            app.tabs.iter().position(|tab| tab.path() == context_path)
+                        {
+                            app.activate_tab(index, window, cx);
+                            app.open_file_provider_menu(event.position, window, cx);
+                        }
+                    }),
+                )
                 .on_drop(cx.listener(move |this, drag: &EditorTabDrag, _, cx| {
                     this.move_tab_before(&drag.path, &drop_path, cx);
                 }))
@@ -597,149 +609,7 @@ impl EditorApp {
                 .child(body)
                 .into_any_element();
         }
-        // Modal surfaces own the window until dismissed; ordinary floating
-        // panels can remain below the raised definition details layer.
-        let hover_enabled = self.explorer_edit.is_none()
-            && self.explorer_delete.is_none()
-            && !window.has_active_dialog(cx)
-            && !window.has_active_sheet(cx);
-        // The menu callback runs inside an editor update, so snapshot its state now.
-        let (enabled, editable, has_definition, has_code_actions) = {
-            let editor = self.editor.read(cx);
-            let presentation = editor.presentation();
-            (
-                !presentation.is_disabled(),
-                presentation.is_editable(),
-                editor.lsp().definition_provider.is_some(),
-                !editor.lsp().code_action_providers.is_empty(),
-            )
-        };
-        let app = cx.entity().downgrade();
-        // Preserve the native editor and all its popovers while a plugin adds a sibling preview.
-        let source = div()
-            .debug_selector(|| "editor-source-pane".into())
-            .flex_1()
-            .min_h_0()
-            .flex()
-            .flex_col()
-            .relative()
-            .when_some(
-                self.render_editor_source_toolbar(window, cx),
-                |source, toolbar| source.child(toolbar),
-            )
-            // Capture selection presses before the base editor collapses them.
-            .when(hover_enabled, |view| {
-                view.capture_any_mouse_down(cx.listener(Self::text_drag_press))
-                    .capture_action(cx.listener(Self::text_drag_escape))
-                    .capture_action(cx.listener(Self::paste_plugin_images))
-                    .on_drag_move(cx.listener(Self::image_drag_move))
-            })
-            // Register drag listeners before the editor's own selection listeners.
-            .child(self.render_text_drag_events(cx))
-            .when(hover_enabled, |source| {
-                source.child(self.render_image_drag_events(cx))
-            })
-            .on_mouse_move(cx.listener(Self::editor_pointer_move))
-            .on_mouse_up(MouseButton::Middle, move |event, window, cx| {
-                let position = event.position;
-                let app = app.clone();
-                cx.stop_propagation();
-                window.defer(cx, move |window, cx| {
-                    // Reuse the editor's own hit testing to place the caret under the click.
-                    let modifiers = Modifiers::default();
-                    window.dispatch_event(
-                        PlatformInput::MouseDown(MouseDownEvent {
-                            button: MouseButton::Left,
-                            position,
-                            modifiers,
-                            click_count: 1,
-                            first_mouse: false,
-                        }),
-                        cx,
-                    );
-                    window.dispatch_event(
-                        PlatformInput::MouseUp(MouseUpEvent {
-                            button: MouseButton::Left,
-                            position,
-                            modifiers,
-                            click_count: 1,
-                        }),
-                        cx,
-                    );
-                    let _ = app.update(cx, |app, cx| {
-                        app.request_definition(Some(position), window, cx);
-                    });
-                });
-            })
-            .child(
-                super::popovers::render(
-                    &self.editor,
-                    &self.completion_popup,
-                    &self.definition_popup_focus,
-                    style,
-                    hover_enabled,
-                    window,
-                    cx,
-                )
-                .unwrap_or_else(|| {
-                    Editor::new(&self.editor)
-                        // Preserve live edit restrictions when the styled component renders.
-                        .readonly(!editable)
-                        .disabled(!enabled)
-                        .context_menu(move |menu, _, cx| {
-                            // Route the menu action through the same fresh LSP request as F12.
-                            menu.menu_with_disabled(
-                                t!("editor.go_to_definition").to_string(),
-                                !(enabled && has_definition),
-                                Box::new(NavigateToDefinition),
-                            )
-                            .menu_with_disabled(
-                                t!("editor.code_actions").to_string(),
-                                !(editable && has_code_actions),
-                                Box::new(gpui_base::input::ToggleCodeActions),
-                            )
-                            .separator()
-                            // Cut and Copy validate the live selection when their actions run.
-                            .menu_with_disabled(
-                                t!("editor.cut").to_string(),
-                                !editable,
-                                Box::new(gpui_base::input::Cut),
-                            )
-                            .menu_with_disabled(
-                                t!("editor.copy").to_string(),
-                                !enabled,
-                                Box::new(gpui_base::input::Copy),
-                            )
-                            .menu_with_disabled(
-                                t!("editor.paste").to_string(),
-                                !(editable && cx.read_from_clipboard().is_some()),
-                                Box::new(gpui_base::input::Paste),
-                            )
-                            .separator()
-                            .menu(
-                                t!("editor.select_all").to_string(),
-                                Box::new(gpui_base::input::SelectAll),
-                            )
-                        })
-                        .bordered(false)
-                        .p_0()
-                        .size_full()
-                        .min_h_0()
-                        .bg(style.background.unwrap_or(cx.theme().background))
-                        .text_color(style.foreground.unwrap_or(cx.theme().foreground))
-                        .font_family(cx.theme().mono_font_family.clone())
-                        .text_size(
-                            style
-                                .font_size_px
-                                .map(px)
-                                .unwrap_or(cx.theme().mono_font_size),
-                        )
-                        .into_any_element()
-                }),
-            )
-            // Paint the drop caret after the text, using the current editor layout.
-            .child(self.render_text_drag_caret(cx))
-            .into_any_element();
+        let source = self.render_native_editor(window, cx);
         let body = if let Some(preview) = self.active_editor_preview(cx) {
             self.render_editor_preview_body(source, preview, window, cx)
         } else {

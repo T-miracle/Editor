@@ -4,6 +4,17 @@ use super::file_watch::{DiskContent, WatchedFile};
 use crate::*;
 
 impl EditorApp {
+    /// Layout changes retire source gestures and popovers before handing native focus to another surface.
+    pub(crate) fn prepare_file_layout_change(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.cancel_text_drag(cx);
+        self.dismiss_pointer_hover(cx);
+        self.completion_popup.reset();
+        window.blur(cx);
+    }
     pub(crate) fn refresh_files(&mut self, cx: &mut Context<Self>) {
         let snapshot = self.workspace.snapshot();
         let count = snapshot.files.len();

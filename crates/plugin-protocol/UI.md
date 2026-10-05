@@ -1,5 +1,24 @@
 # 插件原生界面协议 v1
 
+## 文件中心布局（editor.layout 1.0）
+
+协商 `editor.layout ^1` 后，所选工作区文件提供者可以发布 `Document.editor_layout = true`，
+用已有 Row／Column／Scroll 等原生节点组合中心内容；文本使用当前 `Document.source`，
+非文本使用独立 `Document.file`。要求 `editor.read`、工作区实例及非 auxiliary 的编辑区贡献。
+
+`Kind::NativeEditor { document: DocumentVersion }` 引用既有原生编辑会话，不创建文本或撤销栈。
+该引用只允许出现在布局 root 中，至多一个，目标必须与 `Document.source` 完全一致；
+工具栏、弹窗、跨文件和过期版本中的引用都会被拒绝。省略引用即可仅显示插件内容；
+没有文本会话的文件不能借用其他文件的编辑器。隐藏输入目标撤销焦点，重现仍使用原会话及原生 IME 状态。
+
+`Panel.auxiliary = true` 声明辅助文件工具，只允许编辑区贡献，不能成为中心布局提供者。
+宿主按工作区＋文件类型保存提供者身份。唯一可用候选可首次采用并记忆；多个候选必须从文件标签右键菜单明确选择，
+新安装不会覆盖有效选择。失效不改写用户选择；文本回退复用普通编辑器，菜单提供“恢复普通编辑界面”，
+非文本保留 Tab、原因与替代查看器入口。选择变化推进目标版本，旧源、旧 UI 版本和旧实例事件继续沿既有门禁拒绝。
+
+独立示例见 `plugins/layout-example` 与 `scripts/build-layout-example.ps1`，不依赖宿主仓库 crate 路径。
+该能力与旧 `editor.presentation` 的迁移分阶段实施；后者将在既有插件迁移后收缩。
+
 ## 文件显示与只读图片
 
 `editor.files ^1` 提供 `Notification::FilePreview { file: Option<FileContext> }`：

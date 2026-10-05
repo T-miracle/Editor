@@ -2,7 +2,7 @@
 
 日期：2026-10-06。议题：[#62](https://github.com/T-miracle/Editor/issues/62)。
 分支：`codex/plugin-ui-decoupling`；审查起点：`4d4a7b6`。
-状态：实现、阶段验证与双轴审查通过，准备推送并核对关闭议题。
+状态：实现、阶段验证与双轴审查通过；330d092 已推送至 origin，#62 已关闭并读回确认。
 
 ## 交付内容
 

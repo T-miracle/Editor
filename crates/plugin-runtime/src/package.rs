@@ -387,6 +387,10 @@ impl Package {
                 ["left", "right", "bottom", "editor"].contains(&panel.position.as_str()),
                 "Unsupported dock position"
             );
+            anyhow::ensure!(
+                !panel.auxiliary || panel.position == "editor",
+                "Auxiliary file tools require an editor-local contribution"
+            );
             // Preview ingress is workspace-owned and explicitly requires document read authority.
             anyhow::ensure!(
                 if panel.position == "editor" {

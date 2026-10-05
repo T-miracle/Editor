@@ -702,6 +702,7 @@ mod icon_tests {
                 contributions: None,
                 permissions: BTreeSet::new(),
                 panels: vec![Panel {
+                    auxiliary: false,
                     file_extensions: vec![],
                     readonly_file_extensions: vec![],
                     id: "main".into(),

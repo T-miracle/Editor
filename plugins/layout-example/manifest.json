@@ -1,0 +1,11 @@
+{
+  "id": "layout-example",
+  "name": "Layout Example",
+  "version": "0.1.0",
+  "protocol": 7,
+  "api": {"base": "^1", "required": {"ui.native": "^1", "editor.documents": "^1", "editor.files": "^1", "editor.layout": "^1", "ui.file_images": "^1"}},
+  "component": "layout-example.wasm",
+  "permissions": ["editor.read", "workspace.read"],
+  "panels": [{"id": "layout", "title": "File Layout", "position": "editor", "file_extensions": ["layout"], "readonly_file_extensions": ["png"]}],
+  "storage_limit": 1024
+}

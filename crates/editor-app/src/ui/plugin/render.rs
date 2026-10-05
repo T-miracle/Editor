@@ -192,6 +192,12 @@ impl PluginView {
         let id = node.id.clone();
         let native_id = SharedString::from(format!("plugin-ui-{}", node.id));
         let content = match &node.kind {
+            Kind::NativeEditor { document } => self
+                .native_editor
+                .as_ref()
+                .filter(|_| !disabled)
+                .and_then(|render| render(document, window, cx))
+                .unwrap_or_else(|| div().into_any_element()),
             Kind::SideTabs(_) => self.collections[&node.id].clone().into_any_element(),
             Kind::Canvas(_) => self.canvases[&node.id].clone().into_any_element(),
             Kind::Column { children } | Kind::Row { children } => {

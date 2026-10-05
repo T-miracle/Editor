@@ -108,7 +108,28 @@ impl ExtensionPanel {
             self.surface_id.as_deref().unwrap_or_default()
         );
         let view = self.native_ui.as_ref().unwrap().clone();
+        let parent = self.parent.clone();
+        let expected_key = key.clone();
+        let epoch = self.instance_epoch;
+        let editor: crate::ui::plugin::NativeEditorRenderer = Rc::new(move |target, window, cx| {
+            parent
+                .update(cx, |app, cx| {
+                    let index = app.active_text_tab_index()?;
+                    let selected = app.active_editor_preview(cx)?;
+                    if app.plugin_document_version(index).ok().as_ref() != Some(target)
+                        || app.editor_preview_owner_key(&selected, cx).as_ref()
+                            != Some(&expected_key)
+                        || selected.read(cx).instance_epoch != epoch
+                    {
+                        return None;
+                    }
+                    Some(app.render_native_editor(window, cx))
+                })
+                .ok()
+                .flatten()
+        });
         view.update(cx, |view, cx| {
+            view.native_editor = Some(editor);
             view.set_viewport_enabled(self.viewport_sync_enabled, cx);
             view.update_images(&key, &self.images, window, cx)
         });

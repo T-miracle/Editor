@@ -3,6 +3,7 @@
 use super::*;
 
 mod presentation;
+mod providers;
 mod toolbar;
 pub(crate) mod viewport;
 
@@ -50,6 +51,9 @@ impl EditorApp {
         if !self.session_state.workspace_trusted {
             return t!("file_view.restricted").to_string();
         }
+        if self.file_provider_selection_needed(cx) {
+            return t!("file_view.choose_provider").to_string();
+        }
         let extension = self
             .active_path
             .as_ref()
@@ -57,12 +61,17 @@ impl EditorApp {
             .and_then(|value| value.to_str())
             .unwrap_or("");
         let owner = self.extensions.read(cx);
+        let chosen = self.remembered_file_provider_key();
         let candidates = owner
             .entries
             .iter()
             .filter(|entry| {
                 entry.manifest.panels.iter().any(|panel| {
                     panel.position == "editor"
+                        && !panel.auxiliary
+                        && chosen
+                            .as_ref()
+                            .is_none_or(|key| *key == format!("{}/{}", entry.manifest.id, panel.id))
                         && panel
                             .readonly_file_extensions
                             .iter()
@@ -71,7 +80,12 @@ impl EditorApp {
             })
             .collect::<Vec<_>>();
         if candidates.is_empty() {
-            return t!("file_view.no_provider").to_string();
+            return if chosen.is_some() {
+                t!("file_view.provider_unavailable")
+            } else {
+                t!("file_view.no_provider")
+            }
+            .to_string();
         }
         if let Some(error) = candidates.iter().find_map(|entry| entry.error.as_ref()) {
             return error.clone();
@@ -93,6 +107,7 @@ impl EditorApp {
             .and_then(|value| value.to_str())
             .unwrap_or("");
         // Only enabled faulted matches are restarted; retry never grants permission or enables a plugin.
+        let chosen = self.remembered_file_provider_key();
         let failed = self
             .extensions
             .read(cx)
@@ -103,6 +118,10 @@ impl EditorApp {
                     && entry.error.is_some()
                     && entry.manifest.panels.iter().any(|panel| {
                         panel.position == "editor"
+                            && !panel.auxiliary
+                            && chosen.as_ref().is_none_or(|key| {
+                                *key == format!("{}/{}", entry.manifest.id, panel.id)
+                            })
                             && panel
                                 .readonly_file_extensions
                                 .iter()
@@ -125,39 +144,9 @@ impl EditorApp {
         cx.notify();
     }
 
-    /// Select one visible, authorized preview deterministically when several plugins match a file.
+    /// The user's workspace/file-type selection is the sole authority for a complete center layout.
     pub(crate) fn active_editor_preview(&self, cx: &App) -> Option<Entity<ExtensionPanel>> {
-        let extension = self.active_path.as_ref()?.extension()?.to_str()?;
-        let has_text = self.active_text_tab_index().is_some();
-        let owner = self.extensions.read(cx);
-        let mut matches = owner
-            .entries
-            .iter()
-            .filter(|entry| {
-                entry.enabled && entry.error.is_none() && entry.grants.contains("editor.read")
-            })
-            .flat_map(|entry| {
-                entry.manifest.panels.iter().filter_map(|descriptor| {
-                    (descriptor.position == "editor"
-                        && (if has_text {
-                            &descriptor.file_extensions
-                        } else {
-                            &descriptor.readonly_file_extensions
-                        })
-                        .iter()
-                        .any(|candidate| candidate.eq_ignore_ascii_case(extension)))
-                    .then(|| format!("{}/{}", entry.manifest.id, descriptor.id))
-                })
-            })
-            .filter_map(|key| {
-                self.plugin_panels
-                    .get(&key)
-                    .filter(|panel| panel.read(cx).visible.get())
-                    .map(|panel| (key, panel.clone()))
-            })
-            .collect::<Vec<_>>();
-        matches.sort_by(|a, b| a.0.cmp(&b.0));
-        matches.into_iter().next().map(|(_, panel)| panel)
+        self.selected_file_provider(cx)
     }
 
     /// Input changes invalidate the token even for clean disk reloads that keep the saved revision.
@@ -178,7 +167,8 @@ impl EditorApp {
     }
 
     /// Publish unsaved text once per document revision, and clear a surface when its file changes.
-    pub(crate) fn sync_editor_previews(&self, cx: &mut Context<Self>) {
+    pub(crate) fn sync_editor_previews(&mut self, cx: &mut Context<Self>) {
+        self.remember_single_file_provider(cx);
         self.sync_file_previews(cx);
         let selected = self.active_editor_preview(cx);
         let version = self

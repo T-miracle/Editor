@@ -40,6 +40,8 @@ struct State {
     declared_panels: BTreeSet<String>,
     /// Editor toolbar authority is confined to this package's declared workspace preview surfaces.
     declared_editor_panels: BTreeSet<String>,
+    /// Auxiliary tools never gain authority to publish the whole file layout.
+    declared_layout_panels: BTreeSet<String>,
     subscriptions: std::collections::BTreeMap<u64, crate::document_events::Subscription>,
     wasi: WasiCtx,
     table: ResourceTable,
@@ -267,6 +269,12 @@ impl Instance {
                 .panels
                 .iter()
                 .filter(|panel| panel.position == "editor")
+                .map(|panel| panel.id.clone())
+                .collect(),
+            declared_layout_panels: manifest
+                .panels
+                .iter()
+                .filter(|panel| panel.position == "editor" && !panel.auxiliary)
                 .map(|panel| panel.id.clone())
                 .collect(),
             wasi: wasi.build(),

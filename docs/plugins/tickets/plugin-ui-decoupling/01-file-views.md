@@ -1,6 +1,6 @@
 # 01 — 将 SVG 升级为 Image，并打通图片文件显示
 
-**Status:** verified — 实现、阶段验证与双轴审查通过；按既定流程推送独立分支后关闭议题。
+**Status:** completed — 实现、验证与双轴审查通过，330d092 已推送，#62 关闭状态已读回。
 
 阶段证据：[Image 与文件显示验收](../../verification/plugin-ui-decoupling/01-image-file-views.md)。
 

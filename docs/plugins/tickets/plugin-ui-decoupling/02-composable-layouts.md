@@ -1,6 +1,6 @@
 # 02 — 可组合编辑布局与提供者选择
 
-**Status:** ready-for-agent — 已确认并发布，等待前置工单完成。
+**Status:** in-review — 可组合布局、显式选择与恢复已实现，阶段验证和代码审查进行中。
 
 议题：[工单 #63](https://github.com/T-miracle/Editor/issues/63)。
 

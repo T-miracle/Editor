@@ -5,7 +5,7 @@ use protocol::PreviewMode;
 
 impl EditorApp {
     /// Viewport identity does not require an optional set of presentation icons.
-    pub(super) fn editor_preview_owner_key(
+    pub(crate) fn editor_preview_owner_key(
         &self,
         preview: &Entity<ExtensionPanel>,
         cx: &App,
@@ -54,6 +54,21 @@ impl EditorApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
+        if let Some(document) = preview.read(cx).current_document()
+            && document.editor_layout
+        {
+            let has_editor = document.active_native_editor().is_some();
+            if !has_editor && self.editor.focus_handle(cx).is_focused(window) {
+                window.blur(cx);
+            }
+            return div()
+                .debug_selector(|| "editor-plugin-layout".into())
+                .size_full()
+                .min_h_0()
+                .min_w_0()
+                .child(preview)
+                .into_any_element();
+        }
         let source = self.render_source_viewport_probe(source, preview.clone(), cx);
         match self.editor_preview_mode(&preview, cx) {
             PreviewMode::Source => {
@@ -137,6 +152,13 @@ impl EditorApp {
         // File-only viewers do not offer a source-editing entry or borrow a previous text session.
         self.active_text_tab_index()?;
         let preview = self.active_editor_preview(cx)?;
+        if preview
+            .read(cx)
+            .current_document()
+            .is_some_and(|document| document.editor_layout)
+        {
+            return None;
+        }
         let has_modes = self.editor_preview_key(&preview, cx).is_some();
         let has_viewport = preview
             .read(cx)

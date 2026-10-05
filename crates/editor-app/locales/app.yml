@@ -1,4 +1,13 @@
 _version: 2
+file_view.provider_unavailable:
+  en: "The selected viewer is unavailable; choose another from the file Tab context menu"
+  zh-CN: "所选查看插件不可用，可从文件标签右键菜单选择其他插件"
+file_view.restore_text:
+  en: "Restore the plain text editor"
+  zh-CN: "恢复普通编辑界面"
+file_view.choose_provider:
+  en: "Choose a file viewer from the file Tab context menu"
+  zh-CN: "请从文件标签的右键菜单选择显示插件"
 file_view.retry:
   en: "Retry"
   zh-CN: "重试"

@@ -25,6 +25,8 @@ mod installer_tests;
 #[cfg(test)]
 pub(crate) mod language_tests;
 #[cfg(test)]
+mod layout_tests;
+#[cfg(test)]
 pub(crate) mod lsp_tests;
 mod management;
 #[cfg(test)]

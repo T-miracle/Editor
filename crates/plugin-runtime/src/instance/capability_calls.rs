@@ -417,6 +417,29 @@ impl Instance {
                     .data()
                     .check_editor_toolbar_authority(&view.panel)?;
             }
+            if view.document.editor_layout {
+                if !api.capabilities.contains_key("editor.layout") {
+                    return Err(Failure::new(
+                        ErrorCode::CapabilityUnavailable,
+                        "editor.layout was not negotiated",
+                    )
+                    .into());
+                }
+                if self.store.data().roots.application
+                    || !self.store.data().permissions.contains("editor.read")
+                    || !self
+                        .store
+                        .data()
+                        .declared_layout_panels
+                        .contains(&view.panel)
+                {
+                    return Err(Failure::new(
+                        ErrorCode::PermissionDenied,
+                        "File layouts require editor.read",
+                    )
+                    .into());
+                }
+            }
             if view.document.editor_image_input {
                 self.store.data().check_image_input_authority(&view.panel)?;
             }

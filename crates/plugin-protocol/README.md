@@ -1,5 +1,9 @@
 # 插件 SDK
 
+文件身份与非文本预览通过 `editor.files ^1`／`ui.file_images ^1` 提供；
+中心组合布局与精确原生编辑引用通过 `editor.layout ^1` 提供，见 [UI.md](UI.md)。
+独立 `layout-example` 包展示原生编辑、插件内容、提供者选择与文本／图片恢复，使用宿主公开 SDK 构建。
+
 源码视口通知、双向语义定位、来源抑制和工作区同步偏好通过 `editor.viewport ^1` 提供，见 [VIEWPORT.md](VIEWPORT.md)。
 
 只读原生代码块的提供者高亮、授权、降级与资源生命周期见 [CODE_HIGHLIGHTING.md](CODE_HIGHLIGHTING.md)。

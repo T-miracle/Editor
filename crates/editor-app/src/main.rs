@@ -186,6 +186,8 @@ struct EditorApp {
     plugin_documents:
         std::collections::BTreeMap<String, plugin_runtime::plugin_protocol::api::DocumentVersion>,
     plugin_popup: Option<(PluginPopupKind, Point<Pixels>)>,
+    /// A native file context menu captures the opened identity before presenting provider choices.
+    file_view_menu: Option<Entity<ui::controls::menu::PopupMenu>>,
     /// An immutable summary boundary separates reminder confirmation from visible-record reading.
     plugin_popup_snapshot: Option<PluginPopupSnapshot>,
     dark_theme: bool,
@@ -386,6 +388,7 @@ impl EditorApp {
             plugin_saves: Default::default(),
             plugin_documents: Default::default(),
             plugin_popup: None,
+            file_view_menu: None,
             plugin_popup_snapshot: None,
             dark_theme: false,
             session_state,

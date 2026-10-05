@@ -12,7 +12,19 @@ use std::{
 mod tests;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(tag = "kind", content = "provider", rename_all = "snake_case")]
+pub(crate) enum FileProviderChoice {
+    /// Explicit native recovery leaves plugin preferences intact.
+    Native,
+    /// Stable package/panel identity, preserved through temporary failures and new installations.
+    Plugin(String),
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct SessionState {
+    /// This private workspace record namespaces choices by lowercase file type.
+    #[serde(default)]
+    pub file_view_providers: std::collections::BTreeMap<String, FileProviderChoice>,
     pub workspace: String,
     /// Host-local authority; repository files and project plugin overrides cannot change it.
     #[serde(default = "default_true")]
@@ -59,6 +71,7 @@ pub struct SessionState {
 impl SessionState {
     pub fn for_workspace(workspace: &Path) -> Self {
         Self {
+            file_view_providers: Default::default(),
             workspace: workspace.to_string_lossy().into_owned(),
             // Preserve the editor's existing trust default; users can restrict a workspace locally.
             workspace_trusted: true,

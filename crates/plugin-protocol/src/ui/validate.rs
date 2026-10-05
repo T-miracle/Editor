@@ -9,6 +9,9 @@ pub(super) fn document(document: &Document) -> Result<(), String> {
     if let Some(file) = &document.file {
         file.validate().map_err(|error| error.to_string())?;
     }
+    if document.editor_layout && document.source.is_none() && document.file.is_none() {
+        return Err("File layout requires a current source or file context".into());
+    }
     if document.editor_image_input && document.source.is_none() {
         return Err("Editor image input requires Document.source".into());
     }
@@ -36,8 +39,13 @@ pub(super) fn document(document: &Document) -> Result<(), String> {
         images: 0,
         has_source: document.source.is_some(),
         has_file: document.file.is_some(),
+        editor_source: document.source.clone(),
+        allow_editor: document.editor_layout,
+        editors: 0,
     };
     validator.node(&document.root, 0)?;
+    // Auxiliary surfaces never mount a second native input/IME target.
+    validator.allow_editor = false;
     if let Some(toolbar) = &document.editor_toolbar {
         if document.source.is_none() {
             return Err("Editor toolbar requires Document.source".into());
@@ -89,6 +97,10 @@ struct Validator {
     has_source: bool,
     /// Binary image nodes require an independent file-resource authority.
     has_file: bool,
+    /// Root-only native borrowing is exact and unique across the complete published tree.
+    editor_source: Option<crate::api::DocumentVersion>,
+    allow_editor: bool,
+    editors: usize,
 }
 impl Validator {
     fn budget(&mut self, count: usize) -> Result<(), String> {
@@ -172,6 +184,17 @@ impl Validator {
         dimension(layout.gap, 0., 256.)?;
         dimension(layout.padding, 0., 256.)?;
         match &node.kind {
+            Kind::NativeEditor { document } => {
+                self.editors += 1;
+                if !self.allow_editor
+                    || self.editors > 1
+                    || self.editor_source.as_ref() != Some(document)
+                {
+                    return Err(
+                        "Native editor must uniquely reference this layout's exact source".into(),
+                    );
+                }
+            }
             Kind::SideTabs(tabs) => {
                 if tabs.id != node.id {
                     return Err("Item list identity differs from its node".into());

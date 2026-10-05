@@ -14,6 +14,8 @@ mod events;
 #[cfg(test)]
 mod images_tests;
 #[cfg(test)]
+mod layout_tests;
+#[cfg(test)]
 mod tests;
 mod validate;
 
@@ -22,6 +24,10 @@ pub const VERSION: u32 = 1;
 /// Replace a panel's complete view atomically. Revision is echoed in user events.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Document {
+    /// The selected file provider owns this complete center tree. Requires `editor.layout`.
+    /// NativeEditor nodes borrow the existing source session; omitting them hides its input surface.
+    #[serde(default)]
+    pub editor_layout: bool,
     /// File-resource authority echoed by `editor.files`; no text session or mutable bytes implied.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub file: Option<crate::api::FileVersion>,
@@ -61,6 +67,7 @@ pub struct Document {
 impl Document {
     pub fn new(root: Node) -> Self {
         Self {
+            editor_layout: false,
             file: None,
             source: None,
             version: VERSION,
@@ -95,6 +102,29 @@ impl Document {
     /// Reject unsupported versions, duplicate identities and unbounded native workloads.
     pub fn validate(&self) -> Result<(), String> {
         validate::document(self)
+    }
+
+    /// Return the editor reference actually mounted in the active root, excluding disabled/inactive trees.
+    /// Validation separately requires exact source ownership and at most one reference in the full tree.
+    pub fn active_native_editor(&self) -> Option<&crate::api::DocumentVersion> {
+        fn active(node: &Node) -> Option<&crate::api::DocumentVersion> {
+            if node.disabled {
+                return None;
+            }
+            match &node.kind {
+                Kind::NativeEditor { document } => Some(document),
+                Kind::Column { children } | Kind::Row { children } => {
+                    children.iter().find_map(active)
+                }
+                Kind::Scroll { content } => active(content),
+                Kind::Tabs { tabs, selected } => tabs
+                    .iter()
+                    .find(|tab| tab.id == *selected)
+                    .and_then(|tab| active(&tab.content)),
+                _ => None,
+            }
+        }
+        self.editor_layout.then(|| active(&self.root)).flatten()
     }
 
     /// Find a live root/toolbar target, while dialogs and popups retain exclusive input ownership.
@@ -200,6 +230,11 @@ pub struct Layout {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum Kind {
+    /// Borrow the existing editor of this exact source version; never creates mutable document state.
+    /// Only one reference is permitted, in the root of a negotiated file layout.
+    NativeEditor {
+        document: crate::api::DocumentVersion,
+    },
     /// Display this context's file using controlled decoding. Requires `ui.file_images` and
     /// `workspace.read`; the guest chooses sizing, while the host performs native layout/painting.
     FileImage {
@@ -516,6 +551,7 @@ impl Node {
             return &self.role;
         }
         match &self.kind {
+            Kind::NativeEditor { .. } => "editor",
             Kind::SideTabs(_) => "tab_bar",
             Kind::Canvas(_) => "canvas",
             Kind::Column { .. } | Kind::Row { .. } => "container",

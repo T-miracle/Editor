@@ -35,6 +35,14 @@ use std::{
 };
 
 type EventSink = Rc<dyn Fn(UiEvent, &mut App)>;
+/// Host-only borrowing adapter; the public guest contract contains no GPUI entity or editable copy.
+pub(crate) type NativeEditorRenderer = Rc<
+    dyn Fn(
+        &plugin_runtime::plugin_protocol::api::DocumentVersion,
+        &mut Window,
+        &mut App,
+    ) -> Option<gpui_kit::AnyElement>,
+>;
 
 struct NativeInput {
     state: Entity<InputState>,
@@ -44,6 +52,7 @@ struct NativeInput {
 }
 
 pub(crate) struct PluginView {
+    pub(crate) native_editor: Option<NativeEditorRenderer>,
     plugin: String,
     document: Document,
     environment: Environment,
@@ -203,6 +212,7 @@ impl PluginView {
         })
         .detach();
         let mut this = Self {
+            native_editor: None,
             plugin,
             document,
             environment,

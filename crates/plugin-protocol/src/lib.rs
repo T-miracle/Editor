@@ -83,6 +83,9 @@ pub struct DataFormat {
 /// Dock and command contributions are data, not host-side feature branches.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Panel {
+    /// Editor-local auxiliary contributions may publish tools but cannot become a whole-layout provider.
+    #[serde(default)]
+    pub auxiliary: bool,
     pub id: String,
     pub title: String,
     pub position: String,
