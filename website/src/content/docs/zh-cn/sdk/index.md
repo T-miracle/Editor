@@ -30,6 +30,8 @@ alternate: /en/sdk/
 
 [运行会话](/zh-cn/sdk/sessions/)说明公开输入、展示、输出订阅与正常／强制停止；[调试会话](/zh-cn/sdk/debug/)说明暂停代次、真实检查及断点验证；[运行目标提供者](/zh-cn/sdk/targets/)贡献可移植绑定并受控准备产物。
 
+[配置模板](/zh-cn/sdk/configurations/)为本机配置草稿提供插件默认值、原生表单和校验。
+
 ## workspace.files 1.1 与 host.sdk 1.0
 
 `api::guest::find_files(&workspace, FileQuery { include, exclude, max_results })` 使用 `open_workspace` 返回的工作区根句柄，并在每次调用时重新检查 `workspace.files >=1.1` 与 `workspace.read`。私有数据、其他实例、已释放和已退役的句柄不能用于发现。应用作用域插件不拥有工作区根；调用不会跟随当前选中的其他工作区。

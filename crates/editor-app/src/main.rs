@@ -198,10 +198,18 @@ struct EditorApp {
     run_controls: run::RunControls,
     /// Local presentation state; all debug targets and inspection data remain in RunControls.
     debug_panel: run::ui::panel::DebugPanelState,
-    /// The B1 configuration draft stays alive while its same-window modal is open.
+    /// The configuration draft stays alive while its owned native dialog is open.
     run_form: Option<Entity<run::RunConfigForm>>,
-    /// Focus owner for B1's modal layer in the existing native window.
+    /// Public configuration requests retain origin identity across window and selection changes.
+    plugin_configuration_bridge: crate::run::ui::plugin_form::Bridge,
+    /// Retained content and focus for the configuration window, observing replacement drafts.
     run_dialog: Option<Entity<crate::run::ui::RunConfigModal>>,
+    /// The same native modal window kind used by plugin management; repeated opening activates it.
+    run_dialog_window: Option<WindowHandle<Root>>,
+    /// Coalesces opens deferred until the editor's update lease has ended.
+    run_dialog_opening: bool,
+    /// Unexpected native closure releases draft and popup state without affecting another window.
+    _run_dialog_closed_subscription: Option<Subscription>,
     /// Editor window handle, used to continue a close the user has confirmed.
     ///
     /// The platform reports an untyped handle, which is downcast only where the close continues.
@@ -287,12 +295,12 @@ impl EditorApp {
                 .placeholder(t!("editor.select_file").to_string())
         });
         let session_state = SessionState::load(workspace.root());
-        // Run configurations are host-local and read once, together with anything this project
-        // shares; a broken file is reported, never replaced.
+        // Plugin configurations are host-local per workspace; project settings do not supply run data.
+        // A malformed local store is reported rather than silently replaced.
         let run_controls = run::RunControls::load_with_project(
             &workspace.root().display().to_string(),
             editor_core::default_root(),
-            Some(workspace.root().to_path_buf()),
+            None,
         );
         let tree_state = cx.new(|cx| TreeState::new(cx));
         let tree_subscription = cx.subscribe(&tree_state, |this, _, event: &TreeEvent, cx| {
@@ -455,7 +463,11 @@ impl EditorApp {
             run_controls,
             debug_panel: run::ui::panel::DebugPanelState::new(cx),
             run_form: None,
+            plugin_configuration_bridge: Default::default(),
             run_dialog: None,
+            run_dialog_window: None,
+            run_dialog_opening: false,
+            _run_dialog_closed_subscription: None,
             main_window: None,
             leave_confirmed: false,
             leave_confirm: None,

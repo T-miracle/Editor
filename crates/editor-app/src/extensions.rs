@@ -31,6 +31,8 @@ mod management_tests;
 mod markdown_tests;
 #[cfg(test)]
 mod native_build_tests;
+#[cfg(test)]
+mod native_configuration_tests;
 mod native_controls;
 #[cfg(test)]
 mod native_discovery_tests;
@@ -71,6 +73,7 @@ use plugin_runtime::{
 use std::cell::RefCell;
 use std::collections::BTreeMap;
 pub(crate) use worker::DebugAnswerMessage;
+pub(crate) use worker::configurations::{ConfigurationCatalog, ConfigurationReply};
 pub(crate) use worker::targets::TargetCatalog;
 pub use worker::{HostRunSnapshot, RunStatus, Work as HostWork};
 use worker::{LifecycleAction, OperationProgress, Work, Worker};
@@ -811,7 +814,7 @@ impl ExtensionPanel {
     }
 }
 /// Convert current host palette into explicit plugin context.
-fn environment(workspace: &Path, cx: &App) -> protocol::Environment {
+pub(crate) fn environment(workspace: &Path, cx: &App) -> protocol::Environment {
     fn color(c: gpui_kit::Hsla) -> u32 {
         let c = gpui_kit::Rgba::from(c);
         // Round float channels back to their exact theme bytes before sending them to plugins.
@@ -999,7 +1002,34 @@ impl ExtensionPanel {
 
     /// Stage one host start for the plugin worker, reporting whether it could be queued.
     pub(crate) fn stage_host_run(&self, work: HostWork) -> bool {
-        self.worker.tx.send(work).is_ok()
+        match self.worker.tx.send(work) {
+            Ok(()) => true,
+            Err(error) => {
+                // A stopped actor terminates configuration waits rather than leaving Save spinning.
+                let mut state = self.worker.state.lock().unwrap();
+                let reason = t!("run.plugin_worker_unavailable").to_string();
+                match error.0 {
+                    Work::ConfigurationCall { request, .. } => {
+                        state.configuration_replies.push(ConfigurationReply {
+                            request,
+                            result: Err(reason),
+                        })
+                    }
+                    Work::ConfigurationCatalog { request, .. } => {
+                        state.configuration_catalogs.push((
+                            request,
+                            ConfigurationCatalog {
+                                templates: vec![],
+                                failures: [("runtime".into(), reason)].into(),
+                            },
+                        ))
+                    }
+                    _ => return false,
+                }
+                state.configuration_revision += 1;
+                false
+            }
+        }
     }
 
     /// Ask the runtime which run execution providers it has; the answer arrives with the next pump.
@@ -1132,6 +1162,17 @@ impl ExtensionPanel {
         &self,
     ) -> Vec<(String, u64, Result<worker::targets::TargetCatalog, String>)> {
         std::mem::take(&mut self.worker.state.lock().unwrap().target_discoveries)
+    }
+
+    /// Drain immutable configuration receipts; each consumer retains its own original request identity.
+    pub(crate) fn take_configuration_replies(
+        &self,
+    ) -> (Vec<(u64, ConfigurationCatalog)>, Vec<ConfigurationReply>) {
+        let mut published = self.worker.state.lock().unwrap();
+        (
+            std::mem::take(&mut published.configuration_catalogs),
+            std::mem::take(&mut published.configuration_replies),
+        )
     }
 
     /// Published host sessions, start refusals and stop answers reported by the worker.

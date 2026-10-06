@@ -378,6 +378,10 @@ impl PluginView {
             Kind::Button { label } => self
                 .font(
                     Button::new(native_id.clone())
+                        .debug_selector({
+                            let control = format!("plugin-button-{}", node.id);
+                            move || control.clone()
+                        })
                         .label(label.clone())
                         .when_some(node.tooltip.clone(), |button, tooltip| {
                             button.accessibility_label(tooltip.clone()).tooltip(tooltip)

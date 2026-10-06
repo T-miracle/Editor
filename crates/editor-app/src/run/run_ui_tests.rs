@@ -2,9 +2,11 @@
 //!
 //! These checks read the rendered widget tree: the group's position relative to the plugin icon, its
 //! separating rule, which controls are present, and that the configuration dialog exposes the
-//! approved B1 structure.
+//! approved simplified configuration structure.
 #![cfg(windows)]
 mod modal;
+mod selector;
+mod simplified;
 use crate::ui::controls::DialogContent;
 use crate::*;
 use gpui_kit::test::TestWindowExt as _;
@@ -69,6 +71,27 @@ fn open_editor<'a>(
     (app, cx)
 }
 
+/// Exercise the real configuration HWND, rather than searching for an overlay in the editor window.
+fn use_run_dialog(cx: &mut gpui_kit::VisualTestContext, app: &Entity<EditorApp>) {
+    cx.run_until_parked();
+    let handle = cx.cx.update(|cx| {
+        app.read(cx)
+            .run_dialog_window
+            .expect("native configuration window")
+    });
+    *cx = gpui_kit::VisualTestContext::from_window(handle.into(), &cx.cx);
+    cx.run_until_parked();
+}
+
+/// After a native close, assertions and further commands return to the surviving parent window.
+fn use_live_window(cx: &mut gpui_kit::VisualTestContext) {
+    use gpui_kit::VisualContext as _;
+    let windows = cx.cx.windows();
+    if !windows.contains(&cx.window_handle()) {
+        *cx = gpui_kit::VisualTestContext::from_window(windows[0], &cx.cx);
+    }
+}
+
 /// Chinese composition reaches a dialog field, marks the preedit and commits it as the stored text.
 ///
 /// Ticket 04 asks for Chinese IME to be accepted. The composition protocol is delivered to the
@@ -97,8 +120,12 @@ fn chinese_composition_enters_the_configuration_fields(cx: &mut TestAppContext) 
         let key = owner.read(cx).workspace_key();
         let controls = crate::run::RunControls::default();
         let form = cx.new(|cx| crate::run::RunConfigForm::open(&controls, &key, None, window, cx));
-        let content =
-            crate::run::ui::render_run_config_form(&owner.downgrade(), DialogContent::new(), cx);
+        let content = crate::run::ui::render_run_config_form(
+            &owner.downgrade(),
+            DialogContent::new(),
+            window,
+            cx,
+        );
         let holder = cx.new(|_| FormHolder {
             form,
             content: Some(content),
@@ -233,8 +260,8 @@ fn the_run_surface_answers_dismissal_and_the_theme_toggle(cx: &mut TestAppContex
         "the theme toggle changes the active theme rather than being a no-op"
     );
 
-    // And the run surface still opens and renders its pages in the theme now active.
-    let pages = cx.update(|window, cx| {
+    // Every retained field remains available after changing the surrounding native theme.
+    let fields = cx.update(|window, cx| {
         let key = app.read(cx).workspace_key();
         let form = cx.new(|cx| {
             crate::run::RunConfigForm::open(
@@ -245,20 +272,12 @@ fn the_run_surface_answers_dismissal_and_the_theme_toggle(cx: &mut TestAppContex
                 cx,
             )
         });
-        form.read(cx)
-            .tab_labels()
-            .into_iter()
-            .map(|(label, available)| (label.to_owned(), available))
-            .collect::<Vec<_>>()
+        form.read(cx).field_labels()
     });
     assert_eq!(
-        pages.len(),
-        4,
-        "the configuration dialog still renders its pages after the theme change"
-    );
-    assert!(
-        pages.iter().all(|(_, available)| *available),
-        "and every page is available: {pages:?}"
+        fields.len(),
+        10,
+        "the configuration dialog retains its fields after the theme change"
     );
 
     let _ = std::fs::remove_file(stored);
@@ -654,12 +673,9 @@ fn the_dialog_chooses_a_save_destination(cx: &mut TestAppContext) {
     assert!(!chosen, "the chosen destination is what the save stores");
 }
 
-/// The B1 configuration dialog is a native modal whose draft follows the approved structure.
-///
-/// The dialog paints in its own window, so this check reads the state that window renders from
-/// rather than asserting widget bounds the test harness cannot observe there.
+/// Collapsing the simplified form does not remove any configuration field from its native draft.
 #[gpui::test]
-fn the_run_configuration_dialog_owns_a_b1_draft(cx: &mut TestAppContext) {
+fn the_run_configuration_dialog_retains_all_configuration_fields(cx: &mut TestAppContext) {
     let root = tempfile::tempdir().unwrap();
     let workspace = root.path().join("project");
     std::fs::create_dir_all(&workspace).unwrap();
@@ -678,27 +694,6 @@ fn the_run_configuration_dialog_owns_a_b1_draft(cx: &mut TestAppContext) {
             )
         })
     });
-    // All four retained pages are available, with labels from the active UI locale.
-    let tabs = cx.update(|window, cx| {
-        let _ = window;
-        form.read(cx)
-            .tab_labels()
-            .into_iter()
-            .map(|(label, available)| (label.to_owned(), available))
-            .collect::<Vec<_>>()
-    });
-    assert_eq!(
-        tabs,
-        vec![
-            (t!("run.form_basic").to_string(), true),
-            // The build page edits the same stored configuration, so this slice implements it.
-            (t!("run.form_build").to_string(), true),
-            // The debug page chooses the execution provider for this configuration.
-            (t!("run.form_debug").to_string(), true),
-            // The environment page edits the same stored configuration, so this slice implements it.
-            (t!("run.form_environment").to_string(), true),
-        ]
-    );
     // One field per setting, with arguments, environment entries and tool directories each kept
     // one per line.
     let fields = cx.update(|window, cx| {
@@ -719,11 +714,10 @@ fn the_run_configuration_dialog_owns_a_b1_draft(cx: &mut TestAppContext) {
             t!("run.field_prelaunch").to_string(),
             t!("run.field_breakpoints").to_string()
         ]
-    ); // A new draft starts empty, on the basic page, with nothing to report yet.
+    ); // A new draft starts empty, with nothing to report yet.
     cx.update(|window, cx| {
         let _ = window;
         let form = form.read(cx);
-        assert_eq!(form.tab(), crate::run::ui::RunConfigTab::Basic);
         assert!(form.draft().name.is_empty() && form.draft().program.is_empty());
         assert!(form.error().is_none());
     });

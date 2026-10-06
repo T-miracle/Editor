@@ -1,0 +1,17 @@
+[package]
+name = "configuration-example-guest"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.95"
+license = "MIT"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+# Only the editor's distributed SDK is injected by the public --plugin-cargo entry.
+plugin-protocol = { version = "=0.2.0", features = ["guest"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+
+[workspace]

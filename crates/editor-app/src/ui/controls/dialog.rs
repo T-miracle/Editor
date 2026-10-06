@@ -6,69 +6,36 @@ use gpui_kit::{
     AnyElement, App, IntoElement, ParentElement, RenderOnce, StyleRefinement, Styled, Window,
 };
 
-/// Local modal chrome over gpui-base's focus trap, Escape/Enter and backdrop handling.
+/// Native dialog body over gpui-base's focus trap and Escape/Enter handling.
 ///
-/// The content stays in the owning HWND so closing an input does not retire a native window
-/// while Windows IME or accessibility clients still refer to its fields. Width/height shrink
-/// with the viewport; callers supply a scrollable body and veto confirmation on validation errors.
-pub(crate) fn modal(
+/// AppDialog owns the title bar and native HWND; this surface fills only its body, leaving window
+/// dragging and close controls reachable. Callers own staged edits and may veto dismissal/save.
+pub(crate) fn native_modal(
     focus: gpui_kit::FocusHandle,
-    title: String,
     content: AnyElement,
-    cancel: impl Fn(&mut Window, &mut App) + 'static,
+    cancel: impl Fn(&mut Window, &mut App) -> bool + 'static,
     confirm: impl Fn(&mut Window, &mut App) -> bool + 'static,
     window: &mut Window,
     cx: &mut App,
 ) -> AnyElement {
     use gpui_kit::{div, px};
-    let cancel = std::rc::Rc::new(cancel);
-    let dismiss = cancel.clone();
     let viewport = window.viewport_size();
-    // B1's proportions fit its compact form; only the body scrolls as the viewport shrinks.
-    let width = px(640.).min((viewport.width - px(24.)).max(px(0.)));
-    let height = px(520.).min((viewport.height - px(48.)).max(px(0.)));
+    let title_height = px(crate::PANEL_HEADER_HEIGHT);
     gpui_base::Dialog::new(cx)
         .focus_handle(focus)
         .close_on_backdrop_press(false)
-        .on_cancel(move |_, window, cx| {
-            cancel(window, cx);
-            true
-        })
+        .on_cancel(move |_, window, cx| cancel(window, cx))
         .on_ok(move |_, window, cx| confirm(window, cx))
-        .backdrop(div().absolute().inset_0().bg(gpui_kit::rgba(0x00000055)))
+        // Base Dialog's deferred host starts at the viewport origin; reserve AppDialog's title bar.
+        .top(title_height)
+        .h((viewport.height - title_height).max(px(0.)))
         .popup(
             gpui_base::DialogPopup::new()
-                .w(width)
-                .h(height)
+                .size_full()
                 .flex()
                 .flex_col()
-                .rounded(cx.theme().radius_lg)
                 .bg(cx.theme().tokens.background)
                 .text_color(cx.theme().foreground)
-                .border_1()
-                .border_color(cx.theme().border)
-                .shadow_lg()
-                .child(
-                    div()
-                        .flex()
-                        .items_center()
-                        .h(px(40.))
-                        .flex_shrink_0()
-                        .px_3()
-                        .border_b_1()
-                        .border_color(cx.theme().border)
-                        .child(div().flex_1().font_semibold().child(title))
-                        .child(
-                            super::Button::new("run-form-close")
-                                .small()
-                                .compact()
-                                .ghost()
-                                .icon(gpui_kit::component::IconName::Close)
-                                .accessibility_label(rust_i18n::t!("run.form_cancel"))
-                                .tooltip(rust_i18n::t!("run.form_cancel"))
-                                .on_click(move |_, window, cx| dismiss(window, cx)),
-                        ),
-                )
                 .child(
                     div()
                         .flex()
@@ -117,6 +84,8 @@ impl RenderOnce for DialogContent {
             .flex_col()
             .w_full()
             .flex_1()
+            // Expanded content must shrink into the popup so its own scroller, not the footer, grows.
+            .min_h_0()
             .rounded(cx.theme().radius_lg)
             .children(self.children)
             .refine_style(&self.style)

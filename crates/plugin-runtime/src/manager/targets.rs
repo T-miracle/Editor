@@ -85,6 +85,34 @@ impl Drop for TargetRequest {
     }
 }
 impl Manager {
+    /// Validate any embedded native document against the actual provider's negotiated public capabilities.
+    /// This generic admission gate is reusable by host-owned surfaces and never grants additional access.
+    pub fn validate_native_document(
+        &self,
+        provider: &str,
+        document: &plugin_protocol::ui::Document,
+    ) -> anyhow::Result<()> {
+        anyhow::ensure!(
+            self.live.contains_key(provider),
+            "Native UI provider is unavailable"
+        );
+        let entry = self
+            .installed
+            .get(provider)
+            .ok_or_else(|| anyhow::anyhow!("Unknown native UI provider"))?;
+        let negotiated = crate::capabilities::negotiate(&entry.manifest)?;
+        document.validate().map_err(anyhow::Error::msg)?;
+        for (name, version) in document.required_capabilities() {
+            anyhow::ensure!(
+                negotiated
+                    .capabilities
+                    .get(name)
+                    .is_some_and(|actual| *actual >= version),
+                "{name} was not negotiated for the native document"
+            );
+        }
+        Ok(())
+    }
     /// List compatible live contributors without selecting a default or starting project tools.
     pub fn target_providers(&self) -> Vec<String> {
         let contract = targets::declaration();
@@ -125,7 +153,75 @@ impl Manager {
             matches!(method, "discover" | "prepare"),
             "Unknown target method"
         );
-        let contract = targets::declaration();
+        self.begin_configuration_service(
+            provider,
+            targets::CONTRACT,
+            targets::declaration(),
+            method,
+            arguments,
+        )
+    }
+
+    /// All compatible live plugins can supply command templates, forms and validation.
+    pub fn configuration_providers(&self) -> Vec<String> {
+        let contract = plugin_protocol::configurations::declaration();
+        let dependency = Dependency {
+            version: ">=1.0,<2".parse().unwrap(),
+            optional: false,
+            methods: contract.methods,
+        };
+        self.live
+            .keys()
+            .filter(|id| {
+                self.installed
+                    .get(*id)
+                    .and_then(|entry| {
+                        entry
+                            .manifest
+                            .plugin_services
+                            .provides
+                            .get(plugin_protocol::configurations::CONTRACT)
+                    })
+                    .is_some_and(|contract| dependency.matches(contract))
+            })
+            .cloned()
+            .collect()
+    }
+
+    /// Pin one configuration call to its original live instance and workspace with bounded resources.
+    /// Permission or schema failures are returned before any guest callback or native process starts.
+    pub fn begin_configuration_call(
+        &mut self,
+        provider: &str,
+        method: &str,
+        arguments: Value,
+    ) -> anyhow::Result<TargetRequest> {
+        self.begin_configuration_service(
+            provider,
+            plugin_protocol::configurations::CONTRACT,
+            plugin_protocol::configurations::declaration(),
+            method,
+            arguments,
+        )
+    }
+
+    /// Existing target and configuration consumers share instance pinning and native cleanup roots.
+    fn begin_configuration_service(
+        &mut self,
+        provider: &str,
+        name: &str,
+        contract: plugin_protocol::service::Contract,
+        method: &str,
+        arguments: Value,
+    ) -> anyhow::Result<TargetRequest> {
+        anyhow::ensure!(
+            self.trusted && self.workspace_open,
+            "Restricted/closed workspace cannot configure targets"
+        );
+        anyhow::ensure!(
+            contract.methods.contains_key(method),
+            "Unknown configuration method"
+        );
         let dependency = Dependency {
             version: ">=1.0,<2".parse().unwrap(),
             optional: false,
@@ -144,7 +240,7 @@ impl Manager {
             .plugin_services
             .lock()
             .unwrap()
-            .resolve_pinned(&caller, targets::CONTRACT, &dependency, &instance)
+            .resolve_pinned(&caller, name, &dependency, &instance)
             .map_err(start_failure)?;
         let alive = Arc::new(AtomicBool::new(true));
         let native = Arc::new(std::sync::Mutex::new(

@@ -2,6 +2,7 @@
 use plugin_runtime::{Installed, Manager, Package, plugin_protocol::*};
 #[cfg(test)]
 mod bundled_tests;
+pub(super) mod configurations;
 mod preparation;
 mod runner;
 pub(super) mod targets;
@@ -57,6 +58,22 @@ impl RunStatus {
 }
 
 pub enum Work {
+    /// Public template discovery never creates a user configuration or starts its target.
+    ConfigurationCatalog {
+        request: u64,
+        arguments: serde_json::Value,
+    },
+    /// Explicit provider and host request identity are immutable across native window selection changes.
+    ConfigurationCall {
+        request: u64,
+        provider: String,
+        method: String,
+        arguments: serde_json::Value,
+    },
+    /// Closing a window cancels only its own pending configuration calls.
+    CancelConfigurations {
+        requests: Vec<u64>,
+    },
     /// Explicit target contributors prepare their own projects; the worker never interprets tool output.
     PrepareTarget {
         config: String,
@@ -357,6 +374,8 @@ pub(super) struct Published {
     pub target_snapshots: BTreeMap<u64, (String, usize, plugin_runtime::PreparationSnapshot)>,
     /// Every discovery publication carries workspace and nonce for late-result rejection.
     pub target_discoveries: Vec<(String, u64, Result<targets::TargetCatalog, String>)>,
+    pub configuration_catalogs: Vec<(u64, configurations::ConfigurationCatalog)>,
+    pub configuration_replies: Vec<configurations::ConfigurationReply>,
     pub startup: BTreeMap<String, String>,
     pub views: BTreeMap<String, Arc<ui::Document>>,
     /// Each scene's full-color image operations are ready before the UI observes that scene.
@@ -466,6 +485,10 @@ pub(super) struct Worker {
     image_offers: Arc<std::sync::atomic::AtomicUsize>,
     #[cfg(test)]
     pub recorded: Mutex<mpsc::Receiver<Work>>,
+    /// Test transport retains actual public completions just as the production actor does.
+    /// A pending reply must never be reported as an unknown terminal state.
+    #[cfg(test)]
+    pub run_queries: Mutex<BTreeMap<(String, u64), plugin_runtime::Completion<serde_json::Value>>>,
 }
 
 /// Queue ownership is released on rejection, worker shutdown or completion of native-to-manager transfer.
@@ -591,6 +614,7 @@ impl Worker {
             trusted: Arc::new(std::sync::atomic::AtomicBool::new(trusted)),
             image_offers: Default::default(),
             recorded: Mutex::new(rx),
+            run_queries: Default::default(),
         }
     }
     #[cfg(not(test))]

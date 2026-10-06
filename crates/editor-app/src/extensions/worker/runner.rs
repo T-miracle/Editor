@@ -54,6 +54,7 @@ impl Worker {
             let mut run_locations =
                 BTreeMap::<(u64, u64), plugin_runtime::Completion<serde_json::Value>>::new();
             let mut target_calls = super::targets::TargetCalls::default();
+            let mut configuration_calls = super::configurations::ConfigurationCalls::default();
             loop {
                 // Target calls use their own bounded roots and never block the actor on build output.
                 // Only the candidate travels between threads. Cutover remains serialized with live dispatch.
@@ -186,6 +187,14 @@ impl Worker {
                             | Work::DiscoverTargets { .. }),
                         ) => {
                             target_calls.dispatch(work, &mut manager, &output);
+                            Ok(())
+                        }
+                        Some(
+                            work @ (Work::ConfigurationCatalog { .. }
+                            | Work::ConfigurationCall { .. }
+                            | Work::CancelConfigurations { .. }),
+                        ) => {
+                            configuration_calls.dispatch(work, &mut manager, &output);
                             Ok(())
                         }
                         // A debug call is answered by the provider and published as what it said,
@@ -615,6 +624,7 @@ impl Worker {
                 }
                 manager.poll();
                 target_calls.poll(&manager, &output);
+                configuration_calls.poll(&manager, &output);
                 debug_requests.retain(|request, (method, pending)| {
                     let result = match pending.status() {
                         api::RequestUpdate::Accepted | api::RequestUpdate::Progress { .. } => {
@@ -929,6 +939,8 @@ impl Worker {
             image_offers: Default::default(),
             #[cfg(test)]
             recorded: Mutex::new(mpsc::channel().1),
+            #[cfg(test)]
+            run_queries: Default::default(),
         }
     }
 }

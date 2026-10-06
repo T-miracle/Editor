@@ -1,0 +1,150 @@
+{
+  "id": "configuration-example",
+  "name": "Independent configuration example",
+  "version": "0.1.0",
+  "protocol": 7,
+  "api": {
+    "base": "^1",
+    "required": {
+      "plugin.services": ">=1.1,<2",
+      "ui.native": "^1",
+      "ui.panels": "^1"
+    }
+  },
+  "component": "configuration-example.wasm",
+  "permissions": [
+    "workspace.read",
+    "ui.panels",
+    "process.exec"
+  ],
+  "storage_limit": 1024,
+  "plugin_services": {
+    "provides": {
+      "run.configurations": {
+        "version": "1.0.0",
+        "methods": {
+          "catalog": {
+            "parameters": {
+              "type": "record",
+              "fields": {
+                "workspace": {
+                  "type": "string",
+                  "max_bytes": 4096
+                },
+                "locale": {
+                  "type": "string",
+                  "max_bytes": 64
+                },
+                "os": {
+                  "type": "string",
+                  "max_bytes": 64
+                }
+              }
+            },
+            "result": {
+              "type": "record",
+              "fields": {
+                "payload": {
+                  "type": "string",
+                  "max_bytes": 65536
+                }
+              }
+            },
+            "permissions": [
+              "workspace.read",
+              "process.exec"
+            ]
+          },
+          "form": {
+            "parameters": {
+              "type": "record",
+              "fields": {
+                "workspace": {
+                  "type": "string",
+                  "max_bytes": 4096
+                },
+                "locale": {
+                  "type": "string",
+                  "max_bytes": 64
+                },
+                "os": {
+                  "type": "string",
+                  "max_bytes": 64
+                },
+                "template": {
+                  "type": "string",
+                  "max_bytes": 256
+                },
+                "values": {
+                  "type": "string",
+                  "max_bytes": 16384
+                },
+                "event": {
+                  "type": "string",
+                  "max_bytes": 65536
+                }
+              }
+            },
+            "result": {
+              "type": "record",
+              "fields": {
+                "payload": {
+                  "type": "string",
+                  "max_bytes": 65536
+                }
+              }
+            },
+            "permissions": [
+              "workspace.read",
+              "ui.panels"
+            ]
+          },
+          "validate": {
+            "parameters": {
+              "type": "record",
+              "fields": {
+                "workspace": {
+                  "type": "string",
+                  "max_bytes": 4096
+                },
+                "locale": {
+                  "type": "string",
+                  "max_bytes": 64
+                },
+                "os": {
+                  "type": "string",
+                  "max_bytes": 64
+                },
+                "template": {
+                  "type": "string",
+                  "max_bytes": 256
+                },
+                "values": {
+                  "type": "string",
+                  "max_bytes": 16384
+                },
+                "intent": {
+                  "type": "string",
+                  "max_bytes": 64
+                }
+              }
+            },
+            "result": {
+              "type": "record",
+              "fields": {
+                "payload": {
+                  "type": "string",
+                  "max_bytes": 65536
+                }
+              }
+            },
+            "permissions": [
+              "workspace.read",
+              "process.exec"
+            ]
+          }
+        }
+      }
+    }
+  }
+}

@@ -322,6 +322,7 @@ pub(super) fn pump_recording_and_debug(
         launches,
         debug,
         &mut super::worker::targets::TargetCalls::default(),
+        &mut super::worker::configurations::ConfigurationCalls::default(),
     )
 }
 
@@ -333,6 +334,7 @@ pub(super) fn pump_recording_all(
     launches: &mut Vec<(u64, String, u64)>,
     debug: &mut BTreeMap<u64, (String, plugin_runtime::DebugRequest)>,
     targets: &mut super::worker::targets::TargetCalls,
+    configurations: &mut super::worker::configurations::ConfigurationCalls,
 ) -> (
     Vec<(String, u64, super::RunStatus)>,
     Vec<(String, u64, Result<(), String>)>,
@@ -366,6 +368,20 @@ pub(super) fn pump_recording_all(
         .filter_map(|work| targets.dispatch(work, manager, &published))
         .collect();
     targets.poll(manager, &published);
+    // Mirror the production actor for actual configuration packages, retaining their deferred requests.
+    work = work
+        .into_iter()
+        .filter_map(|work| match work {
+            Work::ConfigurationCatalog { .. }
+            | Work::ConfigurationCall { .. }
+            | Work::CancelConfigurations { .. } => {
+                configurations.dispatch(work, manager, &published);
+                None
+            }
+            other => Some(other),
+        })
+        .collect();
+    configurations.poll(manager, &published);
     let mut statuses: Vec<(String, u64, super::RunStatus)> = Vec::new();
     work.retain(|item| {
         let Work::ForceDebug { session, request } = item else {
@@ -489,28 +505,46 @@ pub(super) fn pump_recording_all(
         }
         _ => true,
     });
-    work.retain(|item| match item {
-        Work::PollRun {
-            session,
-            config,
-            request_id,
-        } => {
-            let status = match manager.query_execution(*session) {
-                Ok(completion) => {
-                    manager.poll_request(&completion);
-                    match completion.status() {
-                        protocol::api::RequestUpdate::Completed { result: Ok(value) } => {
-                            super::RunStatus::from_value(&value)
-                        }
-                        _ => super::RunStatus::Unknown,
+    cx.update(|_, cx| {
+        let mut pending = app
+            .read(cx)
+            .extensions
+            .read(cx)
+            .worker
+            .run_queries
+            .lock()
+            .unwrap();
+        work.retain(|item| match item {
+            Work::PollRun {
+                session,
+                config,
+                request_id,
+            } => {
+                match manager.query_execution(*session) {
+                    Ok(completion) => {
+                        pending.insert((config.clone(), *request_id), completion);
+                    }
+                    Err(_) => {
+                        statuses.push((config.clone(), *request_id, super::RunStatus::Unknown))
                     }
                 }
-                Err(_) => super::RunStatus::Unknown,
+                false
+            }
+            _ => true,
+        });
+        // Pending is a lifecycle state. Only a real terminal receipt can finish the sequence.
+        pending.retain(|(config, request), completion| {
+            manager.poll_request(completion);
+            let status = match completion.status() {
+                protocol::api::RequestUpdate::Completed { result: Ok(value) } => {
+                    super::RunStatus::from_value(&value)
+                }
+                status if status.is_terminal() => super::RunStatus::Unknown,
+                _ => return true,
             };
-            statuses.push((config.clone(), *request_id, status));
+            statuses.push((config.clone(), *request, status));
             false
-        }
-        _ => true,
+        });
     });
     let _ = &mut statuses;
     work.retain(|item| match item {

@@ -1,4 +1,4 @@
-//! Real packages, native B1 confirmation, exact artifacts and explicit target repair.
+//! Real packages, native staged target selection and save, exact artifacts and explicit repair.
 #![cfg(windows)]
 use super::composable_tests::{publish_frame, publish_with_launches, pump_recording_all};
 use super::*;
@@ -15,6 +15,7 @@ struct Driver {
     launches: Vec<(u64, String, u64)>,
     debug: BTreeMap<u64, (String, plugin_runtime::DebugRequest)>,
     targets: super::worker::targets::TargetCalls,
+    configurations: super::worker::configurations::ConfigurationCalls,
 }
 impl Driver {
     fn frame(
@@ -31,6 +32,7 @@ impl Driver {
             &mut self.launches,
             &mut self.debug,
             &mut self.targets,
+            &mut self.configurations,
         );
         publish_frame(
             manager,
@@ -133,17 +135,18 @@ fn editor_for<'a>(
     publish_with_launches(&mut manager, &mut renderer, &app, cx, &[]);
     (manager, app, cx)
 }
-/// The production B1 renderer is observed and repainted after asynchronous catalog/input changes.
+/// The production simplified renderer repaints after asynchronous catalog and native input changes.
 struct FormWindow {
     owner: Entity<EditorApp>,
     _observe: Subscription,
 }
 impl Render for FormWindow {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         if self.owner.read(cx).run_form.is_some() {
             crate::run::ui::render_run_config_form(
                 &self.owner.downgrade(),
                 crate::ui::controls::DialogContent::new(),
+                window,
                 cx,
             )
             .into_any_element()
@@ -248,15 +251,32 @@ fn a_real_rust_project_is_discovered_built_and_run(cx: &mut TestAppContext) {
     let selector = Box::leak(format!("run-config-target-{}", target.id).into_boxed_str());
     click(cx, selector);
 
-    let stored = cx.update(|_, cx| app.read(cx).run_controls.selected().unwrap().id.clone());
+    let stored = cx.update(|_, cx| {
+        assert!(
+            app.read(cx).run_controls.configurations().is_empty(),
+            "a plugin choice is only a draft until Save"
+        );
+        app.read(cx)
+            .run_form
+            .as_ref()
+            .unwrap()
+            .read(cx)
+            .draft()
+            .id
+            .clone()
+    });
     edit(cx, "run-config-name", "用户保留的名称");
+    click(cx, "run-config-arguments-edit");
     edit(
         cx,
         "run-config-arguments",
         "literal space\nquote\"value\n中文;&|",
     );
-    click(cx, "run-config-tab-3");
+    click(cx, "run-config-detail-done");
+    click(cx, "run-config-more");
+    click(cx, "run-config-environment-edit");
     edit(cx, "run-config-environment", "RUN_ENV=本机环境");
+    click(cx, "run-config-detail-done");
     click(cx, "run-config-save");
     let config = cx.update(|_, cx| {
         app.read(cx)
@@ -326,7 +346,7 @@ fn a_real_rust_project_is_discovered_built_and_run(cx: &mut TestAppContext) {
     manager.shutdown();
 }
 
-/// Rename/repair preserves edits, and a different installed provider/type is confirmed through B1.
+/// Rename/repair preserves edits; an independent plugin's defaults are staged and explicitly saved.
 #[gpui::test]
 #[ignore = "build terminal, rust and run-target-example through the current public SDK first"]
 fn a_discovered_project_is_confirmed_built_run_and_offered_for_debugging(cx: &mut TestAppContext) {
@@ -421,6 +441,11 @@ fn a_discovered_project_is_confirmed_built_run_and_offered_for_debugging(cx: &mu
     let cx = form_window(cx, &app);
     let selector = Box::leak(format!("run-config-target-{}", independent.id).into_boxed_str());
     click(cx, selector);
+    assert_eq!(
+        cx.update(|_, cx| app.read(cx).run_controls.configurations().len()),
+        count
+    );
+    click(cx, "run-config-save");
     assert!(cx.update(|_,cx|matches!(app.read(cx).run_controls.selected().unwrap().target,editor_core::RunTarget::Program {ref program,..} if program=="powershell.exe")));
     assert_eq!(
         cx.update(|_, cx| app.read(cx).run_controls.configurations().len()),

@@ -6,6 +6,15 @@ use std::process::Command;
 use std::{borrow::Cow, io::Write};
 
 const SDK_FILES: &[(&str, &[u8])] = &[
+    (
+        "CONFIGURATIONS.md",
+        include_bytes!("../../../website/src/content/docs/en/sdk/configurations.md"),
+    ),
+    // Public configuration providers receive the identical template, native form and validation types.
+    (
+        "src/configurations.rs",
+        include_bytes!("../../plugin-protocol/src/configurations.rs"),
+    ),
     // Reader-facing English is the canonical documentation exported with the identical public SDK.
     (
         "DEBUG.md",
@@ -279,6 +288,7 @@ fn exported_bytes<'a>(relative: &str, bytes: &'a [u8]) -> Cow<'a, [u8]> {
             .to_owned();
     }
     for (route, file) in [
+        ("configurations", "CONFIGURATIONS.md"),
         ("debug", "DEBUG.md"),
         ("targets", "TARGETS.md"),
         ("sessions", "SESSIONS.md"),

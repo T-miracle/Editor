@@ -33,10 +33,10 @@ pub struct DiscoveryOutcome {
 
 /// Build the configuration a discovered target describes.
 ///
-/// The result is an ordinary configuration: the user can edit every part of it, and nothing in it
-/// points back at the plugin except the target it came from. A provider that reports a build program
-/// gets a build action; one that does not gets none, so Build stays honestly unavailable rather than
-/// running a command the provider never described.
+/// Names, arguments and manual actions remain user-editable defaults. A provider binding and its
+/// required preparation remain opaque data resolved by that plugin, rather than executable paths.
+/// An opaque binding gets its preparation action. A manual target gets a build action only when
+/// the plugin reports a build program; missing commands are never inferred by the host.
 pub fn configuration_for(target: &DiscoveredTarget, id: String, name: String) -> RunConfig {
     let program = arguments(&target.fields, PROGRAM_ARGS_FIELD);
     let build = build_steps(target);

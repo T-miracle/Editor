@@ -232,6 +232,10 @@ impl Render for PopupMenu {
                 )
                 .debug_selector(move || debug.clone())
                 .disabled(item.disabled)
+                // Non-actionable placeholders stay readable in both themes without looking enabled.
+                .when(item.disabled, |row| {
+                    row.text_color(cx.theme().muted_foreground)
+                })
                 .when(item.separator_before, |row| {
                     row.border_t_1().border_color(self.style.border)
                 })

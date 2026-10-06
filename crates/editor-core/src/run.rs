@@ -21,8 +21,10 @@ pub use breakpoints::{
     BreakpointError, MAX_BREAKPOINT_SOURCE_BYTES, MAX_RUN_BREAKPOINTS, RunBreakpoint,
     RunBreakpoints,
 };
+mod plugin_configurations;
 mod store;
 pub use discovery::{DiscoveryOutcome, configuration_for, reconcile, repair};
+pub use plugin_configurations::{ConfigurationValidation, PluginConfiguration};
 pub use shared::{
     SHARED_CONFIG_VERSION, SharedConfig, SharedSet, SharedStoreError, WORKSPACE_TOKEN, merge,
     project_path,
@@ -233,7 +235,8 @@ impl RunStep {
     ///
     /// A reference is checked for shape only: whether it resolves is a property of the whole set,
     /// which one configuration cannot answer about itself.
-    fn validate(&self) -> Result<(), RunConfigError> {
+    /// Returns the same field error used by configuration validation, for native detail editors.
+    pub fn validate(&self) -> Result<(), RunConfigError> {
         if self.name.trim().is_empty() {
             return Err(RunConfigError::EmptyStepName);
         }
@@ -526,6 +529,9 @@ pub enum RunConfigReadiness {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct RunConfigSet {
+    /// Opaque plugin values are authoritative; configurations retain bounded executable projections.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub plugin_configurations: BTreeMap<String, PluginConfiguration>,
     /// Format of this set; only this module decides which versions are writable.
     #[serde(default = "current_version")]
     version: u32,
@@ -546,6 +552,7 @@ impl Default for RunConfigSet {
         Self {
             version: RUN_CONFIG_VERSION,
             configurations: Vec::new(),
+            plugin_configurations: BTreeMap::new(),
             selected: None,
         }
     }
@@ -567,6 +574,15 @@ impl RunConfigSet {
         }
         for configuration in &set.configurations {
             configuration.validate().map_err(RunStoreError::Invalid)?;
+        }
+        if set
+            .plugin_configurations
+            .iter()
+            .any(|(id, data)| set.find(id).is_none() || !data.storage_valid())
+        {
+            return Err(RunStoreError::Invalid(RunConfigError::InvalidIdentity {
+                id: "invalid plugin configuration envelope".into(),
+            }));
         }
         if set.configurations.len() > MAX_RUN_CONFIGS {
             return Err(RunStoreError::Invalid(RunConfigError::InvalidIdentity {
@@ -607,6 +623,7 @@ impl RunConfigSet {
     pub fn remove(&mut self, id: &str) -> bool {
         let before = self.configurations.len();
         self.configurations.retain(|entry| entry.id != id);
+        self.plugin_configurations.remove(id);
         if self.selected.as_deref() == Some(id) {
             self.selected = None;
         }

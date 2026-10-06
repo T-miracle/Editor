@@ -56,6 +56,75 @@ pub struct Document {
 }
 
 impl Document {
+    /// Minimum public capabilities for all nodes, including hidden tabs, menus and dialogs.
+    /// Embedding consumers use the same requirements as ordinary plugin surfaces before rendering.
+    pub fn required_capabilities(
+        &self,
+    ) -> std::collections::BTreeMap<&'static str, semver::Version> {
+        let mut required =
+            std::collections::BTreeMap::from([("ui.native", semver::Version::new(1, 0, 0))]);
+        let mut visit = |node: &Node| {
+            if !node.links.is_empty() {
+                required.insert("ui.links", semver::Version::new(1, 0, 0));
+            }
+            if node.source_range.is_some()
+                || matches!(node.kind, Kind::RichText { .. } | Kind::CodeBlock { .. })
+            {
+                required.insert("ui.richtext", semver::Version::new(1, 0, 0));
+            }
+            match &node.kind {
+                Kind::Canvas(canvas) => {
+                    let version = if canvas.scroll.is_some() || canvas.font != Default::default() {
+                        semver::Version::new(1, 1, 0)
+                    } else {
+                        semver::Version::new(1, 0, 0)
+                    };
+                    required
+                        .entry("ui.canvas")
+                        .and_modify(|actual| {
+                            *actual = std::cmp::max(actual.clone(), version.clone())
+                        })
+                        .or_insert(version);
+                    if canvas.grid {
+                        required.insert("ui.grid", semver::Version::new(1, 0, 0));
+                    }
+                }
+                Kind::SideTabs(_) => {
+                    required.insert("ui.collections", semver::Version::new(1, 0, 0));
+                }
+                Kind::Image { .. } => {
+                    required.insert("ui.images", semver::Version::new(1, 0, 0));
+                }
+                _ => {}
+            }
+        };
+        self.root.visit(&mut visit);
+        if let Some(toolbar) = &self.editor_toolbar {
+            toolbar.visit(&mut visit);
+        }
+        if let Some(dialog) = &self.dialog {
+            dialog.content.visit(&mut visit);
+        }
+        if self.menu.is_some() {
+            required.insert("ui.collections", semver::Version::new(1, 0, 0));
+        }
+        if self.link_events {
+            required.insert("ui.links", semver::Version::new(1, 0, 0));
+        }
+        if self.editor_toolbar.is_some() {
+            required.insert("editor.toolbar", semver::Version::new(1, 0, 0));
+        }
+        if self.editor_image_input {
+            required.insert("editor.images", semver::Version::new(1, 0, 0));
+        }
+        if self.code_highlighting {
+            required.insert("ui.code_highlighting", semver::Version::new(1, 0, 0));
+        }
+        if self.editor_viewport.is_some() {
+            required.insert("editor.viewport", semver::Version::new(1, 0, 0));
+        }
+        required
+    }
     pub fn new(root: Node) -> Self {
         Self {
             source: None,

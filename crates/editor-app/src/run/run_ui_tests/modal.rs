@@ -1,10 +1,12 @@
 //! Real modal callbacks must open/close outside the borrowed editor/window update.
 use super::*;
 
-/// B1 keeps the selector and tabs wide, and anchors save actions to the card's bottom edge.
+/// The simplified form has a sidebar, three main fields and a footer outside the field scroller.
 /// This uses the real modal so a full-height wrapper cannot hide unused space below its footer.
 #[gpui::test]
-fn b1_modal_keeps_selector_tabs_and_footer_in_their_layout_regions(cx: &mut TestAppContext) {
+fn simplified_modal_keeps_sidebar_fields_and_footer_in_their_layout_regions(
+    cx: &mut TestAppContext,
+) {
     let root = tempfile::tempdir().unwrap();
     let (app, cx) = open_editor(cx, root.path());
     cx.update(|window, cx| {
@@ -12,25 +14,38 @@ fn b1_modal_keeps_selector_tabs_and_footer_in_their_layout_regions(cx: &mut Test
             state.open_run_config_dialog(window, cx, None)
         })
     });
-    cx.run_until_parked();
+    use_run_dialog(cx, &app);
     cx.update(|window, cx| window.draw(cx).clear(cx));
     let form = cx.debug_bounds("run-config-form").unwrap();
     let save = cx.debug_bounds("run-config-save").unwrap();
     assert!(
         form.bottom() - save.bottom() <= px(28.),
-        "save actions belong at the bottom of B1, not midway down an empty card: form={form:?}, save={save:?}"
+        "save actions belong at the bottom of the card: form={form:?}, save={save:?}"
     );
-    let selector = cx.debug_bounds("run-config-existing").unwrap();
+    let sidebar = cx.debug_bounds("run-config-sidebar").unwrap();
+    // Discovery is an icon in the same header as Add, rather than a footer row.
+    let discover = cx.debug_bounds("run-config-discover").unwrap();
+    let add = cx.debug_bounds("run-config-new").unwrap();
+    assert!(discover.right() <= add.left());
+    assert_eq!(discover.center().y, add.center().y);
+    assert!(discover.top() >= sidebar.top());
+    let page = cx.debug_bounds("run-config-page").unwrap();
     assert!(
-        selector.size.width >= form.size.width * 0.45,
-        "the top row needs a configuration selector, not a saved-count label: {selector:?}"
+        sidebar.right() <= page.left() && sidebar.size.width >= px(180.),
+        "configuration list and fields occupy separate columns: {sidebar:?}, {page:?}"
     );
-    let basic = cx.debug_bounds("run-config-tab-0").unwrap();
-    let environment = cx.debug_bounds("run-config-tab-3").unwrap();
-    assert!(
-        environment.right() - basic.left() >= form.size.width * 0.85,
-        "the four tabs share the form width: basic={basic:?}, environment={environment:?}"
-    );
+    for selector in [
+        "run-config-name",
+        "run-config-target-picker",
+        "run-config-arguments-edit",
+        "run-config-startup",
+        "run-config-more",
+    ] {
+        let bounds = cx.debug_bounds(selector).unwrap();
+        assert!(bounds.left() >= page.left() && bounds.right() <= page.right());
+    }
+    assert!(cx.debug_bounds("run-config-directory").is_none());
+    assert!(cx.debug_bounds("run-config-environment-edit").is_none());
 }
 
 /// The title bar reserves text for the selected name; execution actions use compact icon hit targets.
@@ -67,11 +82,12 @@ fn click_form_control(cx: &mut gpui_kit::VisualTestContext, selector: &'static s
     cx.run_until_parked();
     cx.simulate_click(position, Default::default());
     cx.run_until_parked();
+    use_live_window(cx);
 }
 
-/// Arrow-key page changes preserve native input values instead of replacing the retained draft.
+/// Native keyboard activation opens optional fields without replacing retained input values.
 #[gpui::test]
-fn b1_tabs_accept_keyboard_navigation_without_losing_fields(cx: &mut TestAppContext) {
+fn disclosures_accept_keyboard_activation_without_losing_fields(cx: &mut TestAppContext) {
     let root = tempfile::tempdir().unwrap();
     let (app, cx) = open_editor(cx, root.path());
     cx.update(|window, cx| {
@@ -79,7 +95,7 @@ fn b1_tabs_accept_keyboard_navigation_without_losing_fields(cx: &mut TestAppCont
             state.open_run_config_dialog(window, cx, None)
         })
     });
-    cx.run_until_parked();
+    use_run_dialog(cx, &app);
     cx.update(|window, cx| {
         let form = app.read(cx).run_form.as_ref().unwrap().clone();
         form.read(cx)
@@ -87,21 +103,28 @@ fn b1_tabs_accept_keyboard_navigation_without_losing_fields(cx: &mut TestAppCont
             .unwrap()
             .update(cx, |input, cx| input.set_value("保留我的配置", window, cx));
     });
-    click_form_control(cx, "run-config-tab-0");
-    cx.simulate_keystrokes("right");
+    click_form_control(cx, "run-config-more");
     cx.run_until_parked();
-    assert_eq!(
-        cx.update(|_, cx| app.read(cx).run_form.as_ref().unwrap().read(cx).tab()),
-        crate::run::ui::RunConfigTab::Build
-    );
-    cx.simulate_keystrokes("end");
+    assert!(cx.debug_bounds("run-config-directory").is_some());
+    // Buttons consume key down/up activation; character-input simulation would insert a space.
+    let keystroke = gpui::Keystroke::parse("space").unwrap();
+    cx.simulate_event(gpui::KeyDownEvent {
+        keystroke: keystroke.clone(),
+        is_held: false,
+        prefer_character_input: false,
+    });
+    cx.simulate_event(gpui::KeyUpEvent { keystroke });
     cx.run_until_parked();
-    assert_eq!(
-        cx.update(|_, cx| app.read(cx).run_form.as_ref().unwrap().read(cx).tab()),
-        crate::run::ui::RunConfigTab::Environment
-    );
-    cx.simulate_keystrokes("home");
+    assert!(cx.debug_bounds("run-config-directory").is_none());
+    let keystroke = gpui::Keystroke::parse("enter").unwrap();
+    cx.simulate_event(gpui::KeyDownEvent {
+        keystroke: keystroke.clone(),
+        is_held: false,
+        prefer_character_input: false,
+    });
+    cx.simulate_event(gpui::KeyUpEvent { keystroke });
     cx.run_until_parked();
+    assert!(cx.debug_bounds("run-config-directory").is_some());
     assert_eq!(
         cx.update(|_, cx| {
             app.read(cx)
@@ -119,9 +142,9 @@ fn b1_tabs_accept_keyboard_navigation_without_losing_fields(cx: &mut TestAppCont
     );
 }
 
-/// Both dropdowns use real popup keyboard handling; choosing a configuration loads its own inputs.
+/// Sidebar selection loads the chosen inputs; the scope picker has native keyboard dismissal.
 #[gpui::test]
-fn b1_configuration_and_destination_pickers_work_inside_the_modal(cx: &mut TestAppContext) {
+fn sidebar_and_destination_picker_work_inside_the_modal(cx: &mut TestAppContext) {
     let root = tempfile::tempdir().unwrap();
     let (app, cx) = open_editor(cx, root.path());
     cx.update(|window, cx| {
@@ -144,11 +167,8 @@ fn b1_configuration_and_destination_pickers_work_inside_the_modal(cx: &mut TestA
             state.open_run_config_dialog(window, cx, Some("first".into()));
         });
     });
-    cx.run_until_parked();
-    click_form_control(cx, "run-config-existing");
-    assert!(cx.debug_bounds("native-menu-second").is_some());
-    cx.simulate_keystrokes("down enter");
-    cx.run_until_parked();
+    use_run_dialog(cx, &app);
+    click_form_control(cx, "run-config-existing-second");
     assert_eq!(
         cx.update(|_, cx| {
             app.read(cx)
@@ -205,10 +225,16 @@ fn b1_footer_stays_visible_at_narrow_sizes_and_zoom(cx: &mut TestAppContext) {
                     state.open_run_config_dialog(window, cx, None)
                 });
             });
-            cx.run_until_parked();
+            use_run_dialog(cx, &app);
+            cx.simulate_resize(size(px(520.), px(420.)));
             cx.update(|window, cx| window.draw(cx).clear(cx));
             let form = cx.debug_bounds("run-config-form").unwrap();
             let page = cx.debug_bounds("run-config-page").unwrap();
+            // The compact layout keeps discovery available in the header in both languages/themes.
+            let discover = cx.debug_bounds("run-config-discover").unwrap();
+            let add = cx.debug_bounds("run-config-new").unwrap();
+            assert!(discover.right() <= add.left());
+            assert_eq!(discover.center().y, add.center().y);
             for selector in [
                 "run-config-save",
                 "run-config-cancel",
@@ -228,7 +254,7 @@ fn b1_footer_stays_visible_at_narrow_sizes_and_zoom(cx: &mut TestAppContext) {
     rust_i18n::set_locale("en");
 }
 
-/// Save and Cancel remove the actual modal layer, rather than leaving an empty modal.
+/// Save and Cancel close the owned native window, preserving the editor and allowing a fresh draft.
 #[gpui::test]
 fn real_run_configuration_modal_opens_and_closes_after_callbacks(cx: &mut TestAppContext) {
     let root = tempfile::tempdir().unwrap();
@@ -245,13 +271,15 @@ fn real_run_configuration_modal_opens_and_closes_after_callbacks(cx: &mut TestAp
             state.open_run_config_dialog(window, cx, None);
         })
     });
-    cx.run_until_parked();
-    assert_eq!(cx.update(|_, cx| cx.windows().len()), 1);
+    use_run_dialog(cx, &app);
+    assert_eq!(cx.update(|_, cx| cx.windows().len()), 2);
     assert!(cx.debug_bounds("run-config-form").is_some());
     let owner = app.clone();
     cx.update(move |_, cx| owner.update(cx, |state, cx| state.close_run_form(cx)));
+    use_live_window(cx);
     assert!(cx.update(|_, cx| app.read(cx).run_form.is_none()));
     cx.run_until_parked();
+    use_live_window(cx);
     assert_eq!(cx.update(|_, cx| cx.windows().len()), 1);
     // A subsequent dialog must retain a fresh form rather than an abandoned deferred callback.
     cx.update(|window, cx| {
@@ -259,7 +287,7 @@ fn real_run_configuration_modal_opens_and_closes_after_callbacks(cx: &mut TestAp
             state.open_run_config_dialog(window, cx, None)
         })
     });
-    cx.run_until_parked();
+    use_run_dialog(cx, &app);
     let owner = app.clone();
     cx.update(move |window, cx| {
         owner.update(cx, |state, cx| {
@@ -276,15 +304,98 @@ fn real_run_configuration_modal_opens_and_closes_after_callbacks(cx: &mut TestAp
                         input.set_value("powershell.exe", window, cx)
                     });
             });
-            state.commit_run_form(cx);
+            state.commit_run_form(window, cx);
         })
     });
     cx.run_until_parked();
+    use_live_window(cx);
     assert_eq!(cx.update(|_, cx| cx.windows().len()), 1);
     assert_eq!(
         cx.update(|_, cx| app.read(cx).run_controls.selected().unwrap().name.clone()),
         "Native modal fixture"
     );
+}
+
+/// Reopening activates one native window without replacing edited fields; native chrome cancels inner edits.
+#[gpui::test]
+fn native_configuration_window_reuses_its_draft_and_closes_through_shared_chrome(
+    cx: &mut TestAppContext,
+) {
+    let root = tempfile::tempdir().unwrap();
+    let (app, cx) = open_editor(cx, root.path());
+    cx.update(|window, cx| {
+        app.update(cx, |state, cx| {
+            state.open_run_config_dialog(window, cx, None)
+        })
+    });
+    use_run_dialog(cx, &app);
+    let handle = cx.update(|_, cx| app.read(cx).run_dialog_window.unwrap());
+    assert!(cx.debug_bounds("app-dialog-title-bar").is_some());
+    click_form_control(cx, "run-config-name");
+    cx.simulate_input("Preserve the draft");
+    cx.update(|window, cx| {
+        app.update(cx, |state, cx| {
+            state.open_run_config_dialog(window, cx, None)
+        })
+    });
+    assert_eq!(cx.update(|_, cx| cx.windows().len()), 2);
+    assert_eq!(
+        cx.update(|_, cx| app.read(cx).run_dialog_window.unwrap().window_id()),
+        handle.window_id()
+    );
+    assert_eq!(
+        cx.update(|_, cx| app
+            .read(cx)
+            .run_form
+            .as_ref()
+            .unwrap()
+            .read(cx)
+            .field_input(crate::run::RunField::Name)
+            .unwrap()
+            .read(cx)
+            .value()
+            .to_string()),
+        "Preserve the draft"
+    );
+    click_form_control(cx, "run-config-arguments-edit");
+    click_form_control(cx, "run-config-arguments");
+    cx.simulate_input("discard detail");
+    click_form_control(cx, "app-dialog-close");
+    assert!(cx.debug_bounds("run-config-arguments-edit").is_some());
+    assert_eq!(cx.update(|_, cx| cx.windows().len()), 2);
+    click_form_control(cx, "app-dialog-close");
+    assert_eq!(cx.update(|_, cx| cx.windows().len()), 1);
+    assert!(cx.update(
+        |_, cx| app.read(cx).run_form.is_none() && app.read(cx).run_dialog_window.is_none()
+    ));
+}
+
+/// Platform close is vetoed for a detail edit, then native close receipts release the whole draft.
+#[gpui::test]
+fn native_configuration_close_request_preserves_inner_cancel_and_cleans_on_closed(
+    cx: &mut TestAppContext,
+) {
+    let root = tempfile::tempdir().unwrap();
+    let (app, cx) = open_editor(cx, root.path());
+    cx.update(|window, cx| {
+        app.update(cx, |state, cx| {
+            state.open_run_config_dialog(window, cx, None)
+        })
+    });
+    use_run_dialog(cx, &app);
+    click_form_control(cx, "run-config-arguments-edit");
+    assert!(!cx.simulate_close());
+    cx.run_until_parked();
+    assert!(cx.debug_bounds("run-config-arguments-edit").is_some());
+    assert!(cx.simulate_close());
+    // The platform, rather than its should-close callback, owns actual native window removal.
+    cx.update(|window, _| window.remove_window());
+    cx.run_until_parked();
+    use_live_window(cx);
+    assert_eq!(cx.update(|_, cx| cx.windows().len()), 1);
+    assert!(cx.update(
+        |_, cx| app.read(cx).run_form.is_none() && app.read(cx).run_dialog_window.is_none()
+    ));
 }
 
 /// A source reveal and a physical panel click must preserve the panel's next keyboard step.

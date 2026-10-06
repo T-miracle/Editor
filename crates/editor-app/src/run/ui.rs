@@ -1,4 +1,4 @@
-//! Native run controls: the title-bar group and the B1 configuration dialog.
+//! Native run controls: the title-bar group and the simplified configuration dialog.
 //!
 //! Every control here is a native widget composed from the project's own UI layer; no WebView is
 //! used. The group's position, separation and disabled states follow the approved B1 layout, and a
@@ -22,6 +22,8 @@ use sha2::{Digest, Sha256};
 mod build_output;
 mod configuration;
 pub(crate) use configuration::render_run_config_form;
+mod dialog;
+pub(crate) use dialog::RunConfigModal;
 pub(crate) mod panel;
 
 /// Width of the unified run dropdown; it holds session labels with state words beside them.
@@ -33,493 +35,16 @@ pub(crate) struct RunMenu {
     _dismiss: Subscription,
 }
 
-/// A same-window modal entity renders after EditorApp releases its lease.
-/// It observes the editor and retained draft; closing revokes nodes without destroying an HWND.
-pub(crate) struct RunConfigModal {
-    owner: WeakEntity<EditorApp>,
-    focus: FocusHandle,
-    _updates: Vec<Subscription>,
-    /// Target confirmation can replace the entire draft, so observation follows its current identity.
-    observed_form: Option<Entity<RunConfigForm>>,
-    _form_update: Option<Subscription>,
-}
-impl Render for RunConfigModal {
-    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let Some(app) = self.owner.upgrade() else {
-            return div().into_any_element();
-        };
-        let Some(form) = app.read(cx).run_form.clone() else {
-            return div().into_any_element();
-        };
-        if self
-            .observed_form
-            .as_ref()
-            .is_none_or(|old| old.entity_id() != form.entity_id())
-        {
-            self._form_update = Some(cx.observe(&form, |_, _, cx| cx.notify()));
-            self.observed_form = Some(form.clone());
-        }
-        let title = if app
-            .read(cx)
-            .run_controls
-            .configuration(&form.read(cx).draft.id)
-            .is_some()
-        {
-            t!("run.form_edit_title").to_string()
-        } else {
-            t!("run.form_new_title").to_string()
-        };
-        let cancel = self.owner.clone();
-        let save = self.owner.clone();
-        crate::ui::controls::dialog::modal(
-            self.focus.clone(),
-            title,
-            render_run_config_form(&self.owner, DialogContent::new(), cx).into_any_element(),
-            move |_, cx| {
-                let _ = cancel.update(cx, |state, cx| state.close_run_form(cx));
-            },
-            move |_, cx| {
-                save.update(cx, |state, cx| {
-                    state.commit_run_form(cx);
-                    state.run_form.is_none()
-                })
-                .unwrap_or(true)
-            },
-            window,
-            cx,
-        )
-    }
-}
-
-/// The four B1 pages edit one retained draft; changing pages never drops typed values.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum RunConfigTab {
-    Basic,
-    Build,
-    Debug,
-    Environment,
-}
-
-impl RunConfigTab {
-    const ALL: [Self; 4] = [Self::Basic, Self::Build, Self::Debug, Self::Environment];
-
-    fn label(self) -> String {
-        match self {
-            Self::Basic => t!("run.form_basic").to_string(),
-            Self::Build => t!("run.form_build").to_string(),
-            Self::Debug => t!("run.form_debug").to_string(),
-            Self::Environment => t!("run.form_environment").to_string(),
-        }
-    }
-
-    fn hint(self) -> String {
-        match self {
-            Self::Basic => t!("run.hint_basic").to_string(),
-            Self::Build => t!("run.hint_build").to_string(),
-            Self::Debug => t!("run.hint_debug").to_string(),
-            Self::Environment => t!("run.hint_environment").to_string(),
-        }
-    }
-
-    /// Whether this page edits a stored configuration today.
-    fn available(self) -> bool {
-        // Every page now edits something: the debug page chooses the execution provider.
-        matches!(
-            self,
-            Self::Basic | Self::Environment | Self::Build | Self::Debug
-        )
-    }
-}
-
-/// One labelled configuration field; scripts and row collections retain multi-line editing.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum RunField {
-    Name,
-    Program,
-    Arguments,
-    Script,
-    Directory,
-    Environment,
-    ToolPaths,
-    Build,
-    Prelaunch,
-    /// Breakpoints as `源文件:行号`, one per line.
-    Breakpoints,
-}
-
-impl RunField {
-    const ALL: [Self; 10] = [
-        Self::Name,
-        Self::Program,
-        Self::Arguments,
-        Self::Script,
-        Self::Directory,
-        Self::Environment,
-        Self::ToolPaths,
-        Self::Build,
-        Self::Prelaunch,
-        Self::Breakpoints,
-    ];
-
-    /// Separate input kinds preserve literal argv lines and real multi-line script/IME editing.
-    fn multiline(self) -> bool {
-        matches!(
-            self,
-            Self::Arguments
-                | Self::Script
-                | Self::Environment
-                | Self::ToolPaths
-                | Self::Breakpoints
-        )
-    }
-    fn label(self) -> String {
-        match self {
-            Self::Name => t!("run.field_name").to_string(),
-            Self::Program => t!("run.field_program").to_string(),
-            // One argument per line keeps a value containing spaces literal.
-            Self::Arguments => t!("run.field_arguments").to_string(),
-            Self::Script => t!("run.field_script").to_string(),
-            Self::Directory => t!("run.field_directory").to_string(),
-            Self::Environment => t!("run.field_environment").to_string(),
-            Self::ToolPaths => t!("run.field_tool_paths").to_string(),
-            Self::Build => t!("run.field_build").to_string(),
-            Self::Prelaunch => t!("run.field_prelaunch").to_string(),
-            Self::Breakpoints => t!("run.field_breakpoints").to_string(),
-        }
-    }
-
-    fn selector(self) -> &'static str {
-        match self {
-            Self::Name => "run-config-name",
-            Self::Program => "run-config-program",
-            Self::Arguments => "run-config-arguments",
-            Self::Script => "run-config-script",
-            Self::Directory => "run-config-directory",
-            Self::Environment => "run-config-environment",
-            Self::ToolPaths => "run-config-tool-paths",
-            Self::Build => "run-config-build",
-            Self::Prelaunch => "run-config-prelaunch",
-            Self::Breakpoints => "run-config-breakpoints",
-        }
-    }
-
-    fn value(self, draft: &RunConfigDraft) -> String {
-        match self {
-            Self::Name => draft.name.clone(),
-            Self::Program => draft.program.clone(),
-            Self::Arguments => draft.arguments.clone(),
-            Self::Script => draft.script.clone(),
-            Self::Directory => draft.directory.clone(),
-            Self::Environment => draft.environment.clone(),
-            Self::ToolPaths => draft.tool_paths.clone(),
-            Self::Build => draft.build.clone(),
-            Self::Prelaunch => draft.prelaunch.clone(),
-            Self::Breakpoints => draft.breakpoints.clone(),
-        }
-    }
-
-    fn apply(self, draft: &mut RunConfigDraft, value: String) {
-        match self {
-            Self::Name => draft.name = value,
-            Self::Program => draft.program = value,
-            Self::Arguments => draft.arguments = value,
-            Self::Script => draft.script = value,
-            Self::Directory => draft.directory = value,
-            Self::Environment => draft.environment = value,
-            Self::ToolPaths => draft.tool_paths = value,
-            Self::Build => draft.build = value,
-            Self::Prelaunch => draft.prelaunch = value,
-            Self::Breakpoints => draft.breakpoints = value,
-        }
-    }
-}
-
-/// One structural change to a prepared action list.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum StepEdit {
-    Add,
-    Remove,
-    Up,
-    Down,
-}
-
-/// State of the configuration dialog, owned by one entity so a draft survives repaints.
-///
-/// The dialog's renderer in this module reads these fields; the entity exists so the draft, its text
-/// editing state and its subscriptions share one lifetime instead of resetting on every frame.
-#[allow(dead_code)]
-pub struct RunConfigForm {
-    tab: RunConfigTab,
-    /// The configuration being edited, including its stable identity.
-    draft: RunConfigDraft,
-    /// Validation or storage message shown above the dialog buttons.
-    error: Option<String>,
-    /// Editing state for each field, created with the dialog so text never resets per frame.
-    inputs: Vec<(RunField, Entity<InputState>)>,
-    /// Lists/scripts need actual Enter and multi-line selection, rather than a single-line placeholder.
-    textareas: Vec<(RunField, Entity<TextareaState>)>,
-    /// One editing state per prepared action, for the lists that are edited row by row.
-    ///
-    /// A row is its own single-line field so an action can be moved or removed without its text
-    /// being re-parsed, and so the row controls always address the action the user sees.
-    rows: Vec<(RunField, Entity<InputState>)>,
-    /// The compound tab strip keeps one focus handle while its controlled selection changes.
-    tab_focus: FocusHandle,
-    /// One transient picker for configuration or save location; closing the form revokes it.
-    picker: Option<RunMenu>,
-    /// Subscriptions are retained here; dropping the form releases them with its inputs.
-    _subscriptions: Vec<Subscription>,
-}
-
-impl RunConfigForm {
-    /// Open the dialog on a stored configuration, or on an empty draft that creates a new one.
-    pub fn open(
-        controls: &RunControls,
-        workspace: &str,
-        editing: Option<&str>,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) -> Self {
-        let id = editing
-            .map(str::to_owned)
-            .unwrap_or_else(|| controls.generate_id(workspace));
-        let existing = editing.and_then(|id| controls.configuration(&id));
-        let draft = RunConfigDraft::from_config(existing, id);
-        let mut form = Self {
-            tab: RunConfigTab::Basic,
-            draft,
-            error: None,
-            inputs: Vec::new(),
-            textareas: Vec::new(),
-            rows: Vec::new(),
-            tab_focus: cx.focus_handle(),
-            picker: None,
-            _subscriptions: Vec::new(),
-        };
-        for field in RunField::ALL {
-            let initial = field.value(&form.draft);
-            let label = field.label();
-            if field.multiline() {
-                let input = cx.new(|cx| {
-                    TextareaState::new(window, cx)
-                        .rows(3)
-                        .default_value(initial)
-                        .placeholder(label.to_string())
-                });
-                form._subscriptions.push(cx.subscribe(
-                    &input,
-                    |form, _, event: &InputEvent, cx| {
-                        if matches!(event, InputEvent::Change) && form.error.take().is_some() {
-                            cx.notify();
-                        }
-                    },
-                ));
-                form.textareas.push((field, input));
-                continue;
-            }
-            let input = cx.new(|cx| {
-                InputState::new(window, cx)
-                    .default_value(initial)
-                    .placeholder(label.to_string())
-            });
-            // A change clears a previous rejection message, because the form is being corrected.
-            let subscription = cx.subscribe(&input, move |form, _, event: &InputEvent, cx| {
-                if matches!(event, InputEvent::Change) && form.error.take().is_some() {
-                    cx.notify();
-                }
-            });
-            form._subscriptions.push(subscription);
-            form.inputs.push((field, input));
-        }
-        form.rebuild_rows(window, cx);
-        form
-    }
-
-    /// Create one editing state per prepared action of each list.
-    fn rebuild_rows(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.rows.clear();
-        for field in [RunField::Build, RunField::Prelaunch] {
-            let lines = step_lines(&self.draft.field_text(field));
-            for line in lines {
-                let input = cx.new(|cx| InputState::new(window, cx).default_value(line));
-                let subscription = cx.subscribe(&input, move |form, _, event: &InputEvent, cx| {
-                    if matches!(event, InputEvent::Change) && form.error.take().is_some() {
-                        cx.notify();
-                    }
-                });
-                self._subscriptions.push(subscription);
-                self.rows.push((field, input));
-            }
-        }
-    }
-
-    /// The rows of one list, in the order they will run.
-    pub(crate) fn rows_of(&self, field: RunField) -> Vec<(usize, Entity<InputState>)> {
-        self.rows
-            .iter()
-            .filter(|(candidate, _)| *candidate == field)
-            .enumerate()
-            .map(|(index, (_, input))| (index, input.clone()))
-            .collect()
-    }
-
-    /// Read every row of one list back into the draft, before a structural change is applied.
-    fn sync_rows(&mut self, field: RunField, cx: &gpui_kit::App) {
-        let lines = self
-            .rows_of(field)
-            .into_iter()
-            .map(|(_, input)| input.read(cx).value().to_string())
-            .collect::<Vec<_>>();
-        let text = join_step_lines(&lines);
-        match field {
-            RunField::Build => self.draft.build = text,
-            RunField::Prelaunch => self.draft.prelaunch = text,
-            _ => {}
-        }
-    }
-
-    /// Apply a structural change to one list and rebuild its rows.
-    ///
-    /// The rows are read back first, so a change acts on what the user has typed rather than on the
-    /// text that was there when the dialog opened.
-    pub(crate) fn edit_rows(
-        &mut self,
-        field: RunField,
-        change: StepEdit,
-        index: usize,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        // Rebuilding replaces both lists. Preserve both sets of unsaved native input first.
-        self.sync_rows(RunField::Build, cx);
-        self.sync_rows(RunField::Prelaunch, cx);
-        let current = match field {
-            RunField::Build => self.draft.build.clone(),
-            RunField::Prelaunch => self.draft.prelaunch.clone(),
-            _ => return,
-        };
-        let updated = match change {
-            StepEdit::Add => Some(add_step(&current)),
-            StepEdit::Remove => remove_step(&current, index),
-            StepEdit::Up => move_step(&current, index, true),
-            StepEdit::Down => move_step(&current, index, false),
-        };
-        let Some(updated) = updated else {
-            return;
-        };
-        match field {
-            RunField::Build => self.draft.build = updated,
-            RunField::Prelaunch => self.draft.prelaunch = updated,
-            _ => {}
-        }
-        // The row controls belong to the list that was just rearranged, so the states are rebuilt
-        // together with it; nothing else reads a row state in between.
-        self.rebuild_rows(window, cx);
-        cx.notify();
-    }
-
-    /// Current text of one field, read from its editing state.
-    fn text(&self, field: RunField, cx: &gpui_kit::App) -> String {
-        if let Some((_, input)) = self
-            .textareas
-            .iter()
-            .find(|(candidate, _)| *candidate == field)
-        {
-            return input.read(cx).value().to_string();
-        }
-        self.inputs
-            .iter()
-            .find(|(candidate, _)| *candidate == field)
-            .map(|(_, input)| input.read(cx).value().to_string())
-            .unwrap_or_default()
-    }
-
-    /// Copy every field's current text into the draft before it is validated or saved.
-    fn collect(&mut self, cx: &gpui_kit::App) {
-        for field in RunField::ALL {
-            let value = self.text(field, cx);
-            field.apply(&mut self.draft, value);
-        }
-        // The row-edited lists are gathered from their own rows, so what is saved is what is on screen.
-        for field in [RunField::Build, RunField::Prelaunch] {
-            self.sync_rows(field, cx);
-        }
-    }
-}
-
-/// Structural accessors exist only for native checks, so production builds carry no unused surface.
-#[cfg(test)]
-impl RunConfigForm {
-    /// The tabs this dialog offers, with whether this build implements each one.
-    ///
-    /// Lets a native check confirm the approved structure without depending on how the strip is
-    /// painted in the dialog's own window.
-    pub(crate) fn tab_labels(&self) -> Vec<(String, bool)> {
-        RunConfigTab::ALL
-            .into_iter()
-            .map(|tab| (tab.label(), tab.available()))
-            .collect()
-    }
-
-    /// The labelled fields of the basic page, in the order they are presented.
-    pub(crate) fn field_labels(&self) -> Vec<String> {
-        RunField::ALL.into_iter().map(RunField::label).collect()
-    }
-
-    /// The editing state of one field, so a check can address the field a user types into.
-    ///
-    /// Composition is delivered to the retained control state rather than to the rendered element,
-    /// which is why this returns the state itself and not a node.
-    pub(crate) fn field_input(&self, field: RunField) -> Option<Entity<InputState>> {
-        self.inputs
-            .iter()
-            .find(|(candidate, _)| *candidate == field)
-            .map(|(_, input)| input.clone())
-    }
-
-    /// How many rows one prepared-action list currently shows.
-    pub(crate) fn step_row_count(&self, field: RunField) -> usize {
-        self.rows_of(field).len()
-    }
-
-    /// The text of each row of one prepared-action list, in the order shown.
-    pub(crate) fn step_row_values(&self, field: RunField, cx: &gpui_kit::App) -> Vec<String> {
-        self.rows_of(field)
-            .into_iter()
-            .map(|(_, input)| input.read(cx).value().to_string())
-            .collect()
-    }
-
-    /// Choose whether this configuration is shared with the project, as the footer's control does.
-    pub(crate) fn share_with_project(&mut self, share: bool) {
-        self.draft.share = share;
-        self.error = None;
-    }
-
-    /// Whether a save from this form would write only to this machine.
-    pub(crate) fn destination_is_local(&self) -> bool {
-        !self.draft.share
-    }
-
-    /// The draft currently being edited, for checks that read what the dialog would save.
-    pub(crate) fn draft(&self) -> &RunConfigDraft {
-        &self.draft
-    }
-
-    /// The validation or storage message shown above the dialog buttons, if any.
-    pub(crate) fn error(&self) -> Option<&str> {
-        self.error.as_deref()
-    }
-
-    /// The page the dialog currently shows.
-    pub(crate) fn tab(&self) -> RunConfigTab {
-        self.tab
-    }
-}
+mod form;
+pub(crate) mod plugin_form;
+pub(crate) use form::StepEdit;
+use form::{FormEditor, FormSelection};
+pub use form::{RunConfigForm, RunField};
 
 impl EditorApp {
     /// Read published host sessions into the run controls before the frame is painted.
     pub(crate) fn sync_run_controls(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.sync_plugin_configurations(window, cx);
         let (executions, errors, stops, statuses) = self.extensions.read(cx).take_host_runs();
         for (session, request, result) in self.extensions.read(cx).take_run_locations() {
             if self.run_controls.finish_location(session, request) {
@@ -736,10 +261,7 @@ impl EditorApp {
         self.extensions.read(cx).workspace_trusted()
     }
 
-    /// Open the one run dropdown: active sessions, saved configurations, and the edit entries.
-    ///
-    /// Grouping is what keeps the title bar compact: running work and future launches are separate
-    /// lists in one component instead of two permanent selectors.
+    /// Open saved configurations above one edit action; discovery remains in the editor window.
     pub(crate) fn open_run_menu(
         &mut self,
         position: gpui_kit::Point<gpui_kit::Pixels>,
@@ -749,24 +271,26 @@ impl EditorApp {
         let owner = cx.entity().downgrade();
         // The existing local popup owns retained focus, scrolling and gpui-base item behavior.
         // Its immutable entry map keeps keyboard selection tied to this menu's session snapshot.
-        let mut entries = self.run_controls.menu_entries();
-        // Replacement remains an explicit command without crowding the four title-bar actions.
-        let can_rerun = self.run_controls.selected().is_some_and(|config| {
-            self.run_controls.running_for(&config.id).is_some()
-                || self.run_controls.is_pending(&config.id)
-                || self.run_controls.debug_target_active(&config.id)
-        });
+        // Reuse configuration labels, including missing-target warnings, without showing the
+        // session/discovery commands from the broader runtime catalog in this compact selector.
+        let mut entries: Vec<_> = self
+            .run_controls
+            .menu_entries()
+            .into_iter()
+            .filter(|entry| matches!(entry, RunMenuEntry::Configuration { .. }))
+            .collect();
+        if entries.is_empty() {
+            entries.push(RunMenuEntry::Action {
+                id: "run-empty".into(),
+                label: t!("run.menu_empty").into(),
+                enabled: false,
+            });
+        }
         entries.push(RunMenuEntry::Separator);
         entries.push(RunMenuEntry::Action {
-            id: "run-rerun".into(),
-            label: t!("run.rerun").into(),
-            enabled: can_rerun,
-        });
-        // Force stays reachable for a debugger whose pending disconnect has no ordinary execution state.
-        entries.push(RunMenuEntry::Action {
-            id: "run-force".into(),
-            label: t!("run.force").into(),
-            enabled: can_rerun,
+            id: "run-edit".into(),
+            label: t!("run.menu_edit").into(),
+            enabled: true,
         });
         let mut items = Vec::new();
         let mut actions = std::collections::BTreeMap::new();
@@ -1125,10 +649,16 @@ impl EditorApp {
             if self.run_controls.is_preparing(&config.id) {
                 return Some(t!("run.preparing_busy").to_string().to_owned());
             }
+            if let Some(reason) = self.run_controls.plugin_configuration_blocker(&config.id) {
+                return Some(reason);
+            }
             self.run_controls
                 .preparation_error(&config.id)
                 .filter(|_| config.build.is_empty())
         });
+        let plugin_blocker = selected
+            .as_ref()
+            .and_then(|config| self.run_controls.plugin_configuration_blocker(&config.id));
         let preparing = selected
             .as_ref()
             .and_then(|config| self.run_controls.preparing_step(&config.id));
@@ -1155,29 +685,67 @@ impl EditorApp {
             .as_ref()
             .is_some_and(|config| self.run_controls.is_stopping(&config.id));
 
+        // Measure the trigger itself so mouse and keyboard activation share the same anchor.
+        // The cell belongs to this rendered button, never to a second mutable application model.
+        let selector_bounds = std::rc::Rc::new(std::cell::Cell::new(gpui_kit::Bounds::default()));
+        let measured_bounds = selector_bounds.clone();
         h_flex()
             .debug_selector(|| "run-controls".into())
             .items_center()
             .gap_1()
             .child(
-                div().debug_selector(|| "run-config-selector".into()).child(
-                    Button::new("run-config-select")
-                        .label(short_label(&label))
-                        .child(Icon::new(IconName::ChevronDown))
-                        .accessibility_label(label.clone())
-                        .small()
-                        .compact()
-                        .ghost()
-                        .border_1()
-                        .border_color(cx.theme().input)
-                        .tooltip(label.clone())
-                        .on_click(
-                            cx.listener(|this, event: &gpui_kit::ClickEvent, window, cx| {
-                                // The dropdown opens at the pointer, like every other menu in the shell.
-                                this.open_run_menu(event.position(), window, cx);
-                            }),
-                        ),
-                ),
+                div()
+                    .debug_selector(|| "run-config-selector".into())
+                    .relative()
+                    .child(
+                        gpui_kit::canvas(
+                            move |bounds, _, _| measured_bounds.set(bounds),
+                            |_, _, _, _| {},
+                        )
+                        .absolute()
+                        .size_full(),
+                    )
+                    .child(
+                        Button::new("run-config-select")
+                            // Equal 14px content boxes avoid the font's default line height
+                            // centering differently from the SVG; explicit height and horizontal
+                            // padding keep the outer insets symmetrical around the 1px border.
+                            .child(
+                                div()
+                                    .debug_selector(|| "run-config-selector-label".into())
+                                    .h(px(14.))
+                                    .line_height(px(14.))
+                                    .child(short_label(&label)),
+                            )
+                            .child(
+                                div()
+                                    .debug_selector(|| "run-config-selector-chevron".into())
+                                    .size(px(14.))
+                                    .flex_shrink_0()
+                                    .child(
+                                        Icon::default().path("icons/run-chevron-down.svg").small(),
+                                    ),
+                            )
+                            .accessibility_label(label.clone())
+                            .small()
+                            .compact()
+                            .ghost()
+                            .h(px(26.))
+                            .px(px(5.))
+                            .border_1()
+                            .border_color(cx.theme().input)
+                            .tooltip(label.clone())
+                            .on_click(cx.listener(
+                                move |this, _: &gpui_kit::ClickEvent, window, cx| {
+                                    let bounds = selector_bounds.get();
+                                    this.open_run_menu(
+                                        gpui_kit::point(bounds.origin.x, bounds.bottom()),
+                                        window,
+                                        cx,
+                                    );
+                                },
+                            )),
+                    ),
             )
             .child(
                 div().debug_selector(|| "run-build".into()).child(
@@ -1213,8 +781,10 @@ impl EditorApp {
                         .small()
                         .compact()
                         .ghost()
-                        .disabled(!permitted || selected.is_none())
-                        .tooltip(if permitted {
+                        .disabled(!permitted || selected.is_none() || plugin_blocker.is_some())
+                        .tooltip(if let Some(reason) = &plugin_blocker {
+                            reason.clone()
+                        } else if permitted {
                             t!("run.start_hint").to_string()
                         } else {
                             t!("run.restricted").to_string()
@@ -1334,6 +904,9 @@ impl EditorApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.guard_plugin_execution(config_id, plugin_form::Execution::Run(env.clone()), cx) {
+            return;
+        }
         // Run on an existing debug target locates that same target instead of spawning a second one.
         if self.run_controls.debug_target_active(config_id) {
             self.run_controls.select_debug_session(config_id);
@@ -1724,6 +1297,9 @@ impl EditorApp {
 
     /// Both an explicit Debug and a replacement use the captured owner, even after selection changes.
     fn debug_configuration(&mut self, id: &str, cx: &mut Context<Self>) {
+        if self.guard_plugin_execution(id, plugin_form::Execution::Debug, cx) {
+            return;
+        }
         let Some(configuration) = self.run_controls.configuration(id).cloned() else {
             self.status = t!("run.no_configuration").into();
             cx.notify();
@@ -1875,6 +1451,9 @@ impl EditorApp {
         let Some(config) = self.run_controls.selected().cloned() else {
             return;
         };
+        if self.guard_plugin_execution(&config.id, plugin_form::Execution::Build, cx) {
+            return;
+        }
         if !self.run_permitted(cx) {
             self.status = t!("run.restricted").to_string().into();
             cx.notify();
@@ -2298,73 +1877,23 @@ impl EditorApp {
         self.start_selected_run(window, cx);
     }
 
-    /// Open the B1 configuration dialog for a stored configuration or a new one.
-    pub(crate) fn open_run_config_dialog(
-        &mut self,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-        editing: Option<String>,
-    ) {
-        // Keep the modal inside its owning native window. UI Automation can retain a field
-        // after a secondary HWND is destroyed; the same-window base Dialog revokes only nodes.
-        let key = self.workspace_key();
-        // Opening the dialog asks the host for its provider listings, so the debug page and the debug
-        // control speak about a capability that has been confirmed rather than one assumed from the
-        // absence of a refusal.
-        self.extensions.read(cx).ask_run_providers();
-        let editing_id = editing.clone();
-        let form = cx.new(|cx| {
-            RunConfigForm::open(&self.run_controls, &key, editing_id.as_deref(), window, cx)
-        });
-        self.run_form = Some(form);
-        let owner = cx.entity().downgrade();
-        let observed = cx.entity();
-        self.run_dialog = Some(cx.new(|cx| {
-            let focus = cx.focus_handle();
-            focus.focus(window, cx);
-            RunConfigModal {
-                owner,
-                focus,
-                _updates: vec![cx.observe(&observed, |_, _, cx| cx.notify())],
-                observed_form: None,
-                _form_update: None,
-            }
-        }));
-        cx.notify();
-    }
-
-    /// Mount the modal entity only after the editor's render lease is released.
-    pub(crate) fn render_run_form_modal(
-        &self,
-        _: &mut Window,
-        _: &mut Context<Self>,
-    ) -> AnyElement {
-        self.run_dialog
-            .as_ref()
-            .map(|dialog| div().child(dialog.clone()).into_any_element())
-            .unwrap_or_else(|| div().into_any_element())
-    }
-
-    /// Save the dialog draft into host-local storage and close the dialog.
-    pub(crate) fn commit_run_form(&mut self, cx: &mut Context<Self>) {
+    /// Validate and persist the selected draft; a pending switch continues only after a successful save.
+    pub(crate) fn commit_run_form(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(form) = self.run_form.clone() else {
             return;
         };
+        // Enter in a detail editor accepts that edit only, never the whole configuration.
+        if form.read(cx).editor.is_some() {
+            self.finish_run_editor(window, cx);
+            return;
+        }
         // The draft is read from the fields themselves, so the saved value is what is on screen.
         // A malformed environment line is reported while the form is open, never at launch time.
-        let configuration = form.update(cx, |form, cx| {
-            form.collect(cx);
-            form.draft.to_config()
-        });
+        let configuration = form.update(cx, |form, cx| form.validated_configuration(cx));
         let configuration = match configuration {
             Ok(configuration) => configuration,
-            Err(message) => {
-                form.update(cx, |form, cx| {
-                    form.error = Some(message.clone());
-                    cx.notify();
-                });
-                self.status = message;
-                cx.notify();
+            Err((field, message)) => {
+                self.reject_run_form(field, message, window, cx);
                 return;
             }
         };
@@ -2373,26 +1902,27 @@ impl EditorApp {
             Ok(()) => {
                 // Saving never starts the program; the target merely becomes the selected one.
                 self.run_controls.select(&configuration.id, &key);
+                self.apply_provider_choice(cx);
                 self.status = t!("run.saved_named", name = configuration.name).to_string();
-                self.close_run_form(cx);
+                let next = form.update(cx, |form, _| form.pending_selection.take());
+                if let Some(next) = next {
+                    self.apply_run_form_selection(next, window, cx);
+                } else {
+                    self.close_run_form(cx);
+                }
             }
             Err(message) => {
                 // The rejected draft stays open so the offending field can be corrected.
                 form.update(cx, |form, cx| {
+                    form.pending_selection = None;
+                    form.startup_open = true;
+                    form.more_open = true;
                     form.error = Some(message.clone());
                     cx.notify();
                 });
                 self.status = message;
             }
         }
-        cx.notify();
-    }
-
-    /// Close the configuration dialog without saving anything.
-    pub(crate) fn close_run_form(&mut self, cx: &mut Context<Self>) {
-        // Removing the modal nodes keeps the native HWND alive, including for IME/UIA clients.
-        self.run_dialog = None;
-        self.run_form = None;
         cx.notify();
     }
 

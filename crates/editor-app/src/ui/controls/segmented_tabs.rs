@@ -71,6 +71,8 @@ impl RenderOnce for SegmentedTabs {
         let count = self.labels.len();
         // Match the upstream structure: a 32px track around a 24px inset selected surface.
         let mut tabs = Tabs::new(self.id)
+            // Native tab activation must not trigger a containing dialog's Enter confirmation.
+            .key_context("EditorActivate")
             .flex()
             .items_center()
             .w_full()

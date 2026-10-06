@@ -579,6 +579,46 @@ impl RunControls {
         &self.configs.configurations
     }
 
+    /// Window drafts borrow a snapshot; RunControls remains the persisted configuration owner.
+    pub(crate) fn configuration_set(&self) -> RunConfigSet {
+        self.configs.clone()
+    }
+
+    /// Commit one local snapshot atomically; failed writes do not change the baseline.
+    pub(crate) fn commit_configuration_set(
+        &mut self,
+        set: RunConfigSet,
+        workspace: &str,
+    ) -> Result<(), String> {
+        let bytes = set.to_json().map_err(|error| error.to_string())?;
+        let set = RunConfigSet::from_json(&bytes).map_err(|error| error.to_string())?;
+        let root = self
+            .root
+            .as_ref()
+            .ok_or("Local configuration storage is unavailable")?;
+        editor_core::save(root, workspace, &set).map_err(|error| error.to_string())?;
+        self.configs = set;
+        Ok(())
+    }
+
+    /// Fresh validated projections replace launch data without committing window drafts.
+    pub(crate) fn accept_configuration_projection(
+        &mut self,
+        configuration: RunConfig,
+        values: editor_core::PluginConfiguration,
+    ) -> Result<(), String> {
+        if !values.storage_valid() {
+            return Err("Invalid plugin configuration envelope".into());
+        }
+        self.configs
+            .upsert(configuration.clone())
+            .map_err(|error| error.to_string())?;
+        self.configs
+            .plugin_configurations
+            .insert(configuration.id, values);
+        Ok(())
+    }
+
     pub fn selected(&self) -> Option<&RunConfig> {
         self.configs.selected()
     }
@@ -641,12 +681,11 @@ impl RunControls {
         result
     }
 
-    /// Confirm one discovered candidate and store it as an editable configuration.
-    ///
-    /// This is the only way a discovery adds anything: the user confirms it, and it becomes an
-    /// ordinary configuration from that moment on. Confirming the same target twice resolves to the
-    /// configuration that already exists instead of saving a second copy.
-    pub fn confirm_target(&mut self, target_id: &str, workspace: &str) -> Result<String, String> {
+    /// Read a plugin's defaults into an unsaved configuration without selecting or persisting it.
+    /// An already confirmed identity resolves to its existing user configuration, preserving edits.
+    /// `target_id` identifies the offered target; `workspace` scopes a new configuration's identity.
+    /// Returns a cloned or generated configuration, or a localized error when no target resolves.
+    pub fn target_template(&self, target_id: &str, workspace: &str) -> Result<RunConfig, String> {
         // A stored identity remains selectable after a refresh reports it missing; launches
         // still validate the current catalog, and confirmation must never make a duplicate.
         if let Some(existing) = self
@@ -655,9 +694,7 @@ impl RunControls {
             .iter()
             .find(|config| config.from_target.as_deref() == Some(target_id))
         {
-            let id = existing.id.clone();
-            self.select(&id, workspace);
-            return Ok(id);
+            return Ok(existing.clone());
         }
         let candidate = self
             .discovered
@@ -670,9 +707,7 @@ impl RunControls {
             .iter()
             .find(|config| config.claims_target(candidate))
         {
-            let id = existing.id.clone();
-            self.select(&id, workspace);
-            return Ok(id);
+            return Ok(existing.clone());
         }
         let target = self
             .discovered
@@ -683,9 +718,23 @@ impl RunControls {
         let id = self.generate_id(workspace);
         // The target's display label is the natural name, so the user recognizes what they confirmed
         // and can rename it in the form immediately afterwards.
-        let configuration =
-            editor_core::configuration_for(&target, id.clone(), target.label.clone());
-        self.upsert(configuration, workspace)?;
+        Ok(editor_core::configuration_for(
+            &target,
+            id,
+            target.label.clone(),
+        ))
+    }
+
+    /// Explicit menu confirmation saves a candidate; form selection uses only `target_template`.
+    /// Confirming an existing target selects it without creating a duplicate or replacing edits.
+    /// Resolves `target_id` in `workspace` and returns its configuration ID; discovery, validation
+    /// and persistence errors leave the candidate unconfirmed and are returned to the caller.
+    pub fn confirm_target(&mut self, target_id: &str, workspace: &str) -> Result<String, String> {
+        let configuration = self.target_template(target_id, workspace)?;
+        let id = configuration.id.clone();
+        if self.configuration(&id).is_none() {
+            self.upsert(configuration, workspace)?;
+        }
         self.select(&id, workspace);
         Ok(id)
     }
@@ -2900,6 +2949,9 @@ impl RunControls {
         let Some(configuration) = configs.find(id) else {
             return Some(t!("run.no_configuration").into());
         };
+        if let Some(reason) = self.plugin_configuration_blocker(id) {
+            return Some(reason);
+        }
         // The blocker and the ensuing launch must inspect the same newly loaded shared target.
         if let Some(error) = self.discovery_blocker(configuration) {
             return Some(error);
@@ -2911,6 +2963,19 @@ impl RunControls {
             .validate()
             .err()
             .map(|error| error.to_string())
+    }
+
+    /// Saved validation controls availability; a fresh provider receipt is still required at execution.
+    /// Existing session ownership is independent, so this check never disables Stop.
+    pub(crate) fn plugin_configuration_blocker(&self, id: &str) -> Option<String> {
+        match &self.configs.plugin_configurations.get(id)?.validation {
+            editor_core::ConfigurationValidation::Valid => None,
+            editor_core::ConfigurationValidation::Unchecked => {
+                Some(t!("run.plugin_unchecked").into())
+            }
+            editor_core::ConfigurationValidation::Invalid(reason)
+            | editor_core::ConfigurationValidation::Unavailable(reason) => Some(reason.clone()),
+        }
     }
 
     /// Stage the choice of execution provider for one configuration.
@@ -3543,10 +3608,12 @@ impl RunConfigDraft {
                 .collect::<Vec<_>>()
         };
         let keeps_provider = !self.shell
-            && self
-                .provided
-                .as_ref()
-                .is_some_and(|target| target.executable() == self.program.trim());
+            && self.provided.as_ref().is_some_and(|target| {
+                // A provider label is opaque display data, so unchanged surrounding spaces
+                // must not turn it into a manual executable or discard its preparation binding.
+                target.executable() == self.program.as_str()
+                    || target.executable() == self.program.trim()
+            });
         let target = if keeps_provider {
             let mut target = self.provided.clone().unwrap();
             if let RunTarget::Provided { args, .. } = &mut target {

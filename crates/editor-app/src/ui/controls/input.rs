@@ -55,6 +55,9 @@ impl RenderOnce for Input {
         let palette = cx.theme();
         div()
             .w_full()
+            // Base's single-line engine fills its frame. A minimum height alone leaves its
+            // percentage-height hit region at zero, so painted fields cannot receive pointer/IME input.
+            .h(px(28.))
             .min_h(px(28.))
             .flex()
             .items_center()

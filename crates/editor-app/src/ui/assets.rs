@@ -3,6 +3,9 @@
 use gpui_kit::{AssetSource, Result, SharedString, assets::Assets};
 use std::borrow::Cow;
 
+// Embed only these extra catalog icons; the default bundle intentionally omits them.
+gpui_kit::assets::icon_assets!(ConfigurationIcons, [Lock, SquarePen]);
+
 macro_rules! file_icons {
     ($($path:literal => $file:literal),+ $(,)?) => {
         const FILE_ICON_PATHS: &[&str] = &[$($path),+];
@@ -23,6 +26,7 @@ file_icons! {
     "icons/run-start.svg" => "../../assets/icons/run-start.svg",
     "icons/run-debug.svg" => "../../assets/icons/run-debug.svg",
     "icons/run-stop.svg" => "../../assets/icons/run-stop.svg",
+    "icons/run-chevron-down.svg" => "../../assets/icons/run-chevron-down.svg",
     // Custom explorer actions share the title's theme color through monochrome SVG rendering.
     "icons/explorer-locate.svg" => "../../assets/icons/explorer-locate.svg",
     "icons/explorer-collapse-all.svg" => "../../assets/icons/explorer-collapse-all.svg",
@@ -54,11 +58,15 @@ impl AssetSource for AppAssets {
         if let Some(icon) = crate::extensions::contributions::asset(path) {
             return Ok(Some(Cow::Owned(icon)));
         }
+        if let Some(icon) = ConfigurationIcons.load(path)? {
+            return Ok(Some(icon));
+        }
         Assets.load(path)
     }
 
     fn list(&self, path: &str) -> Result<Vec<SharedString>> {
         let mut paths = Assets.list(path)?;
+        paths.extend(ConfigurationIcons.list(path)?);
         paths.extend(
             FILE_ICON_PATHS
                 .iter()
@@ -113,6 +121,25 @@ mod tests {
             assert!(
                 AppAssets.load(path).unwrap().is_some(),
                 "missing run action icon: {path}"
+            );
+        }
+    }
+
+    /// Locked plugin actions and editable user steps resolve from the selected extra icon bundle.
+    #[test]
+    fn exposes_configuration_action_icons() {
+        for icon in [
+            gpui_kit::assets::IconName::Lock,
+            gpui_kit::assets::IconName::SquarePen,
+        ] {
+            let path = icon.path();
+            assert!(AppAssets.load(&path).unwrap().is_some());
+            assert!(
+                AppAssets
+                    .list("icons/")
+                    .unwrap()
+                    .iter()
+                    .any(|entry| entry == &path)
             );
         }
     }

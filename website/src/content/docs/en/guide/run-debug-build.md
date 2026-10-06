@@ -8,21 +8,17 @@ alternate: /zh-cn/guide/run-debug-build/
 
 # Run, debug and build
 
-The title bar shows one configuration/session dropdown and four icon buttons—Build, Run, Debug and Stop—beside plugin management. Hover an icon for its action or disabled reason. Select an active session from the dropdown to locate its output; the same menu offers Rerun and immediate termination. While an ordinary execution is stopping, the Stop slot offers immediate termination.
+The title bar shows a configuration dropdown and four icon buttons—Build, Run, Debug and Stop—beside plugin management. The dropdown opens directly below its button: saved configurations appear above a separator, and **Edit configurations** opens the configuration window below it. An empty list shows a muted **No configurations** placeholder. Selecting a configuration does not launch it. Hover an icon for its action or disabled reason. While an ordinary execution is stopping, the Stop slot offers immediate termination.
 
 ## Choose a configuration
 
-Open the configuration menu to create or edit a configuration. Its Basic, Build, Debug and Environment pages share one draft. Saving stores the draft without executing anything; Cancel discards changes.
+Open **Edit configurations** to create or edit a configuration. Like plugin management, this is a separate native dialog above its parent window. Reopening activates the same dialog. It follows the externally selected configuration; without a selection the right pane shows **Please add a configuration**.
 
-Program mode takes an executable and one literal argument per line. Spaces, quotes and punctuation inside an argument remain part of that argument. Shell mode takes an explicitly selected interpreter, its arguments and multiline script text. The editor passes the script as the final interpreter argument and does not guess a shell or command flags. A missing interpreter or invalid environment entry keeps the form open with a reason.
+The plus button opens a drawer over the left list. Enabled compatible plugins supply grouped command templates with icons, names and defaults. Choose a template to create a separate unsaved configuration and open its plugin-owned native form. The program is read-only; its complete argument vector is editable, including a default subcommand. Argument boundaries preserve spaces, quotes and punctuation. The plugin supplies additional fields and business validation.
 
-The Environment page accepts NAME=value rows and tool-path overrides. Values apply only to the launched program/preparation. Tool paths are machine-local; shared configuration cannot grant trust or plugin permissions. Native fields support Chinese composition, selection and multiline input.
+**Apply** validates and stores the selected configuration, retaining the dialog and other drafts. **Save** waits for edits and validates every configuration, stores the drafts and closes the dialog. Invalid or unavailable results remain editable and cannot run; a disk write error keeps the dialog open. **Cancel** discards unapplied changes and retains earlier successful Apply operations. Editing or saving never starts a program.
 
-## Discover and share
-
-Discover targets asks enabled providers for candidates. It does not run a candidate or save it automatically. Confirm a candidate to create a configuration; repeated confirmation reuses it. Your edited names, arguments, environment and ordered preparation steps remain intact. If its provider or target disappears, repair the configuration explicitly instead of running a different target.
-
-Configurations can stay local or be stored in the project's shared configuration file. Shared data is portable and omits machine paths, permissions, credentials and running sessions. Opening a copy in another workspace gives it local identities and resolves its provider binding there. External invalid/deleted shared data is reported; the editor does not silently launch a stale fallback.
+Configurations stay on this machine, scoped to the workspace. They do not create a project configuration file or grant plugin permissions. A provider that disappears produces an unavailable result; execution never silently switches to another provider or reuses an old validation receipt.
 
 ## Build and launch
 

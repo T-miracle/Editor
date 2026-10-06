@@ -1,4 +1,37 @@
 _version: 2
+run.plugin_add_prompt:
+  en: "Please add a configuration"
+  zh-CN: "请添加配置"
+run.plugin_loading:
+  en: "Loading configuration…"
+  zh-CN: "正在加载配置…"
+run.plugin_add_folder:
+  en: "Add folder"
+  zh-CN: "添加文件夹"
+run.plugin_apply:
+  en: "Apply"
+  zh-CN: "应用"
+run.plugin_no_templates:
+  en: "No configuration templates"
+  zh-CN: "暂无命令配置"
+run.plugin_unnamed:
+  en: "Unnamed configuration"
+  zh-CN: "未命名配置"
+run.plugin_validating:
+  en: "Validating configuration…"
+  zh-CN: "正在校验配置…"
+run.plugin_unchecked:
+  en: "Configuration has not been validated"
+  zh-CN: "配置尚未校验"
+run.plugin_stale:
+  en: "Configuration changed; please try again"
+  zh-CN: "配置已经变化，请重试"
+run.plugin_edit_quota:
+  en: "Too many pending edits; wait for the provider"
+  zh-CN: "待处理修改过多，请等待配置插件"
+run.plugin_worker_unavailable:
+  en: "The plugin runtime is unavailable. Reopen the workspace to retry."
+  zh-CN: "插件运行时不可用，请重新打开工作区后重试。"
 editor.image_save_first:
   en: "Save the document before importing images"
   zh-CN: "请先保存文档，再导入图片"
@@ -854,6 +887,118 @@ run.step_reference_missing:
 run.step_script_missing:
   en: "An explicit Shell step needs a final script value."
   zh-CN: "显式 Shell 步骤需要最后一个脚本值。"
+# Simplified native configuration: common fields first, optional details on demand.
+run.form_title:
+  en: "Run configurations"
+  zh-CN: "运行配置"
+run.form_configurations:
+  en: "Configurations"
+  zh-CN: "配置"
+run.form_target:
+  en: "Run target"
+  zh-CN: "运行目标"
+run.form_choose_target:
+  en: "Choose a run target…"
+  zh-CN: "选择运行目标…"
+run.form_arguments:
+  en: "Arguments"
+  zh-CN: "参数"
+run.form_optional:
+  en: "Optional"
+  zh-CN: "可选"
+run.form_unset:
+  en: "Not set"
+  zh-CN: "未设置"
+run.form_startup:
+  en: "Before launch"
+  zh-CN: "启动前"
+run.form_more:
+  en: "More settings"
+  zh-CN: "更多设置"
+run.form_startup_automatic:
+  en: "Automatic build · %{count} custom"
+  zh-CN: "自动构建 · %{count} 项自定义"
+run.form_startup_count:
+  en: "%{count} steps"
+  zh-CN: "%{count} 项步骤"
+run.form_default_settings:
+  en: "Workspace directory · Default environment"
+  zh-CN: "工作区目录 · 默认环境"
+run.form_custom_settings:
+  en: "Customized"
+  zh-CN: "已自定义"
+run.form_environment_short:
+  en: "Environment variables"
+  zh-CN: "环境变量"
+run.form_tools_short:
+  en: "Local tool paths"
+  zh-CN: "本机工具路径"
+run.form_breakpoints_short:
+  en: "Breakpoints"
+  zh-CN: "断点"
+run.form_provider:
+  en: "Execution provider"
+  zh-CN: "运行提供者"
+run.form_local_settings:
+  en: "Environment, tool paths and provider choice stay on this machine"
+  zh-CN: "环境、工具路径与提供者选择保留在本机"
+run.form_build_short:
+  en: "Build actions"
+  zh-CN: "构建动作"
+run.form_prelaunch_short:
+  en: "Prelaunch steps"
+  zh-CN: "运行前步骤"
+run.form_plugin_preparation:
+  en: "Prepared by the plugin"
+  zh-CN: "由项目插件准备"
+run.form_actions:
+  en: "More configuration actions"
+  zh-CN: "更多配置操作"
+run.form_copy:
+  en: "Copy configuration"
+  zh-CN: "复制配置"
+run.form_copy_name:
+  en: "%{name} copy"
+  zh-CN: "%{name} 副本"
+run.form_delete:
+  en: "Delete configuration"
+  zh-CN: "删除配置"
+run.form_delete_question:
+  en: "Delete this configuration? Its unsaved changes will be discarded."
+  zh-CN: "删除这个配置？当前未保存的修改将被放弃。"
+run.form_switch_question:
+  en: "Save your changes before switching configurations?"
+  zh-CN: "切换配置前是否保存当前修改？"
+run.form_discard:
+  en: "Discard changes"
+  zh-CN: "放弃修改"
+run.form_save_short:
+  en: "Save"
+  zh-CN: "保存"
+run.form_done:
+  en: "Done"
+  zh-CN: "完成"
+run.form_edit_step:
+  en: "Edit step"
+  zh-CN: "编辑步骤"
+run.form_build_reference:
+  en: "Build reference"
+  zh-CN: "构建引用"
+run.form_reference_config:
+  en: "Referenced configuration"
+  zh-CN: "引用配置"
+run.form_reference_hint:
+  en: "Runs this configuration's build actions, without its final program"
+  zh-CN: "执行所选配置的构建动作，不启动其最终程序"
+run.form_reference_summary:
+  en: "%{name} · Build actions"
+  zh-CN: "%{name} · 构建动作"
+run.form_invalid_step:
+  en: "Invalid step"
+  zh-CN: "步骤内容无效"
+run.form_script_required:
+  en: "Enter the script text"
+  zh-CN: "请填写脚本文本"
 run.form_basic:
   en: "Basic"
   zh-CN: "基本"
@@ -1187,12 +1332,12 @@ run.menu_none:
   zh-CN: "(没有运行中的会话)"
 
 run.menu_empty:
-  en: "(No saved configurations)"
-  zh-CN: "(尚未保存运行配置)"
+  en: "No configurations"
+  zh-CN: "暂无配置"
 
 run.menu_edit:
-  en: "Edit selected configuration…"
-  zh-CN: "编辑所选配置…"
+  en: "Edit configurations"
+  zh-CN: "编辑配置"
 
 run.menu_new:
   en: "New run configuration…"

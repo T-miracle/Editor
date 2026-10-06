@@ -5,6 +5,8 @@ use std::collections::BTreeSet;
 
 /// Capability-based lifecycle, notifications and correlated host operations.
 pub mod api;
+/// Public command-template, native-form and validation service contract.
+pub mod configurations;
 pub mod debug;
 pub mod dependencies;
 pub mod execution;

@@ -104,6 +104,8 @@ execution.
 
 [Run sessions](/en/sdk/sessions/) specify public input, presentation, output subscriptions and normal/forced stopping. [Debug sessions](/en/sdk/debug/) specify pause generations, real inspection and breakpoint verification. [Run target providers](/en/sdk/targets/) contribute portable bindings and controlled artifact preparation.
 
+[Configuration templates](/en/sdk/configurations/) provide plugin-owned defaults, native forms and validation for local configuration drafts.
+
 ## workspace.files 1.1 and host.sdk 1.0
 
 `api::guest::find_files(&workspace, FileQuery { include, exclude, max_results })` uses the

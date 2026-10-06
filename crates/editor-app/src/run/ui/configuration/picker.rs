@@ -1,43 +1,134 @@
-//! Configuration and save-location dropdowns reuse the editor's retained native popup behavior.
+//! Native popup choices retain keyboard/focus behavior and bind callbacks to the opening form.
 use super::*;
 
-/// These selectors edit the modal draft; neither one starts a program.
+/// Every choice edits the draft; target discovery and default preparation keep their existing APIs.
 #[derive(Clone, Copy)]
 pub(super) enum PickerKind {
-    Configuration,
+    Target,
     Destination,
+    New,
+    More,
+    Provider,
+    Reference,
 }
 
-/// A bordered, full-width selector with a trailing chevron, matching B1's top and bottom controls.
+/// The same native selector is used for targets, scope and optional providers.
 pub(super) fn picker_button(
     app: &Entity<EditorApp>,
     kind: PickerKind,
     label: String,
-    cx: &mut gpui_kit::App,
+    cx: &gpui_kit::App,
 ) -> Button {
     let id = match kind {
-        PickerKind::Configuration => "run-config-existing",
+        PickerKind::Target => "run-config-target-picker",
         PickerKind::Destination => "run-config-save-location",
+        PickerKind::New => "run-config-new",
+        PickerKind::More => "run-config-actions",
+        PickerKind::Provider => "run-config-provider",
+        PickerKind::Reference => "run-step-reference",
     };
     let owner = app.clone();
     Button::new(id)
         .debug_selector(move || id.into())
         .ghost()
+        .content_full_width()
         .w_full()
         .min_w_0()
-        .content_full_width()
         .border_1()
         .border_color(cx.theme().input)
-        .accessibility_label(label.clone())
-        .child(div().flex_1().min_w_0().truncate().child(label))
-        .child(Icon::new(IconName::ChevronDown))
-        .on_click(move |event, window, cx| {
-            open_picker(&owner, kind, event.position(), window, cx);
+        .accessibility_label(if label.is_empty() {
+            match kind {
+                PickerKind::New => t!("run.form_new").into(),
+                PickerKind::More => t!("run.form_actions").into(),
+                _ => t!("run.form_choose_target").into(),
+            }
+        } else {
+            label.clone()
         })
+        .when(!label.is_empty(), |button| {
+            button.child(div().flex_1().min_w_0().truncate().child(label))
+        })
+        .child(Icon::new(match kind {
+            PickerKind::New => IconName::Plus,
+            PickerKind::More => IconName::Ellipsis,
+            _ => IconName::ChevronDown,
+        }))
+        .on_click(move |event, window, cx| open_picker(&owner, kind, event.position(), window, cx))
 }
 
-/// The popup snapshots option identities and retains focus/dismissal with the form that opened it.
-/// A delayed selection from a superseded draft cannot modify the replacement form.
+/// IDs, availability and provider provenance are captured, never inferred from displayed names.
+fn options(
+    app: &Entity<EditorApp>,
+    kind: PickerKind,
+    cx: &gpui_kit::App,
+) -> Vec<(String, String, bool)> {
+    match kind {
+        PickerKind::Target | PickerKind::New => {
+            let mut result = app
+                .read(cx)
+                .run_controls
+                .discovered_targets()
+                .iter()
+                .map(|target| {
+                    (
+                        format!("target:{}", target.id),
+                        format!("{} · {}", target.label, target.provider),
+                        false,
+                    )
+                })
+                .collect::<Vec<_>>();
+            result.extend([
+                ("new:program".into(), t!("run.field_program").into(), false),
+                ("new:script".into(), t!("run.form_shell").into(), false),
+                ("discover".into(), t!("run.discover").into(), false),
+            ]);
+            result
+        }
+        PickerKind::Destination => vec![
+            ("local".into(), t!("run.form_local").into(), false),
+            ("shared".into(), t!("run.form_shared").into(), false),
+        ],
+        PickerKind::More => vec![
+            ("copy".into(), t!("run.form_copy").into(), false),
+            ("delete".into(), t!("run.form_delete").into(), false),
+        ],
+        PickerKind::Provider => {
+            let mut result = vec![("default".into(), t!("run.provider_default").into(), false)];
+            result.extend(
+                app.read(cx)
+                    .extensions
+                    .read(cx)
+                    .run_providers()
+                    .unwrap_or_default()
+                    .into_iter()
+                    .map(|provider| {
+                        (
+                            format!("provider:{}", provider.plugin),
+                            provider
+                                .unavailable
+                                .as_ref()
+                                .map(|reason| format!("{} ({reason})", provider.plugin))
+                                .unwrap_or(provider.plugin),
+                            provider.unavailable.is_some(),
+                        )
+                    }),
+            );
+            result
+        }
+        PickerKind::Reference => {
+            let current = &app.read(cx).run_form.as_ref().unwrap().read(cx).draft.id;
+            app.read(cx)
+                .run_controls
+                .configurations()
+                .iter()
+                .filter(|config| &config.id != current)
+                .map(|config| (config.name.clone(), config.name.clone(), false))
+                .collect()
+        }
+    }
+}
+
+/// A superseded form cannot receive a late menu action; dropping the form also revokes its popup.
 fn open_picker(
     app: &Entity<EditorApp>,
     kind: PickerKind,
@@ -48,34 +139,22 @@ fn open_picker(
     let Some(form) = app.read(cx).run_form.clone() else {
         return;
     };
-    let options = match kind {
-        PickerKind::Configuration => app
-            .read(cx)
-            .run_controls
-            .configurations()
-            .iter()
-            .map(|config| (config.id.clone(), config.name.clone()))
-            .collect::<Vec<_>>(),
-        PickerKind::Destination => vec![
-            ("local".into(), t!("run.form_local").to_string()),
-            ("shared".into(), t!("run.form_shared").to_string()),
-        ],
-    };
-    let items = if options.is_empty() {
+    let choices = options(app, kind, cx);
+    let items = if choices.is_empty() {
         vec![plugin_runtime::plugin_protocol::ui::MenuItem {
             id: "empty".into(),
-            label: t!("run.menu_empty").to_string(),
+            label: t!("run.menu_empty").into(),
             disabled: true,
             separator_before: false,
         }]
     } else {
-        options
+        choices
             .into_iter()
             .map(
-                |(id, label)| plugin_runtime::plugin_protocol::ui::MenuItem {
+                |(id, label, disabled)| plugin_runtime::plugin_protocol::ui::MenuItem {
                     id,
                     label,
-                    disabled: false,
+                    disabled,
                     separator_before: false,
                 },
             )
@@ -83,11 +162,10 @@ fn open_picker(
     };
     let owner = app.downgrade();
     let form_id = form.entity_id();
-    let style = MenuStyle::current(cx);
     let popup = cx.new(|cx| {
         NativePopupMenu::new(
             items,
-            style,
+            MenuStyle::current(cx),
             position,
             move |action, window, cx| {
                 let plugin_runtime::plugin_protocol::ui::Action::Select(id) = action else {
@@ -101,26 +179,51 @@ fn open_picker(
                     else {
                         return;
                     };
+                    form.update(cx, |form, cx| {
+                        form.picker = None;
+                        cx.notify();
+                    });
                     match kind {
-                        PickerKind::Configuration => {
-                            let key = state.workspace_key();
-                            // Replace both the draft and its editing states, never only the visible labels.
-                            state.run_form = Some(cx.new(|cx| {
-                                RunConfigForm::open(
-                                    &state.run_controls,
-                                    &key,
-                                    Some(&id),
-                                    window,
-                                    cx,
-                                )
-                            }));
+                        PickerKind::Target | PickerKind::New | PickerKind::More => {
+                            let selection = if let Some(target) = id.strip_prefix("target:") {
+                                Some(FormSelection::Candidate(target.into()))
+                            } else {
+                                match id.as_str() {
+                                    "new:program" => Some(FormSelection::New(false)),
+                                    "new:script" => Some(FormSelection::New(true)),
+                                    "copy" => Some(FormSelection::Copy),
+                                    "delete" => Some(FormSelection::Delete),
+                                    "discover" => {
+                                        state.discover_run_targets(cx);
+                                        None
+                                    }
+                                    _ => None,
+                                }
+                            };
+                            if let Some(selection) = selection {
+                                state.select_run_form(selection, window, cx);
+                            }
                         }
-                        PickerKind::Destination => {
-                            form.update(cx, |form, cx| {
-                                form.draft.share = id == "shared";
-                                form.error = None;
-                                cx.notify();
-                            });
+                        PickerKind::Destination => form.update(cx, |form, cx| {
+                            form.draft.share = id == "shared";
+                            form.error = None;
+                            cx.notify();
+                        }),
+                        PickerKind::Provider => form.update(cx, |form, cx| {
+                            form.draft.provider = id.strip_prefix("provider:").map(str::to_owned);
+                            form.error = None;
+                            cx.notify();
+                        }),
+                        PickerKind::Reference => {
+                            if let Some(FormEditor::Step { state: editor, .. }) =
+                                &form.read(cx).editor
+                            {
+                                editor.clone().update(cx, |editor, cx| {
+                                    editor
+                                        .reference
+                                        .update(cx, |input, cx| input.set_value(id, window, cx))
+                                });
+                            }
                         }
                     }
                     cx.notify();
@@ -130,8 +233,9 @@ fn open_picker(
             cx,
         )
         .width(match kind {
-            PickerKind::Configuration => 320.,
             PickerKind::Destination => 160.,
+            PickerKind::More => 200.,
+            _ => 360.,
         })
     });
     let popup_id = popup.entity_id();

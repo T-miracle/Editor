@@ -516,7 +516,6 @@ impl Render for EditorApp {
                 shell.child(confirm)
             })
             .child(self.render_run_menu(window, cx))
-            .child(self.render_run_form_modal(window, cx))
             .child(self.render_plugin_popup(window, cx))
             .child(self.render_explorer_menu(window, cx))
             .child(self.render_explorer_edit(cx))
