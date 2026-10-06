@@ -11,14 +11,18 @@ use wasmtime::{
 };
 use wasmtime_wasi::{ResourceTable, WasiCtx, WasiCtxView, WasiView};
 mod capability_calls;
+mod data_files;
 mod document_events;
 mod editor_requests;
 mod file_discovery;
+mod image_inputs;
 mod plugin_services;
+mod preferences;
 mod process_calls;
 mod resource_roots;
 mod settings;
 mod stdio;
+mod tools;
 use resource_roots::ResourceRoots;
 wasmtime::component::bindgen!({path:"../plugin-protocol/wit",world:"plugin",require_store_data_send:true});
 
@@ -34,8 +38,15 @@ struct State {
     roots: ResourceRoots,
     /// Slots and pending completions are owned by this exact WASM instance.
     editor_requests: std::collections::BTreeMap<u64, crate::editor_requests::PendingRequest>,
+    /// Native inputs and their slots share this incarnation; pending writers retain their own immutable payload.
+    image_inputs: std::collections::BTreeMap<u64, image_inputs::Input>,
     declared_panels: BTreeSet<String>,
+    /// Editor toolbar authority is confined to this package's declared workspace preview surfaces.
+    declared_editor_panels: BTreeSet<String>,
+    /// Auxiliary tools never gain authority to publish the whole file layout.
+    declared_layout_panels: BTreeSet<String>,
     subscriptions: std::collections::BTreeMap<u64, crate::document_events::Subscription>,
+    preference_subscriptions: std::collections::BTreeMap<u64, preferences::Subscription>,
     wasi: WasiCtx,
     table: ResourceTable,
     limits: crate::faults::MemoryBudget,
@@ -119,6 +130,8 @@ pub struct Instance {
     pub(crate) diagnostics: Vec<crate::faults::Diagnostic>,
     /// UI preview publication is tied to the latest authorized input for each declared surface.
     pub(crate) preview_sources: std::collections::BTreeMap<String, Option<api::DocumentVersion>>,
+    /// File authority is independent of native text revisions and revoked on file/provider changes.
+    pub(crate) file_sources: std::collections::BTreeMap<String, Option<api::FileContext>>,
     /// Configuration belongs to the same owner as its runtime resources, not the currently selected workspace.
     pub(crate) configuration: plugin_protocol::settings::Effective,
     /// Host invocation IDs cannot be confused with stale completions after another call.
@@ -249,10 +262,24 @@ impl Instance {
             call_deadline: std::time::Instant::now(),
             roots: ResourceRoots::new(&environment.workspace, application, manifest.storage_limit),
             editor_requests: Default::default(),
+            image_inputs: Default::default(),
             subscriptions: Default::default(),
+            preference_subscriptions: Default::default(),
             declared_panels: manifest
                 .panels
                 .iter()
+                .map(|panel| panel.id.clone())
+                .collect(),
+            declared_editor_panels: manifest
+                .panels
+                .iter()
+                .filter(|panel| panel.position == "editor")
+                .map(|panel| panel.id.clone())
+                .collect(),
+            declared_layout_panels: manifest
+                .panels
+                .iter()
+                .filter(|panel| panel.position == "editor" && !panel.auxiliary)
                 .map(|panel| panel.id.clone())
                 .collect(),
             wasi: wasi.build(),
@@ -291,6 +318,7 @@ impl Instance {
         let mut instance = Self {
             diagnostics: Vec::new(),
             preview_sources: Default::default(),
+            file_sources: Default::default(),
             configuration: Default::default(),
             next_call: 1,
             store,
@@ -302,6 +330,11 @@ impl Instance {
         instance.prepare_state(environment, snapshot)?;
         Ok(instance)
     }
+    /// Immutable negotiated authority lets manager ingress reject unavailable optional interfaces.
+    pub(crate) fn negotiated(&self) -> &api::Negotiated {
+        &self.store.data().api
+    }
+
     /// Every call gets a finite instruction budget; a trap cannot unwind through the host.
     pub fn call(&mut self, message: api::Input) -> anyhow::Result<api::Output> {
         anyhow::ensure!(
@@ -426,6 +459,9 @@ impl Instance {
                 std::sync::Arc::new(view.document.clone()),
             );
         }
+        // Revoke against the newly published opt-in, before a second public event can use old slots.
+        // Accepted writers pin their payload independently and still deliver the original save receipt.
+        self.reconcile_image_inputs();
         self.error = None;
         Ok(reply)
     }
@@ -498,8 +534,10 @@ impl Instance {
     }
     /// Seal already-published work before the final snapshot, while retaining private-file access for serialization.
     pub(crate) fn quiesce(&mut self) {
+        self.clear_image_inputs();
         self.store.data_mut().plugin_services.clear();
         self.store.data_mut().subscriptions.clear();
+        self.store.data_mut().preference_subscriptions.clear();
         for request in self.store.data_mut().editor_requests.values() {
             request.call.retire();
         }
@@ -508,6 +546,7 @@ impl Instance {
     pub fn stop(&mut self) {
         self.quiesce();
         self.preview_sources.clear();
+        self.file_sources.clear();
         self.store.data_mut().roots.retire();
         self.views.clear();
         self.store.data_mut().processes.clear();
@@ -552,13 +591,15 @@ impl Instance {
         self.store.data().processes.ids()
     }
     pub fn poll(&mut self) -> anyhow::Result<bool> {
+        self.reconcile_image_inputs();
         self.retire_service_sources();
         let revoked = self.poll_service_revocations()?;
         self.poll_service_requests()?;
         self.poll_editor_requests()?;
         self.poll_document_events()?;
+        let preferences_changed = self.poll_preferences()?;
         let events = self.store.data_mut().poll_processes()?;
-        let changed = revoked || !events.is_empty();
+        let changed = revoked || preferences_changed || !events.is_empty();
         for event in events {
             // Exit removes its slot, but the last callback still inherits the originating service authority.
             let context = if let api::Notification::Process { handle, .. } = &event {

@@ -118,7 +118,11 @@ fn text_drag_moves_unicode_forward_and_undoes_atomically(cx: &mut TestAppContext
             app.editor.read(cx).selected_range(),
             expected.len() - source.len()..expected.len()
         );
-        let session = &app.tabs[app.active_tab_index().unwrap()].session;
+        let session = &app.tabs[app.active_tab_index().unwrap()]
+            .text
+            .as_ref()
+            .unwrap()
+            .session;
         assert!(session.is_dirty());
         assert_eq!(session.revision(), 1);
         window.draw(cx).clear(cx);
@@ -177,7 +181,14 @@ fn text_drag_rejects_drops_in_original_selection(cx: &mut TestAppContext) {
         cx.update(|_, cx| {
             assert_eq!(view.read(cx).editor.read(cx).text().to_string(), content);
             assert_eq!(view.read(cx).editor.read(cx).selected_range(), source);
-            assert!(!view.read(cx).tabs[0].session.is_dirty());
+            assert!(
+                !view.read(cx).tabs[0]
+                    .text
+                    .as_ref()
+                    .unwrap()
+                    .session
+                    .is_dirty()
+            );
         });
     }
 }

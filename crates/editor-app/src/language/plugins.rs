@@ -49,7 +49,16 @@ fn load_plugin_language(
         .with_context(|| format!("read grammar {}", grammar_path.display()))?;
     let query = fs::read_to_string(&highlights_path)
         .with_context(|| format!("read highlights {}", highlights_path.display()))?;
-    load_language(contribution, grammar_bytes, query)
+    let injections = contribution
+        .injections
+        .as_ref()
+        .map(|path| {
+            let path = plugin_asset(plugin_root, path)?;
+            fs::read_to_string(path).context("read grammar injections")
+        })
+        .transpose()?
+        .unwrap_or_default();
+    load_language(contribution, grammar_bytes, query, injections)
 }
 
 /// Owns the WASM store for as long as parsers can use its language handle.
@@ -57,6 +66,17 @@ pub(crate) struct LoadedGrammar {
     engine: Engine,
     language_id: String,
     bytes: Arc<[u8]>,
+    /// Queries and allowed identities stay with the same generation-checked immutable grammar.
+    injections: String,
+    injection_languages: Vec<String>,
+}
+
+impl LoadedGrammar {
+    /// Borrow the validated static injection query and its allowed identities from this same module.
+    /// Read-only consumers must independently select each target and retain provider-epoch guards.
+    pub(crate) fn readonly_injections(&self) -> (&str, &[String]) {
+        (&self.injections, &self.injection_languages)
+    }
 }
 
 /// Validate bytes on a background worker without mutating the process-wide parser registry.
@@ -66,11 +86,38 @@ pub(crate) fn prepare_dynamic(
     load_plugin_language(&provider.root, &provider.declaration)
 }
 
+/// Create isolated read-only parser state from an already validated plugin module.
+///
+/// Call on a background worker. The dedicated initialization stack matches editor parsers;
+/// callers retain cancellation/deadline checks around this non-interruptible initialization.
+pub(crate) fn readonly_parser(
+    grammar: Arc<LoadedGrammar>,
+) -> anyhow::Result<(Parser, tree_sitter::Language)> {
+    parser_factory(grammar)()
+}
+
 /// Only the UI owner may publish a generation-checked successful load.
 pub(crate) fn publish_dynamic(language: &str, grammar: Arc<LoadedGrammar>, query: String) {
     let registry = LanguageRegistry::singleton();
+    // A declared injection must never borrow an upstream native parser when its plugin is absent.
+    let selected = super::providers::grammars();
+    for dependency in &grammar.injection_languages {
+        if !selected
+            .iter()
+            .any(|provider| &provider.declaration.language == dependency)
+        {
+            mask_language(dependency);
+        }
+    }
     let mut config = GrammarConfig::plain(language.to_owned());
     config.highlights = SharedString::from(query);
+    config.injections = SharedString::from(grammar.injections.clone());
+    config.injection_languages = grammar
+        .injection_languages
+        .iter()
+        .cloned()
+        .map(Into::into)
+        .collect();
     registry.register(language, &config);
     registry.register_parser_factory(language, parser_factory(grammar));
 }
@@ -80,6 +127,7 @@ fn load_language(
     contribution: &Highlighter,
     grammar_bytes: Vec<u8>,
     query: String,
+    injections: String,
 ) -> anyhow::Result<(Arc<LoadedGrammar>, String)> {
     let expected_abi = contribution.tree_sitter_abi;
 
@@ -104,24 +152,52 @@ fn load_language(
     );
     tree_sitter::Query::new(&language, &query)
         .with_context(|| format!("compile highlight query for {}", contribution.grammar_name))?;
+    if !injections.is_empty() {
+        let injection_query = tree_sitter::Query::new(&language, &injections)
+            .context("compile grammar injections")?;
+        // The upstream registry does not enforce its advertised injection allowlist. Restrict
+        // targets here before publication so queries cannot borrow a built-in native parser.
+        ensure!(
+            !injection_query
+                .capture_names()
+                .contains(&"injection.language"),
+            "dynamic injection language captures are unsupported; declare a static target"
+        );
+        for pattern in 0..injection_query.pattern_count() {
+            let mut targets = injection_query
+                .property_settings(pattern)
+                .iter()
+                .filter(|property| property.key.as_ref() == "injection.language");
+            let target = targets
+                .next()
+                .and_then(|property| property.value.as_deref());
+            ensure!(
+                targets.next().is_none()
+                    && target.is_some_and(|target| contribution
+                        .injection_languages
+                        .iter()
+                        .any(|id| id == target)),
+                "injection target must be explicitly declared in injection_languages"
+            );
+        }
+    }
 
     let grammar = Arc::new(LoadedGrammar {
         engine,
         language_id: contribution.grammar_name.clone(),
         bytes: grammar_bytes.into(),
+        injections,
+        injection_languages: contribution.injection_languages.clone(),
     });
     let (mut parser, language) = create_parser(&grammar)?;
     parser
         .set_language(&language)
         .context("set dynamically loaded Tree-sitter grammar")?;
-    let tree = parser
+    // Creating a tree validates the parser bridge; some legitimate grammars require nonempty input.
+    // Source syntax errors belong to document diagnostics, not package admission.
+    let _tree = parser
         .parse("", None)
         .context("parse validation sample with WASM grammar")?;
-    ensure!(
-        !tree.root_node().has_error(),
-        "WASM grammar rejected the validation sample for {}",
-        contribution.grammar_name
-    );
     Ok((grammar, query))
 }
 

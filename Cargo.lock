@@ -1803,7 +1803,9 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2 0.10.9",
+ "svgtypes 0.15.3",
  "tempfile",
+ "toml 0.9.12+spec-1.1.0",
  "tracing",
  "tree-sitter",
  "url",
@@ -1814,7 +1816,10 @@ dependencies = [
 name = "editor-core"
 version = "0.1.0"
 dependencies = [
+ "dirs 6.0.0",
  "ignore",
+ "serde",
+ "serde_json",
  "tempfile",
  "thiserror 2.0.20",
 ]
@@ -5516,6 +5521,7 @@ dependencies = [
  "plugin-protocol",
  "plugin-schema",
  "portable-pty",
+ "roxmltree 0.21.1",
  "semver",
  "serde",
  "serde_json",

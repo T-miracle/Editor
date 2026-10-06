@@ -27,6 +27,7 @@ impl PluginView {
                 self.collections.insert(id.clone(), view);
             }
             let model = CollectionModel {
+                content_colors: self.document.content_colors.clone(),
                 revision: self.document.revision,
                 sidebar: Some(tabs),
                 menu: None,
@@ -41,6 +42,7 @@ impl PluginView {
                 self.popup = Some(self.widget(cx));
             }
             let model = CollectionModel {
+                content_colors: self.document.content_colors.clone(),
                 revision: self.document.revision,
                 menu: self.document.menu.clone(),
                 sidebar: None,

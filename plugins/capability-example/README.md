@@ -1,5 +1,17 @@
 # Capability Example
 
+版本 0.15.7 的普通 `preview-probe` 命令接收完整公开 `ui::Document` 并原样发布到 welcome 面板，用于独立检查版本、能力与权限的发布门禁；它不修正或伪造 source。组合 UI 资产的 `code_highlighting` 在没有 Preview source 时暂时关闭，绑定版本后恢复原声明。代码高亮消费者需要协商 `ui.code_highlighting`、`ui.richtext` 与 `editor.documents` 并获得 `editor.read`；普通等宽代码保持默认惰性。
+
+0.15.6 使用当前独立 SDK 验证 `editor.navigation`／`ui.links`。公开 `scope-probe` 能发起版本化通用导航；测试重新打包为另一身份，验证非 Markdown 文档、权限、场景归属及取消。默认示例不增加浏览器权限，导航按测试夹具的声明与批准执行。
+
+0.15.5 增加独立 `image-input-fixture` 的 `editor.images` 验收：组合树在没有 `Document.source` 时隐藏图片输入声明；原生图片通知只传元数据，示例使用公开 `scope-probe` 发起保存并展示异步回执。测试覆盖权限、跨实例句柄、名称边界、配额、碰撞重试与源版本撤销；默认包不增加图片写入权限。
+
+0.15.4 增加独立 `images-fixture` 图片资源验收。组合 UI 资产中的 Image 在没有 `Document.source` 时仅发布替代文字，原模板保留，收到版本化 Preview 后声明资源。实际 ZIP 验证 `ui.images` 协商、逐图权限错误、本地工作区边界与异步 HTTP 回收；默认示例权限和界面不变。
+
+0.15.3 增加独立 `edit-fixture` 的版本化选区与源码工具栏验收。组合 UI 资产可带 `editor_toolbar`，输出克隆在尚无 `Document.source` 时隐藏它，原始模板保留；测试在版本化 Preview 后通过原有 zoom 按钮回调验证工具栏事件。组合界面按当前 ID 消费 Dialog/Menu 的 Dismiss，保留 Dialog 的输入优先级和源码版本。范围编辑使用公开 scope-probe 与异步编辑请求，不附加测试专用宿主 API。默认示例界面和权限声明不变，验收包显式协商 `editor.edit` / `editor.toolbar`。
+
+0.15.2 增加独立 `richtext-fixture` 打包验收：测试仅协商 `ui.native`、`ui.richtext` 与资源/配置能力，预览映射再申请 `editor.documents` 和 `editor.read`，不引用 Markdown 插件。组合树资产可携带富文本、代码块与源码字节范围；首次收到带版本的预览前，输出克隆移除未绑定的范围，原资产模板保留。`composable_ui` 集成测试覆盖能力声明与缺失拒绝、中文 UTF-8 范围、倒置及超配额范围。
+
 0.15.0 增加 `interactive.execute` 1.0 的独立替代提供者夹具：消费者继续使用 `service-open` / `service-call`，测试打包时声明同一契约与权限。替代实现通过 stdio 执行 argv 并请求自身普通面板；不引用终端 ID 或终端源码。默认包仍不申请执行权限，也不发布这项契约。实际进程、选择、取消、来源授权和替换验证见 `interactive_execution` 集成测试。
 
 0.14.0 增加 `ui.clipboard` 与 `storage.editor` 验收：使用类型化编辑器请求读写剪贴板、打开自身私有配置，并验证实际原生完成结果。
@@ -28,7 +40,7 @@ SDK `MIGRATION.md` 说明私有数据版本、隔离权限、最终副本与中�
 
 安装时需要批准 assets.read（读取包资源）、workspace.read（读取所属工作区）、storage（读写实例私有文件）、clipboard（类型化剪贴板读写）、editor.read（选区和文档事件）、editor.write（保存已打开文档）与 ui.panels（自身面板显隐）。不申请进程或网络权限。菜单命令“检查类型化错误”验证未知操作、错误参数与路径越界的明确返回。
 
-scope-write / scope-read 将工作区的 source.txt 与私有 value.txt 一起显示；scope-probe 接收公开 Operation JSON，并将 SDK 的类型化结果显示为文本。诊断命令验证跨实例句柄拒绝、应用级实例不具有工作区权限，以及显式释放后的句柄失效。
+scope-write / scope-read 将工作区的 source.txt 与私有 value.txt 一起显示；scope-probe 接收公开 Operation JSON，并将 SDK 的类型化结果显示为文本。替换文本或剪贴板写入操作可追加 `repeat_text` 整数，在 guest 内重复请求文本，结果最多 1 MiB + 1 字节，以验证文本配额；命令参数、WASM fuel 和内存限额保持不变。诊断命令验证跨实例句柄拒绝、应用级实例不具有工作区权限，以及显式释放后的句柄失效。
 
 SDK 提供 open_workspace、open_data、read_file、write_file、close_resource；句柄由宿主签发，不应持久化。workspace.files 1.0 只读，storage.private 1.0 支持私有根目录直接子文件的原子写入，每文件最多 1 MiB，累计受清单 storage_limit 约束。用户设置、其他工作区数据及宿主快照均不在可读根目录内。
 
@@ -47,6 +59,8 @@ SDK 提供 open_workspace、open_data、read_file、write_file、close_resource�
 每实例最多 32 个未结请求、8 个订阅；每个文档队列最多 64 个待处理实体，按实体合并为最新版本并公平分批投递。跨批次保留最多 1024 个实体的版本水位；容量耗尽以 LimitExceeded 终止订阅，需重新订阅。通知是版本提示而非完整文本增量日志，不承诺重放订阅前的变化。最终请求结果保留至投递或实例退出，不作为可丢弃进度处理。停用、卸载或撤销信任统一撤销实例资源；已停用 guest 不再接收回调。
 
 ## 声明式配置
+
+独立 SDK 夹具可用 `preview-probe` 发布原样的 source-bound Scroll，并通过 `scope-probe` 发出公开 `LocateViewport`；无 source 时视口 opt-in 撤销，不制造虚假的文档身份。`editor.viewport` 为可选协商，普通示例保持惰性。
 
 编辑器“设置 → 插件设置”根据清单生成 enabled（布尔）、label（文本）、count（1–20 的整数，仅用户级）、style（枚举）的原生表单。选择用户全局或本项目后点击应用才写入；重置移除所选层级覆盖。每项显示当前生效来源。配置顺序为已确认项目值 → 用户值 → 自动发现 → 默认值；项目不能写宿主信任、授权或主题等设置。
 

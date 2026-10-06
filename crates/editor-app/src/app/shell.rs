@@ -287,32 +287,7 @@ impl Render for EditorDockPanel {
     }
 }
 
-impl EditorApp {
-    fn render_panel_buttons(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let selected_style = component_styles(cx, ThemeComponent::PanelToggle).selected;
-        h_flex()
-            .items_center()
-            .gap_1()
-            .child(
-                Button::new("explorer-panel-toggle")
-                    .icon(explorer_panel_icon(cx))
-                    .small()
-                    .compact()
-                    .ghost()
-                    // Match the existing 24px compact icon width for a rounded square highlight.
-                    .h(px(24.))
-                    .tooltip(t!("panel.explorer").to_string())
-                    .when(self.explorer_visible, |button| {
-                        button
-                            .bg(selected_style.background.unwrap_or(cx.theme().list_active))
-                            .text_color(selected_style.foreground.unwrap_or(cx.theme().foreground))
-                    })
-                    .on_click(cx.listener(|this, _, _, cx| this.toggle_explorer(cx))),
-            )
-            // The explorer owns the first status slot; plugin panels follow it.
-            .children(self.plugin_panel_buttons(cx))
-    }
-}
+impl EditorApp {}
 
 impl Render for EditorApp {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
@@ -332,12 +307,12 @@ impl Render for EditorApp {
         // Open plugin-owned settings through the normal editor document path.
         self.sync_plugin_panels(window, cx);
         self.sync_plugin_documents(cx);
-        for (plugin, request) in std::mem::take(&mut self.pending_editor_requests) {
-            self.perform_editor_request(&plugin, request, window, cx);
-        }
+        self.dispatch_editor_requests(window, cx);
         if let Some(path) = self.pending_plugin_file.take() {
             self.open_file(path, window, cx);
         }
+        // Discovery waits for healthy runtime restoration, then reuses native permission consent for this file.
+        self.sync_bundled_first_use(window, cx);
         let cursor = self.editor.read(cx).cursor_position();
         let project_initial = self
             .workspace
@@ -472,21 +447,30 @@ impl Render for EditorApp {
                     .border_color(status_style.border.unwrap_or(cx.theme().border))
                     .child(
                         StatusBar::new()
-                            .left(self.render_panel_buttons(cx))
-                            .left(div().max_w(px(320.)).truncate().child(self.status.clone()))
+                            .left(self.render_plugin_toolbar(explorer_panel_icon(cx), window, cx))
+                            .left(
+                                div()
+                                    .flex_1()
+                                    .min_w_0()
+                                    .max_w(px(320.))
+                                    .truncate()
+                                    .child(self.status.clone()),
+                            )
                             // Keep error counts separate from temporary save/loading messages.
                             .when(
-                                self.editor
-                                    .read(cx)
-                                    .diagnostics()
-                                    .is_some_and(|set| !set.is_empty()),
+                                self.active_text_tab_index().is_some()
+                                    && self
+                                        .editor
+                                        .read(cx)
+                                        .diagnostics()
+                                        .is_some_and(|set| !set.is_empty()),
                                 |bar| bar.right(self.render_syntax_error_indicator(cx)),
                             )
                             // Keep plugin indicators immediately before the cursor position.
                             .when_some(plugin_indicator, |bar, kind| {
                                 bar.right(self.render_plugin_indicator(kind, cx))
                             })
-                            .right(if self.active_path.is_some() {
+                            .right(if self.active_text_tab_index().is_some() {
                                 t!(
                                     "status.cursor",
                                     line = cursor.line + 1,
@@ -501,6 +485,12 @@ impl Render for EditorApp {
             .child(self.render_plugin_popup_blocker(cx))
             .child(self.render_plugin_popup(window, cx))
             .child(self.render_explorer_menu(window, cx))
+            .when_some(self.file_view_menu.as_ref(), |body, menu| {
+                body.child(menu.clone())
+            })
+            .when_some(self.tool_overflow.as_ref(), |body, menu| {
+                body.child(menu.clone())
+            })
             .child(self.render_explorer_edit(cx))
             .child(self.render_explorer_delete(cx))
             .when_some(self.notification.as_ref(), |this, notification| {

@@ -1,7 +1,7 @@
 {
   "id": "capability-example",
   "name": "Capability Example",
-  "version": "0.15.1",
+  "version": "0.15.9",
   "settings_hook": true,
   "settings": {
     "enabled": { "title": "启用示例功能", "value_type": { "kind": "boolean" }, "default": true, "scope": "project", "apply": "restart_instance" },
@@ -13,7 +13,7 @@
   "api": {
     "base": "^1",
     "required": { "package.assets": "^1", "ui.native": "^1", "workspace.files": "^1", "storage.private": "^1", "storage.editor": "^1", "ui.clipboard": "^1", "editor.documents": "^1", "ui.panels": "^1", "configuration": "^1" },
-    "optional": { "example.future": "^9", "ui.canvas": "^1" }
+    "optional": { "example.future": "^9", "ui.canvas": "^1", "editor.viewport": "^1" }
   },
   "component": "capability-example.wasm",
   "permissions": ["assets.read", "workspace.read", "storage", "clipboard", "editor.read", "editor.write", "ui.panels"],
@@ -29,6 +29,7 @@
     { "id": "scope-write", "title": "写入当前作用域" },
     { "id": "scope-read", "title": "读取当前作用域" },
     { "id": "scope-probe", "title": "检查作用域契约" },
+    { "id": "preview-probe", "title": "检查原生预览契约" },
     { "id": "process-events", "title": "查看进程事件" },
     { "id": "close-on-output", "title": "首个输出后关闭进程" },
     { "id": "read-selection", "title": "读取选区及文档版本" },

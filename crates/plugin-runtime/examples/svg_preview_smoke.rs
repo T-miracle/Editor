@@ -132,15 +132,15 @@ fn main() -> anyhow::Result<()> {
         },
     )?;
     let original = vector(&manager).expect("valid SVG scene");
-    assert!((original.w - 240.).abs() < 0.01);
-    assert!((original.h - 120.).abs() < 0.01);
+    assert!((original.w - 200.).abs() < 0.01);
+    assert!((original.h - 100.).abs() < 0.01);
     assert_centered(&manager);
     let scene = drawing(&manager);
     assert!(
         matches!(scene.paint.last(), Some(Paint::Svg { source: rendered, .. }) if rendered == source)
     );
     assert!(scene.paint.iter().any(|paint| matches!(paint,
-        Paint::Text { text, size, font, .. } if text == "120%" && *size == 16.
+        Paint::Text { text, size, font, .. } if text == "100%" && *size == 16.
             && font.as_deref().or(scene.font.family.as_deref()).unwrap() == "Segoe UI"
     )));
     assert_eq!(
@@ -152,7 +152,7 @@ fn main() -> anyhow::Result<()> {
         4
     );
     // Route physical toolbar clicks through the same pointer events emitted by the native surface.
-    for (x, expected_width) in [(18., 268.8), (50., 240.), (82., 200.), (114., 552.)] {
+    for (x, expected_width) in [(18., 224.), (50., 200.), (82., 200.), (114., 552.)] {
         for phase in [ui::PointerPhase::Down, ui::PointerPhase::Up] {
             canvas(
                 &mut manager,
@@ -192,7 +192,7 @@ fn main() -> anyhow::Result<()> {
         },
     )?;
     let zoomed = vector(&manager).unwrap();
-    assert!((zoomed.w - 268.8).abs() < 0.01);
+    assert!((zoomed.w - 224.).abs() < 0.01);
     assert_centered(&manager);
     canvas(
         &mut manager,
@@ -283,7 +283,7 @@ fn main() -> anyhow::Result<()> {
     )?;
     assert!(vector(&manager).is_some());
     println!(
-        "PASS: real SVG WASM, centered wheel/button zoom, editor typography, 240px default, SVG toolbar, layers, edit recovery and hot update"
+        "PASS: real Image WASM, intrinsic default, centered wheel/button zoom, editor typography, SVG toolbar, layers, edit recovery and hot update"
     );
     Ok(())
 }

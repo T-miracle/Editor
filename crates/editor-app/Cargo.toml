@@ -29,7 +29,9 @@ futures = "0.3"
 sha2 = "0.10"
 # Full-color plugin vectors are rasterized on the existing background worker.
 resvg = "=0.45.1"
-image = { version = "0.25", default-features = false }
+svgtypes = "=0.15.3"
+# Explicitly retain the documented bitmap formats; native images are decoded under host quotas.
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "webp"] }
 tempfile.workspace = true
 # Discover nested plugin manifests without traversing ignored build output.
 ignore.workspace = true
@@ -37,5 +39,7 @@ notify.workspace = true
 
 [dev-dependencies]
 gpui-kit = { workspace = true, features = ["test-support"] }
+# Reidentified hybrid fixtures retain their declarative resources through a parsed TOML manifest.
+toml.workspace = true
 # Build independent declarative package fixtures through the public ZIP inspection boundary.
 zip = { version = "4", default-features = false, features = ["deflate"] }

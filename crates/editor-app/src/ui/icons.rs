@@ -8,9 +8,7 @@ use std::path::Path;
 enum FileIconKind {
     Config,
     Folder,
-    Image,
     Json,
-    Markdown,
     Text,
     GenericFile,
 }
@@ -120,13 +118,11 @@ fn classify_system_icon(path: &Path, is_folder: bool) -> FileIconKind {
         .as_deref()
         .unwrap_or_default()
     {
-        "png" | "jpg" | "jpeg" | "gif" | "webp" | "bmp" | "ico" | "svg" => FileIconKind::Image,
         // JSON belongs to the system icon layer unless a plugin or theme overrides it.
         "json" => FileIconKind::Json,
         "cfg" | "conf" | "config" | "ini" | "properties" | "toml" | "yaml" | "yml" => {
             FileIconKind::Config
         }
-        "md" | "markdown" => FileIconKind::Markdown,
         "txt" | "text" | "log" => FileIconKind::Text,
         _ => FileIconKind::GenericFile,
     }
@@ -148,25 +144,11 @@ fn system_icon_path(kind: FileIconKind, dark: bool) -> &'static str {
                 "file-icons/folder.svg"
             }
         }
-        FileIconKind::Image => {
-            if dark {
-                "file-icons/image_dark.svg"
-            } else {
-                "file-icons/image.svg"
-            }
-        }
         FileIconKind::Json => {
             if dark {
                 "file-icons/json_dark.svg"
             } else {
                 "file-icons/json.svg"
-            }
-        }
-        FileIconKind::Markdown => {
-            if dark {
-                "file-icons/markdown_dark.svg"
-            } else {
-                "file-icons/markdown.svg"
             }
         }
         FileIconKind::Text => {
@@ -194,10 +176,10 @@ mod tests {
     use std::{collections::BTreeSet, sync::Arc};
 
     #[test]
-    fn maps_markdown_files_and_uses_generic_file_for_other_extensions() {
+    fn unrecognized_files_use_generic_artwork_without_language_fallbacks() {
         assert_eq!(
             classify_system_icon(Path::new("README.md"), false),
-            FileIconKind::Markdown
+            FileIconKind::GenericFile
         );
         assert_eq!(
             classify_system_icon(Path::new("main.ts"), false),
@@ -219,8 +201,8 @@ mod tests {
 
     #[test]
     fn svg_image_rendering_preserves_multiple_original_colors() {
-        let path = system_icon_path(FileIconKind::Markdown, true);
-        let bytes = file_icon(path).expect("Markdown icon should be embedded");
+        let path = system_icon_path(FileIconKind::Folder, true);
+        let bytes = file_icon(path).expect("Generic folder icon should be embedded");
         let image = Image::from_bytes(ImageFormat::Svg, bytes.to_vec());
         let rendered = image
             .to_image_data(SvgRenderer::new(Arc::new(())))

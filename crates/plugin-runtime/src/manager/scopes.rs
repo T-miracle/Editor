@@ -18,6 +18,7 @@ pub(crate) fn workspace_key(workspace: &str) -> String {
 impl Manager {
     /// Only the selected trusted workspace can publish document events to its owners.
     pub fn document_changed(&mut self, change: api::DocumentChange) {
+        self.invalidate_document_images(&change);
         if self.trusted && self.workspace_open {
             for instance in self.live.values_mut() {
                 instance.document_changed(change.clone());
@@ -49,11 +50,13 @@ impl Manager {
     }
     /// Count resources across logical workspaces and the application owner for shutdown diagnostics.
     pub fn resource_count(&self) -> usize {
-        self.language_services
-            .values()
-            .filter_map(|item| item.service.as_ref().ok())
-            .map(|service| service.process_count())
-            .sum::<usize>()
+        self.images.len()
+            + self
+                .language_services
+                .values()
+                .filter_map(|item| item.service.as_ref().ok())
+                .map(|service| service.process_count())
+                .sum::<usize>()
             + self
                 .live
                 .values()
@@ -100,6 +103,8 @@ impl Manager {
         if self.workspace_open && old_key == next_key {
             return self.set_workspace_trust(trusted);
         }
+        self.retire_workspace_images();
+        self.retire_workspace_image_inputs();
         let ids = self
             .live
             .keys()
@@ -180,6 +185,8 @@ impl Manager {
         let key = workspace_key(workspace);
         let current = workspace_key(&self.environment.workspace) == key;
         if current {
+            self.retire_workspace_images();
+            self.retire_workspace_image_inputs();
             self.language_services.clear();
         }
         let (environment, mut live) = if current {
@@ -269,6 +276,10 @@ impl Manager {
 
     /// Shutdown retires application resources as well as all workspace resources.
     pub fn shutdown(&mut self) {
+        self.retire_workspace_images();
+        self.retire_workspace_image_inputs();
+        // Host execution sessions end with the window that owns them; no start is left queued.
+        self.host_sessions.retire();
         let _ = self.checkpoint();
         for instance in self.live.values_mut() {
             instance.stop();

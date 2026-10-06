@@ -60,6 +60,15 @@ Providers from different packages can be combined. Recognition choices are keyed
 selector and highlighting choices by language ID. A provider identity is its package ID plus
 its contribution ID, independent of the package version.
 
+Highlighters may optionally declare `injections` (a package-relative query path) and
+`injection_languages` (up to 64 permitted language identities). Injection queries are
+compiled against the same validated WASM grammar before publication. Each query pattern
+must specify a static `injection.language` from that list; dynamic language captures are
+rejected. Each injected language uses its independently selected provider and parser
+factory. Missing or disabled injected providers yield plain spans, never native grammar
+fallback. These fields default to absent/empty for existing packages. Queries can compose
+block and inline grammars without giving the host language-specific rules.
+
 The native **Settings → Language providers** page selects user preferences, or confirmed
 local project preferences, separately for recognition and highlighting. A project choice
 overrides the user choice. A sole provider is adopted automatically and remembered; adding

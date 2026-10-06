@@ -3,15 +3,24 @@
 //! No GPUI objects cross this interface.
 
 use serde::{Deserialize, Serialize};
+use std::ops::Range;
 
 mod controls;
 pub use controls::*;
 mod canvas;
 pub use canvas::*;
 mod events;
+mod tools;
+pub use tools::*;
 
 #[cfg(test)]
+mod images_tests;
+#[cfg(test)]
+mod layout_tests;
+#[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod tools_tests;
 mod validate;
 
 pub const VERSION: u32 = 1;
@@ -19,12 +28,46 @@ pub const VERSION: u32 = 1;
 /// Replace a panel's complete view atomically. Revision is echoed in user events.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Document {
+    /// Plugin-owned RGB defaults keyed by `role.property`, overridden by user theme tokens.
+    /// Requires `ui.content_colors`; native control behavior and general chrome remain host-owned.
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub content_colors: std::collections::BTreeMap<String, u32>,
+    /// Bottom-bar functions remain guest-owned, independently of this surface's layout contribution.
+    /// Requires `ui.tools`; file targets also require the exact `Document.file` context.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tools: Vec<ToolButton>,
+    /// The selected file provider owns this complete center tree. Requires `editor.layout`.
+    /// NativeEditor nodes borrow the existing source session; omitting them hides its input surface.
+    #[serde(default)]
+    pub editor_layout: bool,
+    /// File-resource authority echoed by `editor.files`; no text session or mutable bytes implied.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub file: Option<crate::api::FileVersion>,
     /// Preview replies echo their input version; regular panels leave it absent.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source: Option<crate::api::DocumentVersion>,
     pub version: u32,
     pub revision: u64,
     pub root: Node,
+    /// Native controls above the source editor, bound to `source` and requiring `editor.toolbar`.
+    /// Node identities and quotas share the panel's root/dialog/menu namespace.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub editor_toolbar: Option<Node>,
+    /// Claim user-initiated image paste/drop on the source pane through `editor.images`.
+    /// This additive declaration requires `source`; ordinary panels and older guests leave it false.
+    #[serde(default)]
+    pub editor_image_input: bool,
+    /// Emit clicked native rich-text links through `ui.links`; false retains inert link defaults.
+    #[serde(default)]
+    pub link_events: bool,
+    /// Readonly CodeBlock language/text requests use the selected plugin WASM highlighter.
+    /// Requires ui.code_highlighting, editor.read and the owning preview's exact source version.
+    #[serde(default)]
+    pub code_highlighting: bool,
+    /// Bind one active source-mapped Scroll to native source viewport notifications and locate requests.
+    /// Requires editor.viewport, ui.richtext, editor.read and this preview's exact source identity.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub editor_viewport: Option<String>,
     /// At most one modal per panel. Removing it closes the modal.
     #[serde(default)]
     pub dialog: Option<Dialog>,
@@ -36,10 +79,19 @@ pub struct Document {
 impl Document {
     pub fn new(root: Node) -> Self {
         Self {
+            content_colors: Default::default(),
+            tools: Vec::new(),
+            editor_layout: false,
+            file: None,
             source: None,
             version: VERSION,
             revision: 0,
             root,
+            editor_toolbar: None,
+            editor_image_input: false,
+            link_events: false,
+            code_highlighting: false,
+            editor_viewport: None,
             dialog: None,
             menu: None,
         }
@@ -47,6 +99,12 @@ impl Document {
 
     pub fn revision(mut self, revision: u64) -> Self {
         self.revision = revision;
+        self
+    }
+
+    /// Enable source-pane image input for this versioned preview without exposing native pixel bytes.
+    pub fn editor_image_input(mut self, enabled: bool) -> Self {
+        self.editor_image_input = enabled;
         self
     }
 
@@ -60,15 +118,42 @@ impl Document {
         validate::document(self)
     }
 
-    /// Find an interactive node only in the active modal, or the panel when no modal exists.
+    /// Return the editor reference actually mounted in the active root, excluding disabled/inactive trees.
+    /// Validation separately requires exact source ownership and at most one reference in the full tree.
+    pub fn active_native_editor(&self) -> Option<&crate::api::DocumentVersion> {
+        fn active(node: &Node) -> Option<&crate::api::DocumentVersion> {
+            if node.disabled {
+                return None;
+            }
+            match &node.kind {
+                Kind::NativeEditor { document } => Some(document),
+                Kind::Column { children } | Kind::Row { children } => {
+                    children.iter().find_map(active)
+                }
+                Kind::Scroll { content } => active(content),
+                Kind::Tabs { tabs, selected } => tabs
+                    .iter()
+                    .find(|tab| tab.id == *selected)
+                    .and_then(|tab| active(&tab.content)),
+                _ => None,
+            }
+        }
+        self.editor_layout.then(|| active(&self.root)).flatten()
+    }
+
+    /// Find a live root/toolbar target, while dialogs and popups retain exclusive input ownership.
     pub fn active_node(&self, id: &str) -> Option<&Node> {
-        if self.menu.is_some() && self.dialog.is_none() {
+        if let Some(dialog) = &self.dialog {
+            return dialog.content.find(id);
+        }
+        if self.menu.is_some() {
             return None;
         }
-        self.dialog
-            .as_ref()
-            .map_or(&self.root, |dialog| &dialog.content)
-            .find(id)
+        self.root.find(id).or_else(|| {
+            self.editor_toolbar
+                .as_ref()
+                .and_then(|toolbar| toolbar.find(id))
+        })
     }
 }
 
@@ -96,6 +181,17 @@ impl Dialog {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Node {
     pub id: String,
+    /// Explicit read-only link targets for native keyboard focus and linked images/alternative text.
+    /// URIs use rendered href spelling, not a host-parsed domain format; requires `ui.links`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub links: Vec<LinkTarget>,
+    /// Optional UTF-8 source bytes in the immutable version echoed by `Document.source`.
+    /// Mapping does not grant document access or editing authority; it requires `ui.richtext`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_range: Option<SourceRange>,
+    /// Localized hover/accessibility text; this counts toward the ordinary UI text budget.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tooltip: Option<String>,
     /// Resolves `plugins[plugin_id].ui[role]` colors and `typography[role]` fonts.
     /// If empty, the host uses the node kind (e.g. `button`) as the role.
     #[serde(default)]
@@ -107,13 +203,41 @@ pub struct Node {
     pub kind: Kind,
 }
 
+/// One bounded native activation target. The guest supplies its visible caption and destination;
+/// `Document.link_events` enables events, while navigation remains a separately authorized request.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LinkTarget {
+    /// Exact rendered href, at most 4096 bytes; no controls or implicit URL effect.
+    pub uri: String,
+    /// Author/user-localized accessible caption, at most 256 UTF-8 bytes; empty uses host locale.
+    pub label: String,
+}
+
+/// Half-open UTF-8 byte offsets for one rendered block in its source document version.
+/// `start <= end <= 1 MiB`; the host must check actual source length and character boundaries
+/// before using the range. Blocks retain their identity through the enclosing node ID.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SourceRange {
+    /// Inclusive byte offset in the current immutable source text.
+    pub start: usize,
+    /// Exclusive byte offset in the same source text.
+    pub end: usize,
+}
+
 /// Layout contains geometry only. Color and typography always come from the active theme.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct Layout {
+    /// Native adjustable panes on a Row/Column, requiring `ui.native >=1.1`; cannot combine with wrap.
+    #[serde(default)]
+    pub resizable: bool,
     pub width: Option<f32>,
     pub height: Option<f32>,
     #[serde(default)]
     pub grow: bool,
+    /// Rows may wrap children into additional lines; the host derives height from their content.
+    #[serde(default)]
+    pub wrap: bool,
     #[serde(default)]
     pub padding: f32,
     #[serde(default)]
@@ -123,6 +247,17 @@ pub struct Layout {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum Kind {
+    /// Borrow the existing editor of this exact source version; never creates mutable document state.
+    /// Only one reference is permitted, in the root of a negotiated file layout.
+    NativeEditor {
+        document: crate::api::DocumentVersion,
+    },
+    /// Display this context's file using controlled decoding. Requires `ui.file_images` and
+    /// `workspace.read`; the guest chooses sizing, while the host performs native layout/painting.
+    FileImage {
+        alt: String,
+        sizing: ImageSizing,
+    },
     /// A keyed, reorderable native item list can be placed anywhere in the ordinary layout tree.
     SideTabs(SideTabs),
     /// Any position in the same layout tree can hold a drawing surface; it has no implicit grid.
@@ -138,6 +273,29 @@ pub enum Kind {
     },
     Text {
         text: String,
+    },
+    /// Read-only native rich markup, requiring `ui.richtext` in addition to `ui.native`.
+    /// The host renders a restricted HTML subset and disables implicit URL/image access;
+    /// this is neither a WebView nor a request to parse Markdown in the host.
+    RichText {
+        html: String,
+    },
+    /// Read-only literal code with preserved whitespace and a monospace presentation.
+    /// The optional language is an informational ID, not authority to start a language tool.
+    CodeBlock {
+        text: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        language: Option<String>,
+    },
+    /// Source-bound native image, requiring `ui.images`; loading is a controlled host resource task.
+    /// Document-relative paths require `workspace.read`, HTTP(S) requires `network.images`.
+    /// The host limits reads to 8 MiB and 30 seconds and never follows redirects or uses credentials.
+    /// Failures affect this image only; markup image tags remain unable to perform ambient reads.
+    Image {
+        /// Relative percent-encoded URI or credential-free HTTP(S) URL, at most 4096 UTF-8 bytes.
+        source: String,
+        /// Localized alternative text used while loading or displaying a per-image failure.
+        alt: String,
     },
     Button {
         label: String,
@@ -172,6 +330,16 @@ pub enum Kind {
         value: f32,
     },
     Spacer,
+}
+
+/// Generic image geometry policy chosen by a plugin; this has no file-format business rule.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ImageSizing {
+    /// Preserve intrinsic dimensions when they fit; otherwise contain both axes without enlarging.
+    OriginalContain,
+    /// Contain the available area, permitting an explicit enlargement of small images.
+    Contain,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -230,6 +398,12 @@ pub struct UiEvent {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", content = "value", rename_all = "snake_case")]
 pub enum Action {
+    /// Coalesced live geometry of the bound preview scroll; it never mutates its derived block.
+    Viewport(crate::api::PreviewViewport),
+    /// URI supplied by a clicked native rich-text link, never by parsing or layout alone.
+    Link {
+        uri: String,
+    },
     Canvas(CanvasEvent),
     Click,
     Change(String),
@@ -260,6 +434,9 @@ impl Node {
     pub fn new(id: impl Into<String>, kind: Kind) -> Self {
         Self {
             id: id.into(),
+            links: Vec::new(),
+            source_range: None,
+            tooltip: None,
             role: String::new(),
             disabled: false,
             layout: Layout::default(),
@@ -282,6 +459,60 @@ impl Node {
     }
     pub fn text(id: impl Into<String>, text: impl Into<String>) -> Self {
         Self::new(id, Kind::Text { text: text.into() })
+    }
+    /// Create a read-only rich block with stable `id` and restricted `html` markup.
+    /// The returned node needs `ui.richtext`; text quotas are checked by `Document::validate`.
+    pub fn rich_text(id: impl Into<String>, html: impl Into<String>) -> Self {
+        Self::new(id, Kind::RichText { html: html.into() })
+    }
+    /// Create a literal code block from `text` and an optional ASCII language ID.
+    /// Returns a node requiring `ui.richtext`; the language does not imply highlighting support.
+    pub fn code_block(
+        id: impl Into<String>,
+        text: impl Into<String>,
+        language: Option<String>,
+    ) -> Self {
+        Self::new(
+            id,
+            Kind::CodeBlock {
+                text: text.into(),
+                language,
+            },
+        )
+    }
+    /// Declare a native image with stable `id`, resource `source` and localized alternative text.
+    /// `Document.source` and negotiated `ui.images` are mandatory. Loading never grants WASM bytes
+    /// or file/network authority; unavailable grants become a failure for this node only.
+    pub fn image(id: impl Into<String>, source: impl Into<String>, alt: impl Into<String>) -> Self {
+        Self::new(
+            id,
+            Kind::Image {
+                source: source.into(),
+                alt: alt.into(),
+            },
+        )
+    }
+    /// Attach half-open UTF-8 `range` offsets into the version in `Document.source`.
+    /// Returns the mapped node; invalid bounds are rejected by `Document::validate`.
+    /// Even ordinary text or layout nodes need `ui.richtext` when carrying this metadata.
+    pub fn source_range(mut self, range: Range<usize>) -> Self {
+        self.source_range = Some(SourceRange {
+            start: range.start,
+            end: range.end,
+        });
+        self
+    }
+
+    /// Attach localized hover/accessibility text; `Document::validate` enforces shared text quotas.
+    pub fn tooltip(mut self, text: impl Into<String>) -> Self {
+        self.tooltip = Some(text.into());
+        self
+    }
+
+    /// Let a row wrap its children instead of clipping a toolbar at a narrow editor width.
+    pub fn wrap(mut self) -> Self {
+        self.layout.wrap = true;
+        self
     }
     pub fn button(id: impl Into<String>, label: impl Into<String>) -> Self {
         Self::new(
@@ -327,6 +558,12 @@ impl Node {
         self.layout.height = Some(height);
         self
     }
+    /// Request native pane handles for this Row/Column without handing scroll or document state to the guest.
+    pub fn resizable(mut self) -> Self {
+        self.layout.resizable = true;
+        self
+    }
+
     pub fn grow(mut self) -> Self {
         self.layout.grow = true;
         self
@@ -337,11 +574,15 @@ impl Node {
             return &self.role;
         }
         match &self.kind {
+            Kind::NativeEditor { .. } => "editor",
             Kind::SideTabs(_) => "tab_bar",
             Kind::Canvas(_) => "canvas",
             Kind::Column { .. } | Kind::Row { .. } => "container",
             Kind::Scroll { .. } => "scroll",
             Kind::Text { .. } => "text",
+            Kind::RichText { .. } => "rich_text",
+            Kind::CodeBlock { .. } => "code_block",
+            Kind::Image { .. } | Kind::FileImage { .. } => "image",
             Kind::Button { .. } => "button",
             Kind::Input(_) => "input",
             Kind::Checkbox { .. } => "checkbox",
@@ -365,6 +606,26 @@ impl Node {
             Kind::Scroll { content } => content.visit(visitor),
             Kind::Tabs { tabs, .. } => tabs.iter().for_each(|t| t.content.visit(visitor)),
             _ => {}
+        }
+    }
+
+    /// A bound viewport cannot report a block owned by a nested independent Scroll.
+    fn viewport_block(&self, id: &str) -> Option<&Self> {
+        if self.disabled || matches!(self.kind, Kind::Scroll { .. }) {
+            return None;
+        }
+        if self.id == id {
+            return Some(self);
+        }
+        match &self.kind {
+            Kind::Column { children } | Kind::Row { children } => {
+                children.iter().find_map(|node| node.viewport_block(id))
+            }
+            Kind::Tabs { tabs, selected } => tabs
+                .iter()
+                .find(|tab| &tab.id == selected)
+                .and_then(|tab| tab.content.viewport_block(id)),
+            _ => None,
         }
     }
 

@@ -19,6 +19,8 @@ pub(crate) enum PluginPopupKind {
 /// Captured records never change while open; the base state owns focus and dismissal resources.
 pub(crate) struct PluginPopupSnapshot {
     summaries: Vec<PluginSummary>,
+    /// Store failures without a plugin owner alongside the captured log rows.
+    manager_error: Option<String>,
     state: Entity<PopoverState>,
     scroll: ScrollHandle,
     /// A fresh identity rejects paint callbacks from a closed or replaced popup.
@@ -79,22 +81,31 @@ impl EditorApp {
     pub(crate) fn plugin_count(&self, kind: PluginPopupKind, cx: &App) -> usize {
         match kind {
             PluginPopupKind::Loading => self.plugin_loading_groups(cx).len(),
-            PluginPopupKind::Warning | PluginPopupKind::Error => self
-                .extensions
-                .read(cx)
-                .runtime_logs()
-                .pending_reminders()
-                .iter()
-                .filter(|(_, level)| {
-                    *level
-                        == if kind == PluginPopupKind::Error {
-                            LogLevel::Error
-                        } else {
-                            LogLevel::Warning
-                        }
-                })
-                .count(),
+            PluginPopupKind::Warning | PluginPopupKind::Error => {
+                self.extensions
+                    .read(cx)
+                    .runtime_logs()
+                    .pending_reminders()
+                    .iter()
+                    .filter(|(_, level)| {
+                        *level
+                            == if kind == PluginPopupKind::Error {
+                                LogLevel::Error
+                            } else {
+                                LogLevel::Warning
+                            }
+                    })
+                    .count()
+                    + usize::from(
+                        kind == PluginPopupKind::Error && self.unowned_manager_error(cx).is_some(),
+                    )
+            }
         }
+    }
+
+    /// Recovery can fail before any registry entry exists, so no plugin log can own that failure.
+    fn unowned_manager_error<'a>(&self, cx: &'a App) -> Option<&'a str> {
+        self.extensions.read(cx).unowned_manager_error()
     }
 
     /// A single entry guarantees anomalies are never hidden by simultaneous normal loading.
@@ -108,6 +119,7 @@ impl EditorApp {
             .map(|(_, level)| level)
             .max();
         match severity {
+            _ if self.unowned_manager_error(cx).is_some() => Some(PluginPopupKind::Error),
             Some(LogLevel::Error) => Some(PluginPopupKind::Error),
             Some(LogLevel::Warning) => Some(PluginPopupKind::Warning),
             _ if self.plugin_count(PluginPopupKind::Loading, cx) > 0 => {
@@ -138,6 +150,8 @@ impl EditorApp {
             return;
         }
         let panel = self.extensions.read(cx);
+        let manager_error = self.unowned_manager_error(cx).map(str::to_owned);
+        panel.confirm_unowned_manager_error();
         let logs = panel.runtime_logs();
         let (checkpoint, records) = logs.reminder_snapshot();
         let summaries: Vec<_> = records
@@ -181,7 +195,10 @@ impl EditorApp {
         });
         // Existing completion callbacks may close a pure loading list. An anomaly snapshot remains reviewable.
         let trigger = kind;
-        let kind = if kind == PluginPopupKind::Loading && !summaries.is_empty() {
+        let kind = if manager_error.is_some() {
+            // A stale loading trigger must not let normal completion close a captured recovery error.
+            PluginPopupKind::Error
+        } else if kind == PluginPopupKind::Loading && !summaries.is_empty() {
             if summaries
                 .iter()
                 .any(|summary| summary.record.level == LogLevel::Error)
@@ -196,6 +213,7 @@ impl EditorApp {
         self.plugin_popup = Some((kind, event.position()));
         self.plugin_popup_snapshot = Some(PluginPopupSnapshot {
             summaries,
+            manager_error,
             state: state.clone(),
             scroll: ScrollHandle::new(),
             token,

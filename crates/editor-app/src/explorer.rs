@@ -77,11 +77,7 @@ impl EditorApp {
             ExplorerEditKind::Directory => files::create(&path, &name, true),
             ExplorerEditKind::File => files::create(&path, &name, false),
             ExplorerEditKind::Rename => {
-                if self
-                    .tabs
-                    .iter()
-                    .any(|tab| tab.session.path().starts_with(&path))
-                {
+                if self.tabs.iter().any(|tab| tab.path().starts_with(&path)) {
                     Err(t!("explorer.close_before_rename").to_string())
                 } else {
                     files::rename(&path, &name)
@@ -141,11 +137,7 @@ impl EditorApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self
-            .tabs
-            .iter()
-            .any(|tab| tab.session.path().starts_with(&path))
-        {
+        if self.tabs.iter().any(|tab| tab.path().starts_with(&path)) {
             self.status = t!("explorer.close_before_delete").to_string();
             cx.notify();
             return;
@@ -167,11 +159,7 @@ impl EditorApp {
         };
         let path = delete.path.clone();
         // A tab may have opened while the confirmation was visible; preserve its editor buffer.
-        if self
-            .tabs
-            .iter()
-            .any(|tab| tab.session.path().starts_with(&path))
-        {
+        if self.tabs.iter().any(|tab| tab.path().starts_with(&path)) {
             self.status = t!("explorer.close_before_delete").to_string();
             self.explorer_delete = None;
             cx.notify();

@@ -9,9 +9,11 @@ pub(super) enum RootKind {
     Workspace,
     Data,
     EditorRequest,
+    ImageInput,
     ServiceReference,
     ServiceRequest,
     Subscription,
+    PreferenceSubscription,
     Process(u64),
 }
 
@@ -22,7 +24,7 @@ pub(super) struct ResourceRoots {
     slots: BTreeMap<u64, RootKind>,
     pub(super) application: bool,
     pub(super) retired: bool,
-    limit: usize,
+    pub(super) limit: usize,
 }
 
 impl ResourceRoots {
@@ -124,7 +126,7 @@ impl ResourceRoots {
 
 impl State {
     /// Required negotiation and installation consent are checked on open and every subsequent use.
-    fn file_authority(&self, kind: RootKind, write: bool) -> Result<&Path, Failure> {
+    pub(super) fn file_authority(&self, kind: RootKind, write: bool) -> Result<&Path, Failure> {
         if (!self.active && !self.migrating && !(self.language_hook && !write))
             || self.roots.retired
         {
@@ -135,9 +137,11 @@ impl State {
         }
         let (capability, permission, root) = match kind {
             RootKind::EditorRequest
+            | RootKind::ImageInput
             | RootKind::ServiceReference
             | RootKind::ServiceRequest
             | RootKind::Subscription
+            | RootKind::PreferenceSubscription
             | RootKind::Process(_) => {
                 return Err(Failure::new(ErrorCode::InvalidHandle, "Not a file handle"));
             }
@@ -214,27 +218,7 @@ impl State {
             api::Operation::ReadFile { handle, path } => {
                 let kind = self.roots.resolve(&handle)?;
                 let root = self.file_authority(kind, false)?;
-                let path = safe_path(root, &path, false).map_err(path_failure)?;
-                if let Some(bytes) = self
-                    .staged_writes
-                    .as_ref()
-                    .and_then(|writes| writes.get(&path))
-                {
-                    return Ok(Value::Bytes(bytes.clone()));
-                }
-                use std::io::Read;
-                let file = std::fs::File::open(path).map_err(io_failure)?;
-                let mut bytes = Vec::new();
-                file.take(1024 * 1024 + 1)
-                    .read_to_end(&mut bytes)
-                    .map_err(io_failure)?;
-                if bytes.len() > 1024 * 1024 {
-                    return Err(Failure::new(
-                        ErrorCode::LimitExceeded,
-                        "File read quota exceeded",
-                    ));
-                }
-                Ok(Value::Bytes(bytes))
+                data_files::read(root, &path, &self.staged_writes).map(Value::Bytes)
             }
             api::Operation::WriteFile {
                 handle,
@@ -242,50 +226,14 @@ impl State {
                 bytes,
             } => {
                 let kind = self.roots.resolve(&handle)?;
-                let root = self
-                    .file_authority(kind, true)?
-                    .canonicalize()
-                    .map_err(io_failure)?;
-                let path = safe_path(&root, &path, false).map_err(path_failure)?;
-                // Private file creation is flat in this capability version; no recursive quota gaps.
-                if path.parent() != Some(root.as_path()) {
-                    return Err(Failure::new(
-                        ErrorCode::InvalidPath,
-                        "Private data files must be direct children",
-                    ));
-                }
-                let mut sizes = BTreeMap::new();
-                for entry in std::fs::read_dir(&root).map_err(io_failure)? {
-                    let entry = entry.map_err(io_failure)?;
-                    sizes.insert(entry.path(), entry.metadata().map_err(io_failure)?.len());
-                }
-                if let Some(writes) = &self.staged_writes {
-                    for (path, bytes) in writes {
-                        sizes.insert(path.clone(), bytes.len() as u64);
-                    }
-                }
-                sizes.insert(path.clone(), bytes.len() as u64);
-                if bytes.len() > 1024 * 1024
-                    || sizes.values().sum::<u64>() > self.roots.limit as u64
-                {
-                    return Err(Failure::new(
-                        ErrorCode::LimitExceeded,
-                        "Private data quota exceeded",
-                    ));
-                }
-                if let Some(writes) = &mut self.staged_writes {
-                    if writes.len() >= 64 && !writes.contains_key(&path) {
-                        return Err(Failure::new(
-                            ErrorCode::LimitExceeded,
-                            "Initialization write quota exceeded",
-                        ));
-                    }
-                    writes.insert(path, bytes);
-                } else {
-                    super::super::package::atomic_write(&path, &bytes).map_err(|error| {
-                        Failure::new(ErrorCode::OperationFailed, error.to_string())
-                    })?;
-                }
+                let root = self.file_authority(kind, true)?.to_path_buf();
+                data_files::write(
+                    &root,
+                    &path,
+                    bytes,
+                    self.roots.limit,
+                    &mut self.staged_writes,
+                )?;
                 Ok(Value::Unit)
             }
             api::Operation::CloseResource { handle } => {
@@ -297,12 +245,15 @@ impl State {
                         .map(|_| Value::Unit);
                 }
                 self.subscriptions.remove(&handle.resource);
+                self.preference_subscriptions.remove(&handle.resource);
+                self.image_inputs.remove(&handle.resource);
                 self.plugin_services.references.remove(&handle.resource);
                 if let Some(request) = self.plugin_services.pending.remove(&handle.resource) {
                     request.call.completion.retire();
                 }
                 if let Some(request) = self.editor_requests.remove(&handle.resource) {
                     request.call.retire();
+                    self.finish_image_input_request(&request.call, &request.call.status());
                 }
                 self.roots.slots.remove(&handle.resource);
                 Ok(Value::Unit)
@@ -312,30 +263,12 @@ impl State {
             | api::Operation::Service { .. }
             | api::Operation::Process { .. }
             | api::Operation::SubscribeDocuments
+            | api::Operation::ReadPreference { .. }
+            | api::Operation::WritePreference { .. }
             | api::Operation::Editor { .. }
             | api::Operation::CancelRequest { .. } => {
                 unreachable!("assets are handled before resource dispatch")
             }
         }
     }
-}
-
-/// Preserve missing-file errors while keeping escaped roots and malformed paths distinguishable.
-fn path_failure(error: anyhow::Error) -> Failure {
-    if let Some(error) = error.downcast_ref::<std::io::Error>() {
-        if error.kind() == std::io::ErrorKind::NotFound {
-            return Failure::new(ErrorCode::NotFound, error.to_string());
-        }
-    }
-    Failure::new(ErrorCode::InvalidPath, error.to_string())
-}
-fn io_failure(error: std::io::Error) -> Failure {
-    Failure::new(
-        if error.kind() == std::io::ErrorKind::NotFound {
-            ErrorCode::NotFound
-        } else {
-            ErrorCode::OperationFailed
-        },
-        error.to_string(),
-    )
 }

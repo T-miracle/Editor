@@ -16,9 +16,7 @@ use editor_core::{DocumentSession, Workspace, WorkspaceSnapshot};
 use futures::StreamExt;
 use gpui_base::dock::{DockArea, DockEvent, DockLayout, PanelEvent};
 use gpui_base::input::RopeExt as _;
-use gpui_base::input::{
-    EditorState, InputEvent, TabSize, TextDecoration, TextDecorationCollection,
-};
+use gpui_base::input::{EditorState, InputEvent, TabSize, TextDecoration};
 use gpui_base::{TreeEvent, TreeItem, TreeState};
 use gpui_kit::{
     App, AppContext as _, Bounds, ClickEvent, Context, Entity, EventEmitter, FocusHandle,
@@ -177,11 +175,25 @@ struct EditorApp {
     pending_contribution_sync: bool,
     /// Requests are routed through the editor window; immutable save snapshots run off the UI thread.
     pending_editor_requests: Vec<(String, plugin_runtime::EditorRequest)>,
+    /// Only one request is dispatched before native change and completion effects have drained.
+    editor_request_dispatch_scheduled: bool,
+    /// One native image preparation/save prompt owns the current gesture until its background result.
+    image_input_preparing: bool,
+    /// Bounded external paths belong only to the current native drag; no document authority is cached.
+    image_drag: Option<(gpui_kit::ExternalPaths, Bounds<Pixels>)>,
     plugin_saves: std::collections::BTreeSet<PathBuf>,
     /// Last published open identities allow versioned close notifications without retaining document text.
     plugin_documents:
         std::collections::BTreeMap<String, plugin_runtime::plugin_protocol::api::DocumentVersion>,
     plugin_popup: Option<(PluginPopupKind, Point<Pixels>)>,
+    /// A native file context menu captures the opened identity before presenting provider choices.
+    file_view_menu: Option<Entity<ui::controls::menu::PopupMenu>>,
+    /// Native toolbar focus does not replace the last valid file or independent plugin-window target.
+    function_context: Option<extensions::FunctionContext>,
+    /// Tracks toolbar ancestry so ordinary host focus can return tools to the current file.
+    toolbar_focus: FocusHandle,
+    /// Each group opens its own captured overflow list through the same native popup behavior.
+    tool_overflow: Option<Entity<ui::controls::menu::PopupMenu>>,
     /// An immutable summary boundary separates reminder confirmation from visible-record reading.
     plugin_popup_snapshot: Option<PluginPopupSnapshot>,
     dark_theme: bool,
@@ -199,34 +211,7 @@ struct DefinitionNotice {
     request_id: u64,
 }
 
-struct OpenTab {
-    /// Unlike the dirty revision, this also advances on disk reloads and other programmatic changes.
-    capability_revision: u64,
-    session: DocumentSession,
-    editor: Entity<EditorState>,
-    /// Hash of the last disk text, avoiding a second full copy of every open document.
-    disk_digest: [u8; 32],
-    /// Ignore worker reads that began before the latest successful local save.
-    last_saved_at: Instant,
-    disk_state: DiskState,
-    suppress_change: bool,
-    overwrite_confirmed: bool,
-    /// A separate decoration layer keeps a definition jump visible for two seconds.
-    definition_highlight: TextDecorationCollection,
-    definition_highlight_generation: u64,
-    /// Diagnostics retain only derived parser state; EditorState owns the editable text.
-    diagnostics: editor::diagnostics::DocumentDiagnostics,
-    _subscription: Subscription,
-    _observer: Subscription,
-}
-
-/// Open tabs remain present when their backing file changes or disappears.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum DiskState {
-    Synced,
-    Conflict,
-    Deleted,
-}
+use editor::tabs::{DiskState, NEXT_FILE_ID, OpenTab, TextTab};
 
 impl EditorApp {
     fn new(
@@ -403,9 +388,16 @@ impl EditorApp {
             dynamic_language_ids: Default::default(),
             pending_contribution_sync: false,
             pending_editor_requests: Vec::new(),
+            editor_request_dispatch_scheduled: false,
+            image_input_preparing: false,
+            image_drag: None,
             plugin_saves: Default::default(),
             plugin_documents: Default::default(),
             plugin_popup: None,
+            file_view_menu: None,
+            function_context: None,
+            toolbar_focus: cx.focus_handle(),
+            tool_overflow: None,
             plugin_popup_snapshot: None,
             dark_theme: false,
             session_state,
@@ -429,9 +421,11 @@ impl EditorApp {
             this.open_file(path, window, cx);
         }
         if let Some(active) = desired_active.map(PathBuf::from) {
-            if let Some(index) = this.tabs.iter().position(|tab| {
-                tab.session.path() == active.canonicalize().unwrap_or(active.clone())
-            }) {
+            if let Some(index) = this
+                .tabs
+                .iter()
+                .position(|tab| tab.path() == active.canonicalize().unwrap_or(active.clone()))
+            {
                 this.activate_tab(index, window, cx);
             }
         }
@@ -532,10 +526,11 @@ impl EditorApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.active_text_tab_index().is_none() {
+            return;
+        }
         let source_path = self.active_path.clone();
-        let source_revision = self
-            .active_tab_index()
-            .map(|index| self.tabs[index].session.revision());
+        let source_revision = self.active_text_revision();
         let request = self.editor.update(cx, |editor, cx| {
             let provider = editor.lsp().hover_provider.clone()?;
             let offset = editor.cursor();
@@ -559,10 +554,7 @@ impl EditorApp {
             let _ = this.update_in(cx, |app, _, cx| {
                 // A tab switch, edit, or cursor move invalidates the requested symbol.
                 if app.active_path != source_path
-                    || app
-                        .active_tab_index()
-                        .map(|index| app.tabs[index].session.revision())
-                        != source_revision
+                    || app.active_text_revision() != source_revision
                     || app.editor.read(cx).cursor() != offset
                 {
                     return;
@@ -586,15 +578,16 @@ impl EditorApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.active_text_tab_index().is_none() {
+            return;
+        }
         self.definition_request_id = self.definition_request_id.wrapping_add(1);
         let request_id = self.definition_request_id;
         if self.definition_notice.take().is_some() {
             cx.notify();
         }
         let source_path = self.active_path.clone();
-        let source_revision = self
-            .active_tab_index()
-            .map(|index| self.tabs[index].session.revision());
+        let source_revision = self.active_text_revision();
         let task = self.editor.update(cx, |editor, cx| {
             let provider = editor.lsp_mut().definition_provider.clone()?;
             Some(provider.definitions(editor.text(), editor.cursor(), window, cx))
@@ -614,10 +607,7 @@ impl EditorApp {
                 // An edit, tab switch, or newer request invalidates this result.
                 if app.definition_request_id != request_id
                     || app.active_path != source_path
-                    || app
-                        .active_tab_index()
-                        .map(|index| app.tabs[index].session.revision())
-                        != source_revision
+                    || app.active_text_revision() != source_revision
                 {
                     return;
                 }

@@ -4,9 +4,11 @@ use crate::{Installed, package::atomic_write};
 use plugin_schema::canonical_plugin_id;
 use std::{collections::BTreeMap, fs, path::Path};
 mod installed;
+mod ui_contract;
 pub(crate) use installed::{
     discard_legacy_data, needs_legacy_import, scope_snapshot, stage_legacy_data,
 };
+pub(crate) use ui_contract::{decode_installed, decode_registry};
 
 /// Copy before committing registry changes; original folders and a registry backup stay recoverable.
 pub(crate) fn migrate_registry(

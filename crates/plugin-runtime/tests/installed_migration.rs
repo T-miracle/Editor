@@ -41,6 +41,12 @@ impl LegacyInstallation {
         manifest["api"] = json!(null);
         manifest["version"] = json!("0.0.6");
         manifest["component"] = json!("must-not-load-missing-legacy.wasm");
+        // Historical serializers wrote these optional fields even when the command had no toolbar.
+        // Keep the actual old wire shape so the earlier data importer also exercises UI-contract retirement.
+        for command in manifest["commands"].as_array_mut().unwrap() {
+            command["toolbar"] = serde_json::Value::Null;
+            command["toolbar_icon"] = serde_json::Value::Null;
+        }
         let registry = serde_json::to_vec_pretty(&json!({OLD_ID:{
             "manifest":manifest, "digest":"6666666666666666666666666666666666666666666666666666666666666666",
             "grants":package.manifest.permissions, "enabled":false,
@@ -163,7 +169,7 @@ fn assert_snapshot(manager: &mut Manager, expected: &str) {
 
 /// A compatible reinstall restores two independent scopes once while retaining preferences and recovery evidence.
 #[test]
-#[ignore = "build the independent capability-example SDK 0.12 guest first"]
+#[ignore = "build the current independent capability-example SDK guest first"]
 fn compatible_reinstall_imports_legacy_scopes_once_and_keeps_recoverable_bytes() {
     let package = Package::read(
         &Path::new(env!("CARGO_MANIFEST_DIR"))

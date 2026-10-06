@@ -1,11 +1,25 @@
 //! Native plugin view lifecycle. GPUI entities stay here; guests receive typed events only.
+mod atlas;
+pub(crate) mod bitmap;
 mod canvas;
+mod code;
+mod containers;
 pub(crate) mod controls;
+mod file_image;
 pub(crate) mod images;
+mod layout;
+mod leaf;
+#[cfg(test)]
+mod link_tests;
+mod links;
 mod render;
+mod svg;
 #[cfg(test)]
 mod tests;
 mod theme;
+mod viewport;
+#[cfg(test)]
+mod viewport_tests;
 mod widgets;
 
 use gpui_base::input::{InputEvent, InputState};
@@ -18,11 +32,20 @@ use plugin_runtime::plugin_protocol::{
     ui::{Action, Document, Kind, UiEvent},
 };
 use std::{
+    cell::Cell,
     collections::{BTreeMap, BTreeSet},
     rc::Rc,
 };
 
 type EventSink = Rc<dyn Fn(UiEvent, &mut App)>;
+/// Host-only borrowing adapter; the public guest contract contains no GPUI entity or editable copy.
+pub(crate) type NativeEditorRenderer = Rc<
+    dyn Fn(
+        &plugin_runtime::plugin_protocol::api::DocumentVersion,
+        &mut Window,
+        &mut App,
+    ) -> Option<gpui_kit::AnyElement>,
+>;
 
 struct NativeInput {
     state: Entity<InputState>,
@@ -32,30 +55,112 @@ struct NativeInput {
 }
 
 pub(crate) struct PluginView {
+    pub(crate) native_editor: Option<NativeEditorRenderer>,
     plugin: String,
     document: Document,
     environment: Environment,
     sink: EventSink,
+    /// Nested canvas/control sinks share the gate; retained readonly trees cannot dispatch stale input.
+    scene_current: Rc<Cell<bool>>,
     inputs: BTreeMap<String, NativeInput>,
     scrolls: BTreeMap<String, ScrollHandle>,
+    /// Read-only source block ownership and one revision-bound reveal; native scroll remains in Base.
+    scene_layout: layout::SceneLayout,
+    /// Coalesced source-block geometry and one locate receipt; Base owns the actual scroll offset.
+    viewport: viewport::ViewportState,
+    /// Base resolves the release target; the local adapter retains the real native press owner.
+    link_press: Option<links::LinkPress>,
+    /// Per-target Base focus survives source refresh; subscriptions reveal only the focused link cue.
+    link_focus: BTreeMap<String, links::LinkFocus>,
+    /// Versioned readonly capture cache and a cancellable, bounded native background batch.
+    code_highlights: code::CodeHighlights,
     canvases: BTreeMap<String, Entity<canvas::CanvasView>>,
     /// Collection widgets retain native rename/drag state independently of canvas redraws.
     collections: BTreeMap<String, Entity<controls::CollectionView>>,
     popup: Option<Entity<controls::CollectionView>>,
     origin: gpui_kit::Point<gpui_kit::Pixels>,
     dialog_focus: FocusHandle,
+    /// The surface identifies descendant control focus without adding a container tab stop.
+    view_focus: FocusHandle,
+    /// Control focus survives a source refresh; gesture identity is separately bound to its scene.
+    checkbox_focus: BTreeMap<String, FocusHandle>,
     previous_focus: Option<FocusHandle>,
     dismissed_dialog: Option<String>,
+    /// Editor-local toolbar projections fit their wrapped content instead of consuming the full pane.
+    content_sized: bool,
+    /// Decoded resources are accepted only for this tree's source version and URI.
+    photos: BTreeMap<String, std::sync::Arc<images::Photo>>,
+    /// GPU textures outlive pixel Arcs unless the last native projection explicitly evicts them.
+    image_leases: atlas::ImageLeases,
 }
 
 impl PluginView {
+    /// Suspend guest input and pending locations while retaining paint and the native text entity.
+    pub(crate) fn set_scene_current(&mut self, current: bool, cx: &mut Context<Self>) {
+        if !current {
+            // Accepted requests may still await the next layout. Losing source authority
+            // withdraws their effects too, without undoing an already applied Base offset.
+            self.scene_layout.cancel_reveal();
+            self.viewport.reset_scene();
+            self.link_press = None;
+        }
+        if self.scene_current.replace(current) != current {
+            cx.notify();
+        }
+    }
     /// Image decoding belongs to the worker; native children only borrow the matching immutable raster.
     pub(crate) fn update_images(
-        &self,
+        &mut self,
         panel_key: &str,
         images: &images::SceneImages,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        let mut photos = BTreeMap::new();
+        let mut visit = |node: &plugin_runtime::plugin_protocol::ui::Node| {
+            let expected = match &node.kind {
+                Kind::Image { source, .. } => self.document.source.as_ref().map(|version| {
+                    (
+                        plugin_runtime::plugin_protocol::api::ContentVersion::Document(
+                            version.clone(),
+                        ),
+                        source.as_str(),
+                    )
+                }),
+                Kind::FileImage { .. } => self.document.file.as_ref().map(|version| {
+                    (
+                        plugin_runtime::plugin_protocol::api::ContentVersion::File(version.clone()),
+                        "@current-file",
+                    )
+                }),
+                _ => None,
+            };
+            if let Some((version, source)) = expected
+                && let Some(photo) = images.photos.get(&format!("{panel_key}/image/{}", node.id))
+                && photo.resource.source == version
+                && source == photo.resource.uri
+            {
+                photos.insert(node.id.clone(), photo.clone());
+            }
+        };
+        self.document.root.visit(&mut visit);
+        if let Some(toolbar) = &self.document.editor_toolbar {
+            toolbar.visit(&mut visit);
+        }
+        if let Some(dialog) = &self.document.dialog {
+            dialog.content.visit(&mut visit);
+        }
+        let changed = photos.len() != self.photos.len()
+            || photos.iter().any(|(id, image)| {
+                self.photos
+                    .get(id)
+                    .is_none_or(|old| !std::sync::Arc::ptr_eq(old, image))
+            });
+        self.photos = photos;
+        if changed {
+            self.link_press = None;
+            cx.notify();
+        }
         for (id, canvas) in &self.canvases {
             let images = images.get(&format!("{panel_key}/canvas/{id}")).cloned();
             canvas.update(cx, |view, cx| {
@@ -69,6 +174,32 @@ impl PluginView {
                 }
             });
         }
+        self.sync_image_leases(window, cx);
+    }
+
+    /// Reconcile all decoded native pixels once per projection, including shared dialog/canvas images.
+    fn sync_image_leases(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let mut pixels = self
+            .photos
+            .values()
+            .filter_map(|photo| {
+                photo
+                    .decoded
+                    .as_ref()
+                    .ok()
+                    .and_then(Option::as_ref)
+                    .map(|bitmap| bitmap.image.clone())
+            })
+            .collect::<Vec<_>>();
+        for canvas in self.canvases.values() {
+            if let Some(images) = &canvas.read(cx).images {
+                pixels.extend(images.iter().flatten().map(|image| image.image.clone()));
+            }
+        }
+        for image in self.image_leases.update(pixels, cx) {
+            // GPUI removes the borrowed window from App.windows during rendering and updates.
+            cx.drop_image(image, Some(window));
+        }
     }
     pub(crate) fn new(
         plugin: String,
@@ -78,26 +209,86 @@ impl PluginView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
+        // RenderImage Arcs do not evict GPUI's atlas. Entity retirement therefore owns
+        // an explicit cleanup, including the current window while App temporarily lends it out.
+        let image_window = window.window_handle();
+        cx.on_release(move |this, cx| {
+            let pixels = this.image_leases.clear(cx);
+            if image_window
+                .update(cx, |_, window, cx| {
+                    for image in &pixels {
+                        cx.drop_image(image.clone(), Some(window));
+                    }
+                })
+                .is_err()
+            {
+                // A closed owner window is already gone; shared application atlases still need retirement.
+                for image in pixels {
+                    cx.drop_image(image, None);
+                }
+            }
+        })
+        .detach();
+        let scene_current = Rc::new(Cell::new(true));
+        let gate = scene_current.clone();
         let mut this = Self {
+            native_editor: None,
             plugin,
             document,
             environment,
-            sink: Rc::new(sink),
+            sink: Rc::new(move |event, cx| {
+                if gate.get() {
+                    sink(event, cx)
+                }
+            }),
+            scene_current,
             inputs: BTreeMap::new(),
             scrolls: BTreeMap::new(),
+            scene_layout: Default::default(),
+            viewport: Default::default(),
+            link_press: None,
+            link_focus: BTreeMap::new(),
+            code_highlights: Default::default(),
             canvases: BTreeMap::new(),
             collections: BTreeMap::new(),
             popup: None,
             origin: Default::default(),
             dialog_focus: cx.focus_handle(),
+            view_focus: cx.focus_handle().tab_stop(false),
+            checkbox_focus: BTreeMap::new(),
             previous_focus: None,
             dismissed_dialog: None,
+            content_sized: false,
+            photos: BTreeMap::new(),
+            image_leases: Default::default(),
         };
         this.sync_native(window, cx);
         if this.document.dialog.is_some() {
             this.focus_dialog(window, cx);
         }
         this
+    }
+
+    /// Retain the same native controls and event gate while letting a surrounding layout own height.
+    pub(crate) fn content_sized(mut self) -> Self {
+        self.content_sized = true;
+        self
+    }
+
+    /// Check document identity, excluding revision, before retaining hidden native state during refresh.
+    pub(crate) fn same_source_document(
+        &self,
+        version: &plugin_runtime::plugin_protocol::api::DocumentVersion,
+    ) -> bool {
+        self.document
+            .source
+            .as_ref()
+            .is_some_and(|source| source.id == version.id && source.path == version.path)
+    }
+
+    /// A preview edit preserves its originating native control; toolbar edits still focus source.
+    pub(crate) fn contains_focus(&self, window: &Window, cx: &App) -> bool {
+        self.view_focus.contains_focused(window, cx)
     }
 
     /// Reconcile keyed native state; ordinary guest renders must not recreate focused inputs.
@@ -111,7 +302,12 @@ impl PluginView {
         if self.document == document && self.environment == environment {
             return;
         }
+        if self.document != document {
+            self.invalidate_code_highlighting(cx);
+        }
         let old_dialog = self.document.dialog.as_ref().map(|d| d.id.clone());
+        // A new scene/theme cannot adopt an earlier pointer press, even when node IDs are reused.
+        self.link_press = None;
         let next_dialog = document.dialog.as_ref().map(|d| d.id.clone());
         let menu_changed = self.document.menu.as_ref().map(|menu| &menu.id)
             != document.menu.as_ref().map(|menu| &menu.id);
@@ -130,6 +326,47 @@ impl PluginView {
             }
         }
         self.sync_native(window, cx);
+        // A removed image or source replacement can retire this tree without another worker update.
+        let mut keep = BTreeSet::new();
+        let mut visit = |node: &plugin_runtime::plugin_protocol::ui::Node| {
+            let Some(photo) = self.photos.get(&node.id) else {
+                return;
+            };
+            // Both source types must retain their exact authority, even when the node ID is reused.
+            let current = match &node.kind {
+                Kind::Image { source, .. } => {
+                    self.document
+                        .source
+                        .as_ref()
+                        .is_some_and(|version| photo.resource.source == *version)
+                        && source == &photo.resource.uri
+                }
+                Kind::FileImage { .. } => {
+                    self.document.file.as_ref().is_some_and(|version| {
+                        photo.resource.source
+                            == plugin_runtime::plugin_protocol::api::ContentVersion::File(
+                                version.clone(),
+                            )
+                    }) && photo.resource.uri == "@current-file"
+                }
+                _ => false,
+            };
+            if current {
+                keep.insert(node.id.clone());
+            }
+        };
+        self.document.root.visit(&mut visit);
+        if let Some(toolbar) = &self.document.editor_toolbar {
+            toolbar.visit(&mut visit);
+        }
+        if let Some(dialog) = &self.document.dialog {
+            dialog.content.visit(&mut visit);
+        }
+        self.photos.retain(|id, _| keep.contains(id));
+        self.sync_image_leases(window, cx);
+        // Closing a source-only overlay can retire this view before it is rendered again.
+        // Reconcile popup removal here as well so its previous native focus is returned first.
+        self.sync_widgets(window, cx);
         cx.notify();
     }
 
@@ -141,6 +378,9 @@ impl PluginView {
     }
 
     fn sync_native(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.scene_layout.reset(&self.document);
+        self.viewport.reset_scene();
+        self.sync_link_focus(window, cx);
         let mut nodes = vec![];
         self.document
             .root
@@ -166,6 +406,18 @@ impl PluginView {
             .map(|node| node.id.clone())
             .collect();
         self.canvases.retain(|id, _| canvas_ids.contains(id));
+        let checkbox_ids: BTreeSet<_> = nodes
+            .iter()
+            .filter(|node| matches!(node.kind, Kind::Checkbox { .. }))
+            .map(|node| node.id.clone())
+            .collect();
+        self.checkbox_focus
+            .retain(|id, _| checkbox_ids.contains(id));
+        for id in checkbox_ids {
+            self.checkbox_focus
+                .entry(id)
+                .or_insert_with(|| cx.focus_handle());
+        }
         for node in nodes {
             if let Kind::Canvas(drawing) = &node.kind {
                 if !self.canvases.contains_key(&node.id) {

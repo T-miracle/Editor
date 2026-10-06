@@ -7,7 +7,29 @@ use plugin_runtime::{
     },
 };
 
+mod edits;
+mod images;
+mod navigation;
+mod viewport;
+
 impl EditorApp {
+    /// Drain requests in effect order so each edit's native Change event advances its revision first.
+    pub(crate) fn dispatch_editor_requests(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.editor_request_dispatch_scheduled || self.pending_editor_requests.is_empty() {
+            return;
+        }
+        // A redraw may occur while effects are queued. Keep it from executing a second stale request.
+        self.editor_request_dispatch_scheduled = true;
+        let (plugin, request) = self.pending_editor_requests.remove(0);
+        self.perform_editor_request(&plugin, request, window, cx);
+        // Native EditorState remains the only text and undo owner. Its Change subscription and the
+        // request completion were queued above; the next request observes their committed version.
+        cx.defer_in(window, |this, window, cx| {
+            this.editor_request_dispatch_scheduled = false;
+            this.dispatch_editor_requests(window, cx);
+        });
+    }
+
     /// Publish snapshots of changed versions; intermediate typing events can safely coalesce.
     pub(crate) fn sync_plugin_documents(&mut self, cx: &mut Context<Self>) {
         if !self.session_state.workspace_trusted {
@@ -44,9 +66,14 @@ impl EditorApp {
     /// Tokens use the open entity identity, not merely a path that may later be reopened.
     pub(crate) fn plugin_document_version(&self, index: usize) -> Result<DocumentVersion, Failure> {
         let tab = &self.tabs[index];
+        let text = tab.text.as_ref().ok_or_else(|| {
+            Failure::new(
+                ErrorCode::UnsupportedOperation,
+                "File has no text editing capability",
+            )
+        })?;
         // OpenTab already stores its resolved path. Disk deletion does not end the editor entity's lifetime.
         let path = tab
-            .session
             .path()
             .strip_prefix(self.workspace.root())
             .map_err(|_| {
@@ -56,9 +83,9 @@ impl EditorApp {
                 )
             })?;
         Ok(DocumentVersion {
-            id: format!("{:?}", tab.editor.entity_id()),
+            id: format!("{:?}", text.editor.entity_id()),
             path: path.to_string_lossy().replace('\\', "/"),
-            revision: tab.capability_revision,
+            revision: text.capability_revision,
         })
     }
 
@@ -87,6 +114,22 @@ impl EditorApp {
             self.save_plugin_document(document.clone(), request, cx);
             return;
         }
+        if matches!(request.operation(), Op::ReplaceDocumentRange { .. }) {
+            self.replace_plugin_document(request, window, cx);
+            return;
+        }
+        if matches!(request.operation(), Op::SaveImageInput { .. }) {
+            self.save_plugin_image(request, window, cx);
+            return;
+        }
+        if matches!(request.operation(), Op::NavigateDocument { .. }) {
+            self.navigate_plugin_document(plugin, request, window, cx);
+            return;
+        }
+        if matches!(request.operation(), Op::LocateViewport { .. }) {
+            self.locate_plugin_viewport(plugin, request, window, cx);
+            return;
+        }
         let result = (|| match request.operation() {
             Op::OpenDataFile { path } => {
                 // The owning runtime supplies this root. Resolve aliases again immediately before opening.
@@ -111,7 +154,7 @@ impl EditorApp {
                     ));
                 }
                 self.open_file(file.clone(), window, cx);
-                if !self.tabs.iter().any(|tab| tab.session.path() == file) {
+                if !self.tabs.iter().any(|tab| tab.path() == file) {
                     return Err(Failure::new(
                         ErrorCode::OperationFailed,
                         "Private file could not be opened",
@@ -148,7 +191,18 @@ impl EditorApp {
                     .active_tab_index()
                     .ok_or_else(|| Failure::new(ErrorCode::NotFound, "No active document"))?;
                 let document = self.plugin_document_version(index)?;
-                let text = self.tabs[index].editor.read(cx).selected_text().to_string();
+                let text = self
+                    .text_tab(index)
+                    .ok_or_else(|| {
+                        Failure::new(
+                            ErrorCode::UnsupportedOperation,
+                            "File has no text selection",
+                        )
+                    })?
+                    .editor
+                    .read(cx)
+                    .selected_text()
+                    .to_string();
                 if text.len() > 1024 * 1024 {
                     return Err(Failure::new(
                         ErrorCode::LimitExceeded,
@@ -156,6 +210,9 @@ impl EditorApp {
                     ));
                 }
                 Ok(Value::Selection { document, text })
+            }
+            Op::ReadDocumentSelection { document } => {
+                self.read_plugin_document_selection(document, window, cx)
             }
             Op::ActiveDirectory => {
                 let path = if let Some(index) = self.active_tab_index() {
@@ -195,7 +252,11 @@ impl EditorApp {
                     visible: *visible,
                 })
             }
-            Op::SaveDocument { .. } => unreachable!(),
+            Op::SaveDocument { .. }
+            | Op::ReplaceDocumentRange { .. }
+            | Op::SaveImageInput { .. }
+            | Op::NavigateDocument { .. }
+            | Op::LocateViewport { .. } => unreachable!(),
         })();
         request.finish(result);
     }
@@ -217,8 +278,14 @@ impl EditorApp {
             )));
             return;
         };
-        let tab = &self.tabs[index];
-        let path = tab.session.path().to_path_buf();
+        let Some(tab) = self.tabs[index].text.as_ref() else {
+            request.finish(Err(Failure::new(
+                ErrorCode::UnsupportedOperation,
+                "File has no text save capability",
+            )));
+            return;
+        };
+        let path = tab.path().to_path_buf();
         if let Err(error) = self.check_plugin_save_path(&path) {
             request.finish(Err(error));
             return;
@@ -289,9 +356,14 @@ impl EditorApp {
                     "Document changed during save preparation",
                 )
             })?;
-        let path = self.tabs[index].session.path().to_path_buf();
+        let path = self.tabs[index].path().to_path_buf();
         self.check_plugin_save_path(&path)?;
-        let tab = &mut self.tabs[index];
+        let tab = self.text_tab_mut(index).ok_or_else(|| {
+            Failure::new(
+                ErrorCode::UnsupportedOperation,
+                "File has no text save capability",
+            )
+        })?;
         let disk =
             std::fs::read(&path).map_err(|e| Failure::new(ErrorCode::Conflict, e.to_string()))?;
         if tab.disk_state != DiskState::Synced

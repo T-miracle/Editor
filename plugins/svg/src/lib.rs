@@ -1,4 +1,4 @@
-//! SVG document preview using the host's generic file-scoped surface contract.
+//! Image file viewer: editable SVG source and read-only raster images share the public file surface.
 
 use plugin_protocol::{
     Environment, Paint, Rect, Snapshot, api,
@@ -7,14 +7,13 @@ use plugin_protocol::{
 };
 use std::cell::RefCell;
 
+mod display;
 mod scene;
 
 /// Zoom is the absolute scale of the SVG's intrinsic dimensions.
 const MIN_SCALE: f32 = 0.01;
 const MAX_SCALE: f32 = 32.;
 const HEADER_HEIGHT: f32 = 32.;
-/// A new document starts with a 240-pixel longest edge, independently of its intrinsic size.
-const DEFAULT_DISPLAY_EXTENT: f32 = 240.;
 /// The shared drawing protocol bounds both image extents and coordinates to one million pixels.
 const MAX_EXTENT: f32 = 1_000_000.;
 /// SVG assets stay inside the WASM component and are also included in the installable package.
@@ -35,11 +34,17 @@ enum ViewMode {
 
 /// A preview owns transient view state; the editor remains the authority for document contents.
 struct State {
+    /// Plugin intent applies only to editable SVG, independently of raster file identity.
+    display: display::Display,
     environment: Environment,
     width: f32,
     height: f32,
     /// Echoed source authority; reopening a path creates a different document identity.
     document: Option<api::DocumentVersion>,
+    /// Zoom belongs to the open SVG identity even while a newer exact text snapshot is pending.
+    zoom_document: Option<String>,
+    /// Raster previews carry file authority without manufacturing a text session or revision.
+    file: Option<api::FileContext>,
     revision: u64,
     source: String,
     intrinsic: Option<(f32, f32)>,
@@ -55,10 +60,13 @@ impl Default for State {
     /// Start with an empty preview, using dimensions that the first native resize will replace.
     fn default() -> Self {
         Self {
+            display: Default::default(),
             environment: Environment::default(),
             width: 400.,
             height: 300.,
             document: None,
+            zoom_document: None,
+            file: None,
             revision: 0,
             source: String::new(),
             intrinsic: None,
@@ -73,9 +81,9 @@ impl Default for State {
 
 thread_local! { static STATE: RefCell<State> = RefCell::new(State::default()); }
 
-struct SvgPreview;
+struct ImagePreview;
 
-impl Guest for SvgPreview {
+impl Guest for ImagePreview {
     /// The typed lifecycle never reads the source document from disk or retains it in snapshots.
     fn dispatch(payload: String) -> Result<String, String> {
         api::guest::dispatch(&payload, |message| {
@@ -98,7 +106,7 @@ impl Guest for SvgPreview {
                             ..Default::default()
                         };
                     }
-                    api::Input::Event { panel, event } => state.event(panel.as_deref(), event),
+                    api::Input::Event { panel, event } => state.event(panel.as_deref(), event)?,
                     api::Input::Snapshot => {
                         return Ok(api::Output {
                             snapshot: Some(Snapshot {
@@ -118,11 +126,55 @@ impl Guest for SvgPreview {
         })
     }
 }
-export!(SvgPreview);
+export!(ImagePreview);
 impl State {
     /// Preview is the host-managed current-document subscription; unrelated panels cannot retarget it.
-    fn event(&mut self, panel: Option<&str>, event: api::Notification) {
+    fn event(&mut self, panel: Option<&str>, event: api::Notification) -> Result<(), api::Failure> {
         match event {
+            api::Notification::FilePreview { file } if panel == Some("preview") => {
+                self.display.bind(file.as_ref())?;
+                self.file = file;
+                if self
+                    .file
+                    .as_ref()
+                    .and_then(|file| file.text.as_ref())
+                    .is_none()
+                {
+                    // Closing the text or switching to a raster withdraws its transient zoom intent.
+                    self.zoom_document = None;
+                }
+                if self.file.as_ref().and_then(|file| file.text.as_ref()) != self.document.as_ref()
+                {
+                    // Clear old pixels and authority, retaining only the identity needed to preserve manual zoom.
+                    self.document = None;
+                    self.source.clear();
+                    self.intrinsic = None;
+                    self.error = None;
+                    self.pressed_button = None;
+                    self.hovered_button = None;
+                }
+                self.revision = self.revision.saturating_add(1);
+            }
+            api::Notification::Tool(event) if panel == Some("preview") => {
+                if event.revision == self.revision
+                    && self.file.as_ref().is_some_and(|file| {
+                        event.target
+                            == (ui::ToolTarget::File {
+                                version: file.version.clone(),
+                            })
+                    })
+                    && self.display.select(&event)?
+                {
+                    self.revision = self.revision.saturating_add(1);
+                }
+            }
+            event @ (api::Notification::PreferenceChanged { .. }
+            | api::Notification::SubscriptionFailed { .. }) => {
+                // Revoked watches must reach the binding so reopening the scope can read again.
+                if self.display.changed(&event)? {
+                    self.revision = self.revision.saturating_add(1);
+                }
+            }
             api::Notification::Theme(environment) => self.environment = environment,
             api::Notification::Preview { document, text } if panel == Some("preview") => {
                 self.document(document, text)
@@ -136,6 +188,7 @@ impl State {
             }
             _ => {}
         }
+        Ok(())
     }
     /// Coordinates are local to this ordinary canvas; the host never interprets SVG zoom or toolbar commands.
     fn canvas_event(&mut self, event: ui::CanvasEvent) {
@@ -171,20 +224,26 @@ impl State {
 
     /// Parse unsaved source with external image resolution disabled, keeping malformed input recoverable.
     fn document(&mut self, document: Option<api::DocumentVersion>, source: String) {
+        if let Some(file) = &mut self.file {
+            file.text = document.clone();
+        }
         if matches!((&self.document, &document), (Some(current), Some(next)) if current.id == next.id && next.revision < current.revision)
         {
             return;
         }
-        let changed_file = self.document.as_ref().map(|source| &source.id)
-            != document.as_ref().map(|source| &source.id);
+        let changed_file =
+            self.zoom_document.as_ref() != document.as_ref().map(|source| &source.id);
         if changed_file {
             self.pressed_button = None;
             self.hovered_button = None;
-        }
-        if changed_file {
+            // Identity owns manual intent even when the first snapshot is malformed and has no dimensions.
+            // Reset before parsing so repairing a different file cannot inherit its predecessor's zoom.
+            self.view_mode = ViewMode::DefaultSize;
+            self.scale = 1.;
             self.revision = self.revision.saturating_add(1);
         }
         self.document = document;
+        self.zoom_document = self.document.as_ref().map(|source| source.id.clone());
         self.intrinsic = None;
         self.error = None;
         self.source.clear();
@@ -312,11 +371,12 @@ impl State {
         })
     }
 
-    /// Center a new document at 240 logical pixels on its longest edge, preserving its ratio.
+    /// Preserve intrinsic dimensions, shrinking only when either viewport axis is too small.
     fn default_size(&mut self) {
         self.view_mode = ViewMode::DefaultSize;
         if let Some((width, height)) = self.intrinsic {
-            self.scale = DEFAULT_DISPLAY_EXTENT / width.max(height);
+            let viewport = self.viewport();
+            self.scale = 1_f32.min(viewport.w / width).min(viewport.h / height);
         }
     }
 
@@ -341,23 +401,15 @@ impl State {
     fn max_scale(&self) -> f32 {
         self.intrinsic
             .map(|(width, height)| {
-                (MAX_EXTENT / width.max(height)).min(
-                    MAX_SCALE
-                        .max(DEFAULT_DISPLAY_EXTENT / width.max(height))
-                        .max(self.fit_scale(width, height)),
-                )
+                (MAX_EXTENT / width.max(height)).min(MAX_SCALE.max(self.fit_scale(width, height)))
             })
             .unwrap_or(MAX_SCALE)
     }
 
-    /// Huge canvases must still be able to reach their 240-pixel default below one percent.
+    /// Huge canvases must remain able to reach complete containment below one percent.
     fn min_scale(&self) -> f32 {
         self.intrinsic
-            .map(|(width, height)| {
-                MIN_SCALE
-                    .min(DEFAULT_DISPLAY_EXTENT / width.max(height))
-                    .min(self.fit_scale(width, height))
-            })
+            .map(|(width, height)| MIN_SCALE.min(self.fit_scale(width, height)))
             .unwrap_or(MIN_SCALE)
     }
 

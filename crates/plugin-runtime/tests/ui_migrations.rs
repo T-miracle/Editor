@@ -42,6 +42,34 @@ fn action(manager: &mut Manager, id: &str, panel: &str, node: &str, action: ui::
     );
 }
 
+/// A text-capable image receives file identity before its exact memory snapshot, like the native host.
+fn svg_preview(manager: &mut Manager, document: Option<api::DocumentVersion>, text: &str) {
+    let file = document.as_ref().map(|source| api::FileContext {
+        version: api::FileVersion {
+            id: format!("file:{}", source.id),
+            path: source.path.clone(),
+            revision: source.revision,
+        },
+        file_type: "svg".into(),
+        text: Some(source.clone()),
+    });
+    notify(
+        manager,
+        "svg",
+        "preview",
+        api::Notification::FilePreview { file },
+    );
+    notify(
+        manager,
+        "svg",
+        "preview",
+        api::Notification::Preview {
+            document,
+            text: text.into(),
+        },
+    );
+}
+
 /// No native permission is needed for snapshots, counters, notes or standard controls.
 #[test]
 #[ignore = "build example and svg packages through the host SDK first"]
@@ -111,31 +139,30 @@ const SVG: &str = "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"200\" heigh
 #[ignore = "build example and svg packages through the host SDK first"]
 fn svg_uses_versioned_memory_and_discards_obsolete_content() {
     let package = package("svg");
-    assert_eq!(package.manifest.permissions, ["editor.read".into()].into());
+    assert!(
+        package.manifest.permissions.contains("editor.read")
+            && package.manifest.permissions.contains("storage")
+    );
     let root = tempfile::tempdir().unwrap();
     let mut manager = manager(root.path());
     assert!(manager.install(&package, Default::default()).is_err());
     manager
         .install(&package, package.manifest.permissions.clone())
         .unwrap();
-    let version = api::DocumentVersion {
+    let mut version = api::DocumentVersion {
         id: "open-svg".into(),
         path: "unsaved.svg".into(),
         revision: 7,
     };
-    notify(
-        &mut manager,
-        "svg",
-        "preview",
-        api::Notification::Preview {
-            document: Some(version.clone()),
-            text: SVG.into(),
-        },
-    );
+    svg_preview(&mut manager, Some(version.clone()), SVG);
     let view = tree(&manager, "svg", "preview");
     assert_eq!(view.source.as_ref(), Some(&version));
     let vector = |manager: &Manager| {
-        let ui::Kind::Canvas(canvas) = &tree(manager, "svg", "preview").root.kind else {
+        let ui::Kind::Canvas(canvas) = &tree(manager, "svg", "preview")
+            .active_node("preview-canvas")
+            .unwrap()
+            .kind
+        else {
             panic!("canvas required")
         };
         canvas
@@ -143,7 +170,7 @@ fn svg_uses_versioned_memory_and_discards_obsolete_content() {
             .iter()
             .rev()
             .find_map(|paint| match paint {
-                Paint::Svg { rect, source, .. } if source == SVG => Some(*rect),
+                Paint::Svg { rect, source, .. } if source.contains("<circle") => Some(*rect),
                 _ => None,
             })
             .unwrap()
@@ -162,7 +189,18 @@ fn svg_uses_versioned_memory_and_discards_obsolete_content() {
             y: 150.,
         }),
     );
-    assert!(vector(&manager).w > initial.w);
+    let zoomed = vector(&manager);
+    assert!(zoomed.w > initial.w);
+    // Follow the host's full file-then-text path: an edit changes revision, not the open SVG's zoom intent.
+    version.revision += 1;
+    let edited = SVG.replace("<circle", "<circle fill=\"blue\"");
+    svg_preview(&mut manager, Some(version.clone()), &edited);
+    assert_eq!(vector(&manager), zoomed);
+    assert!(
+        serde_json::to_string(tree(&manager, "svg", "preview"))
+            .unwrap()
+            .contains("blue")
+    );
     let error = manager
         .event(
             "svg",
@@ -194,31 +232,115 @@ fn svg_uses_versioned_memory_and_discards_obsolete_content() {
         revision: 0,
         ..version
     };
-    notify(
-        &mut manager,
-        "svg",
-        "preview",
-        api::Notification::Preview {
-            document: Some(reopened.clone()),
-            text: SVG.into(),
-        },
-    );
+    svg_preview(&mut manager, Some(reopened.clone()), SVG);
     assert_eq!(
         tree(&manager, "svg", "preview").source.as_ref(),
         Some(&reopened)
     );
     assert_eq!(vector(&manager).w, initial.w);
-    notify(
+    action(
         &mut manager,
         "svg",
         "preview",
-        api::Notification::Preview {
-            document: None,
-            text: String::new(),
-        },
+        "preview-canvas",
+        ui::Action::Canvas(ui::CanvasEvent::Wheel {
+            delta_x: 0.,
+            delta_y: 14.,
+            shift: false,
+            x: 200.,
+            y: 150.,
+        }),
     );
+    let mut damaged = api::DocumentVersion {
+        id: "initially-damaged".into(),
+        path: "damaged.svg".into(),
+        revision: 0,
+    };
+    // A different file resets zoom even when its first snapshot cannot yet supply intrinsic dimensions.
+    svg_preview(&mut manager, Some(damaged.clone()), "<svg");
+    damaged.revision += 1;
+    svg_preview(&mut manager, Some(damaged.clone()), SVG);
+    assert_eq!(vector(&manager).w, initial.w);
+    action(
+        &mut manager,
+        "svg",
+        "preview",
+        "preview-canvas",
+        ui::Action::Canvas(ui::CanvasEvent::Wheel {
+            delta_x: 0.,
+            delta_y: 14.,
+            shift: false,
+            x: 200.,
+            y: 150.,
+        }),
+    );
+    let repaired_zoom = vector(&manager);
+    // An incomplete edit of that same file retains the user's manual intent when the SVG becomes valid again.
+    damaged.revision += 1;
+    svg_preview(&mut manager, Some(damaged.clone()), "<svg");
+    damaged.revision += 1;
+    svg_preview(&mut manager, Some(damaged), SVG);
+    assert_eq!(vector(&manager), repaired_zoom);
+    svg_preview(&mut manager, None, "");
     assert!(tree(&manager, "svg", "preview").source.is_none());
     manager.disable("svg").unwrap();
     assert!(manager.live.is_empty());
     manager.uninstall("svg", false).unwrap();
+}
+
+/// Quotas apply to the complete split scene; an oversized preview must leave its editor and guest alive.
+#[test]
+#[ignore = "build markdown through the host SDK first"]
+fn markdown_composed_quota_preserves_editor_and_recovers_after_shortening() {
+    let package = package("markdown");
+    let root = tempfile::tempdir().unwrap();
+    let mut manager = manager(root.path());
+    manager
+        .install(&package, package.manifest.permissions.clone())
+        .unwrap();
+    let instance = manager.instance_id("markdown").unwrap().to_owned();
+    for (revision, text, limited) in [
+        (2, "x\n\n".repeat(673), true),
+        (3, "# Shorter\n".into(), false),
+    ] {
+        let source = api::DocumentVersion {
+            id: "quota-source".into(),
+            path: "quota.md".into(),
+            revision,
+        };
+        notify(
+            &mut manager,
+            "markdown",
+            "preview",
+            api::Notification::FilePreview {
+                file: Some(api::FileContext {
+                    version: api::FileVersion {
+                        id: "quota-file".into(),
+                        path: source.path.clone(),
+                        revision,
+                    },
+                    file_type: "md".into(),
+                    text: Some(source.clone()),
+                }),
+            },
+        );
+        notify(
+            &mut manager,
+            "markdown",
+            "preview",
+            api::Notification::Preview {
+                document: Some(source.clone()),
+                text,
+            },
+        );
+        let scene = tree(&manager, "markdown", "preview");
+        scene.validate().unwrap();
+        assert_eq!(scene.active_node("preview-limit").is_some(), limited);
+        assert!(matches!(
+            &scene.active_node("markdown-native-editor").unwrap().kind,
+            ui::Kind::NativeEditor { document } if document == &source
+        ));
+        assert_eq!(manager.instance_id("markdown"), Some(instance.as_str()));
+        assert!(manager.installed["markdown"].error.is_none());
+    }
 }

@@ -5,6 +5,14 @@ pub use dependencies::{InstallControl, InstallStage, InstallerPrompt};
 mod data_transaction;
 mod document_events;
 mod editor_requests;
+mod images;
+pub use images::{ImageResource, ImageState};
+mod image_input;
+pub use image_input::{
+    HostImageInput, HostImageOrigin, IMAGE_INPUT_MAX_BATCH, IMAGE_INPUT_MAX_BATCH_BYTES,
+    IMAGE_INPUT_MAX_BYTES, IMAGE_INPUT_MAX_RESIDENT_BYTES, IMAGE_INPUT_TIMEOUT_MS,
+    ImageInputResource,
+};
 pub mod faults;
 pub mod logs;
 pub use logs::{LogLevel, LogRecord, RuntimeLogs};
@@ -21,7 +29,11 @@ mod plugin_services;
 mod process;
 mod toolchains;
 pub use instance::Instance;
-pub use manager::{InstallationPreparation, Installed, Manager, PreparedInstallation};
+pub use manager::{
+    EXECUTION_CONTRACT, EXECUTION_START_TIMEOUT_MS, ExecutionFailure, ExecutionSnapshot,
+    ExecutionState, HostExecution, InstallationPreparation, Installed, Manager,
+    PreparedInstallation, RunRequest,
+};
 pub use package::Package;
 pub use plugin_protocol;
 

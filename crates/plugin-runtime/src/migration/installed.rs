@@ -82,7 +82,7 @@ pub(crate) fn stage_legacy_data(
     }
     let backup = legacy_directory(root, id);
     plain_directory(&backup)?;
-    let record: Installed = serde_json::from_slice(&fs::read(backup.join("record.json"))?)?;
+    let record = super::decode_installed(&fs::read(backup.join("record.json"))?)?;
     // The directory name alone does not prove ownership of retained historical evidence.
     if canonical_plugin_id(&record.manifest.id) != id {
         return Ok(());
@@ -142,7 +142,7 @@ pub(crate) fn discard_legacy_data(
     if !backup.exists() {
         return Ok(());
     }
-    let record: Installed = serde_json::from_slice(&fs::read(backup.join("record.json"))?)?;
+    let record = super::decode_installed(&fs::read(backup.join("record.json"))?)?;
     let original = &record.manifest.id;
     anyhow::ensure!(safe_id(original), "Unsafe legacy deletion record");
     if canonical_plugin_id(original) != id {

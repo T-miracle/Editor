@@ -4,6 +4,16 @@ use crate::editor_requests::{EditorRequest, PendingRequest};
 use api::{EditorOperation, ErrorCode, Failure, Notification, Value};
 use resource_roots::RootKind;
 
+/// Return the target's required grant for direct and delegated navigation alike.
+/// Callers also require editor.read; sharing this mapping prevents stronger provider grants leaking.
+pub(super) fn navigation_permission(target: &api::NavigationTarget) -> &'static str {
+    match target {
+        api::NavigationTarget::PreviewNode { .. } => "editor.read",
+        api::NavigationTarget::RelativeDocument { .. } => "workspace.read",
+        api::NavigationTarget::ExternalUrl { .. } => "navigation.external",
+    }
+}
+
 impl State {
     /// Editor access never follows an application's currently selected workspace implicitly.
     pub(super) fn editor_request(
@@ -24,6 +34,43 @@ impl State {
             ));
         }
         let (capability, permission) = match &operation {
+            EditorOperation::LocateViewport {
+                panel,
+                target,
+                origin,
+                ..
+            } => {
+                target.validate()?;
+                if *origin == 0 {
+                    return Err(Failure::new(
+                        ErrorCode::InvalidRequest,
+                        "Viewport location requires a nonzero origin",
+                    ));
+                }
+                self.check_editor_viewport_authority(panel)?;
+                ("editor.viewport", "editor.read")
+            }
+            EditorOperation::NavigateDocument { target, .. } => {
+                target.validate()?;
+                if !self.permissions.contains("editor.read") {
+                    return Err(Failure::new(
+                        ErrorCode::PermissionDenied,
+                        "Navigation requires editor.read",
+                    ));
+                }
+                if let api::NavigationTarget::PreviewNode { panel, .. } = target {
+                    if !self.declared_editor_panels.contains(panel) {
+                        return Err(Failure::new(
+                            ErrorCode::PermissionDenied,
+                            "Navigation panel is not owned by this instance",
+                        ));
+                    }
+                }
+                ("editor.navigation", navigation_permission(target))
+            }
+            EditorOperation::SaveImageInput { .. } => ("editor.images", "workspace.write"),
+            EditorOperation::ReadDocumentSelection { .. } => ("editor.edit", "editor.read"),
+            EditorOperation::ReplaceDocumentRange { .. } => ("editor.edit", "editor.write"),
             EditorOperation::WriteClipboard { text } if text.len() > 1024 * 1024 => {
                 return Err(Failure::new(
                     ErrorCode::LimitExceeded,
@@ -72,6 +119,18 @@ impl State {
                 format!("{permission} permission required"),
             ));
         }
+        validate_edit_request(&operation)?;
+        let image_input = if let EditorOperation::SaveImageInput { input, name } = &operation {
+            if timeout_ms > crate::IMAGE_INPUT_TIMEOUT_MS {
+                return Err(Failure::new(
+                    ErrorCode::InvalidRequest,
+                    "Image save deadline must not exceed 30000 ms",
+                ));
+            }
+            Some(self.image_input_payload(input, name)?)
+        } else {
+            None
+        };
         if self.editor_requests.len() >= 32 {
             return Err(Failure::new(
                 ErrorCode::LimitExceeded,
@@ -81,7 +140,7 @@ impl State {
         let Value::Resource(handle) = self.roots.open(RootKind::EditorRequest)? else {
             unreachable!()
         };
-        let call = EditorRequest::new(
+        let mut call = EditorRequest::new(
             handle.clone(),
             operation,
             self.workspace.display().to_string(),
@@ -89,6 +148,10 @@ impl State {
             timeout_ms,
             self.plugin_services.context.as_ref(),
         );
+        if let Some(input) = image_input {
+            self.mark_image_input_pending(&input.input.handle, handle.clone());
+            call = call.with_image_input(input);
+        }
         self.editor_requests.insert(
             handle.resource,
             PendingRequest {
@@ -100,6 +163,37 @@ impl State {
         );
         Ok(Value::Accepted(handle))
     }
+}
+
+/// Check bounded request shape; only the host can check the target revision and UTF-8 boundaries.
+fn validate_edit_request(operation: &EditorOperation) -> Result<(), Failure> {
+    if let EditorOperation::ReplaceDocumentRange {
+        range,
+        text,
+        selection,
+        expected_selection,
+        ..
+    } = operation
+    {
+        if text.len() > 1024 * 1024 {
+            return Err(Failure::new(
+                ErrorCode::LimitExceeded,
+                "Replacement text exceeds 1 MiB",
+            ));
+        }
+        // Result selections address the resulting full document, so there is no replacement-size end bound.
+        if [Some(range), Some(selection), expected_selection.as_ref()]
+            .into_iter()
+            .flatten()
+            .any(|range| range.start > range.end)
+        {
+            return Err(Failure::new(
+                ErrorCode::InvalidRequest,
+                "Text range start must not exceed its end",
+            ));
+        }
+    }
+    Ok(())
 }
 
 impl Instance {
@@ -145,7 +239,11 @@ impl Instance {
                 continue;
             }
             if update.is_terminal() {
-                self.store.data_mut().editor_requests.remove(&slot);
+                if let Some(pending) = self.store.data_mut().editor_requests.remove(&slot) {
+                    self.store
+                        .data_mut()
+                        .finish_image_input_request(&pending.call, &update);
+                }
                 self.store.data_mut().roots.remove(&handle);
                 self.store
                     .data_mut()

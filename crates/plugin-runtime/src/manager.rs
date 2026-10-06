@@ -7,17 +7,28 @@ use std::{
     collections::{BTreeMap, BTreeSet},
     path::{Path, PathBuf},
 };
+mod artwork;
+mod bundles;
 mod data_updates;
 mod dependencies;
+mod host_services;
+mod image_input;
+mod images;
 mod language;
 mod plugin_services;
+mod preferences;
 mod preparation;
 mod recovery;
 pub use data_updates::PreparedInstallation;
+pub use host_services::{
+    EXECUTION_CONTRACT, EXECUTION_START_TIMEOUT_MS, ExecutionFailure, ExecutionSnapshot,
+    ExecutionState, HostExecution, RunRequest,
+};
 pub use preparation::InstallationPreparation;
 pub(crate) mod scopes;
 mod settings;
 mod ui_events;
+use host_services::HostSessions;
 use scopes::ParkedWorkspace;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -29,6 +40,10 @@ pub struct Installed {
     /// Workspace paths whose plugin instance may run despite the global default.
     #[serde(default)]
     pub project_enabled: BTreeSet<String>,
+    /// Disk-only import marker: removed UI fields require a rebuilt package before any component may run.
+    /// Persisted across reopen and rollback; only a successful current package installation clears it.
+    #[serde(default)]
+    pub retired_ui_contract: bool,
     /// UI snapshots distinguish the global preference from effective availability.
     #[serde(skip)]
     pub global_enabled: Option<bool>,
@@ -36,8 +51,18 @@ pub struct Installed {
     pub error: Option<String>,
 }
 impl Installed {
+    /// Whether this manifest negotiates `id` against the current host; false includes incompatible packages.
+    /// This metadata query executes no guest and grants no permission, workspace or instance authority.
+    pub fn supports_capability(&self, id: &str) -> bool {
+        !self.retired_ui_contract
+            && crate::capabilities::negotiate(&self.manifest)
+                .is_ok_and(|api| api.capabilities.contains_key(id))
+    }
     /// Compatibility is derived without executing guest code or changing the user's enablement preference.
     pub fn compatibility_error(&self) -> Option<String> {
+        if self.retired_ui_contract {
+            return Some("插件使用已退役的 UI 契约，请使用新版 SDK 更新插件".into());
+        }
         crate::capabilities::require_current(&self.manifest)
             .err()
             .map(|error| format!("{error:#}"))
@@ -48,42 +73,6 @@ impl Installed {
         self.project_enabled
             .iter()
             .any(|path| scopes::workspace_key(path) == key)
-    }
-    /// Resolve only a declared SVG from this installed package version.
-    pub fn panel_icon(&self, root: &Path, panel_id: &str, dark: bool) -> Option<Vec<u8>> {
-        let panel = self
-            .manifest
-            .panels
-            .iter()
-            .find(|panel| panel.id == panel_id)?;
-        let path = if dark {
-            panel.icon_dark.as_ref().or(panel.icon_light.as_ref())
-        } else {
-            panel.icon_light.as_ref().or(panel.icon_dark.as_ref())
-        }?;
-        if !self.manifest.id.bytes().all(|byte| {
-            byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'.' || byte == b'-'
-        }) || self.digest.len() != 64
-            || !self.digest.bytes().all(|byte| byte.is_ascii_hexdigit())
-            || !Path::new(path)
-                .components()
-                .all(|part| matches!(part, std::path::Component::Normal(_)))
-        {
-            return None;
-        }
-        let bytes = std::fs::read(
-            root.join("packages")
-                .join(&self.manifest.id)
-                .join(&self.digest)
-                .join(path),
-        )
-        .ok()?;
-        (bytes.len() <= 64 * 1024
-            && std::str::from_utf8(&bytes)
-                .ok()?
-                .trim_start()
-                .starts_with("<svg"))
-        .then_some(bytes)
     }
 }
 /// Run this module on a worker thread; native rendering reads only published documents.
@@ -105,6 +94,16 @@ pub struct Manager {
     trusted: bool,
     workspace_open: bool,
     language_services: BTreeMap<String, language::Prepared>,
+    /// Byte producers are independent of WASM calls and retained only for current preview identities.
+    images: BTreeMap<String, crate::images::Entry>,
+    image_budget: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+    /// Reservations also cover payloads retained by an accepted native writer.
+    image_input_budget: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+    retired_image_sources: BTreeMap<String, api::ContentVersion>,
+    /// Host-owned execution sessions started through the public service contract.
+    host_sessions: HostSessions,
+    /// Retired with this runtime so a queued start cannot outlive the window that requested it.
+    host_alive: std::sync::Arc<std::sync::atomic::AtomicBool>,
 }
 impl Manager {
     /// Share the process-local log owner with host UI and independent real-package verification.
@@ -123,12 +122,30 @@ impl Manager {
     /// Read metadata without starting WASM; first read migrates legacy IDs and preserves private data.
     pub fn read_registry(root: &Path) -> anyhow::Result<BTreeMap<String, Installed>> {
         let _transaction_guard = crate::data_transaction::recover(root)?;
-        let installed = match std::fs::read(root.join("registry.json")) {
-            Ok(bytes) => serde_json::from_slice(&bytes)?,
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => BTreeMap::new(),
+        let (installed, ui_imported) = match std::fs::read(root.join("registry.json")) {
+            Ok(bytes) => {
+                let (installed, changed) = crate::migration::decode_registry(&bytes)?;
+                if changed {
+                    // Back up the original record before normalization; no package or user data is rewritten.
+                    let backup = root.join("registry.before-ui-contract.json");
+                    if !backup.exists() {
+                        atomic_write(&backup, &bytes)?;
+                    }
+                }
+                (installed, changed)
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => (BTreeMap::new(), false),
             Err(e) => return Err(e.into()),
         };
         let mut installed = crate::migration::migrate_registry(root, installed)?;
+        if ui_imported {
+            // The earlier protocol/ID importer must back up the original raw registry before either
+            // migration publishes normalized metadata; their retained evidence composes without loss.
+            atomic_write(
+                &root.join("registry.json"),
+                &serde_json::to_vec_pretty(&installed)?,
+            )?;
+        }
         for entry in installed.values_mut() {
             entry.error = entry.compatibility_error();
         }
@@ -154,6 +171,7 @@ impl Manager {
     ) -> anyhow::Result<Self> {
         std::fs::create_dir_all(&root)?;
         let installed = Self::read_registry(&root)?;
+        let host_alive = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true));
         let mut manager = Self {
             _runtime_lock: None,
             diagnostic_history: BTreeMap::new(),
@@ -174,6 +192,12 @@ impl Manager {
             trusted,
             workspace_open: true,
             language_services: BTreeMap::new(),
+            images: BTreeMap::new(),
+            image_budget: Default::default(),
+            image_input_budget: Default::default(),
+            retired_image_sources: BTreeMap::new(),
+            host_sessions: HostSessions::new(host_alive.clone()),
+            host_alive,
         };
         if manager.installed.values().any(|entry| {
             entry.manifest.component.is_some() && entry.compatibility_error().is_none()
@@ -313,6 +337,7 @@ impl Manager {
                 grants,
                 enabled: true,
                 project_enabled: prior_projects,
+                retired_ui_contract: false,
                 global_enabled: None,
                 error: None,
             },
@@ -356,7 +381,9 @@ impl Manager {
             .installed
             .get(id)
             .ok_or_else(|| anyhow::anyhow!("Unknown plugin"))?;
-        crate::capabilities::require_current(&entry.manifest)?;
+        if let Some(error) = entry.compatibility_error() {
+            anyhow::bail!(error);
+        }
         anyhow::ensure!(
             self.trusted && self.workspace_open,
             "Workspace is restricted or closed"
@@ -486,6 +513,7 @@ impl Manager {
     }
     /// Project overrides retire only their owner; global disable additionally retires parked owners.
     fn disable_current(&mut self, id: &str) -> anyhow::Result<()> {
+        self.retire_plugin_images(id);
         self.retire_language_services(id);
         let snapshot = self.live.get_mut(id).map(Instance::snapshot);
         let saved = match snapshot {
@@ -543,6 +571,8 @@ impl Manager {
     }
     /// Uninstall keeps state unless the user explicitly chose deletion in the manager UI.
     pub fn uninstall(&mut self, id: &str, delete_data: bool) -> anyhow::Result<()> {
+        // A durable host choice must outlive the registry entry and either plugin-data retention option.
+        self.record_bundle_uninstall(id)?;
         self.disable(id)?;
         self.installed.remove(id);
         self.save_registry()?;
@@ -622,6 +652,16 @@ impl Manager {
     pub fn poll(&mut self) {
         self.route_services();
         self.poll_parked();
+        // Host sessions end when their pinned provider incarnation is gone, without replaying work.
+        let present = self
+            .live
+            .values()
+            .chain(self.parked.values().flat_map(|scope| scope.live.values()))
+            .filter_map(Instance::instance_id)
+            .map(str::to_owned)
+            .collect::<BTreeSet<_>>();
+        self.host_sessions
+            .retire_absent_providers(&|instance| present.contains(instance));
         for (id, instance) in &mut self.live {
             if let Err(error) = instance.poll() {
                 instance.stop();
@@ -630,6 +670,7 @@ impl Manager {
                 }
             }
         }
+        self.reconcile_images();
     }
     /// Periodic and shutdown checkpoints use atomic files, leaving last good data on failure.
     pub fn checkpoint(&mut self) -> anyhow::Result<()> {
@@ -697,7 +738,9 @@ mod icon_tests {
                 contributions: None,
                 permissions: BTreeSet::new(),
                 panels: vec![Panel {
+                    auxiliary: false,
                     file_extensions: vec![],
+                    readonly_file_extensions: vec![],
                     id: "main".into(),
                     title: "Main".into(),
                     position: "bottom".into(),
@@ -713,6 +756,7 @@ mod icon_tests {
             grants: BTreeSet::new(),
             enabled: true,
             project_enabled: BTreeSet::new(),
+            retired_ui_contract: false,
             global_enabled: None,
             error: None,
         };
@@ -773,6 +817,7 @@ mod scope_tests {
             grants: BTreeSet::new(),
             enabled: false,
             project_enabled: BTreeSet::from(["project-a".into()]),
+            retired_ui_contract: false,
             global_enabled: None,
             error: None,
         };

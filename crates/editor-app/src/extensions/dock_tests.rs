@@ -52,6 +52,7 @@ fn native_dock_drag_preserves_canvas_viewport_and_saved_size(cx: &mut TestAppCon
                 enabled: true,
                 project_enabled: Default::default(),
                 global_enabled: None,
+                retired_ui_contract: false,
                 error: None,
             }];
             state

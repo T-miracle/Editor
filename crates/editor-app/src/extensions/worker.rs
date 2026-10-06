@@ -1,5 +1,7 @@
 //! A single worker owns plugin stores; the UI thread never compiles or executes WASM.
 use plugin_runtime::{Installed, Manager, Package, plugin_protocol::*};
+#[cfg(test)]
+mod bundled_tests;
 mod preparation;
 mod runner;
 #[cfg(test)]
@@ -12,6 +14,15 @@ use std::{
 };
 
 pub(super) enum Work {
+    /// One-time opaque migration uses current scoped storage consent, never the UI filesystem thread.
+    ImportPreference {
+        plugin: String,
+        epoch: u64,
+        owner: String,
+        workspace: String,
+        key: api::PreferenceKey,
+        data: serde_json::Value,
+    },
     /// Provider choices are explicit host actions, never executable project configuration.
     SetServiceProvider {
         request: u64,
@@ -30,6 +41,12 @@ pub(super) enum Work {
     },
     Inspect(PathBuf),
     Install(Package),
+    /// Shipped discovery never starts guests or forces the manager window open.
+    InspectBundle(super::bundled::Request),
+    /// Only the matching native confirmation can submit the retained immutable package.
+    InstallBundle(super::bundled::Candidate),
+    /// Refusal is a host-owned identity choice, independent of version digest or removable plugin data.
+    DeclineBundle(super::bundled::Candidate),
     Enable(String),
     Restart(String),
     Disable(String),
@@ -40,6 +57,18 @@ pub(super) enum Work {
     Uninstall(String, bool),
     /// Native callbacks retain the incarnation that created them, even if a replacement reuses node IDs.
     Event(String, u64, Option<String>, api::Notification),
+    /// Bytes offered by a native user gesture remain host-owned; only opaque metadata crosses WASM.
+    ImageInput {
+        plugin: String,
+        panel: String,
+        epoch: u64,
+        document: api::DocumentVersion,
+        selection: api::TextRange,
+        origin: plugin_runtime::HostImageOrigin,
+        images: Vec<plugin_runtime::HostImageInput>,
+        /// Conservatively reserves one 32 MiB batch until the manager adopts or rejects its bytes.
+        reservation: ImageOfferReservation,
+    },
     /// Host-originated commands target a plugin directly, even while its panel is hidden.
     Invoke {
         plugin: String,
@@ -52,8 +81,14 @@ impl Work {
     /// Preserve plugin ownership before dispatch consumes the work; manager-wide actions have no owner.
     fn plugin_id(&self) -> Option<&str> {
         match self {
-            Self::SetSetting { plugin, .. } | Self::Invoke { plugin, .. } => Some(plugin),
+            Self::SetSetting { plugin, .. }
+            | Self::ImportPreference { plugin, .. }
+            | Self::Invoke { plugin, .. }
+            | Self::ImageInput { plugin, .. } => Some(plugin),
             Self::Install(package) => Some(&package.manifest.id),
+            Self::InstallBundle(candidate) | Self::DeclineBundle(candidate) => {
+                Some(&candidate.package.manifest.id)
+            }
             Self::Enable(id)
             | Self::Restart(id)
             | Self::Disable(id)
@@ -78,6 +113,11 @@ impl Work {
             }),
             Self::Install(package) => Some(OperationProgress {
                 id: package.manifest.id.clone(),
+                action: LifecycleAction::Install,
+                delete_data: None,
+            }),
+            Self::InstallBundle(candidate) => Some(OperationProgress {
+                id: candidate.package.manifest.id.clone(),
                 action: LifecycleAction::Install,
                 delete_data: None,
             }),
@@ -128,6 +168,12 @@ pub(super) struct InstallationProgress {
 }
 #[derive(Default)]
 pub(super) struct Published {
+    /// Completion bundles let the session discard only the historical data actually stored.
+    pub preference_imports: Vec<PreferenceImport>,
+    /// True only after successful private-store recovery and the actor's first complete entry publication.
+    pub ready: bool,
+    /// A single first-use reply is consumed only by the main editor owner; it grants no installation rights.
+    pub bundle_reply: Option<super::bundled::Reply>,
     /// Kept independently of live instances and manager windows for this editor process only.
     pub logs: plugin_runtime::logs::RuntimeLogs,
     pub diagnostics: BTreeMap<String, Vec<plugin_runtime::faults::Diagnostic>>,
@@ -156,6 +202,13 @@ pub(super) struct Published {
     pub instance_epochs: BTreeMap<String, u64>,
     pub processes: BTreeMap<String, usize>,
 }
+/// The worker's receipt carries no guest document/resource authority and is consumed once by its UI.
+pub(super) struct PreferenceImport {
+    pub owner: String,
+    pub workspace: String,
+    pub data: serde_json::Value,
+    pub succeeded: bool,
+}
 /// One transient operation error retains its target; manager failures cannot become another plugin's log.
 #[derive(Clone, Debug)]
 pub(super) struct OperationStatus {
@@ -167,11 +220,33 @@ pub(super) struct Worker {
     pub tx: mpsc::Sender<Work>,
     pub state: Arc<Mutex<Published>>,
     /// UI publication is masked immediately, including results queued before revocation.
-    pub trusted: std::sync::atomic::AtomicBool,
+    pub trusted: Arc<std::sync::atomic::AtomicBool>,
+    /// Two native batches bound preparation and the otherwise unbounded command channel to 64 MiB.
+    image_offers: Arc<std::sync::atomic::AtomicUsize>,
     #[cfg(test)]
     pub recorded: Mutex<mpsc::Receiver<Work>>,
 }
+
+/// Queue ownership is released on rejection, worker shutdown or completion of native-to-manager transfer.
+pub(super) struct ImageOfferReservation(Arc<std::sync::atomic::AtomicUsize>);
+
+impl Drop for ImageOfferReservation {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, std::sync::atomic::Ordering::AcqRel);
+    }
+}
+
 impl Worker {
+    /// Reserve before copying clipboard pixels or reading external files, never after enqueueing them.
+    pub(super) fn reserve_image_offer(&self) -> Option<ImageOfferReservation> {
+        use std::sync::atomic::Ordering;
+        self.image_offers
+            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |used| {
+                (used < 2).then_some(used + 1)
+            })
+            .ok()?;
+        Some(ImageOfferReservation(self.image_offers.clone()))
+    }
     /// This bypasses the serialized command queue so a long download cannot delay shutdown or trust revocation.
     pub fn cancel_installation(&self) {
         if let Some(control) = &self.state.lock().unwrap().install_control {
@@ -208,7 +283,12 @@ impl Worker {
         if state.progress.is_some() {
             return false;
         }
-        if let Work::Install(package) = &work {
+        let installation = match &work {
+            Work::Install(package) => Some(package),
+            Work::InstallBundle(candidate) => Some(candidate.package.as_ref()),
+            _ => None,
+        };
+        if let Some(package) = installation {
             state.installation = Some(InstallationProgress {
                 id: package.manifest.id.clone(),
                 message: "准备安装…".into(),
@@ -267,7 +347,8 @@ impl Worker {
                 &environment,
                 trusted,
             ))),
-            trusted: std::sync::atomic::AtomicBool::new(trusted),
+            trusted: Arc::new(std::sync::atomic::AtomicBool::new(trusted)),
+            image_offers: Default::default(),
             recorded: Mutex::new(rx),
         }
     }

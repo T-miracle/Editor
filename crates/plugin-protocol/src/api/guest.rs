@@ -81,6 +81,30 @@ pub fn write_file(
     }
 }
 
+/// Read plugin/workspace-owned intent; release an optional watch with close_resource.
+pub fn read_preference(key: PreferenceKey, watch: bool) -> Result<PreferenceRead, Failure> {
+    match request(Operation::ReadPreference { key, watch })? {
+        Value::Preference(value) => Ok(value),
+        _ => Err(wire_error("Unexpected preference result")),
+    }
+}
+
+/// Store opaque intent only if the revision still matches; conflicts preserve the newer record.
+pub fn write_preference(
+    key: PreferenceKey,
+    expected_revision: u64,
+    data: serde_json::Value,
+) -> Result<PreferenceValue, Failure> {
+    match request(Operation::WritePreference {
+        key,
+        expected_revision,
+        data,
+    })? {
+        Value::Preference(read) => Ok(read.value),
+        _ => Err(wire_error("Unexpected preference result")),
+    }
+}
+
 /// Explicit release invalidates the handle; instance retirement releases all remaining handles.
 pub fn close_resource(handle: ResourceHandle) -> Result<(), Failure> {
     match request(Operation::CloseResource { handle })? {

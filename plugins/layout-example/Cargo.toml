@@ -1,0 +1,16 @@
+[package]
+name = "layout-example-guest"
+version = "0.2.0"
+edition = "2024"
+rust-version = "1.95"
+license = "MIT"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+# Independent build resolves the published SDK through --plugin-cargo, never repository crate paths.
+plugin-protocol = { version = "=0.2.0", features = ["guest"] }
+serde_json = "1.0"
+
+[workspace]

@@ -752,15 +752,26 @@ lsp_command = "unmanaged-server"
         );
     }
 
+    /// Tests supply their own user overrides rather than depend on host-bundled plugin defaults.
+    fn theme_with_plugin_overrides() -> ThemeFile {
+        let mut wire: serde_json::Value =
+            serde_json::from_str(include_str!("../../editor-app/assets/themes/default.json"))
+                .unwrap();
+        wire["themes"][0]["plugins"] = serde_json::json!({"fixture":{
+            "ansi":{"yellow":"#795100"},
+            "typography":{"tab":{"family":"Segoe UI","size_px":14}}
+        }});
+        ThemeFile::parse(&wire.to_string()).unwrap()
+    }
+
     /// Nested plugin colors flatten for the runtime and reject malformed overrides.
     #[test]
     fn validates_plugin_color_tokens() {
-        let source = include_str!("../../editor-app/assets/themes/default.json");
-        let mut file = ThemeFile::parse(source).unwrap();
+        let mut file = theme_with_plugin_overrides();
         {
             let PluginThemeColor::Group(ansi) = file.themes[0]
                 .plugins
-                .get_mut("terminal")
+                .get_mut("fixture")
                 .unwrap()
                 .colors
                 .get_mut("ansi")
@@ -773,14 +784,14 @@ lsp_command = "unmanaged-server"
         file.validate().unwrap();
         file.themes[0]
             .legacy_plugin_colors
-            .insert("terminal.ansi.yellow".into(), "#123456".into());
+            .insert("fixture.ansi.yellow".into(), "#123456".into());
         assert_eq!(
-            file.themes[0].plugin_colors()["terminal.ansi.yellow"],
+            file.themes[0].plugin_colors()["fixture.ansi.yellow"],
             "#795100"
         );
         let PluginThemeColor::Group(ansi) = file.themes[0]
             .plugins
-            .get_mut("terminal")
+            .get_mut("fixture")
             .unwrap()
             .colors
             .get_mut("ansi")
@@ -792,7 +803,7 @@ lsp_command = "unmanaged-server"
         assert!(matches!(
             file.validate(),
             Err(ThemeFileError::InvalidColor(path, _))
-                if path == "plugins.terminal.ansi.yellow"
+                if path == "plugins.fixture.ansi.yellow"
         ));
     }
 
@@ -818,36 +829,36 @@ lsp_command = "unmanaged-server"
         );
     }
 
+    /// Dotted nested keys are rejected independently of any installed plugin identity.
     #[test]
     fn nested_plugin_keys_cannot_hide_flattened_paths() {
-        let source = include_str!("../../editor-app/assets/themes/default.json");
-        let mut file = ThemeFile::parse(source).unwrap();
+        let mut file = theme_with_plugin_overrides();
         file.themes[0]
             .plugins
-            .get_mut("terminal")
+            .get_mut("fixture")
             .unwrap()
             .colors
             .insert("ansi.red".into(), PluginThemeColor::Color("#123456".into()));
         assert!(matches!(
             file.validate(),
             Err(ThemeFileError::InvalidPluginColorKey(path))
-                if path == "plugins.terminal.ansi.red"
+                if path == "plugins.fixture.ansi.red"
         ));
     }
 
+    /// User role fonts still flatten and validate after package defaults leave the host stylesheet.
     #[test]
     fn plugin_text_roles_flatten_and_validate() {
-        let source = include_str!("../../editor-app/assets/themes/default.json");
-        let mut file = ThemeFile::parse(source).unwrap();
+        let mut file = theme_with_plugin_overrides();
         assert_eq!(
-            file.themes[0].plugin_text_styles()["terminal.tab"]
+            file.themes[0].plugin_text_styles()["fixture.tab"]
                 .family
                 .as_deref(),
             Some("Segoe UI")
         );
         file.themes[0]
             .plugins
-            .get_mut("terminal")
+            .get_mut("fixture")
             .unwrap()
             .typography
             .get_mut("tab")
@@ -856,7 +867,7 @@ lsp_command = "unmanaged-server"
         assert!(matches!(
             file.validate(),
             Err(ThemeFileError::InvalidFontStyle(path, _))
-                if path == "plugins.terminal.typography.tab.size_px"
+                if path == "plugins.fixture.typography.tab.size_px"
         ));
     }
 }

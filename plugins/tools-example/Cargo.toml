@@ -1,0 +1,16 @@
+[package]
+name = "tools-example-guest"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.95"
+license = "MIT"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+# The independently resolved guest SDK is supplied by the host's --plugin-cargo entry.
+plugin-protocol = { version = "=0.2.0", features = ["guest"] }
+serde_json = "1.0"
+
+[workspace]

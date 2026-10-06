@@ -4,6 +4,25 @@ use serde_json::json;
 use sha2::{Digest, Sha256};
 use std::io::{Read, Write};
 
+/// Native batches cannot accumulate while the worker is busy, and dropping rejected work restores capacity.
+#[test]
+fn image_offer_queue_releases_capacity_on_rejection_and_shutdown() {
+    let directory = tempfile::tempdir().unwrap();
+    let worker = Worker::start(directory.path().into(), Environment::default(), true);
+    let first = worker.reserve_image_offer().unwrap();
+    let second = worker.reserve_image_offer().unwrap();
+    assert!(
+        worker.reserve_image_offer().is_none(),
+        "the pending channel cannot exceed two 32 MiB batches"
+    );
+    drop(first);
+    let replacement = worker.reserve_image_offer().unwrap();
+    assert!(worker.reserve_image_offer().is_none());
+    drop(worker);
+    drop(second);
+    drop(replacement);
+}
+
 /// Native publications are the same seam the editor polls; no second manager services these commands.
 fn wait_for(worker: &Worker, ready: impl Fn(&Published) -> bool) {
     let deadline = Instant::now() + Duration::from_secs(60);

@@ -15,6 +15,8 @@ pub struct EditorRequest {
     /// Trusted runtime metadata; the guest supplies only a relative file name.
     data_root: std::path::PathBuf,
     completion: Completion<EditorValue>,
+    /// Only native-offered bytes can back an image save; the JSON operation contains an opaque handle.
+    image_input: Option<std::sync::Arc<crate::ImageInputResource>>,
 }
 impl EditorRequest {
     /// Construction follows authority checks in the instance; only typed owned data crosses threads.
@@ -34,6 +36,7 @@ impl EditorRequest {
             workspace,
             data_root,
             completion,
+            image_input: None,
         }
     }
     pub fn handle(&self) -> &ResourceHandle {
@@ -41,6 +44,18 @@ impl EditorRequest {
     }
     pub fn operation(&self) -> &EditorOperation {
         &self.operation
+    }
+    /// The native writer borrows immutable authorized pixels and the original document/selection binding.
+    pub fn image_input(&self) -> Option<&crate::ImageInputResource> {
+        self.image_input.as_deref()
+    }
+    /// Attach only after the instance has checked handle ownership, permissions and name shape.
+    pub(crate) fn with_image_input(
+        mut self,
+        input: std::sync::Arc<crate::ImageInputResource>,
+    ) -> Self {
+        self.image_input = Some(input);
+        self
     }
     pub fn workspace(&self) -> &str {
         &self.workspace
@@ -53,6 +68,25 @@ impl EditorRequest {
         self.completion.begin()
     }
     pub fn finish(&self, result: Result<EditorValue, Failure>) {
+        let result = if let (
+            EditorOperation::SaveImageInput { input, name },
+            Some(resource),
+            Ok(value),
+        ) = (&self.operation, &self.image_input, &result)
+        {
+            if !matches!(value, EditorValue::ImageSaved { input: saved, document, name: saved_name }
+                if saved == input && document == &resource.document && saved_name == name)
+            {
+                Err(Failure::new(
+                    ErrorCode::InvalidRequest,
+                    "Image save receipt does not match its owned request",
+                ))
+            } else {
+                result
+            }
+        } else {
+            result
+        };
         self.completion.finish(result);
     }
     pub fn status(&self) -> RequestUpdate {

@@ -13,6 +13,69 @@ fn init(cx: &mut TestAppContext) {
     });
 }
 
+/// A pointer gesture belongs to the scene pressed, even when a replacement reuses its node ID.
+#[gpui::test]
+fn checkbox_press_cannot_activate_a_replacement_scene(cx: &mut TestAppContext) {
+    use gpui_kit::MouseButton;
+    init(cx);
+    let events = Rc::new(RefCell::new(Vec::new()));
+    let output = events.clone();
+    let slot = Rc::new(RefCell::new(None));
+    let capture = slot.clone();
+    let document = Document::new(Node::new(
+        "task",
+        Kind::Checkbox {
+            label: "旧任务".into(),
+            checked: false,
+        },
+    ));
+    let replacement = Document::new(Node::new(
+        "task",
+        Kind::Checkbox {
+            label: "新任务".into(),
+            checked: false,
+        },
+    ))
+    .revision(1);
+    let (_, cx) = cx.add_window_view(move |window, cx| {
+        let view = cx.new(|cx| {
+            PluginView::new(
+                "test".into(),
+                document,
+                Environment::default(),
+                move |event, _| output.borrow_mut().push(event),
+                window,
+                cx,
+            )
+        });
+        *capture.borrow_mut() = Some(view.clone());
+        Root::new(view, window, cx)
+    });
+    let view = slot.borrow_mut().take().unwrap();
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+    let position = cx
+        .debug_bounds("plugin-checkbox-marker-task")
+        .unwrap()
+        .center();
+    cx.simulate_mouse_down(position, MouseButton::Left, Default::default());
+    cx.update(|window, cx| {
+        view.update(cx, |view, cx| {
+            view.update_document(replacement, Environment::default(), window, cx);
+        })
+    });
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+    cx.simulate_mouse_up(position, MouseButton::Left, Default::default());
+    cx.run_until_parked();
+    assert!(
+        events.borrow().is_empty(),
+        "a stale press must not become a new scene's Toggle"
+    );
+    cx.simulate_click(position, Default::default());
+    cx.run_until_parked();
+    assert_eq!(events.borrow().len(), 1, "a fresh gesture remains usable");
+    assert_eq!(events.borrow()[0].revision, 1);
+}
+
 /// Reopening a native popup preserves canvas layout and allows one dismissal on every opening.
 #[gpui::test]
 fn popup_reopens_without_resizing_canvas_or_losing_escape(cx: &mut TestAppContext) {
@@ -649,9 +712,12 @@ fn live_theme_roles_override_native_control_colors_and_fonts(cx: &mut TestAppCon
                 ..Default::default()
             },
         );
-        let view = cx.new(|cx| {
-            PluginView::new("test".into(), fixture(), environment, |_, _| {}, window, cx)
-        });
+        let mut document = fixture();
+        document
+            .content_colors
+            .insert("button.foreground".into(), 0x987654);
+        let view = cx
+            .new(|cx| PluginView::new("test".into(), document, environment, |_, _| {}, window, cx));
         assert_eq!(
             view.read(cx).colors("button", cx).foreground,
             gpui_kit::rgb(0x123456).into()
@@ -667,15 +733,50 @@ fn live_theme_roles_override_native_control_colors_and_fonts(cx: &mut TestAppCon
             Some(gpui_kit::FontWeight::BOLD)
         );
         view.update(cx, |view, cx| {
-            view.update_document(fixture(), Environment::default(), window, cx)
+            let mut document = fixture();
+            document
+                .content_colors
+                .insert("button.foreground".into(), 0x987654);
+            view.update_document(document, Environment::default(), window, cx)
         });
-        assert_ne!(
+        // Removing a user override restores this document's owned default, not another plugin's token.
+        assert_eq!(
             view.read(cx).colors("button", cx).foreground,
-            gpui_kit::rgb(0x123456).into()
+            gpui_kit::rgb(0x987654).into()
         );
         Root::new(view, window, cx)
     });
     cx.update(|window, cx| window.draw(cx).clear(cx));
+}
+
+/// A custom code role changes native glyph metrics, rather than only its surrounding container.
+#[gpui::test]
+fn code_block_custom_role_changes_native_line_height(cx: &mut TestAppContext) {
+    init(cx);
+    let (_, cx) = cx.add_window_view(|window, cx| {
+        let mut environment = Environment::default();
+        environment.theme_text_styles.insert(
+            "test.large_code".into(),
+            plugin_runtime::plugin_protocol::FontStyle {
+                size_px: Some(30.),
+                ..Default::default()
+            },
+        );
+        let document = Document::new(Node::column(
+            "code-roles",
+            vec![
+                Node::code_block("ordinary-code", "let x = 1;", None),
+                Node::code_block("custom-code", "let x = 1;", None).role("large_code"),
+            ],
+        ));
+        let view = cx
+            .new(|cx| PluginView::new("test".into(), document, environment, |_, _| {}, window, cx));
+        Root::new(view, window, cx)
+    });
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+    let ordinary = cx.debug_bounds("plugin-ui-ordinary-code").unwrap();
+    let custom = cx.debug_bounds("plugin-ui-custom-code").unwrap();
+    assert!(custom.size.height > ordinary.size.height + gpui_kit::px(10.));
 }
 
 #[gpui::test]

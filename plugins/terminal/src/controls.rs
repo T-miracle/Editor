@@ -36,6 +36,37 @@ impl Terminal {
         };
         let mut document = ui::Document::new(Node::row("terminal-view", children).grow())
             .revision(self.ui_revision);
+        document.content_colors = self.content_colors();
+        // Window visibility belongs to the host; these addressed functions execute terminal policy.
+        document.tools = [
+            ("terminal.new", "新建终端", "New terminal", "plus"),
+            ("terminal.menu", "终端菜单", "Terminal menu", "chevron-down"),
+        ]
+        .into_iter()
+        .enumerate()
+        .map(|(order, (id, zh, en, icon))| {
+            let label = ui::LocalizedText {
+                zh_cn: zh.into(),
+                en: en.into(),
+            };
+            ui::ToolButton {
+                id: id.into(),
+                label: label.clone(),
+                tooltip: label,
+                icon: ui::ToolIcon {
+                    light: format!("icons/{icon}.svg"),
+                    dark: format!("icons/{icon}.svg"),
+                },
+                target: ui::ToolTarget::Window {
+                    panel: "terminal".into(),
+                },
+                visible: true,
+                selected: false,
+                disabled: self.menu.is_some() || self.rename.is_some(),
+                order: order as i32,
+            }
+        })
+        .collect();
         document.menu = self.menu.map(|kind| PopupMenu {
             id: kind.id().into(),
             x: self.menu_position.0

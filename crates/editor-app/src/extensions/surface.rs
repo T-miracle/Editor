@@ -5,13 +5,154 @@ use gpui_kit::component::WindowExt as _;
 use gpui_kit::component::dialog::{DialogAction, DialogClose, DialogFooter};
 use gpui_kit::rgb;
 impl ExtensionPanel {
+    /// A store recovery failure has no plugin log owner and remains a separate manager diagnostic.
+    pub(crate) fn unowned_manager_error(&self) -> Option<&str> {
+        if self.manager_error_confirmed.get() {
+            return None;
+        }
+        self.status
+            .as_ref()
+            .filter(|status| status.plugin.is_none())?;
+        self.manager_error()
+    }
+
+    /// Confirm only the currently displayed ownerless status; keep its details for plugin management.
+    /// Worker statuses delivered after this click reset the flag even when their messages are identical.
+    pub(crate) fn confirm_unowned_manager_error(&self) {
+        if self.unowned_manager_error().is_some() {
+            self.manager_error_confirmed.set(true);
+        }
+    }
+
+    /// Return a current operation failure not already displayed by an installed entry.
+    /// Recovery, inspection and first preparation may fail before an entry exists. Exact identity
+    /// and message matching avoids counting the same failure twice while retaining newer operation errors.
+    pub(crate) fn manager_error(&self) -> Option<&str> {
+        self.status
+            .as_ref()
+            .filter(|status| {
+                !self.entries.iter().any(|entry| {
+                    status.plugin.as_deref() == Some(entry.manifest.id.as_str())
+                        && entry.error.as_deref() == Some(status.message.as_str())
+                })
+            })
+            .map(|status| status.message.as_str())
+    }
+
+    /// Both a preview body and a source-only toolbar must deliver live theme and locale changes.
+    pub(super) fn native_environment(&mut self, cx: &mut Context<Self>) -> protocol::Environment {
+        let environment = environment(&self.workspace, cx);
+        if self.last_theme.as_ref() != Some(&environment) {
+            self.last_theme = Some(environment.clone());
+            for entry in &self.entries {
+                if entry.enabled && Some(&entry.manifest.id) == self.active.as_ref() {
+                    self.send_to(
+                        &entry.manifest.id,
+                        None,
+                        PluginEvent::Theme(environment.clone()),
+                    );
+                }
+            }
+        }
+        environment
+    }
+
+    /// Preview content and source-mode overlays share one keyed native view and event ownership.
+    pub(super) fn native_document(
+        &mut self,
+        mut document: protocol::ui::Document,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Entity<crate::ui::plugin::PluginView> {
+        document.editor_toolbar = None;
+        let environment = self.native_environment(cx);
+        if let Some(view) = &self.native_ui {
+            view.update(cx, |view, cx| {
+                view.update_document(document, environment, window, cx)
+            });
+        } else {
+            let tx = self.worker.tx.clone();
+            let plugin = self
+                .active
+                .clone()
+                .expect("an approved document has an owner");
+            let panel = self
+                .surface_id
+                .clone()
+                .expect("an approved document has a surface");
+            let visible = self.visible.clone();
+            let epoch = self.instance_epoch;
+            self.native_ui = Some(cx.new(|cx| {
+                crate::ui::plugin::PluginView::new(
+                    plugin.clone(),
+                    document,
+                    environment,
+                    move |event, _| {
+                        if visible.get() {
+                            let _ = tx.send(Work::Event(
+                                plugin.clone(),
+                                epoch,
+                                Some(panel.clone()),
+                                PluginEvent::Ui(event),
+                            ));
+                        }
+                    },
+                    window,
+                    cx,
+                )
+            }));
+        }
+        let key = format!(
+            "{}/{}",
+            self.active.as_deref().unwrap_or_default(),
+            self.surface_id.as_deref().unwrap_or_default()
+        );
+        let view = self.native_ui.as_ref().unwrap().clone();
+        let interactive = self.current_document().is_some();
+        let parent = self.parent.clone();
+        let expected_key = key.clone();
+        let epoch = self.instance_epoch;
+        let editor: crate::ui::plugin::NativeEditorRenderer = Rc::new(move |target, window, cx| {
+            parent
+                .update(cx, |app, cx| {
+                    let index = app.active_text_tab_index()?;
+                    let selected = app.active_editor_preview(cx)?;
+                    let current = app.plugin_document_version(index).ok()?;
+                    // Borrowing current text for retained geometry grants no stale guest edit authority.
+                    if current.id != target.id
+                        || current.path != target.path
+                        || target.revision > current.revision
+                        || app.editor_preview_owner_key(&selected, cx).as_ref()
+                            != Some(&expected_key)
+                        || selected.read(cx).instance_epoch != epoch
+                    {
+                        return None;
+                    }
+                    let source = app.render_native_editor(window, cx);
+                    Some(app.render_source_viewport_probe(source, selected, cx))
+                })
+                .ok()
+                .flatten()
+        });
+        view.update(cx, |view, cx| {
+            view.set_scene_current(interactive, cx);
+            view.native_editor = Some(editor);
+            view.set_viewport_enabled(self.viewport_sync_enabled, cx);
+            view.update_images(&key, &self.images, window, cx)
+        });
+        view
+    }
+
     /// Show package origin and requested capabilities above the manager's README.
     pub(super) fn open_install_dialog(
         &mut self,
-        package: Package,
+        package: impl Into<Arc<Package>>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        // Repaints retain one immutable package; only an accepted manual install needs an owned clone.
+        let package = package.into();
+        let bundled = self.bundled.confirmation(&package);
         let executable =
             package.manifest.component.is_some() || !package.manifest.services.is_empty();
         let name = package.manifest.name.clone();
@@ -25,21 +166,39 @@ impl ExtensionPanel {
             "已安装" => "重新安装",
             action => action,
         };
+        let action_label = match action {
+            "更新" => t!("plugins.update"),
+            "降级安装" => t!("plugins.downgrade"),
+            "重新安装" => t!("plugins.reinstall"),
+            _ => t!("plugins.install"),
+        }
+        .to_string();
+        let title = t!(
+            "plugins.consent_title",
+            action = action_label.clone(),
+            name = name.clone(),
+            version = version.clone()
+        )
+        .to_string();
+        let confirm_label =
+            t!("plugins.consent_confirm", action = action_label.clone()).to_string();
         let source = package.source.clone();
         let permissions = package.manifest.permissions.clone();
         let services = package.manifest.services.clone();
         let owner = cx.entity().downgrade();
         let install_owner = owner.clone();
         window.open_dialog(cx, move |dialog, _, cx| {
-            let name = name.clone();
             let source = source.clone();
             let permissions = permissions.clone();
             let services = services.clone();
             let install_package = package.clone();
+            let install_bundle = bundled.clone();
+            let cancel_bundle = bundled.clone();
+            let action_label = action_label.clone();
             let install_owner = install_owner.clone();
             let cancel_owner = owner.clone();
             dialog
-                .title(format!("{action}插件 · {name} v{version}"))
+                .title(title.clone())
                 .width(px(520.))
                 .overlay_closable(false)
                 .close_button(false)
@@ -51,49 +210,80 @@ impl ExtensionPanel {
                         .child(
                             div()
                                 .text_color(cx.theme().muted_foreground)
-                                .child("本机未签名插件，请确认安装来源和所需能力。"),
+                                .child(t!("plugins.consent_unsigned").to_string()),
                         );
                     if let Some(source) = &source {
-                        details = details.child(format!("来源：{source}"));
+                        details = details
+                            .child(t!("plugins.consent_source", source = source).to_string());
                     }
                     details = details.child(if executable {
-                        format!("{action}后将允许以下能力：")
+                        t!(
+                            "plugins.consent_capabilities",
+                            action = action_label.clone()
+                        )
+                        .to_string()
                     } else {
-                        "此插件仅提供声明式资源，无需额外运行权限。".to_owned()
+                        t!("plugins.consent_resources").to_string()
                     });
                     for permission in &permissions {
                         let explanation = match permission.as_str() {
-                            "assets.read" => "读取此插件安装包内的资源文件",
-                            "process.exec" => "执行任意本机程序（含交互式终端）：以当前用户权限访问文件与网络，WASM 沙箱不限制这些程序",
-                            "dependencies.prepare" => "下载、校验并解包插件声明或 WASM 钩子返回的服务依赖；保存在编辑器私有目录，不运行安装脚本、不修改全局 PATH",
-                            "dependencies.install" => "依赖需要原生安装步骤时，另行展示程序、参数、目标和用途；您确认具体方案后才会执行，大型 SDK 还需主动勾选",
-                            value if value.starts_with("process.service.") => "启动此包声明的固定本机服务：程序以当前用户权限运行，可访问本机文件与网络",
-                            "workspace.read" => "读取当前工作区文件",
-                            "clipboard" => "读写系统剪贴板",
-                            "storage" => "保存插件私有配置与会话数据",
-                            _ => permission,
-                        };
+                            "assets.read" => t!("plugins.permission_assets"),
+                            "process.exec" => t!("plugins.permission_process"),
+                            "dependencies.prepare" => t!("plugins.permission_dependencies_prepare"),
+                            "dependencies.install" => t!("plugins.permission_dependencies_install"),
+                            value if value.starts_with("process.service.") => {
+                                t!("plugins.permission_service")
+                            }
+                            "editor.read" => t!("plugins.permission_editor_read"),
+                            "editor.write" => t!("plugins.permission_editor_write"),
+                            "workspace.read" => t!("plugins.permission_workspace_read"),
+                            "workspace.write" => t!("plugins.permission_workspace_write"),
+                            "network.images" => t!("plugins.permission_network_images"),
+                            "navigation.external" => t!("plugins.permission_external_navigation"),
+                            "clipboard" => t!("plugins.permission_clipboard"),
+                            "storage" => t!("plugins.permission_storage"),
+                            _ => std::borrow::Cow::Borrowed(permission.as_str()),
+                        }
+                        .to_string();
                         details = details.child(format!("• {explanation}"));
-                        if let Some(service) = permission.strip_prefix("process.service.")
-                            .and_then(|id| services.get(id)) {
+                        if let Some(service) = permission
+                            .strip_prefix("process.service.")
+                            .and_then(|id| services.get(id))
+                        {
                             // Show the approved executable and argument vector separately from prose.
-                            details = details.child(format!("  程序：{} · 参数：{:?}", service.program, service.args));
+                            details = details.child(
+                                t!(
+                                    "plugins.consent_program",
+                                    program = service.program.clone(),
+                                    args = format!("{:?}", service.args)
+                                )
+                                .to_string(),
+                            );
                             if let Some(plan) = &service.installation {
                                 for artifact in &plan.artifacts {
-                                    details = details.child(format!("  依赖：{} {} · {} · {:?} · SHA-256 {}", artifact.id, artifact.version, artifact.platform, artifact.source, artifact.sha256));
+                                    details = details.child(
+                                        t!(
+                                            "plugins.consent_dependency",
+                                            id = artifact.id.clone(),
+                                            version = artifact.version.clone(),
+                                            platform = artifact.platform.clone(),
+                                            source = format!("{:?}", artifact.source),
+                                            sha256 = artifact.sha256.clone()
+                                        )
+                                        .to_string(),
+                                    );
                                 }
                             }
                         }
                     }
                     details = details.child(if executable {
                         if action == "安装" {
-                            "安装后插件即可启动声明的程序。".to_owned()
+                            t!("plugins.consent_after_install").to_string()
                         } else {
-                            "将停止插件当前运行的程序，保存会话后启动新程序。原有命令不会自动重跑。"
-                                .to_owned()
+                            t!("plugins.consent_after_update").to_string()
                         }
                     } else {
-                        format!("{action}后会加载语法、主题或图标资源。")
+                        t!("plugins.consent_resource_install", action = action_label).to_string()
                     });
                     content.child(details)
                 })
@@ -104,7 +294,9 @@ impl ExtensionPanel {
                             div()
                                 .id("plugin-install-cancel")
                                 .debug_selector(|| "plugin-install-cancel".into())
-                                .child(DialogClose::new().trigger(|button| button.label("取消"))),
+                                .child(DialogClose::new().trigger(|button| {
+                                    button.label(t!("plugins.cancel").to_string())
+                                })),
                         )
                         .child(
                             div()
@@ -113,7 +305,7 @@ impl ExtensionPanel {
                                 .child(
                                     DialogAction::new().child(
                                         Button::new("confirm-plugin-install")
-                                            .label(format!("确认{action}"))
+                                            .label(confirm_label.clone())
                                             .primary()
                                             .when(action == "更新", |button| {
                                                 button.custom(update_button_style(cx))
@@ -126,7 +318,39 @@ impl ExtensionPanel {
                 .on_ok(move |_, _, cx| {
                     install_owner
                         .update(cx, |this, cx| {
-                            if this.queue_lifecycle(Work::Install(install_package.clone())) {
+                            // Native authority is checked in this event as well as by the serialized manager.
+                            let work = if let Some(candidate) = &install_bundle {
+                                let current =
+                                    this.bundled.confirmation(&install_package).is_some_and(
+                                        |current| current.request.token == candidate.request.token,
+                                    ) && this
+                                        .worker
+                                        .trusted
+                                        .load(std::sync::atomic::Ordering::Acquire)
+                                        && this.bundled.ready
+                                        && !this.entries.iter().any(|entry| {
+                                            bundled::matches_editor_preview(
+                                                entry,
+                                                &candidate.request.file,
+                                            )
+                                        })
+                                        && this.parent.upgrade().is_some_and(|parent| {
+                                            this.bundled.source_current(parent.read(cx))
+                                        });
+                                if !current {
+                                    this.bundled.cancel_request();
+                                    this.bundled.finish();
+                                    cx.notify();
+                                    return true;
+                                }
+                                Work::InstallBundle(candidate.clone())
+                            } else {
+                                Work::Install(install_package.as_ref().clone())
+                            };
+                            if this.queue_lifecycle(work) {
+                                if install_bundle.is_some() {
+                                    this.bundled.finish();
+                                }
                                 this.pending = None;
                                 this.pending_dialog_open = false;
                                 cx.notify();
@@ -139,6 +363,11 @@ impl ExtensionPanel {
                 })
                 .on_cancel(move |_, _, cx| {
                     let _ = cancel_owner.update(cx, |this, cx| {
+                        if let Some(candidate) = &cancel_bundle {
+                            this.bundled.cancel_request();
+                            this.bundled.finish();
+                            let _ = this.worker.tx.send(Work::DeclineBundle(candidate.clone()));
+                        }
                         this.pending = None;
                         this.pending_dialog_open = false;
                         cx.notify();
@@ -363,20 +592,7 @@ impl Render for ExtensionPanel {
                     cx.notify();
                 }));
         }
-        let environment = environment(&self.workspace, cx);
-        // Plugin-only theme tokens trigger the same live update as editor base colors.
-        if self.last_theme.as_ref() != Some(&environment) {
-            self.last_theme = Some(environment.clone());
-            for entry in &self.entries {
-                if entry.enabled && Some(&entry.manifest.id) == self.active.as_ref() {
-                    self.send_to(
-                        &entry.manifest.id,
-                        None,
-                        PluginEvent::Theme(environment.clone()),
-                    );
-                }
-            }
-        }
+        self.native_environment(cx);
         if let Some(error) = &self.preview_error {
             // Host-side admission failures are readable UI, with no stale guest input target underneath.
             return div()
@@ -387,54 +603,24 @@ impl Render for ExtensionPanel {
                 .child(error.clone())
                 .into_any_element();
         }
-        if let Some(document) = self.current_document().map(|document| (*document).clone()) {
-            if let Some(view) = &self.native_ui {
-                view.update(cx, |view, cx| {
-                    view.update_document(document, environment, window, cx)
-                });
-            } else {
-                let tx = self.worker.tx.clone();
-                let plugin = self.active.clone().unwrap();
-                let panel = self.surface_id.clone().unwrap();
-                let visible = self.visible.clone();
-                self.native_ui = Some(cx.new(|cx| {
-                    crate::ui::plugin::PluginView::new(
-                        plugin.clone(),
-                        document,
-                        environment,
-                        move |event, _| {
-                            if !visible.get() {
-                                return;
-                            }
-                            let _ = tx.send(Work::Event(
-                                plugin.clone(),
-                                epoch,
-                                Some(panel.clone()),
-                                PluginEvent::Ui(event),
-                            ));
-                        },
-                        window,
-                        cx,
-                    )
-                }));
+        if let Some(mut document) = self
+            .renderable_document()
+            .map(|document| (*document).clone())
+        {
+            if self.current_document().is_none() {
+                // Old modals/menus cannot capture current input while a source refresh is pending.
+                document.dialog = None;
+                document.menu = None;
             }
-            let key = format!(
-                "{}/{}",
-                self.active.as_deref().unwrap_or_default(),
-                self.surface_id.as_deref().unwrap_or_default()
-            );
-            self.native_ui
-                .as_ref()
-                .unwrap()
-                .update(cx, |view, cx| view.update_images(&key, &self.images, cx));
+            let view = self.native_document(document, window, cx);
             return div()
                 .size_full()
                 .key_context("PluginSurface")
-                .child(self.native_ui.as_ref().unwrap().clone())
+                .child(view)
                 .children(self.command_popup(window, cx))
                 .into_any_element();
         }
-        self.native_ui = None;
+        self.retire_unowned_native_view(cx);
         // An unpublished or retired document has no focusable guest controls.
         div()
             .size_full()

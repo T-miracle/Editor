@@ -14,6 +14,8 @@ use std::{cell::Cell, rc::Rc};
 /// Native reconciliation state only; the wire protocol exposes ordinary document nodes.
 #[derive(Clone, Default, PartialEq)]
 pub(super) struct CollectionModel {
+    /// Bounded immutable guest defaults accompany the same revision as the native collection.
+    pub content_colors: std::collections::BTreeMap<String, u32>,
     pub revision: u64,
     pub sidebar: Option<SideTabs>,
     pub menu: Option<plugin_runtime::plugin_protocol::ui::PopupMenu>,
@@ -51,6 +53,7 @@ impl CollectionView {
     fn color(&self, key: &str, fallback: Hsla) -> Hsla {
         self.environment
             .color(&self.plugin, &format!("ui.{key}"))
+            .or_else(|| self.model.content_colors.get(key).copied())
             .map(|v| rgb(v).into())
             .unwrap_or(fallback)
     }
@@ -92,6 +95,7 @@ impl CollectionView {
         let color = |key: &str| {
             self.environment
                 .color(&self.plugin, &format!("ui.{key}"))
+                .or_else(|| self.model.content_colors.get(key).copied())
                 .map(|v| rgb(v).into())
         };
         SideTabsStyle {
@@ -107,7 +111,7 @@ impl CollectionView {
             rename_foreground: color("tab.rename.foreground"),
         }
     }
-    pub fn update(
+    pub(super) fn update(
         &mut self,
         model: CollectionModel,
         environment: Environment,
@@ -120,6 +124,7 @@ impl CollectionView {
         }
         // Terminal output advances revisions without changing native controls; keep them stable.
         let controls_changed = self.model.sidebar != model.sidebar
+            || self.model.content_colors != model.content_colors
             || self.model.menu != model.menu
             || self.environment != environment;
         if !controls_changed {
@@ -291,6 +296,7 @@ mod tests {
             max_width: 480.,
         };
         let model = CollectionModel {
+            content_colors: Default::default(),
             revision: 1,
             sidebar: Some(tabs),
             menu: None,
@@ -366,6 +372,7 @@ mod tests {
         });
         let view = slot.borrow_mut().take().unwrap();
         let mut controls = CollectionModel {
+            content_colors: Default::default(),
             revision: 1,
             sidebar: Some(SideTabs {
                 id: "tabs".into(),

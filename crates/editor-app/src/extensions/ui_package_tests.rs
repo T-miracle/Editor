@@ -45,12 +45,12 @@ fn delivered_ui_packages_follow_native_input_and_reclaim_layout(cx: &mut TestApp
     });
     let app = slot.borrow_mut().take().unwrap();
     cx.simulate_resize(size(px(1400.), px(900.)));
-    publish(&manager, &mut renderer, &app, cx);
+    publish(&mut manager, &mut renderer, &app, cx);
     let button = cx.debug_bounds("plugin-ui-increment").unwrap();
     cx.simulate_click(button.center(), Default::default());
     cx.run_until_parked();
     pump(&mut manager, &app, cx);
-    publish(&manager, &mut renderer, &app, cx);
+    publish(&mut manager, &mut renderer, &app, cx);
     assert!(
         serde_json::to_string(manager.live["example"].views["counter"].as_ref())
             .unwrap()
@@ -61,7 +61,7 @@ fn delivered_ui_packages_follow_native_input_and_reclaim_layout(cx: &mut TestApp
     cx.simulate_input("中文 notes with spaces");
     cx.run_until_parked();
     pump(&mut manager, &app, cx);
-    publish(&manager, &mut renderer, &app, cx);
+    publish(&mut manager, &mut renderer, &app, cx);
     assert!(
         serde_json::to_string(manager.live["example"].views["notes"].as_ref())
             .unwrap()
@@ -72,13 +72,16 @@ fn delivered_ui_packages_follow_native_input_and_reclaim_layout(cx: &mut TestApp
     cx.run_until_parked();
     for _ in 0..2 {
         pump(&mut manager, &app, cx);
-        publish(&manager, &mut renderer, &app, cx);
+        publish(&mut manager, &mut renderer, &app, cx);
     }
-    assert!(cx.debug_bounds("editor-preview-pane").is_some());
+    assert!(cx.debug_bounds("editor-plugin-layout").is_some());
     let canvas = cx.debug_bounds("plugin-ui-preview-canvas").unwrap();
     let drawing = |manager: &plugin_runtime::Manager| {
-        let protocol::ui::Kind::Canvas(canvas) =
-            &manager.live["svg"].views["preview"].as_ref().root.kind
+        // Image composes a native source beside this canvas through the public layout contract.
+        let protocol::ui::Kind::Canvas(canvas) = &manager.live["svg"].views["preview"]
+            .active_node("preview-canvas")
+            .unwrap()
+            .kind
         else {
             panic!("canvas required")
         };
@@ -96,7 +99,7 @@ fn delivered_ui_packages_follow_native_input_and_reclaim_layout(cx: &mut TestApp
     cx.simulate_click(canvas.origin + point(px(18.), px(16.)), Default::default());
     cx.run_until_parked();
     pump(&mut manager, &app, cx);
-    publish(&manager, &mut renderer, &app, cx);
+    publish(&mut manager, &mut renderer, &app, cx);
     assert!(drawing(&manager).w > before.w);
     cx.update(|window, cx| {
         app.read(cx)
@@ -108,7 +111,7 @@ fn delivered_ui_packages_follow_native_input_and_reclaim_layout(cx: &mut TestApp
     cx.simulate_input("<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"320\" height=\"100\"><!-- 未保存 --></svg>");
     cx.run_until_parked();
     pump(&mut manager, &app, cx);
-    publish(&manager, &mut renderer, &app, cx);
+    publish(&mut manager, &mut renderer, &app, cx);
     let tree = manager.live["svg"].views["preview"].as_ref();
     assert!(serde_json::to_string(tree).unwrap().contains("未保存"));
     assert!(tree.source.is_some());
@@ -133,24 +136,28 @@ fn delivered_ui_packages_follow_native_input_and_reclaim_layout(cx: &mut TestApp
     cx.simulate_keystrokes("ctrl-v");
     cx.run_until_parked();
     pump(&mut manager, &app, cx);
-    publish(&manager, &mut renderer, &app, cx);
+    publish(&mut manager, &mut renderer, &app, cx);
     assert!(cx.debug_bounds("plugin-preview-error").is_some());
+    assert!(
+        cx.debug_bounds("editor-source-pane").is_some(),
+        "preview transport limits must preserve editable text"
+    );
     assert!(cx.debug_bounds("plugin-ui-preview-canvas").is_none());
     cx.simulate_keystrokes("ctrl-a");
     cx.simulate_input(original);
     cx.run_until_parked();
     pump(&mut manager, &app, cx);
-    publish(&manager, &mut renderer, &app, cx);
+    publish(&mut manager, &mut renderer, &app, cx);
     assert!(cx.debug_bounds("plugin-preview-error").is_none());
     assert!(cx.debug_bounds("plugin-ui-preview-canvas").is_some());
     assert!(manager.installed["svg"].error.is_none());
     manager.disable("svg").unwrap();
-    publish(&manager, &mut renderer, &app, cx);
-    assert!(cx.debug_bounds("editor-preview-pane").is_none());
+    publish(&mut manager, &mut renderer, &app, cx);
+    assert!(cx.debug_bounds("editor-plugin-layout").is_none());
     for id in ["svg", "example"] {
         manager.uninstall(id, false).unwrap();
     }
-    publish(&manager, &mut renderer, &app, cx);
+    publish(&mut manager, &mut renderer, &app, cx);
     assert!(cx.debug_bounds("plugin-ui-note").is_none());
     assert!(cx.update(|_, cx| app.read(cx).plugin_panels.is_empty()));
 }

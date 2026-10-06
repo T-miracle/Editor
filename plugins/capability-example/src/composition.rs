@@ -30,6 +30,26 @@ impl Demo {
     /// Stable native input identities keep composition intact when only canvas content changes.
     pub(super) fn event(&mut self, event: &ui::UiEvent) {
         match &event.action {
+            // Dismiss only the current overlay identity; dialogs retain priority over background menus.
+            Action::Dismiss
+                if self
+                    .document
+                    .dialog
+                    .as_ref()
+                    .is_some_and(|dialog| dialog.id == event.node) =>
+            {
+                self.document.dialog = None;
+            }
+            Action::Dismiss
+                if self.document.dialog.is_none()
+                    && self
+                        .document
+                        .menu
+                        .as_ref()
+                        .is_some_and(|menu| menu.id == event.node) =>
+            {
+                self.document.menu = None;
+            }
             Action::Click if event.node == "zoom" => {
                 self.zoom = (self.zoom * 1.25).min(4.);
                 let zoom = self.zoom;
@@ -104,8 +124,13 @@ impl Demo {
     }
     /// The preview uses unsaved source supplied by the host, never a disk reread.
     pub(super) fn preview(&mut self, source: Option<api::DocumentVersion>, text: &str) {
-        self.document.source = source;
+        self.document.source = source.clone();
         visit(&mut self.document.root, &mut |node| {
+            if let Kind::NativeEditor { document } = &mut node.kind
+                && let Some(source) = &source
+            {
+                *document = source.clone();
+            }
             if let Kind::Canvas(canvas) = &mut node.kind {
                 canvas.paint = if text.trim_start().starts_with("<svg") {
                     vec![Paint::Svg {
@@ -138,8 +163,39 @@ impl Demo {
         });
         self.document.revision += 1;
     }
+    /// Source ranges become meaningful only after a versioned preview notification arrives.
     pub(super) fn document(&self) -> ui::Document {
-        self.document.clone()
+        let mut document = self.document.clone();
+        if document.source.is_none() {
+            document.editor_layout = false;
+            // Source controls cannot publish until their immutable document identity is available.
+            document.editor_toolbar = None;
+            document.editor_image_input = false;
+            document.code_highlighting = false;
+            document.editor_viewport = None;
+            // Preserve the asset's mapping template for later previews, but never publish unbound ranges.
+            visit(&mut document.root, &mut unbind_source);
+            if let Some(dialog) = &mut document.dialog {
+                visit(&mut dialog.content, &mut unbind_source);
+            }
+        }
+        document
+    }
+    /// Diagnostics reuse the same public document so native image metadata and typed request failures stay observable.
+    pub(super) fn diagnostic(&mut self, text: &str) {
+        self.document.root = Node::text("scope-probe-result", text);
+        self.document.revision += 1;
+    }
+}
+
+/// Hide source-bound resources only in the publication clone; preserve the asset for later previews.
+fn unbind_source(node: &mut Node) {
+    if matches!(node.kind, Kind::NativeEditor { .. }) {
+        node.kind = Kind::Spacer;
+    }
+    node.source_range = None;
+    if let Kind::Image { alt, .. } = &node.kind {
+        node.kind = Kind::Text { text: alt.clone() };
     }
 }
 

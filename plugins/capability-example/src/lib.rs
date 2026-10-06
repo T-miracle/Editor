@@ -8,6 +8,7 @@ use std::cell::RefCell;
 mod composition;
 mod discovery;
 mod execution_demo;
+mod scope_probe;
 mod service_demo;
 
 #[derive(Default)]
@@ -373,8 +374,7 @@ impl State {
                 ..
             } if id == "scope-probe" => {
                 // Return expected domain failures as data so the host can observe continued liveness.
-                let operation = serde_json::from_value(arguments.unwrap_or_default())
-                    .map_err(|error| Failure::new(ErrorCode::InvalidRequest, error.to_string()))?;
+                let operation = scope_probe::operation(arguments.unwrap_or_default())?;
                 if matches!(operation, api::Operation::Editor { .. }) {
                     self.task = None;
                 }
@@ -384,6 +384,25 @@ impl State {
                 }
                 self.text = serde_json::to_string(&result)
                     .map_err(|error| Failure::new(ErrorCode::OperationFailed, error.to_string()))?;
+                if let Some(demo) = &mut self.ui_demo {
+                    demo.diagnostic(&self.text);
+                }
+            }
+            api::Input::Event {
+                event: api::Notification::Command { id, arguments },
+                ..
+            } if id == "preview-probe" => {
+                // Independent SDK consumers can inspect host publication validation without bypassing it.
+                // Echo the complete public document unchanged, including any stale source under test.
+                let document = serde_json::from_value(arguments.unwrap_or_default())
+                    .map_err(|error| Failure::new(ErrorCode::InvalidRequest, error.to_string()))?;
+                return Ok(api::Output {
+                    views: vec![api::View {
+                        panel: "welcome".into(),
+                        document,
+                    }],
+                    ..Default::default()
+                });
             }
             api::Input::Event {
                 event: api::Notification::Command { id, .. },
@@ -409,6 +428,20 @@ impl State {
                         self.document = Some(document.clone());
                     }
                     self.text = format!("{update:?}");
+                }
+                if let Some(demo) = &mut self.ui_demo {
+                    demo.diagnostic(&self.text);
+                }
+            }
+            api::Input::Event {
+                event: event @ api::Notification::ImageInput { .. },
+                ..
+            } => {
+                // The example receives only native-owned metadata; pixels never pass through this JSON transport.
+                self.text = serde_json::to_string(&event)
+                    .map_err(|error| Failure::new(ErrorCode::OperationFailed, error.to_string()))?;
+                if let Some(demo) = &mut self.ui_demo {
+                    demo.diagnostic(&self.text);
                 }
             }
             api::Input::Event {

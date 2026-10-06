@@ -1,7 +1,6 @@
 //! Renders the explorer, document tabs, and editor.
 
 use crate::*;
-use gpui_kit::component::WindowExt as _;
 
 #[derive(Clone)]
 /// Carries a tab's identity while it is dragged in the tab strip.
@@ -242,18 +241,22 @@ impl EditorApp {
         let tab_styles = component_styles(cx, ThemeComponent::EditorTab);
         let close_styles = component_styles(cx, ThemeComponent::EditorTabClose);
         let tabs = self.tabs.iter().enumerate().map(|(index, tab)| {
-            let path = tab.session.path().to_path_buf();
+            let path = tab.path().to_path_buf();
             let is_active = self.active_path.as_ref() == Some(&path);
             let is_external = !path.starts_with(self.workspace.root());
-            let is_dirty = tab.session.is_dirty();
-            let disk_state = tab.disk_state;
+            let is_dirty = tab.is_dirty();
+            let disk_state = tab
+                .text
+                .as_ref()
+                .map_or(DiskState::Synced, |text| text.disk_state);
             let name = tab
-                .session
+                .path()
                 .file_name()
-                .map(str::to_owned)
-                .unwrap_or_else(|_| t!("editor.untitled").to_string());
+                .map(|name| name.to_string_lossy().into_owned())
+                .unwrap_or_else(|| t!("editor.untitled").to_string());
             let icon = file_icon(&path, false, &theme::active_theme(self.dark_theme));
             let activate_path = path.clone();
+            let context_path = path.clone();
             let close_path = path.clone();
             let middle_close_path = path.clone();
             let drop_path = path.clone();
@@ -386,15 +389,25 @@ impl EditorApp {
                 )
                 .on_click(cx.listener(move |this, _, window, cx| {
                     // A tab click activates existing content and follows the explorer preference.
-                    if let Some(index) = this
-                        .tabs
-                        .iter()
-                        .position(|tab| tab.session.path() == activate_path)
+                    if let Some(index) =
+                        this.tabs.iter().position(|tab| tab.path() == activate_path)
                     {
                         this.activate_tab(index, window, cx);
                     }
                 }))
                 .on_drag(drag_payload, |drag, _, _, cx| cx.new(|_| drag.clone()))
+                .on_mouse_down(
+                    MouseButton::Right,
+                    cx.listener(move |app, event: &MouseDownEvent, window, cx| {
+                        cx.stop_propagation();
+                        if let Some(index) =
+                            app.tabs.iter().position(|tab| tab.path() == context_path)
+                        {
+                            app.activate_tab(index, window, cx);
+                            app.open_file_provider_menu(event.position, window, cx);
+                        }
+                    }),
+                )
                 .on_drop(cx.listener(move |this, drag: &EditorTabDrag, _, cx| {
                     this.move_tab_before(&drag.path, &drop_path, cx);
                 }))
@@ -436,6 +449,7 @@ impl EditorApp {
 
         div()
             .id("editor-tabs-container")
+            .debug_selector(|| "editor-tabs-container".into())
             .relative()
             .w_full()
             .h(px(PANEL_HEADER_HEIGHT))
@@ -525,142 +539,83 @@ impl EditorApp {
                 ))
                 .into_any_element();
         }
-        // Modal surfaces own the window until dismissed; ordinary floating
-        // panels can remain below the raised definition details layer.
-        let hover_enabled = self.explorer_edit.is_none()
-            && self.explorer_delete.is_none()
-            && !window.has_active_dialog(cx)
-            && !window.has_active_sheet(cx);
-        // The menu callback runs inside an editor update, so snapshot its state now.
-        let (enabled, editable, has_definition, has_code_actions) = {
-            let editor = self.editor.read(cx);
-            let presentation = editor.presentation();
-            (
-                !presentation.is_disabled(),
-                presentation.is_editable(),
-                editor.lsp().definition_provider.is_some(),
-                !editor.lsp().code_action_providers.is_empty(),
-            )
-        };
-        let app = cx.entity().downgrade();
-        // Preserve the native editor and all its popovers while a plugin adds a sibling preview.
-        let source = div()
-            .debug_selector(|| "editor-source-pane".into())
-            .flex_1()
-            .min_h_0()
-            .relative()
-            // Capture selection presses before the base editor collapses them.
-            .when(hover_enabled, |view| {
-                view.capture_any_mouse_down(cx.listener(Self::text_drag_press))
-                    .capture_action(cx.listener(Self::text_drag_escape))
-            })
-            // Register drag listeners before the editor's own selection listeners.
-            .child(self.render_text_drag_events(cx))
-            .on_mouse_move(cx.listener(Self::editor_pointer_move))
-            .on_mouse_up(MouseButton::Middle, move |event, window, cx| {
-                let position = event.position;
-                let app = app.clone();
-                cx.stop_propagation();
-                window.defer(cx, move |window, cx| {
-                    // Reuse the editor's own hit testing to place the caret under the click.
-                    let modifiers = Modifiers::default();
-                    window.dispatch_event(
-                        PlatformInput::MouseDown(MouseDownEvent {
-                            button: MouseButton::Left,
-                            position,
-                            modifiers,
-                            click_count: 1,
-                            first_mouse: false,
-                        }),
-                        cx,
-                    );
-                    window.dispatch_event(
-                        PlatformInput::MouseUp(MouseUpEvent {
-                            button: MouseButton::Left,
-                            position,
-                            modifiers,
-                            click_count: 1,
-                        }),
-                        cx,
-                    );
-                    let _ = app.update(cx, |app, cx| {
-                        app.request_definition(Some(position), window, cx);
-                    });
-                });
-            })
-            .child(
-                super::popovers::render(
-                    &self.editor,
-                    &self.completion_popup,
-                    &self.definition_popup_focus,
-                    style,
-                    hover_enabled,
-                    window,
-                    cx,
-                )
-                .unwrap_or_else(|| {
-                    Editor::new(&self.editor)
-                        // Preserve live edit restrictions when the styled component renders.
-                        .readonly(!editable)
-                        .disabled(!enabled)
-                        .context_menu(move |menu, _, cx| {
-                            // Route the menu action through the same fresh LSP request as F12.
-                            menu.menu_with_disabled(
-                                t!("editor.go_to_definition").to_string(),
-                                !(enabled && has_definition),
-                                Box::new(NavigateToDefinition),
-                            )
-                            .menu_with_disabled(
-                                t!("editor.code_actions").to_string(),
-                                !(editable && has_code_actions),
-                                Box::new(gpui_base::input::ToggleCodeActions),
-                            )
-                            .separator()
-                            // Cut and Copy validate the live selection when their actions run.
-                            .menu_with_disabled(
-                                t!("editor.cut").to_string(),
-                                !editable,
-                                Box::new(gpui_base::input::Cut),
-                            )
-                            .menu_with_disabled(
-                                t!("editor.copy").to_string(),
-                                !enabled,
-                                Box::new(gpui_base::input::Copy),
-                            )
-                            .menu_with_disabled(
-                                t!("editor.paste").to_string(),
-                                !(editable && cx.read_from_clipboard().is_some()),
-                                Box::new(gpui_base::input::Paste),
-                            )
-                            .separator()
-                            .menu(
-                                t!("editor.select_all").to_string(),
-                                Box::new(gpui_base::input::SelectAll),
-                            )
-                        })
-                        .bordered(false)
-                        .p_0()
-                        .size_full()
-                        .min_h_0()
-                        .bg(style.background.unwrap_or(cx.theme().background))
-                        .text_color(style.foreground.unwrap_or(cx.theme().foreground))
-                        .font_family(cx.theme().mono_font_family.clone())
-                        .text_size(
-                            style
-                                .font_size_px
-                                .map(px)
-                                .unwrap_or(cx.theme().mono_font_size),
+        if self.active_text_tab_index().is_none() {
+            // A file-only body never mounts the retained background editor or its native input handler.
+            if self.editor.focus_handle(cx).is_focused(window) {
+                window.blur(cx);
+            }
+            let body = if let Some(preview) = self.active_editor_preview(cx) {
+                let failed = preview.read(cx).file_preview_failed();
+                let file_id = self
+                    .active_tab_index()
+                    .map(|index| self.tabs[index].file_id);
+                div()
+                    .flex_1()
+                    .min_h_0()
+                    .overflow_hidden()
+                    .relative()
+                    .child(preview)
+                    .when(failed, |body| {
+                        body.child(
+                            div().absolute().top_2().right_2().child(
+                                Button::new("retry-image-resource")
+                                    .label(t!("file_view.retry").to_string())
+                                    .small()
+                                    .on_click(cx.listener(move |app, _, _, cx| {
+                                        if app
+                                            .active_tab_index()
+                                            .map(|index| app.tabs[index].file_id)
+                                            == file_id
+                                        {
+                                            app.retry_file_view(cx);
+                                        }
+                                    })),
+                            ),
                         )
-                        .into_any_element()
-                }),
-            )
-            // Paint the drop caret after the text, using the current editor layout.
-            .child(self.render_text_drag_caret(cx))
-            .into_any_element();
+                    })
+                    .into_any_element()
+            } else {
+                let message = self.file_view_unavailable_reason(cx);
+                let file_id = self
+                    .active_tab_index()
+                    .map(|index| self.tabs[index].file_id);
+                v_flex()
+                    .debug_selector(|| "file-view-unavailable".into())
+                    .flex_1()
+                    .min_h_0()
+                    .items_center()
+                    .justify_center()
+                    .gap_3()
+                    .child(div().text_color(cx.theme().muted_foreground).child(message))
+                    .child(
+                        // Recovery remains separately measurable even when the failure message changes size.
+                        div().debug_selector(|| "file-view-retry".into()).child(
+                            Button::new("retry-file-view")
+                                .label(t!("file_view.retry").to_string())
+                                .small()
+                                .on_click(cx.listener(move |app, _, _, cx| {
+                                    if app.active_tab_index().map(|index| app.tabs[index].file_id)
+                                        == file_id
+                                    {
+                                        app.retry_file_view(cx);
+                                    }
+                                })),
+                        ),
+                    )
+                    .into_any_element()
+            };
+            return v_flex()
+                .debug_selector(|| "editor-panel-content".into())
+                .size_full()
+                .min_h_0()
+                .child(self.render_tabs(window, cx))
+                .child(body)
+                .into_any_element();
+        }
         let body = if let Some(preview) = self.active_editor_preview(cx) {
-            self.render_editor_preview_split(source, preview, cx)
+            self.render_editor_preview_body(preview, window, cx)
         } else {
-            source
+            self.render_native_editor(window, cx)
         };
         v_flex()
             // Expose the editor extent for layout regression checks when docks disappear.

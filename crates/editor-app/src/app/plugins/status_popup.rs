@@ -95,6 +95,14 @@ impl EditorApp {
             .flat_map(|snapshot| &snapshot.summaries)
             .map(|summary| Some(summary.record.plugin.clone()))
             .collect();
+        if self
+            .plugin_popup_snapshot
+            .as_ref()
+            .is_some_and(|snapshot| snapshot.manager_error.is_some())
+        {
+            // The noninteractive error occupies a real scroll item before the focusable log rows.
+            row_plugins.insert(0, None);
+        }
         for (key, group) in &loading {
             if !row_plugins
                 .iter()
@@ -107,6 +115,27 @@ impl EditorApp {
         let snapshot = self.plugin_popup_snapshot.as_ref();
         let mut rows = Vec::new();
         if let Some(snapshot) = snapshot {
+            if let Some(error) = &snapshot.manager_error {
+                // An ownerless recovery error has no routable plugin row but remains visible in the same Base popup.
+                rows.push(
+                    v_flex()
+                        .debug_selector(|| "plugin-manager-status-detail".into())
+                        .px_3()
+                        .py_2()
+                        .gap_1()
+                        .child(
+                            div()
+                                .font_semibold()
+                                .child(t!("plugins.manager_title").to_string()),
+                        )
+                        .child(
+                            div()
+                                .text_xs()
+                                .child(t!("plugins.manager_error", error = error).to_string()),
+                        )
+                        .into_any_element(),
+                );
+            }
             for summary in &snapshot.summaries {
                 let loading = loading.remove(&summary.record.plugin);
                 rows.push(self.render_plugin_summary(summary, loading.as_ref(), snapshot, cx));

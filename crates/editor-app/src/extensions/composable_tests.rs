@@ -72,6 +72,7 @@ fn native_input_and_canvas_route_text_to_their_own_nodes_and_hide_reclaims_targe
                 enabled: true,
                 project_enabled: Default::default(),
                 global_enabled: None,
+                retired_ui_contract: false,
                 error: None,
             }];
             state
@@ -226,12 +227,12 @@ fn composed_wasm_preview_follows_memory_and_reclaims_the_editor_split(cx: &mut T
     });
     let app = slot.borrow_mut().take().unwrap();
     cx.simulate_resize(size(px(1200.), px(800.)));
-    publish(&manager, &mut renderer, &app, cx);
+    publish(&mut manager, &mut renderer, &app, cx);
     cx.update(|window, cx| app.update(cx, |app, cx| app.open_file(path.clone(), window, cx)));
     cx.run_until_parked();
     pump(&mut manager, &app, cx);
-    publish(&manager, &mut renderer, &app, cx);
-    assert!(cx.debug_bounds("editor-preview-pane").is_some());
+    publish(&mut manager, &mut renderer, &app, cx);
+    assert!(cx.debug_bounds("editor-plugin-layout").is_some());
     assert!(cx.debug_bounds("plugin-ui-caption").is_some());
     cx.update(|_, cx| {
         let owner = app.read(cx).extensions.read(cx);
@@ -245,7 +246,7 @@ fn composed_wasm_preview_follows_memory_and_reclaims_the_editor_split(cx: &mut T
     );
     cx.run_until_parked();
     pump(&mut manager, &app, cx);
-    publish(&manager, &mut renderer, &app, cx);
+    publish(&mut manager, &mut renderer, &app, cx);
     let tree = manager.live["capability-example"].views["welcome"].as_ref();
     let Kind::Canvas(canvas) = &tree.active_node("viewport").unwrap().kind else {
         unreachable!()
@@ -261,14 +262,14 @@ fn composed_wasm_preview_follows_memory_and_reclaims_the_editor_split(cx: &mut T
     cx.simulate_input("未保存 ");
     cx.run_until_parked();
     pump(&mut manager, &app, cx);
-    publish(&manager, &mut renderer, &app, cx);
+    publish(&mut manager, &mut renderer, &app, cx);
     let tree = manager.live["capability-example"].views["welcome"].as_ref();
     assert!(serde_json::to_string(tree).unwrap().contains("未保存 "));
     assert_eq!(std::fs::read_to_string(&path).unwrap(), svg);
     assert!(tree.source.is_some());
     manager.uninstall("capability-example", true).unwrap();
-    publish(&manager, &mut renderer, &app, cx);
-    assert!(cx.debug_bounds("editor-preview-pane").is_none());
+    publish(&mut manager, &mut renderer, &app, cx);
+    assert!(cx.debug_bounds("editor-plugin-layout").is_none());
     assert!(cx.debug_bounds("plugin-ui-viewport").is_none());
     assert!(cx.update(|_, cx| app.read(cx).plugin_panels.is_empty()));
 }
@@ -291,6 +292,48 @@ pub(super) fn pump(
             .collect()
     });
     for work in work {
+        let work = match work {
+            Work::ImportPreference {
+                plugin,
+                owner,
+                workspace,
+                key,
+                data,
+                ..
+            } => {
+                let succeeded = manager
+                    .import_preference(&plugin, key, data.clone())
+                    .is_ok();
+                cx.update(|_, cx| {
+                    super::package_ui_test_support::owner_receipt(
+                        &owner,
+                        &workspace,
+                        data,
+                        succeeded,
+                        &app.read(cx).extensions.read(cx).worker,
+                    )
+                });
+                continue;
+            }
+            work => work,
+        };
+        if let Work::ImageInput {
+            plugin,
+            panel,
+            document,
+            selection,
+            origin,
+            images,
+            reservation,
+            ..
+        } = work
+        {
+            manager
+                .offer_image_input(&plugin, &panel, document, selection, origin, images)
+                .unwrap();
+            drop(reservation);
+            continue;
+        }
         if let Work::Event(id, _, panel, event) = work {
             if let Err(error) = manager.event(&id, panel, event) {
                 assert!(
@@ -304,7 +347,7 @@ pub(super) fn pump(
 
 /// The existing worker publication seam also supplies the actual asynchronous vector renderer output.
 pub(super) fn publish(
-    manager: &plugin_runtime::Manager,
+    manager: &mut plugin_runtime::Manager,
     renderer: &mut images::VectorRenderer,
     app: &Entity<EditorApp>,
     cx: &mut gpui_kit::VisualTestContext,
@@ -319,7 +362,8 @@ pub(super) fn publish(
                 .map(move |(panel, scene)| (format!("{id}/{panel}"), scene.clone()))
         })
         .collect();
-    let images = renderer.prepare(&scenes);
+    let resources = manager.image_resources();
+    let images = renderer.prepare_resources(&scenes, &resources);
     cx.update(|window, cx| {
         app.read(cx).extensions.clone().update(cx, |owner, cx| {
             let mut state = owner.worker.state.lock().unwrap();

@@ -3,6 +3,22 @@ use semver::{Version, VersionReq};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
+mod navigation;
+pub use navigation::{
+    NavigationTarget, decode_uri_component, document_relative_path, is_windows_device_segment,
+};
+mod viewport;
+pub use viewport::{PreviewViewport, SourceViewport, ViewportTarget};
+mod preferences;
+pub use preferences::{PreferenceKey, PreferenceRead, PreferenceValue};
+#[cfg(feature = "guest")]
+mod preference_binding;
+#[cfg(feature = "guest")]
+pub use preference_binding::PreferenceBinding;
+
+#[cfg(test)]
+mod images_tests;
+
 /// Maximum encoded host request size; SDKs reject oversized requests before transport.
 pub const MAX_REQUEST_BYTES: usize = 2 * 1024 * 1024;
 
@@ -22,6 +38,40 @@ pub struct ResourceHandle {
     pub instance: String,
     pub scope: String,
     pub resource: u64,
+}
+
+/// Formats accepted by native image input; the host identifies encoded content before issuing a handle.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ImageFormat {
+    Png,
+    Jpeg,
+    Gif,
+    Webp,
+    Svg,
+}
+
+impl ImageFormat {
+    /// Canonical suffix without a dot, used to validate a caller-chosen document-sibling name.
+    pub const fn extension(self) -> &'static str {
+        match self {
+            Self::Png => "png",
+            Self::Jpeg => "jpg",
+            Self::Gif => "gif",
+            Self::Webp => "webp",
+            Self::Svg => "svg",
+        }
+    }
+}
+
+/// Metadata for a 30-second, instance-owned input. Encoded pixels never cross the 2 MiB JSON transport.
+/// Batches contain at most eight images, each at most 8 MiB and together at most 32 MiB.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ImageInput {
+    pub handle: ResourceHandle,
+    pub format: ImageFormat,
+    pub byte_len: u64,
 }
 
 /// Compatibility ranges describe API requirements, never the plugin package version.
@@ -187,6 +237,19 @@ pub enum Operation {
     /// Describe a host-owned SDK without accepting a guest-chosen native path.
     DescribeSdk,
     OpenData,
+    /// Read opaque plugin preferences under the owning workspace and file type; requires storage.private 1.1.
+    /// A watch returns an instance-owned resource revoked through CloseResource or retirement.
+    ReadPreference {
+        key: PreferenceKey,
+        watch: bool,
+    },
+    /// Compare-and-set prevents another instance's newer intent from being silently overwritten.
+    /// Returns the actual persisted revision; values grant no layout, window or document authority.
+    WritePreference {
+        key: PreferenceKey,
+        expected_revision: u64,
+        data: serde_json::Value,
+    },
     ReadFile {
         handle: ResourceHandle,
         path: String,
@@ -212,6 +275,7 @@ pub struct Request {
 /// Result variants carry structured values, never JSON hidden inside a string result.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum Value {
+    Preference(PreferenceRead),
     Files(FileMatches),
     Sdk(SdkDescriptor),
     Process(crate::process::Update),
@@ -249,6 +313,21 @@ pub enum Input {
 /// Native UI notifications contain no legacy canvas or character-grid fields.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum Notification {
+    /// A selected file provider receives a host-issued file identity, independent of text editing.
+    /// Requires `editor.files` and `editor.read`; clearing the context revokes its resource access.
+    FilePreview {
+        file: Option<FileContext>,
+    },
+    /// An authorized source-bound preview receives coalesced, readonly native source positions.
+    /// Delivery stops outside split mode, while synchronization is disabled, or on owner retirement.
+    SourceViewport(SourceViewport),
+    /// User-initiated native input belongs to this exact source version and UTF-8 selection.
+    /// Only the authorized active workspace preview receives the ordered metadata batch.
+    ImageInput {
+        document: DocumentVersion,
+        selection: TextRange,
+        images: Vec<ImageInput>,
+    },
     /// Only the isolated private-data root and package assets are available during this callback.
     MigrateData {
         from: u32,
@@ -279,11 +358,19 @@ pub enum Notification {
         subscription: ResourceHandle,
         error: Failure,
     },
+    /// Shared private intent changed; delivery belongs to this exact live watch, not a document session.
+    PreferenceChanged {
+        subscription: ResourceHandle,
+        key: PreferenceKey,
+        value: PreferenceValue,
+    },
     Request {
         handle: ResourceHandle,
         update: RequestUpdate,
     },
     Ui(crate::ui::UiEvent),
+    /// Bottom-bar functions retain the captured file/window target after native focus changes.
+    Tool(crate::ui::ToolEvent),
     Theme(crate::Environment),
     Command {
         id: String,
@@ -305,6 +392,90 @@ pub struct DocumentVersion {
     pub revision: u64,
 }
 
+/// Identity of one opened file. Revision advances on reload/retry; reopening creates a new ID.
+/// This is a file resource version and does not claim that the file has a text document.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FileVersion {
+    pub id: String,
+    /// Workspace-relative, normalized path; it cannot grant access outside the owning workspace.
+    pub path: String,
+    pub revision: u64,
+}
+
+impl FileVersion {
+    /// Validate transport metadata before issuing file authority; IO still checks canonical boundaries.
+    pub fn validate(&self) -> Result<(), Failure> {
+        if self.id.is_empty()
+            || self.id.len() > 128
+            || self.path.is_empty()
+            || self.path.len() > 4096
+            || self.path.contains(['\\', ':', '?'])
+            || self.path.chars().any(char::is_control)
+            || self.path.split('/').any(|part| {
+                part.is_empty() || part == "." || part == ".." || is_windows_device_segment(part)
+            })
+        {
+            return Err(Failure::new(
+                ErrorCode::InvalidPath,
+                "Invalid opened-file identity or relative path",
+            ));
+        }
+        Ok(())
+    }
+}
+
+/// Immutable context of the selected file. Text capability exists only when a native text session does.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FileContext {
+    pub version: FileVersion,
+    /// Lowercase extension without a dot, used by the plugin's own presentation preferences.
+    pub file_type: String,
+    pub text: Option<DocumentVersion>,
+}
+
+/// Image tasks bind to either unsaved text or an opened file, retaining their distinct authority.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", content = "version", rename_all = "snake_case")]
+pub enum ContentVersion {
+    Document(DocumentVersion),
+    File(FileVersion),
+}
+
+impl ContentVersion {
+    /// Relative path used after permission and canonical workspace-boundary checks.
+    pub fn path(&self) -> &str {
+        match self {
+            Self::Document(version) => &version.path,
+            Self::File(version) => &version.path,
+        }
+    }
+}
+
+impl From<DocumentVersion> for ContentVersion {
+    fn from(value: DocumentVersion) -> Self {
+        Self::Document(value)
+    }
+}
+
+impl PartialEq<DocumentVersion> for ContentVersion {
+    fn eq(&self, other: &DocumentVersion) -> bool {
+        matches!(self, Self::Document(version) if version == other)
+    }
+}
+
+/// Half-open UTF-8 byte offsets in one explicitly versioned document.
+/// Empty ranges represent carets; the host checks actual text length and character boundaries.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TextRange {
+    /// Inclusive byte offset.
+    pub start: usize,
+    /// Exclusive byte offset, greater than or equal to `start`.
+    pub end: usize,
+}
+
 /// Notifications carry versions, not text deltas; intermediate revisions may be coalesced safely.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct DocumentChange {
@@ -316,6 +487,29 @@ pub struct DocumentChange {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum EditorOperation {
+    /// Locate a viewport in the exact active source/UI scene; requires editor.viewport and editor.read.
+    /// Nonzero origins identify programmatic movement so a guest cannot create a feedback loop.
+    LocateViewport {
+        document: DocumentVersion,
+        panel: String,
+        ui_revision: u64,
+        target: ViewportTarget,
+        origin: u64,
+    },
+    /// Navigate from the exact active source version. Requires `editor.navigation` and `editor.read`;
+    /// relative documents additionally require `workspace.read`, external URLs `navigation.external`.
+    NavigateDocument {
+        document: DocumentVersion,
+        target: NavigationTarget,
+    },
+    /// Create an input's bytes beside its bound source document, without overwriting an existing file.
+    /// Requires `editor.images`, `editor.read`, `editor.write` and `workspace.write`.
+    /// `name` is a basename with the resource's canonical suffix. Conflict retains the input for retry;
+    /// successful completion consumes it. No reference edit or file deletion is implied.
+    SaveImageInput {
+        input: ResourceHandle,
+        name: String,
+    },
     /// Clipboard calls are separately negotiated and authorized; they use the same asynchronous completion gate.
     ReadClipboard,
     WriteClipboard {
@@ -326,6 +520,22 @@ pub enum EditorOperation {
         path: String,
     },
     ReadSelection,
+    /// Read the selection of this exact document/version without following toolbar or editor focus.
+    /// Requires `editor.edit` and `editor.read` in the requesting workspace instance.
+    ReadDocumentSelection {
+        document: DocumentVersion,
+    },
+    /// Replace one source range atomically and set the selection in the resulting complete text.
+    /// Requires `editor.edit` and `editor.write`; replacement text is bounded to 1 MiB.
+    /// Optional expected selection rejects a toolbar action whose original selection has changed.
+    ReplaceDocumentRange {
+        document: DocumentVersion,
+        range: TextRange,
+        text: String,
+        selection: TextRange,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        expected_selection: Option<TextRange>,
+    },
     ActiveDirectory,
     SaveDocument {
         document: DocumentVersion,
@@ -339,6 +549,17 @@ pub enum EditorOperation {
 /// Values describe the actual document and revision observed or saved, rather than an acknowledgement.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum EditorValue {
+    /// Actual identity/version opened by a controlled relative navigation, for optional follow-up anchors.
+    Opened {
+        document: DocumentVersion,
+    },
+    /// The complete file was created. `name` is relative to this original document's directory.
+    /// A later source change cannot turn this receipt into permission to edit another document.
+    ImageSaved {
+        input: ResourceHandle,
+        document: DocumentVersion,
+        name: String,
+    },
     Clipboard {
         text: String,
     },
@@ -347,6 +568,17 @@ pub enum EditorValue {
     Selection {
         document: DocumentVersion,
         text: String,
+    },
+    /// Actual source selection observed at the requested version, expressed as UTF-8 bytes.
+    DocumentSelection {
+        document: DocumentVersion,
+        range: TextRange,
+        text: String,
+    },
+    /// The resulting document version and full-text selection after one atomic editor transaction.
+    Edited {
+        document: DocumentVersion,
+        selection: TextRange,
     },
     Directory {
         path: String,

@@ -3,12 +3,38 @@
 use editor_core::{Workspace, WorkspaceSnapshot};
 use futures::channel::mpsc::{self, UnboundedReceiver, UnboundedSender};
 use notify::{Event, EventKind, RecursiveMode, Watcher, event::ModifyKind, event::RenameMode};
+use sha2::{Digest, Sha256};
 use std::{
     collections::{HashMap, HashSet},
     path::{Path, PathBuf},
     sync::mpsc::{self as sync_mpsc, RecvTimeoutError, Sender},
     time::{Duration, Instant},
 };
+
+/// Watch metadata chooses the authorized file model before any text decoding.
+#[derive(Clone)]
+pub(crate) struct WatchedFile {
+    pub(crate) path: PathBuf,
+    pub(crate) text: bool,
+}
+
+/// Opaque files publish only a fingerprint; their bytes are read by the owned resource loader.
+pub(crate) enum DiskContent {
+    Text(String),
+    FileDigest([u8; 32]),
+}
+
+impl From<&str> for DiskContent {
+    fn from(text: &str) -> Self {
+        Self::Text(text.to_owned())
+    }
+}
+
+impl From<String> for DiskContent {
+    fn from(text: String) -> Self {
+        Self::Text(text)
+    }
+}
 
 const RETRY_INTERVAL: Duration = Duration::from_secs(30);
 const MAX_SCAN_INTERVAL: Duration = Duration::from_secs(300);
@@ -17,7 +43,7 @@ const EVENT_DEBOUNCE: Duration = Duration::from_millis(180);
 /// The editor applies a completed scan only after the worker finishes reading disk state.
 pub(crate) struct Reconciliation {
     pub(crate) snapshot: Option<WorkspaceSnapshot>,
-    pub(crate) documents: Vec<(PathBuf, std::io::Result<String>, Instant)>,
+    pub(crate) documents: Vec<(PathBuf, std::io::Result<DiskContent>, Instant)>,
     pub(crate) renames: Vec<(PathBuf, PathBuf)>,
     pub(crate) native: bool,
 }
@@ -25,7 +51,7 @@ pub(crate) struct Reconciliation {
 enum Command {
     Event(notify::Result<Event>),
     Reconcile,
-    Documents(Vec<PathBuf>),
+    Documents(Vec<WatchedFile>),
     Stop,
 }
 
@@ -61,7 +87,7 @@ impl FileWatch {
     }
 
     /// Watch parent directories of open files outside the workspace.
-    pub(crate) fn set_documents(&self, paths: Vec<PathBuf>) {
+    pub(crate) fn set_documents(&self, paths: Vec<WatchedFile>) {
         let _ = self.sender.send(Command::Documents(paths));
     }
 }
@@ -256,13 +282,13 @@ fn start_native(
 fn watch_external(
     watcher: &mut notify::RecommendedWatcher,
     root: &Path,
-    documents: &[PathBuf],
+    documents: &[WatchedFile],
     watched: &mut HashSet<PathBuf>,
 ) -> bool {
     let desired: HashSet<_> = documents
         .iter()
-        .filter(|path| !path.starts_with(root))
-        .filter_map(|path| path.parent().map(Path::to_path_buf))
+        .filter(|file| !file.path.starts_with(root))
+        .filter_map(|file| file.path.parent().map(Path::to_path_buf))
         .collect();
     for path in watched.difference(&desired) {
         let _ = watcher.unwatch(path);
@@ -282,7 +308,7 @@ fn watch_external(
 fn record_event(
     result: notify::Result<Event>,
     root: &Path,
-    documents: &[PathBuf],
+    documents: &[WatchedFile],
     renames: &mut Vec<(PathBuf, PathBuf)>,
     rename_sources: &mut HashMap<usize, PathBuf>,
     watcher: &mut Option<notify::RecommendedWatcher>,
@@ -320,7 +346,7 @@ fn record_event(
         _ => {}
     }
     let relevant = event.paths.iter().any(|path| {
-        if documents.iter().any(|document| document == path) {
+        if documents.iter().any(|document| document.path == *path) {
             return true;
         }
         if path.starts_with(root) {
@@ -331,7 +357,7 @@ fn record_event(
                     .any(|part| part.as_os_str() == ".git" || part.as_os_str() == "target")
             })
         } else {
-            documents.iter().any(|document| document == path)
+            documents.iter().any(|document| document.path == *path)
         }
     });
     if !relevant {
@@ -348,10 +374,10 @@ fn record_event(
     Some(!content_only)
 }
 
-/// A scan visits the workspace once and reads only the text of currently open documents.
+/// A scan visits the workspace once; opaque file checks use a bounded streaming buffer.
 fn send_snapshot(
     workspace: &Workspace,
-    documents: &[PathBuf],
+    documents: &[WatchedFile],
     renames: &mut Vec<(PathBuf, PathBuf)>,
     native: bool,
     scan_tree: bool,
@@ -371,10 +397,15 @@ fn send_snapshot(
         });
     let documents = documents
         .iter()
-        .map(|path| {
+        .map(|file| {
             // Timestamp before I/O so a later local save can reject an older read.
             let read_at = Instant::now();
-            (path.clone(), std::fs::read_to_string(path), read_at)
+            let contents = if file.text {
+                std::fs::read_to_string(&file.path).map(DiskContent::Text)
+            } else {
+                file_fingerprint(&file.path).map(DiskContent::FileDigest)
+            };
+            (file.path.clone(), contents, read_at)
         })
         .collect();
     updates
@@ -385,6 +416,22 @@ fn send_snapshot(
             native,
         })
         .is_ok()
+}
+
+/// Fingerprints do not retain binary contents or allocate in proportion to the file size.
+fn file_fingerprint(path: &Path) -> std::io::Result<[u8; 32]> {
+    use std::io::Read;
+    let mut file = std::fs::File::open(path)?;
+    let mut digest = Sha256::new();
+    let mut buffer = [0u8; 64 * 1024];
+    loop {
+        let count = file.read(&mut buffer)?;
+        if count == 0 {
+            break;
+        }
+        digest.update(&buffer[..count]);
+    }
+    Ok(digest.finalize().into())
 }
 
 #[cfg(test)]

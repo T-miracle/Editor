@@ -146,6 +146,27 @@ impl Broker {
             .and_then(|map| map.get(contract))
             .or_else(|| self.preferences.user.get(&choice_key(scope, contract)))
     }
+    /// Package identity of the provider a start in this scope would use; descriptive, never routing.
+    pub fn selected_provider(&self, scope: &str, contract: &str) -> Option<String> {
+        if let Some(id) = self.preference(scope, contract)
+            && self
+                .providers
+                .values()
+                .any(|provider| &provider.caller.plugin == id)
+        {
+            return Some(id.clone());
+        }
+        let mut candidates = self
+            .providers
+            .values()
+            .filter(|provider| {
+                provider.caller.scope == scope && provider.contracts.contains_key(contract)
+            })
+            .map(|provider| provider.caller.plugin.clone());
+        let first = candidates.next()?;
+        // An ambiguous contract has no single owner; report nothing rather than guessing one.
+        candidates.next().is_none().then_some(first)
+    }
     pub fn resolve(
         &self,
         caller: &Caller,

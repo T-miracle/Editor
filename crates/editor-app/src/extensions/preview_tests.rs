@@ -28,7 +28,36 @@ fn publish_preview_source(app: &Entity<EditorApp>, cx: &mut App) {
             let mut state = owner.worker.state.lock().unwrap();
             if let Some(scene) = state.views.get("svg/preview") {
                 let mut next = scene.as_ref().clone();
-                next.source = version;
+                next.source = version.clone();
+                if let Some(version) = version {
+                    // The simulated public guest declares geometry instead of relying on a host split.
+                    let editor = Node::new(
+                        "source",
+                        Kind::NativeEditor {
+                            document: version.clone(),
+                        },
+                    )
+                    .grow();
+                    let content = Node::column(
+                        "preview-content",
+                        vec![
+                            Node::text("heading", "SVG preview").height(32.),
+                            Node::new(
+                                "viewport",
+                                Kind::Canvas(Canvas {
+                                    focusable: true,
+                                    ..Default::default()
+                                }),
+                            )
+                            .grow(),
+                        ],
+                    )
+                    .grow();
+                    next.root = Node::row("preview-layout", vec![editor, content])
+                        .grow()
+                        .resizable();
+                    next.editor_layout = true;
+                }
                 state.views.insert("svg/preview".into(), Arc::new(next));
             }
         }
@@ -68,7 +97,7 @@ fn svg_preview_follows_open_documents_and_unsaved_edits(cx: &mut TestAppContext)
             // Publish through the existing runtime boundary; no installed user plugins are touched.
             let manifest: protocol::Manifest = serde_json::from_value(serde_json::json!({
                 "id": "svg", "name": "SVG 预览", "version": "0.1.0",
-                "protocol": 7, "api": {"base":"^1","required":{"ui.native":"^1","ui.canvas":"^1","editor.documents":"^1"}}, "component": "svg.wasm",
+                "protocol": 7, "api": {"base":"^1","required":{"ui.native":">=1.1,<2","ui.canvas":"^1","editor.documents":"^1","editor.layout":"^1"}}, "component": "svg.wasm",
                 "permissions": ["editor.read"], "storage_limit": 1024,
                 "panels": [{ "id": "preview", "title": "SVG 预览",
                     "position": "editor", "file_extensions": ["svg"] }]
@@ -82,6 +111,7 @@ fn svg_preview_follows_open_documents_and_unsaved_edits(cx: &mut TestAppContext)
                 enabled: true,
                 project_enabled: Default::default(),
                 global_enabled: None,
+                retired_ui_contract: false,
                 error: None,
             }];
             state.views.insert(
@@ -103,12 +133,15 @@ fn svg_preview_follows_open_documents_and_unsaved_edits(cx: &mut TestAppContext)
     });
     let source = cx.debug_bounds("editor-source-pane").expect("source pane");
     let preview = cx
-        .debug_bounds("editor-preview-pane")
+        .debug_bounds("plugin-ui-preview-content")
         .expect("preview pane");
     assert!(source.right() <= preview.left() + px(2.));
     assert!(source.size.width > px(100.) && preview.size.width > px(100.));
     // Drag the native divider, including movement after leaving its one-pixel painted line.
-    let divider = cx.debug_bounds("editor-preview-divider").unwrap().center();
+    let divider = cx
+        .debug_bounds("plugin-split-divider-preview-layout")
+        .unwrap()
+        .center();
     cx.simulate_mouse_down(divider, MouseButton::Left, Modifiers::default());
     cx.simulate_mouse_move(
         divider + point(px(12.), px(0.)),
@@ -209,14 +242,14 @@ fn svg_preview_follows_open_documents_and_unsaved_edits(cx: &mut TestAppContext)
         publish_preview_source(&app, cx);
         window.draw(cx).clear(cx);
     });
-    assert!(cx.debug_bounds("editor-preview-pane").is_none());
+    assert!(cx.debug_bounds("plugin-ui-preview-content").is_none());
     cx.update(|window, cx| app.update(cx, |app, cx| app.open_file(svg_path, window, cx)));
     cx.run_until_parked();
     cx.update(|window, cx| {
         publish_preview_source(&app, cx);
         window.draw(cx).clear(cx);
     });
-    assert!(cx.debug_bounds("editor-preview-pane").is_some());
+    assert!(cx.debug_bounds("plugin-ui-preview-content").is_some());
     cx.update(|_, cx| {
         let owner = app.read(cx).extensions.clone();
         owner
@@ -308,7 +341,14 @@ fn svg_preview_follows_open_documents_and_unsaved_edits(cx: &mut TestAppContext)
     });
     cx.update(|_, cx| {
         let app = app.read(cx);
-        assert!(!app.tabs[app.active_tab_index().unwrap()].session.is_dirty());
+        assert!(
+            !app.tabs[app.active_tab_index().unwrap()]
+                .text
+                .as_ref()
+                .unwrap()
+                .session
+                .is_dirty()
+        );
         let owner = app.extensions.read(cx);
         assert!(
             owner

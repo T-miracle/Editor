@@ -1,0 +1,53 @@
+{
+  "id": "markdown",
+  "name": "Markdown",
+  "version": "0.12.0",
+  "protocol": 7,
+  "contributions": "plugin.toml",
+  "component": "markdown.wasm",
+  "permissions": [
+    "editor.read",
+    "editor.write",
+    "workspace.read",
+    "workspace.write",
+    "clipboard",
+    "network.images",
+    "navigation.external",
+    "storage"
+  ],
+  "storage_limit": 8192,
+  "api": {
+    "base": "^1",
+    "required": {
+      "ui.native": ">=1.1, <2",
+      "ui.richtext": "^1",
+      "ui.code_highlighting": "^1",
+      "ui.images": "^1",
+      "ui.links": "^1",
+      "editor.documents": "^1",
+      "editor.viewport": "^1",
+      "editor.edit": "^1",
+      "editor.toolbar": "^1",
+      "editor.images": "^1",
+      "editor.navigation": "^1",
+      "editor.files": "^1",
+      "editor.layout": "^1",
+      "ui.tools": "^1",
+      "ui.content_colors": "^1",
+      "storage.private": ">=1.1, <2"
+    }
+  },
+  "panels": [
+    {
+      "id": "preview",
+      "title": "Markdown",
+      "position": "editor",
+      "file_extensions": [
+        "md",
+        "markdown"
+      ],
+      "default_visible": true
+    }
+  ],
+  "commands": []
+}

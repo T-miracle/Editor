@@ -7,6 +7,7 @@ use std::{
     io::{Cursor, Read, Write},
     path::Path,
 };
+pub(crate) mod icons;
 
 /// LSP declarations carry exactly the native service authority that the host will exercise.
 fn validate_language_services(manifest: &Manifest) -> anyhow::Result<()> {
@@ -111,7 +112,10 @@ impl Package {
             files
                 .get("manifest.json")
                 .ok_or_else(|| anyhow::anyhow!("Missing manifest.json"))?,
-        )?;
+        )
+        .map_err(|error| {
+            anyhow::anyhow!("插件清单不兼容或无效，请使用新版 SDK 更新插件：{error}")
+        })?;
         // New archives keep their declared identity; historical aliases belong exclusively to data import.
         anyhow::ensure!(
             manifest.id.len() <= 100
@@ -322,6 +326,9 @@ impl Package {
                 let grammar = package_bytes(&files, &provider.grammar.to_string_lossy())?;
                 anyhow::ensure!(grammar.starts_with(b"\0asm"), "Invalid grammar module");
                 package_text(&files, &provider.highlights.to_string_lossy())?;
+                if let Some(path) = &provider.injections {
+                    package_text(&files, &path.to_string_lossy())?;
+                }
             }
             anyhow::ensure!(
                 contributions.plugin.id == manifest.id,
@@ -345,6 +352,9 @@ impl Package {
             anyhow::ensure!(
                 [
                     "workspace.read",
+                    "workspace.write",
+                    "network.images",
+                    "navigation.external",
                     "storage",
                     "clipboard",
                     "assets.read",
@@ -380,27 +390,41 @@ impl Package {
                 ["left", "right", "bottom", "editor"].contains(&panel.position.as_str()),
                 "Unsupported dock position"
             );
+            anyhow::ensure!(
+                !panel.auxiliary || panel.position == "editor",
+                "Auxiliary file tools require an editor-local contribution"
+            );
             // Preview ingress is workspace-owned and explicitly requires document read authority.
             anyhow::ensure!(
                 if panel.position == "editor" {
                     manifest.permissions.contains("editor.read")
                         && manifest.scope == plugin_protocol::api::InstanceScope::Workspace
-                        && manifest
-                            .api
-                            .as_ref()
-                            .is_some_and(|api| api.required.contains_key("editor.documents"))
-                        && !panel.file_extensions.is_empty()
-                        && panel.file_extensions.len() <= 32
-                        && panel.file_extensions.iter().all(|extension| {
-                            !extension.is_empty()
-                                && extension.len() <= 32
-                                && extension.bytes().all(|byte| {
-                                    byte.is_ascii_alphanumeric()
-                                        || matches!(byte, b'_' | b'-' | b'+')
-                                })
+                        && manifest.api.as_ref().is_some_and(|api| {
+                            api.required.contains_key("editor.documents")
+                                || api.required.contains_key("editor.files")
                         })
+                        && (!panel.file_extensions.is_empty()
+                            || !panel.readonly_file_extensions.is_empty())
+                        && panel.file_extensions.len() + panel.readonly_file_extensions.len() <= 32
+                        && (panel.readonly_file_extensions.is_empty()
+                            || manifest
+                                .api
+                                .as_ref()
+                                .is_some_and(|api| api.required.contains_key("editor.files")))
+                        && panel
+                            .file_extensions
+                            .iter()
+                            .chain(&panel.readonly_file_extensions)
+                            .all(|extension| {
+                                !extension.is_empty()
+                                    && extension.len() <= 32
+                                    && extension.bytes().all(|byte| {
+                                        byte.is_ascii_alphanumeric()
+                                            || matches!(byte, b'_' | b'-' | b'+')
+                                    })
+                            })
                 } else {
-                    panel.file_extensions.is_empty()
+                    panel.file_extensions.is_empty() && panel.readonly_file_extensions.is_empty()
                 },
                 "Editor previews require document read authority and valid file extensions"
             );

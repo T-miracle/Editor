@@ -54,11 +54,7 @@ impl EditorApp {
         if event.pressed_button.is_some() {
             return;
         }
-        let context = (
-            self.active_path.clone(),
-            self.active_tab_index()
-                .map(|index| self.tabs[index].session.revision()),
-        );
+        let context = (self.active_path.clone(), self.active_text_revision());
         if self.pointer_hover_context.as_ref() != Some(&context) {
             // A tab switch or edit invalidates both the cached card and the
             // Escape suppression range, even when the byte range is identical.
@@ -162,10 +158,7 @@ impl EditorApp {
                 if app.pointer_hover_generation != generation
                     || app.pointer_hover_symbol.as_ref() != Some(&symbol)
                     || app.active_path != source_path
-                    || app
-                        .active_tab_index()
-                        .map(|index| app.tabs[index].session.revision())
-                        != source_revision
+                    || app.active_text_revision() != source_revision
                 {
                     return;
                 }

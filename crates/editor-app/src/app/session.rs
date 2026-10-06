@@ -12,7 +12,19 @@ use std::{
 mod tests;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(tag = "kind", content = "provider", rename_all = "snake_case")]
+pub(crate) enum FileProviderChoice {
+    /// Explicit native recovery leaves plugin preferences intact.
+    Native,
+    /// Stable package/panel identity, preserved through temporary failures and new installations.
+    Plugin(String),
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct SessionState {
+    /// This private workspace record namespaces choices by lowercase file type.
+    #[serde(default)]
+    pub file_view_providers: std::collections::BTreeMap<String, FileProviderChoice>,
     pub workspace: String,
     /// Host-local authority; repository files and project plugin overrides cannot change it.
     #[serde(default = "default_true")]
@@ -38,6 +50,27 @@ pub struct SessionState {
     pub plugin_dock_sizes: std::collections::BTreeMap<String, f32>,
     #[serde(default)]
     pub plugin_panel_visibility: std::collections::BTreeMap<String, bool>,
+    /// Import-only records preserve historical data until the authorized private write is acknowledged.
+    /// They never select a layout or control current guest behavior.
+    #[serde(
+        default,
+        rename = "editor_preview_modes",
+        skip_serializing_if = "std::collections::BTreeMap::is_empty"
+    )]
+    pub legacy_preview_modes: std::collections::BTreeMap<String, serde_json::Value>,
+    #[serde(
+        default,
+        rename = "editor_preview_sync",
+        skip_serializing_if = "std::collections::BTreeMap::is_empty"
+    )]
+    pub legacy_preview_sync: std::collections::BTreeMap<String, bool>,
+    /// Accept optional historical visibility records without assuming they existed in every version.
+    #[serde(
+        default,
+        rename = "editor_preview_toolbar",
+        skip_serializing_if = "std::collections::BTreeMap::is_empty"
+    )]
+    pub legacy_preview_toolbar: std::collections::BTreeMap<String, bool>,
     /// Base serializes the complete split tree, dock extents and open state.
     #[serde(default)]
     pub dock_layout: Option<gpui_base::dock::DockAreaState>,
@@ -50,8 +83,39 @@ pub struct SessionState {
 }
 
 impl SessionState {
+    /// Bundle historical owner records as opaque data; the plugin decides whether fields are applicable.
+    pub(crate) fn legacy_display_payload(&self, owner: &str) -> Option<serde_json::Value> {
+        let mut data = serde_json::Map::new();
+        if let Some(mode) = self.legacy_preview_modes.get(owner) {
+            data.insert("mode".into(), mode.clone());
+        }
+        if let Some(sync) = self.legacy_preview_sync.get(owner) {
+            data.insert("sync".into(), (*sync).into());
+        }
+        if let Some(toolbar) = self.legacy_preview_toolbar.get(owner) {
+            data.insert("toolbar".into(), (*toolbar).into());
+        }
+        (!data.is_empty()).then_some(data.into())
+    }
+
+    /// Delete only the acknowledged source bundle; a newer local edit or another owner's data survives.
+    pub(crate) fn acknowledge_display_import(
+        &mut self,
+        owner: &str,
+        payload: &serde_json::Value,
+    ) -> bool {
+        if self.legacy_display_payload(owner).as_ref() != Some(payload) {
+            return false;
+        }
+        self.legacy_preview_modes.remove(owner);
+        self.legacy_preview_sync.remove(owner);
+        self.legacy_preview_toolbar.remove(owner);
+        true
+    }
+
     pub fn for_workspace(workspace: &Path) -> Self {
         Self {
+            file_view_providers: Default::default(),
             workspace: workspace.to_string_lossy().into_owned(),
             // Preserve the editor's existing trust default; users can restrict a workspace locally.
             workspace_trusted: true,
@@ -65,6 +129,9 @@ impl SessionState {
             extensions_visible: true,
             plugin_dock_sizes: Default::default(),
             plugin_panel_visibility: Default::default(),
+            legacy_preview_modes: Default::default(),
+            legacy_preview_sync: Default::default(),
+            legacy_preview_toolbar: Default::default(),
             dock_layout: None,
             open_tabs: Vec::new(),
             active_file: None,

@@ -28,12 +28,8 @@ file_icons! {
     "file-icons/file_dark.svg" => "../../assets/file-icons/file_dark.svg",
     "file-icons/folder.svg" => "../../assets/file-icons/folder.svg",
     "file-icons/folder_dark.svg" => "../../assets/file-icons/folder_dark.svg",
-    "file-icons/image.svg" => "../../assets/file-icons/image.svg",
-    "file-icons/image_dark.svg" => "../../assets/file-icons/image_dark.svg",
     "file-icons/json.svg" => "../../assets/file-icons/json.svg",
     "file-icons/json_dark.svg" => "../../assets/file-icons/json_dark.svg",
-    "file-icons/markdown.svg" => "../../assets/file-icons/markdown.svg",
-    "file-icons/markdown_dark.svg" => "../../assets/file-icons/markdown_dark.svg",
     "file-icons/text.svg" => "../../assets/file-icons/text.svg",
     "file-icons/text_dark.svg" => "../../assets/file-icons/text_dark.svg",
 }

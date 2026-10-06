@@ -3,8 +3,9 @@ param(
     [string]$Output = "$PSScriptRoot/../dist/plugins",
     [string]$HostExe = '',
     # Restrict verification to named packages without rebuilding unrelated components.
-    [ValidateSet('terminal', 'example', 'svg', 'rust', 'toml', 'html', 'javascript')]
-    [string[]]$Packages = @('terminal', 'example', 'svg', 'rust', 'toml', 'html', 'javascript')
+    [ValidateSet('terminal', 'example', 'svg', 'rust', 'toml', 'html', 'javascript', 'markdown')]
+    # Default and release packaging include every bundled plugin; the host must provide their SDK capabilities.
+    [string[]]$Packages = @('terminal', 'example', 'svg', 'rust', 'toml', 'html', 'javascript', 'markdown')
 )
 $ErrorActionPreference = 'Stop'
 $projectRoot = (Resolve-Path "$PSScriptRoot/..").Path
@@ -37,11 +38,16 @@ try {
         & $hostPath --plugin-cargo 'plugins/rust/Cargo.toml' build --target wasm32-wasip2 --release
         if ($LASTEXITCODE -ne 0) { throw 'Rust language WASM build failed' }
         }
+        # Markdown requires the public SDK of a host supporting its declared preview capabilities.
+        if ($Packages -contains 'markdown') {
+        & $hostPath --plugin-cargo 'plugins/markdown/Cargo.toml' build --target wasm32-wasip2 --release
+        if ($LASTEXITCODE -ne 0) { throw 'Markdown preview WASM build failed' }
+        }
     } finally { $env:CARGO_TARGET_DIR = $previousTargetDir }
     New-Item -ItemType Directory -Force $Output | Out-Null
     Add-Type -AssemblyName System.IO.Compression
     # Remove legacy package filenames, including the theme now built into the editor.
-    foreach ($name in @('terminal', 'example', 'svg', 'rust', 'toml', 'html', 'javascript')) {
+    foreach ($name in @('terminal', 'example', 'svg', 'rust', 'toml', 'html', 'javascript', 'markdown')) {
         Remove-Item -LiteralPath (Join-Path $Output "me.$name.zip") -Force -ErrorAction SilentlyContinue
     }
     Remove-Item -LiteralPath (Join-Path $Output 'me.default-light-theme.zip') -Force -ErrorAction SilentlyContinue
@@ -66,12 +72,18 @@ try {
             # The panel manifest selects the matching SVG when the editor theme changes.
             $packageFiles += ,@('icons/terminal_light.svg', 'plugins/terminal/icons/terminal_light.svg')
             $packageFiles += ,@('icons/terminal_dark.svg', 'plugins/terminal/icons/terminal_dark.svg')
+            $packageFiles += ,@('theme.json', 'plugins/terminal/theme.json')
+            foreach ($icon in @('plus','chevron-down')) {
+                $packageFiles += ,@("icons/$icon.svg", "plugins/terminal/icons/$icon.svg")
+            }
         }
         if ($plugin[0] -eq 'svg') {
             # Keep editable vector sources beside the component that embeds the same toolbar assets.
-            foreach ($icon in @('zoom-in', 'zoom-out', 'actual-size', 'fit-window')) {
+            foreach ($icon in @('zoom-in', 'zoom-out', 'actual-size', 'fit-window', 'view-source', 'view-split', 'view-preview', 'file', 'file_dark')) {
                 $packageFiles += ,@("icons/$icon.svg", "plugins/svg/icons/$icon.svg")
             }
+            $packageFiles += ,@('plugin.toml', 'plugins/svg/plugin.toml')
+            $packageFiles += ,@('icons.json', 'plugins/svg/icons.json')
         }
         foreach ($item in $packageFiles) {
             $entry = $archive.CreateEntry($item[0])
@@ -82,26 +94,42 @@ try {
     } finally { $archive.Dispose(); $stream.Dispose() }
     Write-Output $destination
     }
-    foreach ($name in @('rust', 'toml', 'html', 'javascript')) {
+    foreach ($name in @('rust', 'toml', 'html', 'javascript', 'markdown')) {
         if ($Packages -notcontains $name) { continue }
-        # Only Rust adds a policy component; the other language packages remain resource-only.
+        # Rust and Markdown include guest components; the remaining language packages are resource-only.
         $destination = [IO.Path]::GetFullPath((Join-Path $Output "$name.zip"))
         $stream = [IO.File]::Create($destination)
         $archive = [IO.Compression.ZipArchive]::new($stream, [IO.Compression.ZipArchiveMode]::Create)
         try {
             $pluginRoot = Join-Path $projectRoot "plugins/$name"
             # Explicit distribution roots prevent Cargo/source/cache files from leaking into the Rust ZIP.
-            $packageFiles = @('manifest.json', 'README.md', 'plugin.toml', 'icons.json') | ForEach-Object {
+            $packageFiles = @('manifest.json', 'README.md', 'plugin.toml') | ForEach-Object {
                 ,@($_, (Join-Path $pluginRoot $_))
+            }
+            # Preview packages may omit an icon catalog while still shipping toolbar SVG assets.
+            if (Test-Path -LiteralPath (Join-Path $pluginRoot 'icons.json')) {
+                $packageFiles += ,@('icons.json', (Join-Path $pluginRoot 'icons.json'))
             }
             foreach ($directory in @('grammar', 'queries', 'icons')) {
                 foreach ($file in Get-ChildItem -LiteralPath (Join-Path $pluginRoot $directory) -Recurse -File | Sort-Object FullName) {
-                    $relative = [IO.Path]::GetRelativePath($pluginRoot, $file.FullName).Replace('\', '/')
+                    # Windows PowerShell 5.1 lacks Path.GetRelativePath. Enumeration is rooted
+                    # in this plugin, so remove its normalized prefix and retain the ZIP separators.
+                    $resourcePrefix = [IO.Path]::GetFullPath($pluginRoot).TrimEnd([char[]]@('\', '/')) + [IO.Path]::DirectorySeparatorChar
+                    $resourcePath = [IO.Path]::GetFullPath($file.FullName)
+                    if (-not $resourcePath.StartsWith($resourcePrefix, [StringComparison]::OrdinalIgnoreCase)) {
+                        throw "Plugin resource is outside its package directory: $resourcePath"
+                    }
+                    $relative = $resourcePath.Substring($resourcePrefix.Length).Replace('\', '/')
                     $packageFiles += ,@($relative, $file.FullName)
                 }
             }
             if ($name -eq 'rust') {
                 $packageFiles += ,@('rust.wasm', (Join-Path $projectRoot 'target/wasm32-wasip2/release/rust_language_guest.wasm'))
+            }
+            if ($name -eq 'markdown') {
+                # Distribute only runtime resources and licenses, never source or build caches.
+                $packageFiles += ,@('markdown.wasm', (Join-Path $projectRoot 'target/wasm32-wasip2/release/markdown_guest.wasm'))
+                $packageFiles += ,@('licenses/pulldown-cmark-LICENSE', (Join-Path $pluginRoot 'src/pulldown-cmark-LICENSE'))
             }
             foreach ($item in $packageFiles) {
                 $entryStream = $archive.CreateEntry($item[0]).Open()

@@ -8,7 +8,7 @@ members = [
     "crates/plugin-runtime",
 ]
 # Guests build through the packaged host using its managed interface cache.
-exclude = ["plugins/terminal", "plugins/example", "plugins/svg", "plugins/capability-example"]
+exclude = ["plugins/terminal", "plugins/example", "plugins/svg", "plugins/capability-example", "plugins/markdown"]
 resolver = "2"
 
 [workspace.package]

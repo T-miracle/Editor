@@ -41,6 +41,8 @@ impl State {
                 "find_files",
                 "describe_sdk",
                 "open_data",
+                "read_preference",
+                "write_preference",
                 "read_file",
                 "write_file",
                 "close_resource",
@@ -68,6 +70,8 @@ impl State {
                     &request.operation,
                     api::Operation::ReadAsset { .. }
                         | api::Operation::OpenData
+                        | api::Operation::ReadPreference { watch: false, .. }
+                        | api::Operation::WritePreference { .. }
                         | api::Operation::ReadFile { .. }
                         | api::Operation::WriteFile { .. }
                         | api::Operation::CloseResource { .. }
@@ -84,6 +88,8 @@ impl State {
                     &request.operation,
                     api::Operation::ReadAsset { .. }
                         | api::Operation::OpenData
+                        | api::Operation::ReadPreference { watch: false, .. }
+                        | api::Operation::WritePreference { .. }
                         | api::Operation::ReadFile { .. }
                         | api::Operation::WriteFile { .. }
                         | api::Operation::CloseResource { .. }
@@ -114,6 +120,7 @@ impl State {
                     api::Operation::ReadAsset { .. }
                         | api::Operation::OpenWorkspace { .. }
                         | api::Operation::OpenData { .. }
+                        | api::Operation::ReadPreference { watch: false, .. }
                         | api::Operation::ReadFile { .. }
                         | api::Operation::FindFiles { .. }
                         | api::Operation::DescribeSdk
@@ -148,6 +155,8 @@ impl State {
                         .map(api::Value::Cancellation)
                 }
                 api::Operation::ReadAsset { path } => self.read_capability_asset(&path),
+                operation @ (api::Operation::ReadPreference { .. }
+                | api::Operation::WritePreference { .. }) => self.preference_request(operation),
                 api::Operation::DescribeSdk => self.describe_sdk(),
                 api::Operation::Editor {
                     operation,
@@ -157,7 +166,14 @@ impl State {
             };
             // Record all delegated allocations at the common boundary, including file and request handles.
             if let (
-                Ok(api::Value::Resource(handle) | api::Value::Accepted(handle)),
+                Ok(
+                    api::Value::Resource(handle)
+                    | api::Value::Accepted(handle)
+                    | api::Value::Preference(api::PreferenceRead {
+                        subscription: Some(handle),
+                        ..
+                    }),
+                ),
                 Some(context),
             ) = (&result, &self.plugin_services.context)
             {
@@ -211,6 +227,71 @@ impl State {
             ));
         }
         Ok(api::Value::Sdk(sdk.clone()))
+    }
+
+    /// Toolbar publication requires an independently negotiated capability and an owned workspace editor surface.
+    fn check_editor_toolbar_authority(&self, panel: &str) -> Result<(), Failure> {
+        if !self.api.capabilities.contains_key("editor.toolbar") {
+            return Err(Failure::new(
+                ErrorCode::CapabilityUnavailable,
+                "editor.toolbar was not negotiated",
+            ));
+        }
+        if self.roots.application
+            || !self.permissions.contains("editor.read")
+            || !self.declared_editor_panels.contains(panel)
+        {
+            return Err(Failure::new(
+                ErrorCode::PermissionDenied,
+                "Editor toolbar requires an owned workspace editor panel and editor.read",
+            ));
+        }
+        Ok(())
+    }
+
+    /// Code requests have read-only authority, scoped to the same owned preview as their source.
+    fn check_code_highlighting_authority(&self, panel: &str) -> Result<(), Failure> {
+        // Opt-in requires both contracts even when this particular scene has no code yet.
+        for capability in ["ui.code_highlighting", "ui.richtext"] {
+            if !self.api.capabilities.contains_key(capability) {
+                return Err(Failure::new(
+                    ErrorCode::CapabilityUnavailable,
+                    format!("{capability} was not negotiated"),
+                ));
+            }
+        }
+        if self.roots.application
+            || !self.permissions.contains("editor.read")
+            || !self.declared_editor_panels.contains(panel)
+        {
+            return Err(Failure::new(
+                ErrorCode::PermissionDenied,
+                "Code highlighting requires an owned workspace editor panel and editor.read",
+            ));
+        }
+        Ok(())
+    }
+
+    /// Semantic viewport declarations carry readonly document authority, never editing permission.
+    pub(super) fn check_editor_viewport_authority(&self, panel: &str) -> Result<(), Failure> {
+        for capability in ["editor.viewport", "ui.richtext"] {
+            if !self.api.capabilities.contains_key(capability) {
+                return Err(Failure::new(
+                    ErrorCode::CapabilityUnavailable,
+                    format!("{capability} was not negotiated"),
+                ));
+            }
+        }
+        if self.roots.application
+            || !self.permissions.contains("editor.read")
+            || !self.declared_editor_panels.contains(panel)
+        {
+            return Err(Failure::new(
+                ErrorCode::PermissionDenied,
+                "Viewport binding requires an owned workspace editor panel and editor.read",
+            ));
+        }
+        Ok(())
     }
 
     /// Availability and authorization are separate; preparation can read only immutable assets.
@@ -315,6 +396,41 @@ impl Instance {
             view.document
                 .validate()
                 .map_err(|message| Failure::new(ErrorCode::InvalidRequest, message))?;
+            self.check_tool_authority(&view.panel, &view.document)?;
+            if !view.document.content_colors.is_empty()
+                && !self
+                    .store
+                    .data()
+                    .api
+                    .capabilities
+                    .contains_key("ui.content_colors")
+            {
+                return Err(api::Failure::new(
+                    api::ErrorCode::CapabilityUnavailable,
+                    "Content colors require ui.content_colors",
+                )
+                .into());
+            }
+            if view.document.file.as_ref()
+                != self
+                    .file_sources
+                    .get(&view.panel)
+                    .and_then(Option::as_ref)
+                    .map(|context| &context.version)
+            {
+                return Err(Failure::new(
+                    ErrorCode::StaleRevision,
+                    "File view does not match its current input",
+                )
+                .into());
+            }
+            if view.document.file.is_some() && !api.capabilities.contains_key("editor.files") {
+                return Err(Failure::new(
+                    ErrorCode::CapabilityUnavailable,
+                    "editor.files was not negotiated",
+                )
+                .into());
+            }
             if view.document.source.as_ref()
                 != self
                     .preview_sources
@@ -327,21 +443,99 @@ impl Instance {
                 )
                 .into());
             }
+            if view.document.editor_toolbar.is_some() {
+                self.store
+                    .data()
+                    .check_editor_toolbar_authority(&view.panel)?;
+            }
+            if view.document.editor_layout {
+                if !api.capabilities.contains_key("editor.layout") {
+                    return Err(Failure::new(
+                        ErrorCode::CapabilityUnavailable,
+                        "editor.layout was not negotiated",
+                    )
+                    .into());
+                }
+                if self.store.data().roots.application
+                    || !self.store.data().permissions.contains("editor.read")
+                    || !self
+                        .store
+                        .data()
+                        .declared_layout_panels
+                        .contains(&view.panel)
+                {
+                    return Err(Failure::new(
+                        ErrorCode::PermissionDenied,
+                        "File layouts require editor.read",
+                    )
+                    .into());
+                }
+            }
+            if view.document.editor_image_input {
+                self.store.data().check_image_input_authority(&view.panel)?;
+            }
+            if view.document.code_highlighting {
+                self.store
+                    .data()
+                    .check_code_highlighting_authority(&view.panel)?;
+            }
+            if view.document.editor_viewport.is_some() {
+                self.store
+                    .data()
+                    .check_editor_viewport_authority(&view.panel)?;
+            }
             let mut canvas = false;
+            let mut resizable = false;
             let mut grid = false;
             let mut collections = view.document.menu.is_some();
             let mut enhanced_canvas = false;
+            let mut rich_text = false;
+            let mut images = false;
+            let mut file_images = false;
+            let mut links = view.document.link_events;
             let mut visit = |node: &ui::Node| {
+                links |= !node.links.is_empty();
                 if let ui::Kind::Canvas(value) = &node.kind {
                     canvas = true;
                     grid |= value.grid;
                     enhanced_canvas |= value.scroll.is_some() || value.font != Default::default();
                 }
                 collections |= matches!(node.kind, ui::Kind::SideTabs(_));
+                resizable |= node.layout.resizable;
+                images |= matches!(node.kind, ui::Kind::Image { .. });
+                file_images |= matches!(node.kind, ui::Kind::FileImage { .. });
+                // Source metadata is part of the same optional interface even on ordinary nodes.
+                rich_text |= node.source_range.is_some()
+                    || matches!(
+                        node.kind,
+                        ui::Kind::RichText { .. } | ui::Kind::CodeBlock { .. }
+                    );
             };
             view.document.root.visit(&mut visit);
+            if let Some(toolbar) = &view.document.editor_toolbar {
+                toolbar.visit(&mut visit);
+            }
             if let Some(dialog) = &view.document.dialog {
                 dialog.content.visit(&mut visit);
+            }
+            if resizable
+                && !api
+                    .capabilities
+                    .get("ui.native")
+                    .is_some_and(|version| *version >= semver::Version::new(1, 1, 0))
+            {
+                return Err(Failure::new(
+                    ErrorCode::CapabilityUnavailable,
+                    "Resizable containers require ui.native 1.1",
+                )
+                .into());
+            }
+            if links && !api.capabilities.contains_key("ui.links") {
+                return Err(Failure::new(
+                    ErrorCode::CapabilityUnavailable,
+                    "ui.links was not negotiated",
+                )
+                .into());
             }
             if enhanced_canvas
                 && !api
@@ -359,6 +553,9 @@ impl Instance {
                 (canvas, "ui.canvas"),
                 (grid, "ui.grid"),
                 (collections, "ui.collections"),
+                (rich_text, "ui.richtext"),
+                (images, "ui.images"),
+                (file_images, "ui.file_images"),
             ] {
                 if required && !api.capabilities.contains_key(capability) {
                     return Err(api::Failure::new(

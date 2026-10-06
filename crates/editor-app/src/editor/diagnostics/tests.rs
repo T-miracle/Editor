@@ -41,7 +41,7 @@ fn test_editor<'a>(
 
 /// Publish through the revision gate instead of injecting markers directly into Base.
 fn publish(app: &mut EditorApp, errors: Vec<Diagnostic>, cx: &mut Context<EditorApp>) {
-    let tab = &app.tabs[0];
+    let tab = app.text_tab(0).unwrap();
     app.apply_syntax_diagnostics(
         tab.editor.entity_id(),
         tab.session.revision(),
@@ -60,14 +60,14 @@ fn stale_diagnostics_are_discarded(cx: &mut TestAppContext) {
         view.update(cx, |app, cx| {
             let error = Diagnostic::new(Position::new(0, 7)..Position::new(0, 8), "unexpected @")
                 .with_severity(DiagnosticSeverity::Error);
-            let tab = &app.tabs[0];
+            let tab = app.text_tab(0).unwrap();
             let editor_id = tab.editor.entity_id();
             let revision = tab.session.revision();
             let generation = tab.diagnostics.generation;
             let plugin_generation = app.plugin_loading_generation;
             publish(app, vec![error.clone()], cx);
             assert_eq!(app.editor.read(cx).diagnostics().unwrap().len(), 1);
-            app.tabs[0].session.note_edit();
+            app.tabs[0].text.as_mut().unwrap().session.note_edit();
             app.refresh_syntax_diagnostics(editor_id, cx);
             app.apply_syntax_diagnostics(
                 editor_id,
@@ -78,7 +78,7 @@ fn stale_diagnostics_are_discarded(cx: &mut TestAppContext) {
                 cx,
             );
             assert!(app.editor.read(cx).diagnostics().unwrap().is_empty());
-            let tab = &app.tabs[0];
+            let tab = app.text_tab(0).unwrap();
             let revision = tab.session.revision();
             let generation = tab.diagnostics.generation;
             app.plugin_loading_generation = app.plugin_loading_generation.wrapping_add(1);

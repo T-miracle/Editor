@@ -4,7 +4,7 @@ use super::*;
 /// Decode exactly the result envelope exported by the SDK.
 fn dispatch(message: api::Input) -> ui::Canvas {
     let payload =
-        SvgPreview::dispatch(serde_json::to_string(&api::Invocation { id: 1, message }).unwrap())
+        ImagePreview::dispatch(serde_json::to_string(&api::Invocation { id: 1, message }).unwrap())
             .unwrap();
     let result: api::Completion = serde_json::from_str(&payload).unwrap();
     assert_eq!(result.id, 1);
@@ -86,6 +86,24 @@ fn vector(scene: &ui::Canvas) -> (Rect, &str) {
         .expect("a valid document must produce a vector image")
 }
 
+/// Opening a small image preserves its intrinsic dimensions instead of enlarging it.
+#[test]
+fn default_preview_preserves_small_intrinsic_image_dimensions() {
+    prepare(Environment::default());
+    canvas(ui::CanvasEvent::Resize {
+        width: 400.,
+        height: 300.,
+        grid: None,
+    });
+    let scene = preview(
+        "small.svg",
+        "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"100\" height=\"50\"/>".into(),
+    );
+    let (rect, _) = vector(&scene);
+    assert_eq!((rect.w, rect.h), (100., 50.));
+    assert_eq!((rect.x, rect.y), (150., 141.));
+}
+
 /// Transparent vectors sit above the board, and off-center wheel input keeps the image centered.
 #[test]
 fn document_renders_above_checkerboard_and_stays_centered_during_zoom() {
@@ -100,10 +118,10 @@ fn document_renders_above_checkerboard_and_stays_centered_during_zoom() {
     let (rect, rendered) = vector(&scene);
     assert_eq!(rendered, source);
     // Intrinsic-to-logical scaling uses f32, so compare the visible geometry within a subpixel.
-    assert!((rect.x - 80.).abs() < 0.01);
-    assert!((rect.y - 106.).abs() < 0.01);
-    assert!((rect.w - 240.).abs() < 0.01);
-    assert!((rect.h - 120.).abs() < 0.01);
+    assert!((rect.x - 100.).abs() < 0.01);
+    assert!((rect.y - 116.).abs() < 0.01);
+    assert!((rect.w - 200.).abs() < 0.01);
+    assert!((rect.h - 100.).abs() < 0.01);
     assert!(matches!(scene.paint.last(), Some(Paint::Svg { .. })));
     assert!(scene.paint.iter().any(|paint| matches!(
         paint,
@@ -120,8 +138,8 @@ fn document_renders_above_checkerboard_and_stays_centered_during_zoom() {
         y: 126.,
     });
     let (rect, _) = vector(&zoomed);
-    assert!((rect.w - 268.8).abs() < 0.01);
-    assert!((rect.h - 134.4).abs() < 0.01);
+    assert!((rect.w - 224.).abs() < 0.01);
+    assert!((rect.h - 112.).abs() < 0.01);
     assert!((rect.x + rect.w / 2. - 200.).abs() < 0.01);
     assert!((rect.y + rect.h / 2. - 166.).abs() < 0.01);
     // An opposite-corner wheel event and every toolbar command must retain the same center.
@@ -174,23 +192,23 @@ fn huge_svg_zoom_stays_inside_protocol_geometry_limits() {
     assert!(rect.x.abs() <= 1_000_000. && rect.y.abs() <= 1_000_000.);
 }
 
-/// Default previews keep their longest edge at 240 logical pixels across viewport resizes.
+/// Automatic fitting follows viewport changes and stops growing at the original image size.
 #[test]
-fn default_preview_uses_240_pixels_and_preserves_aspect_ratio() {
+fn automatic_preview_preserves_ratio_and_restores_intrinsic_size_after_resize() {
     prepare(Environment::default());
     let scene = preview(
         "portrait.svg",
         "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"300\" height=\"600\"/>".into(),
     );
     let rect = vector(&scene).0;
-    assert_eq!((rect.w, rect.h), (120., 240.));
+    assert_eq!((rect.w, rect.h), (134., 268.));
     let resized = canvas(ui::CanvasEvent::Resize {
         width: 900.,
         height: 700.,
         grid: None,
     });
     let rect = vector(&resized).0;
-    assert_eq!((rect.w, rect.h), (120., 240.));
+    assert_eq!((rect.w, rect.h), (300., 600.));
 }
 
 /// The four visible SVG icons behave like clicks, and window fitting follows later resizes.
@@ -220,7 +238,7 @@ fn svg_toolbar_controls_zoom_and_places_percentage_at_right() {
         "all four toolbar controls use real SVG assets"
     );
     assert!(scene.paint.iter().any(|operation| matches!(operation,
-        Paint::Text { x, y, text, .. } if text == "120%" && *x > 300. && *y < 32.
+        Paint::Text { x, y, text, .. } if text == "100%" && *x > 300. && *y < 32.
     )));
     // An unmatched release must not activate a button or change the current image size.
     let unchanged = canvas(ui::CanvasEvent::Pointer {
@@ -231,8 +249,8 @@ fn svg_toolbar_controls_zoom_and_places_percentage_at_right() {
         clicks: 1,
         shift: false,
     });
-    assert!((vector(&unchanged).0.w - 240.).abs() < 0.01);
-    for (index, expected) in [(0, 268.8), (1, 240.), (2, 200.), (3, 352.)] {
+    assert!((vector(&unchanged).0.w - 200.).abs() < 0.01);
+    for (index, expected) in [(0, 224.), (1, 200.), (2, 200.), (3, 352.)] {
         let rect = icons[index];
         canvas(ui::CanvasEvent::Pointer {
             phase: ui::PointerPhase::Down,
@@ -277,7 +295,7 @@ fn percentage_text_inherits_editor_default_typography() {
         "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"480\" height=\"480\"/>".into(),
     );
     assert!(scene.paint.iter().any(|operation| matches!(operation,
-        Paint::Text { text, size, bold, font, .. } if text == "50%" && *size == 18. && *bold
+        Paint::Text { text, size, bold, font, .. } if text == "56%" && *size == 18. && *bold
             && font.as_deref().or(scene.font.family.as_deref()).unwrap() == "Segoe UI"
     )));
     let updated = event(api::Notification::Theme(Environment {
@@ -289,7 +307,7 @@ fn percentage_text_inherits_editor_default_typography() {
         ..Default::default()
     }));
     assert!(updated.paint.iter().any(|operation| matches!(operation,
-        Paint::Text { text, size, bold, font, .. } if text == "50%" && *size == 16. && !*bold
+        Paint::Text { text, size, bold, font, .. } if text == "56%" && *size == 16. && !*bold
             && font.as_deref().or(updated.font.family.as_deref()).unwrap() == "Arial"
     )));
 }

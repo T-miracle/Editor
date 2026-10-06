@@ -1,6 +1,12 @@
 //! Plugin-owned terminal palette, resolved from editor theme tokens and user settings.
 use super::Terminal;
 use plugin_protocol::FontStyle;
+use std::{collections::BTreeMap, sync::LazyLock};
+
+/// Immutable bundled domain defaults are parsed once; themes may override the plugin's public roles.
+static DEFAULTS: LazyLock<serde_json::Value> = LazyLock::new(|| {
+    serde_json::from_str(include_str!("../theme.json")).expect("bundled terminal theme")
+});
 
 /// ANSI names follow Alacritty/VTE indices 0..15, including the bright variants.
 const ANSI_NAMES: [&str; 16] = [
@@ -22,16 +28,17 @@ const ANSI_NAMES: [&str; 16] = [
     "bright_white",
 ];
 
-// The light palette keeps every named foreground at readable contrast on Editor white.
-const LIGHT_ANSI: [u32; 16] = [
-    0x1f2329, 0xb42318, 0x1a7f46, 0x8a5a00, 0x175cd3, 0x8250df, 0x096d83, 0x6c707e, 0x59616e,
-    0xc0322b, 0x167c42, 0x795100, 0x1d64d8, 0x7a3ecc, 0x086e80, 0x1f2329,
-];
-// The dark palette uses the editor's #1e1f22 canvas and #dfe1e5 text as anchors.
-const DARK_ANSI: [u32; 16] = [
-    0x89919b, 0xff7673, 0x82c991, 0xd7ba7d, 0x7aa5f8, 0xc9a7e8, 0x71c6d7, 0xdfe1e5, 0xa6a9b1,
-    0xff8a87, 0x96d6a4, 0xe2c58d, 0x92b7ff, 0xd8b7f0, 0x8fd3df, 0xf7f8fa,
-];
+/// Read immutable defaults from one package resource instead of a duplicate host/guest palette.
+fn bundled_value(dark: bool, path: &str) -> &'static serde_json::Value {
+    path.split('.').fold(
+        &DEFAULTS[if dark { "dark" } else { "light" }],
+        |value, key| &value[key],
+    )
+}
+
+fn bundled_color(dark: bool, path: &str) -> Option<u32> {
+    user_color(bundled_value(dark, path).as_str())
+}
 // Dim SGR colors remain subdued but legible on each editor canvas.
 const LIGHT_DIM: [u32; 8] = [
     0x59616e, 0x9d4a43, 0x327651, 0x775913, 0x3f64a6, 0x7251a6, 0x376b78, 0x626875,
@@ -64,9 +71,48 @@ fn contrast(a: u32, b: u32) -> f32 {
 }
 
 impl Terminal {
+    /// Native terminal collections use the same bounded role map as every other public UI consumer.
+    pub(super) fn content_colors(&self) -> BTreeMap<String, u32> {
+        fn flatten(value: &serde_json::Value, prefix: &str, out: &mut BTreeMap<String, u32>) {
+            if let Some(object) = value.as_object() {
+                for (key, value) in object {
+                    flatten(
+                        value,
+                        &if prefix.is_empty() {
+                            key.clone()
+                        } else {
+                            format!("{prefix}.{key}")
+                        },
+                        out,
+                    );
+                }
+            } else if let Some(color) = value
+                .as_str()
+                .and_then(|value| u32::from_str_radix(value.trim_start_matches('#'), 16).ok())
+            {
+                out.insert(prefix.into(), color);
+            }
+        }
+        let mut colors = BTreeMap::new();
+        flatten(
+            &DEFAULTS[if self.env.dark { "dark" } else { "light" }]["ui"],
+            "",
+            &mut colors,
+        );
+        colors
+    }
     /// Event::Theme replaces the environment; every painted text role resolves on demand.
     pub(super) fn text_style(&self, role: &str, monospace: bool) -> FontStyle {
-        let style = self.env.font_style("terminal", role, monospace);
+        // Role overrides remain user-owned; the package supplies its content/error defaults.
+        let defaults = serde_json::from_value::<FontStyle>(
+            bundled_value(self.env.dark, &format!("typography.{role}")).clone(),
+        )
+        .unwrap_or_default();
+        // Global user typography is an override too; package values are defaults only.
+        let style = self
+            .env
+            .font_style("terminal", role, monospace)
+            .over(defaults);
         FontStyle {
             family: Some(
                 style
@@ -83,18 +129,15 @@ impl Terminal {
         self.env.color("terminal", name)
     }
 
-    /// Let editor themes style plugin-owned controls while preserving host colors as defaults.
+    /// Let user tokens override the same owned defaults published for native controls.
     pub(super) fn ui_color(&self, name: &str, fallback: u32) -> u32 {
-        self.theme_color(&format!("ui.{name}")).unwrap_or(fallback)
+        self.theme_color(&format!("ui.{name}"))
+            .or_else(|| bundled_color(self.env.dark, &format!("ui.{name}")))
+            .unwrap_or(fallback)
     }
 
     /// Active theme tokens win over user settings and plugin-owned defaults.
     pub(super) fn color(&self, index: usize) -> u32 {
-        let ansi = if self.env.dark {
-            &DARK_ANSI
-        } else {
-            &LIGHT_ANSI
-        };
         match index {
             0..=15 => self
                 .theme_color(&format!("ansi.{}", ANSI_NAMES[index]))
@@ -107,7 +150,10 @@ impl Terminal {
                             .map(|palette| palette[index].as_str()),
                     )
                 })
-                .unwrap_or(ansi[index]),
+                .unwrap_or_else(|| {
+                    bundled_color(self.env.dark, &format!("ansi.{}", ANSI_NAMES[index]))
+                        .expect("bundled named ANSI color")
+                }),
             16..=231 => {
                 let n = index - 16;
                 let c = |v| if v == 0 { 0 } else { 55 + 40 * v };
@@ -189,10 +235,9 @@ mod tests {
     /// Every built-in named ANSI color remains readable on its matching editor canvas.
     #[test]
     fn named_colors_have_readable_light_and_dark_contrast() {
-        for (background, palette, dim) in [
-            (0xffffff, LIGHT_ANSI, LIGHT_DIM),
-            (0x1e1f22, DARK_ANSI, DARK_DIM),
-        ] {
+        for (dark, background, dim) in [(false, 0xffffff, LIGHT_DIM), (true, 0x1e1f22, DARK_DIM)] {
+            let palette =
+                ANSI_NAMES.map(|name| bundled_color(dark, &format!("ansi.{name}")).unwrap());
             for color in palette.into_iter().chain(dim) {
                 assert!(contrast(background, color) >= 4.5, "#{color:06x}");
             }

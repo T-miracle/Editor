@@ -70,7 +70,7 @@ impl Manager {
         let transaction = Transaction::new(&self.root, &scope)?;
         // Dependency-only managers can publish unrelated packages; preserve their latest committed records.
         if let Some(bytes) = transaction.registry()? {
-            self.installed = serde_json::from_slice(&bytes)?;
+            self.installed = crate::migration::decode_registry(&bytes)?.0;
         }
         if self.engine.is_none() {
             self.engine = Some(Instance::engine()?);
@@ -216,6 +216,7 @@ impl Manager {
                         .map(|entry| entry.project_enabled.clone())
                         .unwrap_or_default(),
                     global_enabled: None,
+                    retired_ui_contract: false,
                     error: None,
                 },
             );

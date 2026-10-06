@@ -1,0 +1,4 @@
+{
+  "schema_version": 1,
+  "icons": [{"extensions": ["svg", "png", "jpg", "jpeg", "gif", "webp", "bmp", "ico"], "light":"icons/file.svg", "dark":"icons/file_dark.svg"}]
+}

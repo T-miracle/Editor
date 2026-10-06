@@ -6,14 +6,96 @@ pub(super) fn document(document: &Document) -> Result<(), String> {
     if document.version != VERSION {
         return Err("Unsupported UI protocol version".into());
     }
+    if document.content_colors.len() > 64
+        || document.content_colors.iter().any(|(role, color)| {
+            role.is_empty()
+                || role.len() > 128
+                || !role
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-'))
+                || *color > 0xffffff
+        })
+    {
+        return Err("Content color defaults require bounded role keys and RGB values".into());
+    }
+    if let Some(file) = &document.file {
+        file.validate().map_err(|error| error.to_string())?;
+    }
+    if document.editor_layout && document.source.is_none() && document.file.is_none() {
+        return Err("File layout requires a current source or file context".into());
+    }
+    if document.editor_image_input && document.source.is_none() {
+        return Err("Editor image input requires Document.source".into());
+    }
+    if document.code_highlighting && document.source.is_none() {
+        return Err("Code highlighting requires Document.source".into());
+    }
+    if let Some(scroll) = &document.editor_viewport {
+        if document.source.is_none() {
+            return Err("Editor viewport requires Document.source".into());
+        }
+        if document
+            .root
+            .find(scroll)
+            .is_none_or(|node| !matches!(node.kind, Kind::Scroll { .. }))
+        {
+            return Err("Editor viewport requires an active root Scroll".into());
+        }
+    }
     let mut validator = Validator {
         ids: BTreeSet::new(),
         count: 0,
         bytes: 0,
         drawings: 0,
         vectors: 0,
+        images: 0,
+        has_source: document.source.is_some(),
+        has_file: document.file.is_some(),
+        editor_source: document.source.clone(),
+        allow_editor: document.editor_layout,
+        editors: 0,
     };
     validator.node(&document.root, 0)?;
+    if document.tools.len() > 32 {
+        return Err("Too many toolbar contributions".into());
+    }
+    for tool in &document.tools {
+        validator.id(&tool.id)?;
+        validator.budget(1)?;
+        for text in [
+            &tool.label.zh_cn,
+            &tool.label.en,
+            &tool.tooltip.zh_cn,
+            &tool.tooltip.en,
+        ] {
+            if text.is_empty() || text.len() > 512 || text.chars().any(char::is_control) {
+                return Err("Tool labels and tooltips require bounded bilingual text".into());
+            }
+            validator.text(text)?;
+        }
+        tool.icon.validate()?;
+        match &tool.target {
+            ToolTarget::File { version } if document.file.as_ref() == Some(version) => {
+                version.validate().map_err(|error| error.to_string())?;
+            }
+            ToolTarget::Window { panel }
+                if !panel.is_empty()
+                    && panel.len() <= 100
+                    && panel.bytes().all(|byte| {
+                        byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.')
+                    }) => {}
+            _ => return Err("Tool target requires this file or an owned window".into()),
+        }
+    }
+    // Auxiliary surfaces never mount a second native input/IME target.
+    validator.allow_editor = false;
+    if let Some(toolbar) = &document.editor_toolbar {
+        if document.source.is_none() {
+            return Err("Editor toolbar requires Document.source".into());
+        }
+        // The same validator preserves identities and budgets across the host's source/preview surfaces.
+        validator.node(toolbar, 0)?;
+    }
     if let Some(menu) = &document.menu {
         validator.id(&menu.id)?;
         menu.validate()?;
@@ -52,6 +134,16 @@ struct Validator {
     bytes: usize,
     drawings: usize,
     vectors: usize,
+    /// One document owns the combined image budget across its root, toolbar and dialog.
+    images: usize,
+    /// Source mappings are meaningful only in a version-bound preview document.
+    has_source: bool,
+    /// Binary image nodes require an independent file-resource authority.
+    has_file: bool,
+    /// Root-only native borrowing is exact and unique across the complete published tree.
+    editor_source: Option<crate::api::DocumentVersion>,
+    allow_editor: bool,
+    editors: usize,
 }
 impl Validator {
     fn budget(&mut self, count: usize) -> Result<(), String> {
@@ -90,6 +182,50 @@ impl Validator {
         }
         self.budget(1)?;
         self.id(&node.id)?;
+        if node.layout.resizable
+            && (node.layout.wrap
+                || !matches!(&node.kind,
+            Kind::Row {children}|Kind::Column{children} if (2..=16).contains(&children.len())))
+        {
+            return Err(
+                "Resizable panes require 2..16 Row/Column children without wrapping".into(),
+            );
+        }
+        if !node.links.is_empty() {
+            if !matches!(
+                node.kind,
+                Kind::RichText { .. } | Kind::Image { .. } | Kind::Text { .. }
+            ) {
+                return Err("Only read-only content can declare native links".into());
+            }
+            if !matches!(node.kind, Kind::RichText { .. }) && node.links.len() > 1 {
+                return Err("An image or alternative text has one native link target".into());
+            }
+            // Focus targets consume the same whole-tree control budget, even inside one rich block.
+            self.budget(node.links.len())?;
+            for link in &node.links {
+                if link.uri.is_empty()
+                    || link.uri.len() > 4096
+                    || link.uri.chars().any(char::is_control)
+                    || link.label.len() > 256
+                {
+                    return Err("Invalid native link target".into());
+                }
+                self.text(&link.uri)?;
+                self.text(&link.label)?;
+            }
+        }
+        if let Some(tooltip) = &node.tooltip {
+            self.text(tooltip)?;
+        }
+        if let Some(range) = node.source_range {
+            if !self.has_source {
+                return Err("UI source ranges require Document.source".into());
+            }
+            if range.start > range.end || range.end > 1024 * 1024 {
+                return Err("Invalid UI source range".into());
+            }
+        }
         if node.role.len() > 128 {
             return Err("UI theme role too long".into());
         }
@@ -100,6 +236,17 @@ impl Validator {
         dimension(layout.gap, 0., 256.)?;
         dimension(layout.padding, 0., 256.)?;
         match &node.kind {
+            Kind::NativeEditor { document } => {
+                self.editors += 1;
+                if !self.allow_editor
+                    || self.editors > 1
+                    || self.editor_source.as_ref() != Some(document)
+                {
+                    return Err(
+                        "Native editor must uniquely reference this layout's exact source".into(),
+                    );
+                }
+            }
             Kind::SideTabs(tabs) => {
                 if tabs.id != node.id {
                     return Err("Item list identity differs from its node".into());
@@ -140,6 +287,54 @@ impl Validator {
             }
             Kind::Scroll { content } => self.node(content, depth + 1)?,
             Kind::Text { text } => self.text(text)?,
+            Kind::RichText { html } => {
+                self.text(html)?;
+                // Bound the generated native markup tree too, including dense empty/table tags.
+                // Counting delimiters is deliberately conservative and never interprets Markdown.
+                self.budget(html.bytes().filter(|byte| *byte == b'<').count())?;
+            }
+            Kind::CodeBlock { text, language } => {
+                self.text(text)?;
+                self.budget(text.lines().count())?;
+                if let Some(language) = language
+                    && (language.is_empty()
+                        || language.len() > 100
+                        || !language
+                            .bytes()
+                            .all(|byte| byte.is_ascii_alphanumeric() || b"._+-#".contains(&byte)))
+                {
+                    return Err(
+                        "Code language IDs must use 1..100 ASCII identifier characters".into(),
+                    );
+                }
+                if let Some(language) = language {
+                    self.text(language)?;
+                }
+            }
+            Kind::FileImage { alt, .. } => {
+                if !self.has_file {
+                    return Err("File image requires Document.file".into());
+                }
+                self.images += 1;
+                if self.images > 64 {
+                    return Err("UI image quota exceeded".into());
+                }
+                self.text(alt)?;
+            }
+            Kind::Image { source, alt } => {
+                if !self.has_source {
+                    return Err("Images require Document.source".into());
+                }
+                self.images += 1;
+                if self.images > 64 {
+                    return Err("Image node quota exceeded".into());
+                }
+                if source.is_empty() || source.len() > 4096 {
+                    return Err("Image URI must use 1..4096 UTF-8 bytes".into());
+                }
+                self.text(source)?;
+                self.text(alt)?;
+            }
             Kind::Button { label } | Kind::Checkbox { label, .. } => self.text(label)?,
             Kind::Input(input) => {
                 self.text(&input.value)?;

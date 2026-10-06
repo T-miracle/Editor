@@ -269,6 +269,23 @@ impl State {
                 "workspace.read"
             }
             api::Operation::Editor { operation, .. } => match operation {
+                api::EditorOperation::NavigateDocument { target, .. } => {
+                    // A service source must delegate both base editor access and the target grant.
+                    // External navigation remains unavailable through the current service whitelist.
+                    if !context.permissions.contains("editor.read") {
+                        return Err(Failure::new(
+                            ErrorCode::PermissionDenied,
+                            "Service source did not delegate editor.read",
+                        ));
+                    }
+                    super::editor_requests::navigation_permission(target)
+                }
+                api::EditorOperation::SaveImageInput { .. } => {
+                    return Err(Failure::new(
+                        ErrorCode::PermissionDenied,
+                        "Native image offers cannot be delegated through services",
+                    ));
+                }
                 api::EditorOperation::ReadClipboard
                 | api::EditorOperation::WriteClipboard { .. } => "clipboard",
                 api::EditorOperation::OpenDataFile { .. } => {
@@ -277,7 +294,9 @@ impl State {
                         "Service calls cannot open private provider files",
                     ));
                 }
-                api::EditorOperation::SaveDocument { .. } => "editor.write",
+                // Delegated range edits cannot borrow the provider's stronger write grant.
+                api::EditorOperation::SaveDocument { .. }
+                | api::EditorOperation::ReplaceDocumentRange { .. } => "editor.write",
                 api::EditorOperation::SetPanelVisibility { .. } => "ui.panels",
                 _ => "editor.read",
             },

@@ -1,10 +1,10 @@
 //! Render portable trees through gpui-base behavior with editor-owned appearance.
 use super::*;
-use crate::ui::controls::{Button, ButtonCustomVariant, Input, vertical_scrollbar};
-use gpui_base::{Checkbox, CheckboxState, Dialog, Progress, Radio, RadioGroup, Tab, Tabs};
+use crate::ui::controls::{Button, ButtonCustomVariant};
+use gpui_base::Dialog;
 use gpui_kit::{
-    AnyElement, InteractiveElement, ParentElement, SharedString, StatefulInteractiveElement,
-    Styled, div, prelude::FluentBuilder as _, px, relative,
+    AnyElement, InteractiveElement, ParentElement, SharedString, Styled, div,
+    prelude::FluentBuilder as _, px,
 };
 use plugin_runtime::plugin_protocol::ui::Node;
 
@@ -15,18 +15,33 @@ impl PluginView {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         self.sync_widgets(window, cx);
+        self.sync_code_highlighting(cx);
+        let viewport_frame = self.begin_viewport_frame();
+        let revision = self.document.revision;
         let root = self.document.root.clone();
         let body = self.node(&root, false, window, cx);
         let mut view = div()
-            .size_full()
+            .w_full()
+            .when(!self.content_sized, |view| view.h_full())
+            .when(self.content_sized, |view| view.h_auto().flex_shrink_0())
             .flex()
             .flex_col()
+            .tab_group()
+            .track_focus(&self.view_focus)
+            .capture_key_down(cx.listener(|view, _, window, cx| {
+                // Register on the focused root's ancestry; an overlay's paint node may be a sibling.
+                if view.view_focus.contains_focused(window, cx) {
+                    view.viewport.cancel_locate();
+                }
+            }))
             .relative()
             .overflow_hidden()
             .bg(self.colors("container", cx).background)
             .child(body);
         // Popup anchors use this composed view's native origin, never the containing editor window origin.
         let owner = cx.entity().downgrade();
+        let released = cx.entity().downgrade();
+        let viewport = cx.entity().downgrade();
         view = view.child(
             gpui_kit::canvas(
                 move |bounds, _, cx| {
@@ -37,14 +52,63 @@ impl PluginView {
                         }
                     });
                 },
-                |_, _, _, _| {},
+                move |_, _, window, cx| {
+                    // All source blocks have completed prepaint before this composed view paints.
+                    let _ = viewport.update(cx, |view, cx| {
+                        view.finish_viewport_frame(viewport_frame, revision, cx);
+                    });
+                    let input = viewport.clone();
+                    window.on_mouse_event(
+                        move |event: &gpui_kit::ScrollWheelEvent, phase, _, cx| {
+                            if phase.capture() {
+                                let _ = input.update(cx, |view, _| {
+                                    view.viewport_wheel(event.position, revision);
+                                });
+                            }
+                        },
+                    );
+                    // A scrollbar press supersedes a queued locate before Base begins its native drag.
+                    let pointer = viewport.clone();
+                    window.on_mouse_event(move |event: &gpui_kit::MouseDownEvent, phase, _, cx| {
+                        if phase.capture() {
+                            let _ = pointer.update(cx, |view, _| {
+                                view.viewport_pointer_down(event.position, revision)
+                            });
+                        }
+                    });
+                    let drag = viewport.clone();
+                    window.on_mouse_event(move |event: &gpui_kit::MouseMoveEvent, phase, _, cx| {
+                        // A request can arrive after the press; every held move renews manual ownership.
+                        if phase.capture() && event.pressed_button.is_some() {
+                            let _ = drag.update(cx, |view, _| view.viewport_pointer_move());
+                        }
+                    });
+                    // Every release ends ownership, including releases outside the link's hit box.
+                    // Defer cleanup so Base can consume a matching link release in this dispatch.
+                    let released = released.clone();
+                    window.on_mouse_event(move |_: &gpui_kit::MouseUpEvent, phase, _, cx| {
+                        if phase.capture() {
+                            let _ = released.update(cx, |view, _| view.viewport_pointer_up());
+                            let released = released.clone();
+                            cx.defer(move |cx| {
+                                let _ = released.update(cx, |view, _| view.link_press = None);
+                            });
+                        }
+                    });
+                },
             )
             .absolute()
             .size_full(),
         );
         if let Some(popup) = &self.popup {
             // Menus overlay their owner; a full-size widget must not consume a second flex row.
-            view = view.child(div().absolute().inset_0().child(popup.clone()));
+            view = view.child(
+                div()
+                    .debug_selector(|| "plugin-popup-menu".into())
+                    .absolute()
+                    .inset_0()
+                    .child(popup.clone()),
+            );
         }
         if let Some(dialog) = self.document.dialog.clone() {
             // Dismiss stays blocked until the guest acknowledges it by removing the modal.
@@ -122,7 +186,7 @@ impl PluginView {
         view.into_any_element()
     }
 
-    fn node(
+    pub(super) fn node(
         &mut self,
         node: &Node,
         parent_disabled: bool,
@@ -130,246 +194,55 @@ impl PluginView {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let disabled = node.disabled || parent_disabled;
-        let colors = self.colors(node.theme_role(), cx);
-        let id = node.id.clone();
-        let native_id = SharedString::from(format!("plugin-ui-{}", node.id));
-        let content = match &node.kind {
-            Kind::SideTabs(_) => self.collections[&node.id].clone().into_any_element(),
-            Kind::Canvas(_) => self.canvases[&node.id].clone().into_any_element(),
-            Kind::Column { children } | Kind::Row { children } => {
-                let children: Vec<_> = children
-                    .iter()
-                    .map(|n| self.node(n, disabled, window, cx))
-                    .collect();
-                div()
-                    .flex()
-                    .flex_1()
-                    .min_w_0()
-                    .min_h_0()
-                    .gap(px(node.layout.gap))
-                    .when(matches!(node.kind, Kind::Column { .. }), |v| v.flex_col())
-                    .children(children)
-                    .into_any_element()
-            }
-            Kind::Scroll { content } => {
-                let child = self.node(content, disabled, window, cx);
-                let handle = self.scrolls.get(&node.id).cloned().unwrap_or_default();
-                div()
-                    .relative()
-                    .size_full()
-                    .min_h_0()
-                    .child(
-                        div()
-                            .id(native_id.clone())
-                            .size_full()
-                            .overflow_y_scroll()
-                            .track_scroll(&handle)
-                            .child(child),
-                    )
-                    .child(
-                        div()
-                            .absolute()
-                            .inset_0()
-                            .child(vertical_scrollbar(&handle, cx)),
-                    )
-                    .into_any_element()
-            }
-            Kind::Text { text } => div().child(text.clone()).into_any_element(),
-            Kind::Button { label } => self
-                .font(
-                    Button::new(native_id.clone())
-                        .label(label.clone())
-                        .disabled(disabled)
-                        .border_color(colors.border)
-                        .custom(
-                            ButtonCustomVariant::new(cx)
-                                .color(colors.background)
-                                .foreground(colors.foreground)
-                                .hover(colors.hover)
-                                .active(colors.active),
-                        )
-                        .on_click(
-                            cx.listener(move |this, _, _, cx| this.emit(&id, Action::Click, cx)),
-                        ),
-                    node.theme_role(),
-                )
-                .into_any_element(),
-            Kind::Input(_) => self
-                .font(
-                    Input::new(&self.inputs[&node.id].state)
-                        .bg(colors.background)
-                        .text_color(colors.foreground)
-                        .border_color(colors.border),
-                    node.theme_role(),
-                )
-                .into_any_element(),
-            Kind::Checkbox { label, checked } => {
-                let owner = cx.entity().downgrade();
-                let marker = div()
-                    .size(px(16.))
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .border_1()
-                    .border_color(colors.border)
-                    .rounded(px(3.))
-                    .bg(if *checked {
-                        colors.accent
-                    } else {
-                        colors.background
-                    })
-                    .text_color(colors.accent_foreground)
-                    .when(*checked, |v| v.child("✓"));
-                self.font(
-                    Checkbox::new(native_id.clone())
-                        .checked(*checked)
-                        .disabled(disabled)
-                        .accessibility_label(label.clone())
-                        .flex()
-                        .items_center()
-                        .gap_2()
-                        .on_change(move |state, _, _, cx| {
-                            let _ = owner.update(cx, |this, cx| {
-                                this.emit(&id, Action::Toggle(state == CheckboxState::Checked), cx)
-                            });
-                        })
-                        .child(marker)
-                        .child(label.clone()),
-                    node.theme_role(),
-                )
-                .into_any_element()
-            }
-            Kind::Choice { options, selected } => {
-                let mut group = RadioGroup::new(native_id.clone()).flex().flex_col().gap_2();
-                for (index, option) in options.iter().enumerate() {
-                    let owner = cx.entity().downgrade();
-                    let checked = selected.as_ref() == Some(&option.id);
-                    let node_id = node.id.clone();
-                    let option_id = option.id.clone();
-                    let marker = div()
-                        .size(px(14.))
-                        .rounded_full()
-                        .border_1()
-                        .border_color(colors.border)
-                        .bg(if checked {
-                            colors.accent
-                        } else {
-                            colors.background
-                        });
-                    group = group.child(
-                        Radio::new(SharedString::from(format!("{}-option-{index}", node.id)))
-                            .checked(checked)
-                            .disabled(disabled || option.disabled)
-                            .accessibility_label(option.label.clone())
-                            .set_position(index + 1, options.len())
-                            .flex()
-                            .items_center()
-                            .gap_2()
-                            .on_change(move |_, _, _, cx| {
-                                let _ = owner.update(cx, |this, cx| {
-                                    this.emit(&node_id, Action::Select(option_id.clone()), cx)
-                                });
-                            })
-                            .child(marker)
-                            .child(option.label.clone()),
-                    );
-                }
-                group.into_any_element()
-            }
-            Kind::Tabs { tabs, selected } => {
-                let mut strip = Tabs::new(native_id.clone())
-                    .flex()
-                    .gap_1()
-                    .border_b_1()
-                    .border_color(colors.border);
-                for (index, tab) in tabs.iter().enumerate() {
-                    let node_id = node.id.clone();
-                    let tab_id = tab.id.clone();
-                    strip = strip.child(
-                        Tab::new(SharedString::from(format!("{}-tab-{index}", node.id)))
-                            .selected(&tab.id == selected)
-                            .disabled(disabled)
-                            .accessibility_label(tab.label.clone())
-                            .set_position(index + 1, tabs.len())
-                            .px_3()
-                            .py_2()
-                            .bg(if &tab.id == selected {
-                                colors.active
-                            } else {
-                                colors.background
-                            })
-                            .hover(|s| s.bg(colors.hover))
-                            .on_click(cx.listener(move |this, _, _, cx| {
-                                this.emit(&node_id, Action::Select(tab_id.clone()), cx)
-                            }))
-                            .child(tab.label.clone()),
-                    );
-                }
-                let mut body = div().flex().flex_col().gap_2().child(strip);
-                if let Some(tab) = tabs.iter().find(|t| &t.id == selected) {
-                    body = body.child(self.node(&tab.content, disabled, window, cx));
-                }
-                body.into_any_element()
-            }
-            Kind::List { items } => div()
-                .flex()
-                .flex_col()
-                .gap_1()
-                .children(items.iter().map(|text| div().py_1().child(text.clone())))
-                .into_any_element(),
-            Kind::Table { headers, rows } => {
-                let mut table = div()
-                    .flex()
-                    .flex_col()
-                    .border_1()
-                    .border_color(colors.border);
-                for (index, row) in std::iter::once(headers).chain(rows).enumerate() {
-                    table = table.child(
-                        div()
-                            .flex()
-                            .when(index == 0, |v| v.bg(colors.active))
-                            .border_b_1()
-                            .border_color(colors.border)
-                            .children(
-                                row.iter()
-                                    .map(|cell| div().flex_1().min_w_0().p_2().child(cell.clone())),
-                            ),
-                    );
-                }
-                table.into_any_element()
-            }
-            Kind::Separator => div()
-                .w_full()
-                .h(px(1.))
-                .bg(colors.border)
-                .into_any_element(),
-            Kind::Progress { label, value } => Progress::new(native_id.clone())
-                .value(*value)
-                .accessibility_label(label.clone())
-                .h(px(8.))
-                .w_full()
-                .rounded(px(4.))
-                .bg(colors.background)
-                .border_1()
-                .border_color(colors.border)
-                .child(
-                    div()
-                        .h_full()
-                        .w(relative(*value / 100.))
-                        .bg(colors.accent)
-                        .rounded(px(4.)),
-                )
-                .into_any_element(),
-            Kind::Spacer => div().min_h(px(8.)).into_any_element(),
+        // Recursive geometry/editor borrowing stays outside the large leaf control renderer's stack.
+        let content = if matches!(
+            node.kind,
+            Kind::NativeEditor { .. }
+                | Kind::Row { .. }
+                | Kind::Column { .. }
+                | Kind::Scroll { .. }
+                | Kind::Tabs { .. }
+        ) {
+            self.layout_node(node, disabled, window, cx)
+        } else {
+            self.leaf_node(node, disabled || !self.scene_current.get(), window, cx)
         };
+        let content = self.linked_content(
+            content,
+            node,
+            disabled || !self.scene_current.get(),
+            window,
+            cx,
+        );
+        self.node_shell(node, disabled, content, cx)
+    }
+
+    /// Build decoration after descendants return: GPUI builder temporaries must not occupy
+    /// every recursive frame of a nested list/table/tree on the default native thread stack.
+    #[inline(never)]
+    fn node_shell(
+        &self,
+        node: &Node,
+        disabled: bool,
+        content: AnyElement,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let colors = self.colors(node.theme_role(), cx);
         let debug_id = format!("plugin-ui-{}", node.id);
+        let owner = cx.entity().downgrade();
+        let block = node.id.clone();
+        let revision = self.document.revision;
+        let pressed_node = node.id.clone();
         self.font(
             div()
                 .id(SharedString::from(format!("plugin-ui-{}-wrapper", node.id)))
+                .relative()
                 .debug_selector(move || debug_id.clone())
                 .flex()
                 .flex_col()
                 .flex_shrink_0()
+                // Wrapped groups need a bounded outer box as well as a wrapping inner flex row.
+                .when(node.layout.wrap, |wrapper| wrapper.max_w_full())
                 .min_w_0()
                 .min_h_0()
                 .when(node.layout.grow, |v| v.flex_1())
@@ -379,7 +252,34 @@ impl PluginView {
                 .bg(colors.background)
                 .text_color(colors.foreground)
                 .when(disabled, |v| v.opacity(0.5))
-                .child(content),
+                .child(content)
+                .when(
+                    self.document.link_events
+                        && matches!(node.kind, Kind::RichText { .. })
+                        && !disabled,
+                    |view| {
+                        view.capture_any_mouse_down(cx.listener(move |this, event, _, _| {
+                            this.press_link(&pressed_node, revision, event);
+                        }))
+                    },
+                )
+                .when(
+                    node.source_range.is_some() || !node.links.is_empty(),
+                    |view| {
+                        view.child(
+                            gpui_kit::canvas(
+                                move |bounds, _, cx| {
+                                    let _ = owner.update(cx, |this, cx| {
+                                        this.measure_block(&block, revision, bounds, cx);
+                                    });
+                                },
+                                |_, _, _, _| {},
+                            )
+                            .absolute()
+                            .size_full(),
+                        )
+                    },
+                ),
             node.theme_role(),
         )
         .into_any_element()

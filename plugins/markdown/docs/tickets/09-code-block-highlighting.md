@@ -1,0 +1,33 @@
+# 09 — 使用已启用语言提供者高亮预览代码块
+
+**Status:** completed — 实际包、独立提供者、SDK 与原生行为已通过[验证](../verification/09-code-block-highlighting.md)，Git 交付及 #35 关闭随后独立读回。
+
+**GitHub:** [#35](https://github.com/T-miracle/Editor/issues/35)；父方案 [#26](https://github.com/T-miracle/Editor/issues/26)。
+
+**规格：** [Markdown 插件总方案](../spec.md)。验收覆盖：M12、M06、M14、M16。
+
+## What to build
+
+围栏代码块按已启用语言提供者高亮，提供者缺失或停用时仍可阅读等宽代码。
+
+## Acceptance criteria
+
+- [x] 通过通用公开能力请求已选语言提供者的高亮；不按插件 ID 或特定语言名添加宿主分支。
+- [x] 无标记、未知语言、缺少或失败提供者时保留等宽文本及代码块样式。
+- [x] 安装、替换和停用提供者后重新渲染正确，迟到结果同时校验源文档与提供者有效性。
+- [x] 代码块文本保持只读派生数据，不进入第二个可变文档或撤销栈。
+- [x] 以实际语言包和独立提供者夹具验证热切换、降级与公开能力兼容。
+
+## Blocked by
+
+- 02 — 编辑未保存 Markdown 并实时查看原生分栏预览
+
+## Implementation guardrails
+
+不引入宿主内建 grammar，不额外启动代码块 LSP。
+
+遵守插件根部 AI 执行约定。所需接口、权限、宿主接入、插件行为、SDK 与可观察回归在本单闭环；必要预重构先保持行为并验证，不能以占位 UI 或仅协议声明完成工单。保留其他任务改动，新增代码同步补注释。
+
+## Verification
+
+沿真实插件包、公开管理器、原生编辑器交互主接缝验证以上验收项。先运行针对性回归，再执行仓库要求的格式、非 UI workspace 测试与 workspace 编译；涉及 editor-app 追加相关测试和原生验收，实际 WASM 测试先构建再显式运行。记录失败归因与未验证内容，不以 mocked 内部结果替代完整行为。

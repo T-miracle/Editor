@@ -16,6 +16,35 @@ use std::process::Command;
 
 const SDK_FILES: &[(&str, &[u8])] = &[
     (
+        "src/api/preference_binding.rs",
+        include_bytes!("../../plugin-protocol/src/api/preference_binding.rs"),
+    ),
+    ("TOOLS.md", include_bytes!("../../plugin-protocol/TOOLS.md")),
+    (
+        "src/ui/layout_tests.rs",
+        include_bytes!("../../plugin-protocol/src/ui/layout_tests.rs"),
+    ),
+    (
+        "VIEWPORT.md",
+        include_bytes!("../../plugin-protocol/VIEWPORT.md"),
+    ),
+    (
+        "src/api/viewport.rs",
+        include_bytes!("../../plugin-protocol/src/api/viewport.rs"),
+    ),
+    (
+        "CODE_HIGHLIGHTING.md",
+        include_bytes!("../../plugin-protocol/CODE_HIGHLIGHTING.md"),
+    ),
+    (
+        "NAVIGATION.md",
+        include_bytes!("../../plugin-protocol/NAVIGATION.md"),
+    ),
+    (
+        "src/api/navigation.rs",
+        include_bytes!("../../plugin-protocol/src/api/navigation.rs"),
+    ),
+    (
         "MIGRATION.md",
         include_bytes!("../../../website/src/content/docs/en/sdk/migration.md"),
     ),
@@ -34,6 +63,14 @@ const SDK_FILES: &[(&str, &[u8])] = &[
     (
         "src/ui/events.rs",
         include_bytes!("../../plugin-protocol/src/ui/events.rs"),
+    ),
+    (
+        "src/ui/tools.rs",
+        include_bytes!("../../plugin-protocol/src/ui/tools.rs"),
+    ),
+    (
+        "src/ui/tools_tests.rs",
+        include_bytes!("../../plugin-protocol/src/ui/tools_tests.rs"),
     ),
     (
         "src/ui/canvas.rs",
@@ -70,6 +107,10 @@ const SDK_FILES: &[(&str, &[u8])] = &[
     (
         "src/api/guest.rs",
         include_bytes!("../../plugin-protocol/src/api/guest.rs"),
+    ),
+    (
+        "src/api/preferences.rs",
+        include_bytes!("../../plugin-protocol/src/api/preferences.rs"),
     ),
     (
         "src/ui/controls.rs",
@@ -110,6 +151,14 @@ const SDK_FILES: &[(&str, &[u8])] = &[
     (
         "src/ui/tests.rs",
         include_bytes!("../../plugin-protocol/src/ui/tests.rs"),
+    ),
+    (
+        "src/ui/images_tests.rs",
+        include_bytes!("../../plugin-protocol/src/ui/images_tests.rs"),
+    ),
+    (
+        "src/api/images_tests.rs",
+        include_bytes!("../../plugin-protocol/src/api/images_tests.rs"),
     ),
     (
         "wit/plugin.wit",
@@ -233,11 +282,19 @@ fn payload(name: &str, bytes: &'static [u8]) -> Vec<u8> {
     let Ok(text) = std::str::from_utf8(bytes) else {
         return bytes.to_vec();
     };
-    let Some(rest) = text.strip_prefix("---\n") else {
+    // Windows checkouts may use CRLF. Only remove the frontmatter and its line breaks;
+    // retain body bytes so cache validation still compares exactly what is exported.
+    let Some(rest) = text
+        .strip_prefix("---\r\n")
+        .or_else(|| text.strip_prefix("---\n"))
+    else {
         return bytes.to_vec();
     };
     match rest.find("\n---") {
-        Some(end) => rest[end + 4..].trim_start_matches('\n').as_bytes().to_vec(),
+        Some(end) => rest[end + 4..]
+            .trim_start_matches(['\r', '\n'])
+            .as_bytes()
+            .to_vec(),
         // An unterminated block is not frontmatter; export the text unchanged.
         None => bytes.to_vec(),
     }
@@ -314,6 +371,12 @@ mod tests {
         assert_eq!(
             String::from_utf8(payload("DOC.md", with_frontmatter)).unwrap(),
             "# Heading\n\nBody.\n"
+        );
+        // A Windows checkout must export the same heading, preserving the body's own CRLF.
+        let windows_frontmatter = b"---\r\ntitle: Example\r\n---\r\n\r\n# Heading\r\n\r\nBody.\r\n";
+        assert_eq!(
+            payload("DOC.md", windows_frontmatter),
+            b"# Heading\r\n\r\nBody.\r\n"
         );
         let without_frontmatter = b"# Heading\n\nBody.\n";
         assert_eq!(payload("DOC.md", without_frontmatter), without_frontmatter);

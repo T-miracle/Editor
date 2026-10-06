@@ -16,6 +16,40 @@ use std::{cell::RefCell, rc::Rc};
 
 /// Remove only the isolated workspace's generated session file, including on assertion failure.
 struct SessionFile(PathBuf);
+
+/// A successful private write acknowledges one unchanged bundle, never newer or unrelated settings.
+#[test]
+fn legacy_display_import_preserves_future_and_unrelated_session_data() {
+    let directory = tempfile::tempdir().unwrap();
+    let mut state = SessionState::for_workspace(directory.path());
+    let _cleanup = SessionFile(state.file_path().unwrap());
+    state
+        .legacy_preview_modes
+        .insert("owner/preview".into(), serde_json::json!("split"));
+    state
+        .legacy_preview_sync
+        .insert("owner/preview".into(), false);
+    state
+        .legacy_preview_modes
+        .insert("other/preview".into(), serde_json::json!({"future":2}));
+    state.explorer_reveal_on_tab_switch = true;
+    let bundle = state.legacy_display_payload("owner/preview").unwrap();
+    state
+        .legacy_preview_modes
+        .insert("owner/preview".into(), serde_json::json!("source"));
+    assert!(!state.acknowledge_display_import("owner/preview", &bundle));
+    let newest = state.legacy_display_payload("owner/preview").unwrap();
+    assert!(state.acknowledge_display_import("owner/preview", &newest));
+    assert!(!state.acknowledge_display_import("owner/preview", &newest));
+    state.save();
+    let restored = SessionState::load(directory.path());
+    assert!(restored.legacy_display_payload("owner/preview").is_none());
+    assert_eq!(
+        restored.legacy_display_payload("other/preview").unwrap()["mode"],
+        serde_json::json!({"future":2})
+    );
+    assert!(restored.explorer_reveal_on_tab_switch);
+}
 impl Drop for SessionFile {
     fn drop(&mut self) {
         let _ = fs::remove_file(&self.0);
@@ -157,6 +191,7 @@ fn plugin_dock_layout_survives_delayed_startup(cx: &mut TestAppContext) {
         enabled: true,
         project_enabled: Default::default(),
         global_enabled: None,
+        retired_ui_contract: false,
         error: None,
     };
     let registry = workspace.root().join(".runtime-plugin-test");

@@ -1,6 +1,6 @@
 [package]
 name = "capability-example-guest"
-version = "0.15.1"
+version = "0.15.9"
 edition = "2024"
 rust-version = "1.95"
 license = "MIT"

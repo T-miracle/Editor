@@ -35,6 +35,7 @@ fn host_command_reveals_hidden_terminal_and_preserves_arguments(cx: &mut TestApp
                 enabled: true,
                 project_enabled: Default::default(),
                 global_enabled: None,
+                retired_ui_contract: false,
                 error: None,
             }];
             state.views.insert(
@@ -135,6 +136,7 @@ fn plugin_hide_requests_are_scoped_and_reclaim_the_empty_dock(cx: &mut TestAppCo
                     enabled: true,
                     project_enabled: Default::default(),
                     global_enabled: None,
+                    retired_ui_contract: false,
                     error: None,
                 });
                 state.views.insert(
@@ -237,6 +239,7 @@ fn native_panel_clicks_are_scoped_to_the_declared_surface(cx: &mut TestAppContex
                 enabled: true,
                 project_enabled: Default::default(),
                 global_enabled: None,
+                retired_ui_contract: false,
                 error: None,
             }];
             state
@@ -329,6 +332,7 @@ fn canvas_controls_sidebar_routes_ui_without_canvas_pointer_events(cx: &mut Test
                 enabled: true,
                 project_enabled: Default::default(),
                 global_enabled: None,
+                retired_ui_contract: false,
                 error: None,
             }];
             state

@@ -23,6 +23,12 @@ pub struct Highlighter {
     pub grammar_name: String,
     pub grammar: PathBuf,
     pub highlights: PathBuf,
+    /// Optional Tree-sitter query composing other explicitly selected WASM grammar providers.
+    #[serde(default)]
+    pub injections: Option<PathBuf>,
+    /// Only these language identities may be resolved by this provider's injection query.
+    #[serde(default)]
+    pub injection_languages: Vec<String>,
     pub tree_sitter_abi: u32,
 }
 
@@ -86,6 +92,18 @@ pub(super) fn validate(manifest: &PluginManifest) -> Result<(), ManifestError> {
         }
         for path in [&provider.grammar, &provider.highlights] {
             super::validate_relative_path(path).map_err(|_| invalid())?;
+        }
+        if let Some(path) = &provider.injections {
+            super::validate_relative_path(path).map_err(|_| invalid())?;
+        }
+        if provider.injection_languages.len() > 64
+            || !provider
+                .injection_languages
+                .iter()
+                .all(|name| id(name) && name != "text")
+            || provider.injections.is_none() && !provider.injection_languages.is_empty()
+        {
+            return Err(invalid());
         }
     }
     Ok(())

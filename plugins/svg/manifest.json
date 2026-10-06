@@ -1,20 +1,46 @@
 {
   "id": "svg",
-  "name": "SVG",
-  "version": "0.2.1",
+  "name": "Image",
+  "version": "0.5.0",
   "protocol": 7,
-  "api": {"base":"^1","required":{"ui.native":"^1","ui.canvas":">=1.1, <2","editor.documents":"^1"}},
+  "api": {
+    "base": "^1",
+    "required": {
+      "ui.native": ">=1.1, <2",
+      "ui.canvas": ">=1.1, <2",
+      "ui.file_images": "^1",
+      "editor.files": "^1",
+      "editor.documents": "^1",
+      "editor.layout": "^1",
+      "ui.tools": "^1",
+      "storage.private": ">=1.1, <2"
+    }
+  },
   "component": "svg.wasm",
-  "permissions": ["editor.read"],
-  "storage_limit": 1024,
+  "permissions": [
+    "editor.read",
+    "workspace.read",
+    "storage"
+  ],
+  "storage_limit": 8192,
   "panels": [
     {
       "id": "preview",
-      "title": "SVG",
+      "title": "Image",
       "position": "editor",
-      "file_extensions": ["svg"],
+      "file_extensions": [
+        "svg"
+      ],
+      "readonly_file_extensions": [
+        "png",
+        "jpg",
+        "jpeg",
+        "gif",
+        "webp"
+      ],
       "default_visible": true
     }
   ],
-  "commands": []
+  "commands": [],
+  "contributions": "plugin.toml"
 }

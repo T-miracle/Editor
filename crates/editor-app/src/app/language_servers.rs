@@ -165,8 +165,8 @@ impl EditorApp {
             }
         }
         let mut documents_changed = false;
-        for tab in &self.tabs {
-            let path = tab.session.path();
+        for tab in self.tabs.iter().filter_map(|file| file.text.as_ref()) {
+            let path = tab.path();
             let language = editor::language_for_path(path);
             let previous = tab.editor.read(cx).language_name().to_string();
             if !changed && previous == language {

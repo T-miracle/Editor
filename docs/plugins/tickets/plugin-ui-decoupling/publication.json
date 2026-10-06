@@ -1,0 +1,102 @@
+{
+  "repository": "T-miracle/Editor",
+  "date": "2026-10-05",
+  "label": "ready-for-agent",
+  "method": "authenticated-github-rest",
+  "parent": {
+    "key": "plugin-ui-decoupling",
+    "file": "docs/plugins/specs/plugin-ui-decoupling.md",
+    "title": "[Spec] 插件 UI 解耦与文件显示布局总方案",
+    "number": 61,
+    "id": 5713739646,
+    "url": "https://github.com/T-miracle/Editor/issues/61"
+  },
+  "tickets": [
+    {
+      "key": "plugin-ui-decoupling/01-file-views",
+      "file": "docs/plugins/tickets/plugin-ui-decoupling/01-file-views.md",
+      "title": "[UI] 01 — 将 SVG 升级为 Image，并打通图片文件显示",
+      "number": 62,
+      "state": "closed",
+      "verified_commit": "330d092bef163cee99abcd7ae197b45499ee2f71",
+      "id": 5714684032,
+      "url": "https://github.com/T-miracle/Editor/issues/62",
+      "body_matches": true,
+      "blocked_by": []
+    },
+    {
+      "key": "plugin-ui-decoupling/02-composable-layouts",
+      "file": "docs/plugins/tickets/plugin-ui-decoupling/02-composable-layouts.md",
+      "title": "[UI] 02 — 可组合编辑布局与提供者选择",
+      "number": 63,
+      "state": "closed",
+      "verified_commit": "bcdb76d00371a1e1f063013b0edff711610b9636",
+      "id": 5714685719,
+      "url": "https://github.com/T-miracle/Editor/issues/63",
+      "body_matches": true,
+      "blocked_by": [
+        62
+      ]
+    },
+    {
+      "key": "plugin-ui-decoupling/03-tool-groups-and-preferences",
+      "file": "docs/plugins/tickets/plugin-ui-decoupling/03-tool-groups-and-preferences.md",
+      "title": "[UI] 03 — 两组底栏与共享显示偏好",
+      "number": 64,
+      "state": "closed",
+      "verified_commit": "d105aa00a0cd801e6c62e2a9d96d34b8e258f509",
+      "id": 5714686054,
+      "url": "https://github.com/T-miracle/Editor/issues/64",
+      "body_matches": true,
+      "blocked_by": [
+        63
+      ]
+    },
+    {
+      "key": "plugin-ui-decoupling/04-plugin-migration",
+      "file": "docs/plugins/tickets/plugin-ui-decoupling/04-plugin-migration.md",
+      "title": "[UI] 04 — 现有插件与用户数据迁移",
+      "number": 65,
+      "state": "closed",
+      "verified_commit": "5583325d6d8e51e1b3b1872f376008b942712ade",
+      "id": 5714686398,
+      "url": "https://github.com/T-miracle/Editor/issues/65",
+      "body_matches": true,
+      "blocked_by": [
+        64
+      ]
+    },
+    {
+      "key": "plugin-ui-decoupling/05-integration-and-contract",
+      "file": "docs/plugins/tickets/plugin-ui-decoupling/05-integration-and-contract.md",
+      "title": "[UI] 05 — 故障边界、契约收缩与总验收",
+      "number": 66,
+      "state": "closed",
+      "verified_commit": "5dd06659b2f5939c1e8cf8f8db9e16fa466c4dd4",
+      "id": 5714686731,
+      "url": "https://github.com/T-miracle/Editor/issues/66",
+      "body_matches": true,
+      "blocked_by": [
+        65
+      ]
+    }
+  ],
+  "readback": {
+    "state": "open",
+    "body_matches_published_spec": true,
+    "labels": [
+      "ready-for-agent"
+    ]
+  },
+  "execution": {
+    "status": "completed",
+    "reviewed_source": "a04f0d8d0439f0ec83e0c133acabcd55e9d2d958",
+    "final_closure_commit": "5dd06659b2f5939c1e8cf8f8db9e16fa466c4dd4",
+    "all_child_states_read_back": true,
+    "branch": "codex/plugin-ui-decoupling",
+    "worktree": "C:\\Users\\Tmiracle\\.codex\\worktrees\\plugin-ui-decoupling\\Editor",
+    "base": "4d4a7b6d90130cf6e687c46c610c5ca38f1f89c1",
+    "dependencies_verified": true,
+    "parent_unchanged": true
+  }
+}

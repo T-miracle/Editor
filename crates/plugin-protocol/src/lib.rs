@@ -80,9 +80,13 @@ pub struct DataFormat {
     pub migration_hook: bool,
 }
 
-/// Dock and command contributions are data, not host-side feature branches.
+/// Dock and file contributions declare placement; their domain controls arrive through `ui::Document`.
 #[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Panel {
+    /// Editor-local auxiliary contributions may publish tools but cannot become a whole-layout provider.
+    #[serde(default)]
+    pub auxiliary: bool,
     pub id: String,
     pub title: String,
     pub position: String,
@@ -90,6 +94,10 @@ pub struct Panel {
     /// Other panel positions leave this list empty and retain their independent dock behavior.
     #[serde(default)]
     pub file_extensions: Vec<String>,
+    /// Non-text file types matched by this provider. They never create a text editing session.
+    /// Requires `editor.files`; the declaration remains meaningful when the viewer is disabled.
+    #[serde(default)]
+    pub readonly_file_extensions: Vec<String>,
     /// Used only when this panel has no saved visibility preference yet.
     #[serde(default = "panel_visible_by_default")]
     pub default_visible: bool,
@@ -108,7 +116,9 @@ pub struct Panel {
 fn panel_visible_by_default() -> bool {
     true
 }
+/// Menu and shortcut invocations remain commands; domain footer buttons use `ui::Document::tools`.
 #[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Command {
     pub id: String,
     pub title: String,
@@ -116,11 +126,6 @@ pub struct Command {
     pub shortcut: Option<String>,
     #[serde(default)]
     pub menu: bool,
-    #[serde(default)]
-    pub toolbar: Option<String>,
-    /// Optional icon path from the host's shared `gpui-kit-assets` catalog.
-    #[serde(default)]
-    pub toolbar_icon: Option<String>,
 }
 
 /// Opaque plugin-owned data; the host never interprets or migrates its contents.
@@ -135,6 +140,10 @@ pub struct Snapshot {
 pub struct Environment {
     pub workspace: String,
     pub os: String,
+    /// Current user interface locale, supplied at preparation and in Theme notifications.
+    /// Missing or empty values preserve the existing Simplified Chinese default.
+    #[serde(default)]
+    pub locale: String,
     pub background: u32,
     pub foreground: u32,
     pub muted: u32,
