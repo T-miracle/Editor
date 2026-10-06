@@ -24,8 +24,9 @@ pub(crate) fn modal(
     let cancel = std::rc::Rc::new(cancel);
     let dismiss = cancel.clone();
     let viewport = window.viewport_size();
-    let width = px(720.).min((viewport.width - px(24.)).max(px(0.)));
-    let height = px(620.).min((viewport.height - px(48.)).max(px(0.)));
+    // B1's proportions fit its compact form; only the body scrolls as the viewport shrinks.
+    let width = px(640.).min((viewport.width - px(24.)).max(px(0.)));
+    let height = px(520.).min((viewport.height - px(48.)).max(px(0.)));
     gpui_base::Dialog::new(cx)
         .focus_handle(focus)
         .close_on_backdrop_press(false)
@@ -51,7 +52,7 @@ pub(crate) fn modal(
                     div()
                         .flex()
                         .items_center()
-                        .h(px(36.))
+                        .h(px(40.))
                         .flex_shrink_0()
                         .px_3()
                         .border_b_1()
@@ -62,7 +63,8 @@ pub(crate) fn modal(
                                 .small()
                                 .compact()
                                 .ghost()
-                                .label("×")
+                                .icon(gpui_kit::component::IconName::Close)
+                                .accessibility_label(rust_i18n::t!("run.form_cancel"))
                                 .tooltip(rust_i18n::t!("run.form_cancel"))
                                 .on_click(move |_, window, cx| dismiss(window, cx)),
                         ),

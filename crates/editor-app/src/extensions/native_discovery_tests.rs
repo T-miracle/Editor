@@ -255,7 +255,7 @@ fn a_real_rust_project_is_discovered_built_and_run(cx: &mut TestAppContext) {
         "run-config-arguments",
         "literal space\nquote\"value\n中文;&|",
     );
-    click(cx, "run-config-tab-environment");
+    click(cx, "run-config-tab-3");
     edit(cx, "run-config-environment", "RUN_ENV=本机环境");
     click(cx, "run-config-save");
     let config = cx.update(|_, cx| {

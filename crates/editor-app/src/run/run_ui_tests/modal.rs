@@ -1,6 +1,38 @@
 //! Real modal callbacks must open/close outside the borrowed editor/window update.
 use super::*;
 
+/// B1 keeps the selector and tabs wide, and anchors save actions to the card's bottom edge.
+/// This uses the real modal so a full-height wrapper cannot hide unused space below its footer.
+#[gpui::test]
+fn b1_modal_keeps_selector_tabs_and_footer_in_their_layout_regions(cx: &mut TestAppContext) {
+    let root = tempfile::tempdir().unwrap();
+    let (app, cx) = open_editor(cx, root.path());
+    cx.update(|window, cx| {
+        app.update(cx, |state, cx| {
+            state.open_run_config_dialog(window, cx, None)
+        })
+    });
+    cx.run_until_parked();
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+    let form = cx.debug_bounds("run-config-form").unwrap();
+    let save = cx.debug_bounds("run-config-save").unwrap();
+    assert!(
+        form.bottom() - save.bottom() <= px(28.),
+        "save actions belong at the bottom of B1, not midway down an empty card: form={form:?}, save={save:?}"
+    );
+    let selector = cx.debug_bounds("run-config-existing").unwrap();
+    assert!(
+        selector.size.width >= form.size.width * 0.45,
+        "the top row needs a configuration selector, not a saved-count label: {selector:?}"
+    );
+    let basic = cx.debug_bounds("run-config-tab-0").unwrap();
+    let environment = cx.debug_bounds("run-config-tab-3").unwrap();
+    assert!(
+        environment.right() - basic.left() >= form.size.width * 0.85,
+        "the four tabs share the form width: basic={basic:?}, environment={environment:?}"
+    );
+}
+
 /// The title bar reserves text for the selected name; execution actions use compact icon hit targets.
 #[gpui::test]
 fn b1_titlebar_actions_are_compact_icons(cx: &mut TestAppContext) {
@@ -21,6 +53,179 @@ fn b1_titlebar_actions_are_compact_icons(cx: &mut TestAppContext) {
         cx.debug_bounds("run-terminate").is_none(),
         "immediate termination is offered when stopping, not as an extra idle title-bar action"
     );
+}
+
+/// Drive the actual button hit region; pointer hover and click use the same native input seam.
+fn click_form_control(cx: &mut gpui_kit::VisualTestContext, selector: &'static str) {
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+    let position = cx.debug_bounds(selector).unwrap().center();
+    cx.simulate_event(gpui::MouseMoveEvent {
+        position,
+        pressed_button: None,
+        modifiers: Default::default(),
+    });
+    cx.run_until_parked();
+    cx.simulate_click(position, Default::default());
+    cx.run_until_parked();
+}
+
+/// Arrow-key page changes preserve native input values instead of replacing the retained draft.
+#[gpui::test]
+fn b1_tabs_accept_keyboard_navigation_without_losing_fields(cx: &mut TestAppContext) {
+    let root = tempfile::tempdir().unwrap();
+    let (app, cx) = open_editor(cx, root.path());
+    cx.update(|window, cx| {
+        app.update(cx, |state, cx| {
+            state.open_run_config_dialog(window, cx, None)
+        })
+    });
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+        let form = app.read(cx).run_form.as_ref().unwrap().clone();
+        form.read(cx)
+            .field_input(crate::run::RunField::Name)
+            .unwrap()
+            .update(cx, |input, cx| input.set_value("保留我的配置", window, cx));
+    });
+    click_form_control(cx, "run-config-tab-0");
+    cx.simulate_keystrokes("right");
+    cx.run_until_parked();
+    assert_eq!(
+        cx.update(|_, cx| app.read(cx).run_form.as_ref().unwrap().read(cx).tab()),
+        crate::run::ui::RunConfigTab::Build
+    );
+    cx.simulate_keystrokes("end");
+    cx.run_until_parked();
+    assert_eq!(
+        cx.update(|_, cx| app.read(cx).run_form.as_ref().unwrap().read(cx).tab()),
+        crate::run::ui::RunConfigTab::Environment
+    );
+    cx.simulate_keystrokes("home");
+    cx.run_until_parked();
+    assert_eq!(
+        cx.update(|_, cx| {
+            app.read(cx)
+                .run_form
+                .as_ref()
+                .unwrap()
+                .read(cx)
+                .field_input(crate::run::RunField::Name)
+                .unwrap()
+                .read(cx)
+                .value()
+                .to_string()
+        }),
+        "保留我的配置"
+    );
+}
+
+/// Both dropdowns use real popup keyboard handling; choosing a configuration loads its own inputs.
+#[gpui::test]
+fn b1_configuration_and_destination_pickers_work_inside_the_modal(cx: &mut TestAppContext) {
+    let root = tempfile::tempdir().unwrap();
+    let (app, cx) = open_editor(cx, root.path());
+    cx.update(|window, cx| {
+        app.update(cx, |state, cx| {
+            let key = state.workspace_key();
+            state.run_controls = crate::run::RunControls::load_with_project(
+                &key,
+                Some(root.path().join("local")),
+                Some(root.path().into()),
+            );
+            for (id, name) in [("first", "第一项"), ("second", "第二项")] {
+                let mut draft = crate::run::RunConfigDraft::from_config(None, id.into());
+                draft.name = name.into();
+                draft.program = "fixture.exe".into();
+                state
+                    .run_controls
+                    .upsert(draft.to_config().unwrap(), &key)
+                    .unwrap();
+            }
+            state.open_run_config_dialog(window, cx, Some("first".into()));
+        });
+    });
+    cx.run_until_parked();
+    click_form_control(cx, "run-config-existing");
+    assert!(cx.debug_bounds("native-menu-second").is_some());
+    cx.simulate_keystrokes("down enter");
+    cx.run_until_parked();
+    assert_eq!(
+        cx.update(|_, cx| {
+            app.read(cx)
+                .run_form
+                .as_ref()
+                .unwrap()
+                .read(cx)
+                .field_input(crate::run::RunField::Name)
+                .unwrap()
+                .read(cx)
+                .value()
+                .to_string()
+        }),
+        "第二项"
+    );
+    click_form_control(cx, "run-config-save-location");
+    cx.simulate_keystrokes("escape");
+    cx.run_until_parked();
+    assert!(
+        cx.update(|_, cx| app.read(cx).run_form.is_some()),
+        "Escape dismisses the picker, retaining the modal"
+    );
+    click_form_control(cx, "run-config-save-location");
+    cx.simulate_keystrokes("down enter");
+    cx.run_until_parked();
+    assert!(!cx.update(|_, cx| {
+        app.read(cx)
+            .run_form
+            .as_ref()
+            .unwrap()
+            .read(cx)
+            .destination_is_local()
+    }));
+    assert!(
+        cx.update(|_, cx| app.read(cx).run_controls.sessions().is_empty()),
+        "editing never launches a program"
+    );
+}
+
+/// A constrained viewport keeps save/cancel outside the field scroller in both themes and locales.
+#[gpui::test]
+fn b1_footer_stays_visible_at_narrow_sizes_and_zoom(cx: &mut TestAppContext) {
+    let root = tempfile::tempdir().unwrap();
+    let (app, cx) = open_editor(cx, root.path());
+    cx.simulate_resize(size(px(520.), px(420.)));
+    for locale in ["en", "zh-CN"] {
+        rust_i18n::set_locale(locale);
+        for dark in [false, true] {
+            cx.update(|window, cx| {
+                apply_theme(builtin_theme(dark), cx);
+                crate::ui::typography::set_font_size(cx, 24.);
+                crate::ui::theme::sync_font_sizes(cx);
+                app.update(cx, |state, cx| {
+                    state.open_run_config_dialog(window, cx, None)
+                });
+            });
+            cx.run_until_parked();
+            cx.update(|window, cx| window.draw(cx).clear(cx));
+            let form = cx.debug_bounds("run-config-form").unwrap();
+            let page = cx.debug_bounds("run-config-page").unwrap();
+            for selector in [
+                "run-config-save",
+                "run-config-cancel",
+                "run-config-save-location",
+            ] {
+                let bounds = cx.debug_bounds(selector).unwrap();
+                assert!(
+                    bounds.left() >= form.left()
+                        && bounds.right() <= form.right()
+                        && bounds.bottom() <= form.bottom()
+                        && bounds.top() >= page.bottom(),
+                    "{locale}, dark={dark}: {selector} stays reachable outside the scroller: {bounds:?}, form={form:?}, page={page:?}"
+                );
+            }
+        }
+    }
+    rust_i18n::set_locale("en");
 }
 
 /// Save and Cancel remove the actual modal layer, rather than leaving an empty modal.

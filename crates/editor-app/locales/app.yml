@@ -992,6 +992,21 @@ run.leave_title:
 run.form_saved_count:
   en: "%{count} saved configurations"
   zh-CN: "已保存 %{count} 项"
+run.form_source_manual:
+  en: "Manual configuration"
+  zh-CN: "手动配置"
+run.form_source_provider:
+  en: "Provided by %{provider}"
+  zh-CN: "来自插件 %{provider}"
+run.form_prelaunch_count:
+  en: "%{count} prelaunch steps"
+  zh-CN: "启动前步骤：%{count}"
+run.form_debug_ready:
+  en: "Debugging ready"
+  zh-CN: "调试已就绪"
+run.form_debug_after_save:
+  en: "Debug availability is checked after saving"
+  zh-CN: "保存后检查调试可用性"
 run.debug_breakpoints:
   en: "Breakpoints"
   zh-CN: "断点"

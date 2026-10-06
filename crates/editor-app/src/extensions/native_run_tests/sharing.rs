@@ -55,7 +55,8 @@ fn native_shared_configuration_runs_in_two_isolated_projects(cx: &mut TestAppCon
         })
     });
     window.run_until_parked();
-    click(window, "run-config-shared");
+    click(window, "run-config-save-location");
+    click(window, "native-menu-shared");
     click(window, "run-config-save");
     assert!(window.update(|_, cx| app.read(cx).run_form.is_none()));
     let shared_path = editor_core::project_path(&first);

@@ -265,6 +265,26 @@ impl Render for PopupMenu {
                     .on_mouse_up(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                     .on_mouse_up(MouseButton::Right, |_, _, cx| cx.stop_propagation())
                     .capture_key_down(cx.listener(Self::key))
+                    // A popup inside a dialog owns these actions as well as raw key events.
+                    // Without this boundary, Enter selects a row and also confirms the parent modal.
+                    .on_action(
+                        cx.listener(|this, _: &gpui_base::actions::Confirm, window, cx| {
+                            if let Some(item) = this
+                                .selected
+                                .and_then(|index| this.items.get(index))
+                                .filter(|item| !item.disabled)
+                            {
+                                this.finish(Action::Select(item.id.clone()), window, cx);
+                            }
+                            cx.stop_propagation();
+                        }),
+                    )
+                    .on_action(
+                        cx.listener(|this, _: &gpui_base::actions::Cancel, window, cx| {
+                            this.finish(Action::Dismiss, window, cx);
+                            cx.stop_propagation();
+                        }),
+                    )
                     .on_any_mouse_down(cx.listener(|this, _, window, cx| {
                         this.finish(Action::Dismiss, window, cx);
                         cx.stop_propagation();
