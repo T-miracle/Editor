@@ -180,7 +180,10 @@ impl Worker {
                         manager.commit_installation(prepared, &control)
                     })
                 } else {
-                    match work {
+                    match work.and_then(|work| work.admit(&manager, &output)) {
+                        Some(Work::Validated { .. }) => {
+                            unreachable!("admission consumes provenance")
+                        }
                         Some(
                             work @ (Work::PrepareTarget { .. }
                             | Work::CancelTarget { .. }

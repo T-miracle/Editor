@@ -37,7 +37,7 @@ pub use manager::{
     DebugFrame, DebugRequest, DebugSession, DebugState, DebugVariable, EXECUTION_CONTRACT,
     EXECUTION_START_TIMEOUT_MS, ExecutionFailure, ExecutionSnapshot, ExecutionState, HostExecution,
     InstallationPreparation, Installed, Manager, PreparedInstallation, ProviderCandidate,
-    RunEnvEntry, RunRequest, StopOptions, TargetRequest, debug_dependency_for_test,
+    RunEnvEntry, RunRequest, StopOptions, TargetOrigin, TargetRequest, debug_dependency_for_test,
     frames_from_value, variables_from_value,
 };
 mod native_work;

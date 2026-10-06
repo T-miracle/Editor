@@ -208,6 +208,10 @@ impl EditorApp {
             .collect::<Vec<_>>();
         self.run_controls.adopt_step_sessions(&adopted);
 
+        for (configuration, request, reason) in &errors {
+            self.run_controls
+                .reject_start(configuration, *request, reason);
+        }
         if let Some((_, _, message)) = errors.first() {
             // A refused start is reported where the launch was requested instead of failing silently.
             self.status = message.clone();
@@ -294,6 +298,7 @@ impl EditorApp {
         });
         let mut items = Vec::new();
         let mut actions = std::collections::BTreeMap::new();
+        let mut notices = std::collections::BTreeMap::new();
         let mut separator = false;
         for (index, entry) in entries.into_iter().enumerate() {
             let (label, disabled) = match &entry {
@@ -310,6 +315,17 @@ impl EditorApp {
                 RunMenuEntry::Action { label, enabled, .. } => (label.clone(), !enabled),
             };
             let id = format!("run-item-{index}");
+            if let RunMenuEntry::Configuration {
+                id: configuration, ..
+            } = &entry
+            {
+                if let Some(reason) = self
+                    .run_controls
+                    .plugin_configuration_blocker(configuration)
+                {
+                    notices.insert(id.clone(), reason);
+                }
+            }
             items.push(plugin_runtime::plugin_protocol::ui::MenuItem {
                 id: id.clone(),
                 label,
@@ -421,6 +437,7 @@ impl EditorApp {
                 window,
                 cx,
             )
+            .notices(notices)
             .width(RUN_MENU_WIDTH)
         });
         let popup_id = popup.entity_id();
@@ -665,14 +682,15 @@ impl EditorApp {
         let label = selected
             .as_ref()
             .map(|config| {
+                let name = self.run_controls.configuration_label(&config.id);
                 if let Some(step) = &preparing {
-                    format!("{} · {}", config.name, step)
+                    format!("{} · {}", name, step)
                 } else if pending {
-                    format!("{} · {}", config.name, t!("run.state_starting"))
+                    format!("{} · {}", name, t!("run.state_starting"))
                 } else if active.is_some() {
-                    format!("{} · {}", config.name, t!("run.state_running"))
+                    format!("{} · {}", name, t!("run.state_running"))
                 } else {
-                    config.name.clone()
+                    name
                 }
             })
             .unwrap_or_else(|| t!("run.configurations").to_string().to_string());
@@ -715,6 +733,9 @@ impl EditorApp {
                                     .debug_selector(|| "run-config-selector-label".into())
                                     .h(px(14.))
                                     .line_height(px(14.))
+                                    .when(plugin_blocker.is_some(), |label| {
+                                        label.text_color(cx.theme().danger)
+                                    })
                                     .child(short_label(&label)),
                             )
                             .child(
@@ -734,7 +755,7 @@ impl EditorApp {
                             .px(px(5.))
                             .border_1()
                             .border_color(cx.theme().input)
-                            .tooltip(label.clone())
+                            .tooltip(plugin_blocker.clone().unwrap_or_else(|| label.clone()))
                             .on_click(cx.listener(
                                 move |this, _: &gpui_kit::ClickEvent, window, cx| {
                                     let bounds = selector_bounds.get();
@@ -1400,11 +1421,16 @@ impl EditorApp {
         let Some(request) = self.run_controls.begin_debug_start_request(configuration) else {
             return;
         };
-        if !self
-            .extensions
-            .read(cx)
-            .stage_debug_launch(request, configuration, details)
-        {
+        if !self.stage_validated_run(
+            configuration,
+            Work::DebugCall {
+                request,
+                configuration: Some(configuration.into()),
+                method: "start".into(),
+                arguments: details,
+            },
+            cx,
+        ) {
             let message = t!("run.debug_unavailable").to_string();
             let _ = self.run_controls.fail_debug_reply(request, message.clone());
             self.status = message;
@@ -1596,7 +1622,7 @@ impl EditorApp {
                 request_id,
             }
         };
-        let queued = self.extensions.read(cx).stage_host_run(work);
+        let queued = self.stage_validated_run(config, work, cx);
         if !queued {
             self.run_controls
                 .sequence_start_failed(config, index, &t!("run.worker_missing"));

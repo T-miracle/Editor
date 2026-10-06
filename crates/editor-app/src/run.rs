@@ -1859,6 +1859,22 @@ impl RunControls {
         applied
     }
 
+    /// Settle only the matching queued start. Rejection cannot leave preparation busy forever
+    /// or fail a replacement sequence carrying a different request identity.
+    pub(crate) fn reject_start(&mut self, config: &str, request: u64, reason: &str) {
+        if let Some((owner, index)) = self.step_by_request(request) {
+            let matches = owner == config && self.sequences.get(config).is_some_and(|sequence| {
+                sequence.steps().get(index).is_some_and(|step| matches!(step.state, sequence::StepState::Starting { request: current } if current == request))
+            });
+            if matches {
+                self.sequence_start_failed(config, index, reason);
+                self.step_requests.remove(&request);
+            }
+        }
+        self.pending
+            .retain(|pending| pending.config != config || pending.request_id != request);
+    }
+
     /// Record that one step of a configuration's preparation could not start at all.
     pub fn sequence_start_failed(&mut self, config: &str, index: usize, reason: &str) {
         let request = self
@@ -2968,13 +2984,37 @@ impl RunControls {
     /// Saved validation controls availability; a fresh provider receipt is still required at execution.
     /// Existing session ownership is independent, so this check never disables Stop.
     pub(crate) fn plugin_configuration_blocker(&self, id: &str) -> Option<String> {
-        match &self.configs.plugin_configurations.get(id)?.validation {
+        let data = self.configs.plugin_configurations.get(id)?;
+        if !data.pending_events.is_empty() {
+            return Some(t!("run.plugin_pending_edits").into());
+        }
+        match &data.validation {
             editor_core::ConfigurationValidation::Valid => None,
             editor_core::ConfigurationValidation::Unchecked => {
                 Some(t!("run.plugin_unchecked").into())
             }
             editor_core::ConfigurationValidation::Invalid(reason)
             | editor_core::ConfigurationValidation::Unavailable(reason) => Some(reason.clone()),
+        }
+    }
+
+    /// Display the provider-owned name even when an older executable projection is retained.
+    pub(crate) fn configuration_label(&self, id: &str) -> String {
+        let name = self
+            .configs
+            .plugin_configurations
+            .get(id)
+            .map(|data| data.name.as_str())
+            .or_else(|| {
+                self.configs
+                    .find(id)
+                    .map(|configuration| configuration.name.as_str())
+            })
+            .unwrap_or(id);
+        if name.trim().is_empty() {
+            t!("run.plugin_unnamed").into()
+        } else {
+            name.into()
         }
     }
 
@@ -3296,10 +3336,11 @@ impl RunControls {
         } else {
             for config in &self.configs.configurations {
                 let selected = self.configs.selected.as_deref() == Some(config.id.as_str());
+                let name = self.configuration_label(&config.id);
                 let mut label = if selected {
-                    format!("{} ✓", config.name)
+                    format!("{} ✓", name)
                 } else {
-                    config.name.clone()
+                    name
                 };
                 // A discovered configuration whose target disappeared is marked where it is chosen,
                 // not only when it is launched and fails.

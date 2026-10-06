@@ -26,6 +26,8 @@ Catalog, form and validation requests expire after 30 seconds. The host accepts 
 
 ## Structured launch
 
+An unsuccessful form call does not acknowledge its event. The host retains pending events with the local draft (at most 512 events and 64 KiB combined), stops automatic retries after failure, and may save them as unavailable. Reopening replays them in order before validation. Canonical values alone cannot authorize execution while input remains unacknowledged. Input exceeding the storage budget keeps the window open with an explicit error. Deferred native events retain their window and provider incarnation; replacement surfaces cannot adopt old callbacks.
+
 `Launch` contains `target`, optional `directory`, `env`, `tool_paths`, ordered `build` and `prelaunch` actions, and optional execution `provider`. A program target is `{ "mode": "program", "program": "cargo", "args": ["run", "--release"] }`. The subcommand is part of the editable full argument array. Spaces, quotes, Chinese text and metacharacters stay inside their original argument elements; the host never joins them into a Shell command.
 
 A script target is `{ "mode": "script", "interpreter": "...", "args": [], "script": "..." }` and uses the interpreter supplied by the plugin. A provided target is `{ "mode": "provided", "provider": "...", "binding": "...", "label": "...", "args": [] }`, prepared through [run targets](/en/sdk/targets/). Each preparation action is `{ "name": "...", "target": { "kind": "action", "target": PROGRAM_TARGET } }`; an explicit build reference uses `{ "kind": "build", "config": "CONFIGURATION_ID" }` instead. These values pass the existing configuration, path, tool and session boundaries; they cannot grant permissions.

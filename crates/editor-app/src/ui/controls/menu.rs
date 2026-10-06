@@ -110,6 +110,8 @@ pub(crate) struct PopupMenu {
     scroll: ScrollHandle,
     /// The caller chooses a local layout width; actual rendering still clamps it to the viewport.
     width: f32,
+    /// Generic row diagnostics supplied by a caller; keyboard selection remains available for repair.
+    notices: std::collections::BTreeMap<String, String>,
     sink: Rc<dyn Fn(Action, &mut Window, &mut App)>,
 }
 impl PopupMenu {
@@ -135,6 +137,7 @@ impl PopupMenu {
             closed: false,
             scroll: ScrollHandle::new(),
             width: 230.,
+            notices: Default::default(),
             sink: Rc::new(sink),
         }
     }
@@ -197,6 +200,11 @@ impl PopupMenu {
             _ => {}
         }
     }
+    /// Color diagnostic rows with the local danger token and expose their full reason on hover.
+    pub fn notices(mut self, notices: std::collections::BTreeMap<String, String>) -> Self {
+        self.notices = notices;
+        self
+    }
 }
 impl Render for PopupMenu {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
@@ -235,6 +243,12 @@ impl Render for PopupMenu {
                 // Non-actionable placeholders stay readable in both themes without looking enabled.
                 .when(item.disabled, |row| {
                     row.text_color(cx.theme().muted_foreground)
+                })
+                .when_some(self.notices.get(&item.id).cloned(), |row, reason| {
+                    row.text_color(cx.theme().danger)
+                        .tooltip(move |window, cx| {
+                            super::Tooltip::new(reason.clone()).build(window, cx)
+                        })
                 })
                 .when(item.separator_before, |row| {
                     row.border_t_1().border_color(self.style.border)

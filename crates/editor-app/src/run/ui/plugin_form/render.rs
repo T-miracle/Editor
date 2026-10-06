@@ -26,6 +26,8 @@ pub(in crate::run::ui) fn render(
         if let (Some(document), Some(provider)) = (document, provider) {
             let owner = app.downgrade();
             let configuration = id.clone();
+            let window_origin = form.entity_id();
+            let provider_origin = current.form_origins.get(id).cloned();
             form.update(cx, |form, cx| {
                 let state = form.plugin.as_mut().unwrap();
                 if let Some(view) = state.views.get(id) {
@@ -40,7 +42,16 @@ pub(in crate::run::ui) fn render(
                             environment.clone(),
                             move |event, cx| {
                                 let _ = owner.update(cx, |app, cx| {
-                                    app.plugin_configuration_event(&configuration, event, cx)
+                                    // Deferred native events cannot adopt a replacement window/provider.
+                                    let current = app
+                                        .run_form
+                                        .as_ref()
+                                        .filter(|form| form.entity_id() == window_origin)
+                                        .and_then(|form| form.read(cx).plugin.as_ref())
+                                        .and_then(|state| state.form_origins.get(&configuration));
+                                    if current == provider_origin.as_ref() && current.is_some() {
+                                        app.plugin_configuration_event(&configuration, event, cx)
+                                    }
                                 });
                             },
                             window,
@@ -58,10 +69,29 @@ pub(in crate::run::ui) fn render(
             .views
             .get(id)
             .map(|view| div().size_full().child(view.clone()).into_any_element())
-            .unwrap_or_else(|| empty(t!("run.plugin_loading").into(), cx)),
+            .unwrap_or_else(|| {
+                let text = if state.editing.contains_key(id) {
+                    t!("run.plugin_loading").into()
+                } else {
+                    actions::validation_reason(&state.draft.plugin_configurations[id].validation)
+                };
+                empty(text, cx)
+            }),
         _ => empty(t!("run.plugin_add_prompt").into(), cx),
     };
-    let error = state.error.clone();
+    let error = state.error.clone().or_else(|| {
+        selected
+            .as_ref()
+            .and_then(|id| state.draft.plugin_configurations.get(id))
+            .filter(|data| {
+                matches!(
+                    data.validation,
+                    ConfigurationValidation::Invalid(_) | ConfigurationValidation::Unavailable(_)
+                )
+            })
+            .map(|data| actions::validation_reason(&data.validation))
+            .filter(|reason| !reason.is_empty())
+    });
     let applying = state.commit.is_some();
     let body = h_flex()
         // h_flex centers children by default; both panes must instead fill the native dialog body.
@@ -93,7 +123,10 @@ pub(in crate::run::ui) fn render(
                 .when_some(error, |pane, error| {
                     pane.child(
                         div()
+                            .id("plugin-configuration-error")
                             .debug_selector(|| "plugin-configuration-error".into())
+                            .max_h(px(64.))
+                            .overflow_y_scroll()
                             .text_sm()
                             .text_color(cx.theme().danger)
                             .child(error),

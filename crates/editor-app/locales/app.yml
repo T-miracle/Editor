@@ -27,8 +27,17 @@ run.plugin_stale:
   en: "Configuration changed; please try again"
   zh-CN: "配置已经变化，请重试"
 run.plugin_edit_quota:
-  en: "Too many pending edits; wait for the provider"
-  zh-CN: "待处理修改过多，请等待配置插件"
+  en: "Pending input exceeds the storage limit. Keep this window open or discard the draft."
+  zh-CN: "待确认输入超出存储上限。请保留窗口或放弃草稿。"
+run.plugin_pending_edits:
+  en: "Input could not be acknowledged. It has been retained; reopen when the provider is available."
+  zh-CN: "插件未能确认输入，内容已保留；提供者恢复后重新打开即可重试。"
+run.plugin_provider_unavailable:
+  en: "The configuration provider is unavailable. Reopen the form after enabling it."
+  zh-CN: "配置提供者不可用，启用后请重新打开表单。"
+run.plugin_timeout:
+  en: "The configuration provider did not reply within 30 seconds."
+  zh-CN: "配置提供者未在 30 秒内回复。"
 run.plugin_worker_unavailable:
   en: "The plugin runtime is unavailable. Reopen the workspace to retry."
   zh-CN: "插件运行时不可用，请重新打开工作区后重试。"

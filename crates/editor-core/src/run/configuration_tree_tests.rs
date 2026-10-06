@@ -16,6 +16,7 @@ fn configuration(set: &mut RunConfigSet, id: &str, name: &str) {
             provider: "provider".into(),
             template: "command".into(),
             values: serde_json::json!({"label":name}).to_string(),
+            pending_events: vec![],
             name: name.into(),
             program: "probe".into(),
             revision: 0,

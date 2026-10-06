@@ -16,6 +16,65 @@ pub(crate) struct Driver {
     configurations: super::worker::configurations::ConfigurationCalls,
 }
 impl Driver {
+    /// Collect an actual terminal service receipt while withholding the UI frame to test the race gap.
+    #[track_caller]
+    pub(crate) fn collect_without_paint(
+        &mut self,
+        manager: &mut Manager,
+        app: &Entity<EditorApp>,
+        cx: &mut gpui_kit::VisualTestContext,
+    ) {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            manager.poll();
+            pump_recording_all(
+                manager,
+                app,
+                cx,
+                &mut self.launches,
+                &mut self.debug,
+                &mut self.targets,
+                &mut self.configurations,
+            );
+            let ready = cx.update(|_, cx| {
+                !app.read(cx)
+                    .extensions
+                    .read(cx)
+                    .worker
+                    .state
+                    .lock()
+                    .unwrap()
+                    .configuration_replies
+                    .is_empty()
+            });
+            if ready {
+                return;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "no real service receipt in actor/UI gap: {}",
+                cx.update(|_, cx| app.read(cx).status.clone())
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    }
+    /// Publish existing receipts without admitting the resulting queued launch yet.
+    pub(crate) fn publish_without_collect(
+        &mut self,
+        manager: &mut Manager,
+        app: &Entity<EditorApp>,
+        cx: &mut gpui_kit::VisualTestContext,
+    ) {
+        publish_frame(
+            manager,
+            &mut self.renderer,
+            app,
+            cx,
+            &self.launches,
+            vec![],
+            vec![],
+        );
+    }
     /// Paint the active native window after publishing one real manager/actor iteration.
     pub(crate) fn frame(
         &mut self,
@@ -320,9 +379,9 @@ pub(crate) fn edit(cx: &mut gpui_kit::VisualTestContext, selector: &'static str,
 }
 
 /// The executed program records each literal argument, independently from any host or Shell formatter.
-fn probe(root: &Path) {
+pub(crate) fn probe(root: &Path) {
     let source = root.join("probe.rs");
-    std::fs::write(&source, "//! Isolated argv acceptance program.\nfn main(){let args=std::env::args().skip(1).collect::<Vec<_>>();std::fs::write(\"argv.txt\",format!(\"{args:?}\")).unwrap();println!(\"CONFIGURATION_PROBE\");}\n").unwrap();
+    std::fs::write(&source, "//! Isolated argv and owned-stop acceptance program.\nfn main(){let args=std::env::args().skip(1).collect::<Vec<_>>();std::fs::write(\"argv.txt\",format!(\"{args:?}\")).unwrap();println!(\"CONFIGURATION_PROBE\");if args.iter().any(|arg|arg==\"hold\"){std::thread::sleep(std::time::Duration::from_secs(60));}}\n").unwrap();
     let output = std::process::Command::new("rustc")
         .arg(&source)
         .arg("-o")

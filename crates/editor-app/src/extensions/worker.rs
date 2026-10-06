@@ -1,5 +1,6 @@
 //! A single worker owns plugin stores; the UI thread never compiles or executes WASM.
 use plugin_runtime::{Installed, Manager, Package, plugin_protocol::*};
+mod admission;
 #[cfg(test)]
 mod bundled_tests;
 pub(super) mod configurations;
@@ -58,6 +59,11 @@ impl RunStatus {
 }
 
 pub enum Work {
+    /// A delayed launch keeps the service receipt's origin until actor admission.
+    Validated {
+        origin: plugin_runtime::TargetOrigin,
+        operation: Box<Work>,
+    },
     /// Public template discovery never creates a user configuration or starts its target.
     ConfigurationCatalog {
         request: u64,
@@ -376,6 +382,8 @@ pub(super) struct Published {
     pub target_discoveries: Vec<(String, u64, Result<targets::TargetCatalog, String>)>,
     pub configuration_catalogs: Vec<(u64, configurations::ConfigurationCatalog)>,
     pub configuration_replies: Vec<configurations::ConfigurationReply>,
+    /// Provider incarnations let the UI reject receipts published just before retirement.
+    pub configuration_origins: Vec<plugin_runtime::TargetOrigin>,
     pub startup: BTreeMap<String, String>,
     pub views: BTreeMap<String, Arc<ui::Document>>,
     /// Each scene's full-color image operations are ready before the UI observes that scene.

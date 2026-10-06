@@ -1000,6 +1000,16 @@ impl ExtensionPanel {
             .load(std::sync::atomic::Ordering::Acquire)
     }
 
+    /// Read the actor's latest immutable provider snapshot, including revocation between UI frames.
+    pub(crate) fn configuration_origins(&self) -> Vec<plugin_runtime::TargetOrigin> {
+        self.worker
+            .state
+            .lock()
+            .unwrap()
+            .configuration_origins
+            .clone()
+    }
+
     /// Stage one host start for the plugin worker, reporting whether it could be queued.
     pub(crate) fn stage_host_run(&self, work: HostWork) -> bool {
         match self.worker.tx.send(work) {
@@ -1012,6 +1022,7 @@ impl ExtensionPanel {
                     Work::ConfigurationCall { request, .. } => {
                         state.configuration_replies.push(ConfigurationReply {
                             request,
+                            origin: None,
                             result: Err(reason),
                         })
                     }
@@ -1021,6 +1032,7 @@ impl ExtensionPanel {
                             ConfigurationCatalog {
                                 templates: vec![],
                                 failures: [("runtime".into(), reason)].into(),
+                                origins: vec![],
                             },
                         ))
                     }

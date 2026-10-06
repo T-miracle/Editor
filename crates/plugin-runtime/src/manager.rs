@@ -33,7 +33,7 @@ pub use preparation::InstallationPreparation;
 pub(crate) mod scopes;
 mod settings;
 mod targets;
-pub use targets::TargetRequest;
+pub use targets::{TargetOrigin, TargetRequest};
 mod ui_events;
 use host_services::HostSessions;
 use scopes::ParkedWorkspace;

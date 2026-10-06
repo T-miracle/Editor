@@ -31,11 +31,8 @@ impl Guest for ConfigurationExample {
                 event: api::Notification::Service(service::Notification::Invoke(call)),
                 ..
             } => {
-                if call.method == "validate"
-                    && call.arguments["values"]
-                        .as_str()
-                        .is_some_and(|values| values.contains("\"failure\":\"timeout\""))
-                {
+                // Retaining the invocation exercises the real deadline, not a synthetic timer.
+                if call.method == "validate" && marker(".configuration-validation")?.as_deref() == Some("timeout") {
                     return Ok(Default::default());
                 }
                 Ok(api::Output {
@@ -91,6 +88,9 @@ fn invoke(call: service::Invocation) -> Result<Value, Failure> {
             serde_json::to_string(&config::Catalog { templates })
         }
         "form" => {
+            if marker(".configuration-form-offline")?.is_some() {
+                return Err(Failure::new(ErrorCode::OperationFailed, "Example form is offline"));
+            }
             let mut values: Values =
                 serde_json::from_str(call.arguments["values"].as_str().unwrap_or_default())
                     .map_err(invalid)?;
@@ -127,19 +127,21 @@ fn invoke(call: service::Invocation) -> Result<Value, Failure> {
             let values: Values =
                 serde_json::from_str(call.arguments["values"].as_str().unwrap_or_default())
                     .map_err(invalid)?;
-            if values.failure == "error" {
+            let environment = marker(".configuration-validation")?.unwrap_or_default();
+            if values.failure == "error" || environment == "error" {
                 return Err(Failure::new(
                     ErrorCode::OperationFailed,
                     "Example provider failure",
                 ));
             }
+            if environment == "malformed" { return Ok(json!({"payload":"{\"valid\":true}"})); }
             let valid = !values.name.trim().is_empty()
                 && values.arguments.len() <= 128
                 && values
                     .arguments
                     .iter()
                     .all(|value| value.len() <= 4096 && !value.contains('\0'))
-                && values.failure.is_empty();
+                && values.failure.is_empty() && environment.is_empty();
             let launch = valid.then(|| config::Launch {
                 target: json!({"mode":"program","program":values.program,"args":values.arguments}),
                 directory: Some(
@@ -253,4 +255,17 @@ fn form(values: &Values, locale: &str, revision: u64) -> ui::Document {
 
 fn invalid(error: impl std::fmt::Display) -> Failure {
     Failure::new(ErrorCode::InvalidRequest, error.to_string())
+}
+
+/// Fixture-local environment faults use ordinary workspace read authority and close every handle.
+fn marker(path: &str) -> Result<Option<String>, Failure> {
+    let api::Value::Resource(root) = api::guest::request(api::Operation::OpenWorkspace)? else { return Err(invalid("Workspace unavailable")); };
+    let result = api::guest::request(api::Operation::ReadFile { handle: root.clone(), path: path.into() });
+    let _ = api::guest::close_resource(root);
+    match result {
+        Ok(api::Value::Bytes(bytes)) => String::from_utf8(bytes).map(Some).map_err(invalid),
+        Err(error) if error.code == ErrorCode::NotFound => Ok(None),
+        Err(error) => Err(error),
+        _ => Err(invalid("Unexpected workspace read result")),
+    }
 }

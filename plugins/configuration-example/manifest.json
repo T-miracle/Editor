@@ -1,12 +1,13 @@
 {
   "id": "configuration-example",
   "name": "Independent configuration example",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "protocol": 7,
   "api": {
     "base": "^1",
     "required": {
       "plugin.services": ">=1.1,<2",
+      "workspace.files": ">=1.1,<2",
       "ui.native": "^1",
       "ui.panels": "^1"
     }

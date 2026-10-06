@@ -124,6 +124,12 @@ pub(super) fn render(
                 .get(&id)
                 .is_some_and(|data| !matches!(data.validation, ConfigurationValidation::Valid));
             let label = entry.item().label.to_string();
+            let reason = state
+                .draft
+                .plugin_configurations
+                .get(&id)
+                .map(|data| actions::validation_reason(&data.validation))
+                .filter(|reason| !reason.is_empty());
             let drag = NodeDrag {
                 id: id.clone(),
                 label: label.clone(),
@@ -191,6 +197,11 @@ pub(super) fn render(
                     folder.then_some(toggle),
                 )
                 .debug_selector(move || selector.clone())
+                .when_some(reason, |row, reason| {
+                    row.tooltip(move |window, cx| {
+                        crate::ui::controls::Tooltip::new(reason.clone()).build(window, cx)
+                    })
+                })
                 // Selection uses the base state but disclosure toggling belongs only to its arrow;
                 // dragging a folder must not collapse the descendant used as a drop destination.
                 .on_mouse_down(MouseButton::Left, move |_, window, cx| {

@@ -365,6 +365,10 @@ pub(super) fn pump_recording_all(
     let published = cx.update(|_, cx| app.read(cx).extensions.read(cx).worker.state.clone());
     work = work
         .into_iter()
+        .filter_map(|work| work.admit(manager, &published))
+        .collect();
+    work = work
+        .into_iter()
         .filter_map(|work| targets.dispatch(work, manager, &published))
         .collect();
     targets.poll(manager, &published);

@@ -21,6 +21,14 @@ pub struct TargetRequest {
     scope: String,
 }
 impl TargetRequest {
+    /// Retain immutable provenance after this bounded invocation releases its native root.
+    pub fn origin(&self) -> TargetOrigin {
+        TargetOrigin {
+            provider: self.provider.clone(),
+            instance: self.instance.clone(),
+            scope: self.scope.clone(),
+        }
+    }
     /// Final receipts and deadlines release the preparation root; the final executable is not started.
     pub fn status(&self) -> RequestUpdate<Value> {
         let mut status = self.completion.status();
@@ -50,13 +58,7 @@ impl TargetRequest {
     }
     /// Caller identity remains valid only in the original workspace and provider incarnation.
     pub fn valid_for(&self, manager: &Manager) -> bool {
-        manager.trusted
-            && manager.workspace_open
-            && manager.host_scope() == self.scope
-            && manager
-                .live
-                .get(&self.provider)
-                .is_some_and(|instance| instance.instance_id() == Some(self.instance.as_str()))
+        self.origin().valid_for(manager)
     }
     /// Observe this invocation's bounded native history independently from another configuration.
     pub fn snapshot(&self) -> crate::PreparationSnapshot {
@@ -85,6 +87,24 @@ impl Drop for TargetRequest {
     }
 }
 impl Manager {
+    /// Snapshot compatible live configuration contributors without starting an invocation.
+    /// Restricted or closed workspaces have no valid origins; this does not grant permissions.
+    pub fn configuration_origins(&self) -> Vec<TargetOrigin> {
+        if !self.trusted || !self.workspace_open {
+            return vec![];
+        }
+        self.configuration_providers()
+            .into_iter()
+            .filter_map(|provider| {
+                let instance = self.instance_id(&provider)?.to_owned();
+                Some(TargetOrigin {
+                    provider,
+                    instance,
+                    scope: self.host_scope(),
+                })
+            })
+            .collect()
+    }
     /// Validate any embedded native document against the actual provider's negotiated public capabilities.
     /// This generic admission gate is reusable by host-owned surfaces and never grants additional access.
     pub fn validate_native_document(
@@ -282,5 +302,27 @@ impl Manager {
             instance,
             scope,
         })
+    }
+}
+
+/// Read-only provenance of a public service receipt. The runtime alone creates these values.
+/// Consumers recheck provenance before accepting delayed results; ordinary permission checks still apply.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TargetOrigin {
+    provider: String,
+    instance: String,
+    scope: String,
+}
+impl TargetOrigin {
+    /// Whether the original trusted workspace and live provider incarnation still exist.
+    pub fn valid_for(&self, manager: &Manager) -> bool {
+        manager.trusted
+            && manager.workspace_open
+            && manager.host_scope() == self.scope
+            && manager.instance_id(&self.provider) == Some(self.instance.as_str())
+    }
+    /// Identify presentation ownership without exposing a constructible caller reference.
+    pub fn provider(&self) -> &str {
+        &self.provider
     }
 }

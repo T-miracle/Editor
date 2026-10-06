@@ -7,11 +7,13 @@ use plugin_runtime::plugin_protocol::{api::RequestUpdate, configurations};
 pub(crate) struct ConfigurationCatalog {
     pub templates: Vec<(String, configurations::Template)>,
     pub failures: BTreeMap<String, String>,
+    pub origins: Vec<plugin_runtime::TargetOrigin>,
 }
 
 /// Replies are joined to host-generated request IDs before any window or launch consumes them.
 pub(crate) struct ConfigurationReply {
     pub request: u64,
+    pub origin: Option<plugin_runtime::TargetOrigin>,
     pub result: Result<serde_json::Value, String>,
 }
 
@@ -76,6 +78,7 @@ impl ConfigurationCalls {
                             .configuration_replies
                             .push(ConfigurationReply {
                                 request,
+                                origin: None,
                                 result: Err(error),
                             });
                         output.lock().unwrap().configuration_revision += 1;
@@ -94,6 +97,14 @@ impl ConfigurationCalls {
 
     /// Polling consumes each terminal receipt once and rejects retired providers before publication.
     pub fn poll(&mut self, manager: &Manager, output: &Arc<Mutex<Published>>) {
+        let origins = manager.configuration_origins();
+        {
+            let mut published = output.lock().unwrap();
+            if published.configuration_origins != origins {
+                published.configuration_origins = origins;
+                published.configuration_revision += 1;
+            }
+        }
         self.calls.retain(|request, (provider, method, call)| {
             let Some(mut result) = outcome(call, manager) else {
                 return true;
@@ -114,6 +125,7 @@ impl ConfigurationCalls {
                 .configuration_replies
                 .push(ConfigurationReply {
                     request: *request,
+                    origin: Some(call.origin()),
                     result,
                 });
             output.lock().unwrap().configuration_revision += 1;
@@ -145,6 +157,15 @@ impl ConfigurationCalls {
                                 .len()
                                 == result.templates.len() =>
                     {
+                        if catalog.templates.len() + result.templates.len() > 128 {
+                            catalog
+                                .failures
+                                .insert(provider.clone(), "Template quota exceeded".into());
+                            continue;
+                        }
+                        if let Ok(call) = call {
+                            catalog.origins.push(call.origin());
+                        }
                         catalog.templates.extend(
                             result
                                 .templates
@@ -161,12 +182,6 @@ impl ConfigurationCalls {
                         catalog.failures.insert(provider.clone(), error);
                     }
                 }
-            }
-            if catalog.templates.len() > 128 {
-                catalog.templates.clear();
-                catalog
-                    .failures
-                    .insert("catalog".into(), "Template quota exceeded".into());
             }
             output
                 .lock()
@@ -245,6 +260,10 @@ fn outcome(
         RequestUpdate::Completed { result } if call.valid_for(manager) => {
             Some(result.map_err(|error| error.message))
         }
+        RequestUpdate::Cancelled {
+            reason: plugin_runtime::plugin_protocol::api::ErrorCode::TimedOut,
+            ..
+        } => Some(Err(rust_i18n::t!("run.plugin_timeout").into())),
         _ => Some(Err("Configuration provider or workspace retired".into())),
     }
 }

@@ -29,6 +29,7 @@ impl EditorApp {
                 provider,
                 template: template.id,
                 values: template.defaults,
+                pending_events: vec![],
                 name: template.label,
                 program: "plugin-pending".into(),
                 revision: 0,
@@ -89,29 +90,7 @@ impl EditorApp {
         let Some(form) = self.run_form.clone() else {
             return;
         };
-        let send = form.update(cx, |form, cx| {
-            let Some(state) = form.plugin.as_mut() else {
-                return false;
-            };
-            if state.commit.is_some() {
-                return false;
-            }
-            if state.editing.contains_key(id) {
-                let queue = state.events.entry(id.into()).or_default();
-                if queue.len() < 512 {
-                    queue.push_back(contract::FormEvent::Native(event.clone()));
-                } else {
-                    state.error = Some(t!("run.plugin_edit_quota").into());
-                }
-                cx.notify();
-                false
-            } else {
-                true
-            }
-        });
-        if send {
-            self.request_plugin_form(&form, id, Some(contract::FormEvent::Native(event)), cx);
-        }
+        self.request_plugin_form(&form, id, Some(contract::FormEvent::Native(event)), cx);
     }
 
     /// Save waits for serialized edits before validating a snapshot; Apply validates only the current row.
@@ -125,6 +104,11 @@ impl EditorApp {
         };
         let ids = form.update(cx, |form, cx| {
             let state = form.plugin.as_mut()?;
+            if !state.edit_overflow.is_empty() {
+                state.error = Some(t!("run.plugin_edit_quota").into());
+                cx.notify();
+                return None;
+            }
             if state.busy() {
                 state.commit_requested = Some(mode);
                 return None;
@@ -159,13 +143,28 @@ impl EditorApp {
                 .draft
                 .plugin_configurations[&id]
                 .clone();
+            if !snapshot.pending_events.is_empty() {
+                // A failed form acknowledgement cannot validate older canonical values. Save keeps
+                // the unacknowledged input and its unavailable result for later recovery.
+                self.accept_plugin_commit(
+                    form.entity_id(),
+                    &id,
+                    snapshot,
+                    Err(t!("run.plugin_pending_edits").into()),
+                    cx,
+                );
+                continue;
+            }
             let mut arguments = self.configuration_arguments(&snapshot);
             arguments["intent"] = "save".into();
-            let request = self.plugin_configuration_bridge.reserve(Purpose::Commit {
-                window: form.entity_id(),
-                id,
-                snapshot: snapshot.clone(),
-            });
+            let request = self.plugin_configuration_bridge.reserve(
+                Purpose::Commit {
+                    window: form.entity_id(),
+                    id,
+                    snapshot: snapshot.clone(),
+                },
+                self.workspace_key(),
+            );
             self.extensions
                 .read(cx)
                 .stage_host_run(Work::ConfigurationCall {
@@ -317,6 +316,18 @@ impl EditorApp {
             cx.notify();
             return true;
         }
+        if !snapshot.pending_events.is_empty() {
+            self.status = t!("run.plugin_pending_edits").into();
+            cx.notify();
+            return true;
+        }
+        if self.run_controls.is_preparing(id)
+            || self.plugin_configuration_bridge.pending.values().any(
+                |(_, purpose)| matches!(purpose, Purpose::Execute { id: owner, .. } if owner == id),
+            )
+        {
+            return true;
+        }
         let mut arguments = self.configuration_arguments(&snapshot);
         arguments["intent"] = match &action {
             Execution::Run(_) => "run",
@@ -324,11 +335,14 @@ impl EditorApp {
             Execution::Debug => "debug",
         }
         .into();
-        let request = self.plugin_configuration_bridge.reserve(Purpose::Execute {
-            id: id.into(),
-            snapshot: snapshot.clone(),
-            action,
-        });
+        let request = self.plugin_configuration_bridge.reserve(
+            Purpose::Execute {
+                id: id.into(),
+                snapshot: snapshot.clone(),
+                action,
+            },
+            self.workspace_key(),
+        );
         self.extensions
             .read(cx)
             .stage_host_run(Work::ConfigurationCall {
@@ -351,6 +365,11 @@ impl EditorApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if !self.run_permitted(cx) {
+            self.status = t!("run.restricted").into();
+            cx.notify();
+            return;
+        }
         if self
             .run_controls
             .configuration_set()

@@ -26,6 +26,8 @@ alternate: /en/sdk/configurations/
 
 ## 结构化启动
 
+表单调用失败不表示事件已确认。宿主将待确认事件与本机草稿一起保留（最多 512 个事件，总计 64 KiB），失败后停止自动重试，并允许保存为无法校验状态。重开后先按顺序重放，再进行校验。尚有待确认输入时，仅凭旧的规范化值不能授权执行。输入超过存储预算时明确报错，并保留窗口。迟到的原生事件绑定原窗口和提供者实例，替换后的界面不会接收旧回调。
+
 `Launch` 包含 `target`、可选 `directory`、`env`、`tool_paths`、顺序执行的 `build` 与 `prelaunch` 动作，以及可选执行 `provider`。程序目标为 `{ "mode": "program", "program": "cargo", "args": ["run", "--release"] }`。子命令也是可编辑的完整参数数组的一部分；空格、引号、中文和元字符保留在原来的参数元素中，宿主不把它们拼接为 Shell 命令。
 
 脚本目标为 `{ "mode": "script", "interpreter": "...", "args": [], "script": "..." }`，解释器由插件提供。提供者目标为 `{ "mode": "provided", "provider": "...", "binding": "...", "label": "...", "args": [] }`，通过[运行目标](/zh-cn/sdk/targets/)准备。准备动作为 `{ "name": "...", "target": { "kind": "action", "target": PROGRAM_TARGET } }`；明确引用构建配置时改用 `{ "kind": "build", "config": "CONFIGURATION_ID" }`。这些值仍通过已有配置、路径、工具与会话边界检查，不能授予权限。

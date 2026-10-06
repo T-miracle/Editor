@@ -30,6 +30,7 @@ mod tests {
             values: r#"{"arguments":["two words","\"中文\" ; &"],"custom":{"nested":true}}"#.into(),
             name: first.name.clone(),
             program: "probe".into(),
+            pending_events: vec![r#"{"node":"name","text":"尚未确认的输入"}"#.into()],
             revision: 7,
             validation: ConfigurationValidation::Invalid("plugin reason".into()),
         };
@@ -64,6 +65,10 @@ pub struct PluginConfiguration {
     pub template: String,
     /// Canonical plugin-owned JSON. The host stores but never parses command-specific fields.
     pub values: String,
+    /// Ordered opaque form events not yet acknowledged by the provider. Faults must not erase input.
+    /// Reopening replays these events before validation; the host never interprets their business data.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub pending_events: Vec<String>,
     pub name: String,
     pub program: String,
     /// Every accepted native edit invalidates older validation and executable preparation receipts.
@@ -85,5 +90,11 @@ impl PluginConfiguration {
             && !self.program.contains('\0')
             && self.values.len() <= 16 * 1024
             && serde_json::from_str::<serde_json::Value>(&self.values).is_ok()
+            && self.pending_events.len() <= 512
+            && self.pending_events.iter().map(String::len).sum::<usize>() <= 64 * 1024
+            && self
+                .pending_events
+                .iter()
+                .all(|event| serde_json::from_str::<serde_json::Value>(event).is_ok())
     }
 }

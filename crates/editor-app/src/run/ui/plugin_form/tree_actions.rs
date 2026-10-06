@@ -224,8 +224,10 @@ impl EditorApp {
             }
             for id in &removed {
                 state.documents.remove(id);
+                state.form_origins.remove(id);
                 state.views.remove(id);
-                state.events.remove(id);
+                state.edit_failures.remove(id);
+                state.edit_overflow.remove(id);
                 state.editing.remove(id);
             }
             state.rename = None;
@@ -233,7 +235,7 @@ impl EditorApp {
             removed
         });
         let mut requests = vec![];
-        self.plugin_configuration_bridge.pending.retain(|request, purpose| {
+        self.plugin_configuration_bridge.pending.retain(|request, (_, purpose)| {
             let delete = matches!(purpose, Purpose::Form { window, id, .. } if *window == form.entity_id() && removed.contains(id));
             if delete { requests.push(*request); }
             !delete
