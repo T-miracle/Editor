@@ -18,6 +18,11 @@ macro_rules! file_icons {
 }
 
 file_icons! {
+    // Run actions use editor-owned monochrome geometry, including filled Play/Stop treatment.
+    "icons/run-build.svg" => "../../assets/icons/run-build.svg",
+    "icons/run-start.svg" => "../../assets/icons/run-start.svg",
+    "icons/run-debug.svg" => "../../assets/icons/run-debug.svg",
+    "icons/run-stop.svg" => "../../assets/icons/run-stop.svg",
     // Custom explorer actions share the title's theme color through monochrome SVG rendering.
     "icons/explorer-locate.svg" => "../../assets/icons/explorer-locate.svg",
     "icons/explorer-collapse-all.svg" => "../../assets/icons/explorer-collapse-all.svg",
@@ -92,6 +97,22 @@ mod tests {
                     .unwrap()
                     .iter()
                     .any(|entry| entry == path)
+            );
+        }
+    }
+
+    /// Icon-only execution controls must resolve every asset in the application bundle.
+    #[test]
+    fn exposes_run_title_icons() {
+        for path in [
+            "icons/run-build.svg",
+            "icons/run-start.svg",
+            "icons/run-debug.svg",
+            "icons/run-stop.svg",
+        ] {
+            assert!(
+                AppAssets.load(path).unwrap().is_some(),
+                "missing run action icon: {path}"
             );
         }
     }

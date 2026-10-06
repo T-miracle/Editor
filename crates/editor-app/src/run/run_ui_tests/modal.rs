@@ -1,6 +1,28 @@
 //! Real modal callbacks must open/close outside the borrowed editor/window update.
 use super::*;
 
+/// The title bar reserves text for the selected name; execution actions use compact icon hit targets.
+#[gpui::test]
+fn b1_titlebar_actions_are_compact_icons(cx: &mut TestAppContext) {
+    let root = tempfile::tempdir().unwrap();
+    let (_, cx) = open_editor(cx, root.path());
+    for action in ["run-build", "run-start", "run-debug", "run-stop"] {
+        let bounds = cx.debug_bounds(action).unwrap();
+        assert!(
+            bounds.size.width <= bounds.size.height + px(4.),
+            "{action} must fit an icon button rather than a text label: {bounds:?}"
+        );
+    }
+    assert!(
+        cx.debug_bounds("run-rerun").is_none(),
+        "rerun is an explicit menu action, keeping the idle title bar to four icons"
+    );
+    assert!(
+        cx.debug_bounds("run-terminate").is_none(),
+        "immediate termination is offered when stopping, not as an extra idle title-bar action"
+    );
+}
+
 /// Save and Cancel remove the actual modal layer, rather than leaving an empty modal.
 #[gpui::test]
 fn real_run_configuration_modal_opens_and_closes_after_callbacks(cx: &mut TestAppContext) {

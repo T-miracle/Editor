@@ -8,7 +8,7 @@ alternate: /zh-cn/guide/run-debug-build/
 
 # Run, debug and build
 
-The title bar groups configuration selection, Build, Run, Debug, Stop, Locate and Rerun beside plugin management. A disabled control explains the missing configuration, unavailable capability, restricted workspace or current lifecycle state.
+The title bar shows one configuration/session dropdown and four icon buttons—Build, Run, Debug and Stop—beside plugin management. Hover an icon for its action or disabled reason. Select an active session from the dropdown to locate its output; the same menu offers Rerun and immediate termination. While an ordinary execution is stopping, the Stop slot offers immediate termination.
 
 ## Choose a configuration
 

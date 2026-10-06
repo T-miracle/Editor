@@ -1116,15 +1116,38 @@ fn a_saved_configuration_becomes_the_selected_target(cx: &mut TestAppContext) {
     let _ = std::fs::remove_file(stored);
 }
 
-/// An explicit force action remains visible alongside ordinary Stop, with state deciding enablement.
+/// Stop exposes immediate termination in the same slot once graceful stopping has begun.
 #[gpui::test]
 fn the_run_group_exposes_an_immediate_termination_action(cx: &mut TestAppContext) {
     let root = tempfile::tempdir().unwrap();
     let workspace = root.path().join("project");
     std::fs::create_dir_all(&workspace).unwrap();
-    let (_, cx) = open_editor(cx, &workspace);
+    let (app, cx) = open_editor(cx, &workspace);
+    assert!(cx.debug_bounds("run-terminate").is_none());
+    cx.update(|_, cx| {
+        app.update(cx, |state, cx| {
+            let key = state.workspace_key();
+            state.run_controls = crate::run::RunControls::load_with_project(
+                &key,
+                Some(root.path().join("local")),
+                Some(workspace.clone()),
+            );
+            let id = state.run_controls.generate_id(&key);
+            let mut draft = crate::run::RunConfigDraft::from_config(None, id.clone());
+            draft.name = "Stop fixture".into();
+            draft.program = "fixture.exe".into();
+            state
+                .run_controls
+                .upsert(draft.to_config().unwrap(), &key)
+                .unwrap();
+            state.run_controls.select(&id, &key);
+            state.run_controls.begin_stop(&id, 1);
+            cx.notify();
+        })
+    });
+    cx.run_until_parked();
     assert!(
         cx.debug_bounds("run-terminate").is_some(),
-        "users need a separate immediate force action"
+        "a stopping session needs an explicit force action in the Stop slot"
     );
 }

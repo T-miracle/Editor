@@ -750,7 +750,25 @@ impl EditorApp {
         let owner = cx.entity().downgrade();
         // The existing local popup owns retained focus, scrolling and gpui-base item behavior.
         // Its immutable entry map keeps keyboard selection tied to this menu's session snapshot.
-        let entries = self.run_controls.menu_entries();
+        let mut entries = self.run_controls.menu_entries();
+        // Replacement remains an explicit command without crowding the four title-bar actions.
+        let can_rerun = self.run_controls.selected().is_some_and(|config| {
+            self.run_controls.running_for(&config.id).is_some()
+                || self.run_controls.is_pending(&config.id)
+                || self.run_controls.debug_target_active(&config.id)
+        });
+        entries.push(RunMenuEntry::Separator);
+        entries.push(RunMenuEntry::Action {
+            id: "run-rerun".into(),
+            label: t!("run.rerun").into(),
+            enabled: can_rerun,
+        });
+        // Force stays reachable for a debugger whose pending disconnect has no ordinary execution state.
+        entries.push(RunMenuEntry::Action {
+            id: "run-force".into(),
+            label: t!("run.force").into(),
+            enabled: can_rerun,
+        });
         let mut items = Vec::new();
         let mut actions = std::collections::BTreeMap::new();
         let mut separator = false;
@@ -838,6 +856,8 @@ impl EditorApp {
                                 }
                                 "run-new" => app.open_run_config_dialog(window, cx, None),
                                 "run-discover" => app.discover_run_targets(cx),
+                                "run-rerun" => app.rerun_selected(window, cx),
+                                "run-force" => app.terminate_selected_run(cx),
                                 other => {
                                     if let Some(binding) = other.strip_prefix("run-rebind-") {
                                         if let Ok((config, target)) =
@@ -1131,6 +1151,10 @@ impl EditorApp {
             .as_ref()
             .map(|session| session.state)
             .or(pending.then_some(plugin_runtime::ExecutionState::Starting));
+        // During graceful stopping the same slot exposes the explicit immediate-termination path.
+        let stopping = selected
+            .as_ref()
+            .is_some_and(|config| self.run_controls.is_stopping(&config.id));
 
         h_flex()
             .debug_selector(|| "run-controls".into())
@@ -1140,9 +1164,13 @@ impl EditorApp {
                 div().debug_selector(|| "run-config-selector".into()).child(
                     Button::new("run-config-select")
                         .label(short_label(&label))
+                        .child(Icon::new(IconName::ChevronDown))
+                        .accessibility_label(label.clone())
                         .small()
                         .compact()
                         .ghost()
+                        .border_1()
+                        .border_color(cx.theme().input)
                         .tooltip(label.clone())
                         .on_click(
                             cx.listener(|this, event: &gpui_kit::ClickEvent, window, cx| {
@@ -1155,14 +1183,15 @@ impl EditorApp {
             .child(
                 div().debug_selector(|| "run-build".into()).child(
                     Button::new("run-build-action")
-                        .label(t!("run.form_build").to_string())
+                        .icon(Icon::default().path("icons/run-build.svg"))
+                        .accessibility_label(t!("run.form_build"))
                         .small()
                         .compact()
                         .ghost()
                         // Build runs the configuration's own build actions and nothing else: no
                         // pre-launch step, no program. A configuration without build actions keeps
                         // the control disabled with the reason it is disabled.
-                        .disabled(!permitted || build_blocker.is_some())
+                        .disabled(!permitted || selected.is_none() || build_blocker.is_some())
                         .tooltip(
                             build_blocker
                                 .clone()
@@ -1176,7 +1205,12 @@ impl EditorApp {
             .child(
                 div().debug_selector(|| "run-start".into()).child(
                     Button::new("run-start-action")
-                        .label(t!("run.start").to_string())
+                        .icon(
+                            Icon::default()
+                                .path("icons/run-start.svg")
+                                .text_color(cx.theme().success),
+                        )
+                        .accessibility_label(t!("run.start"))
                         .small()
                         .compact()
                         .ghost()
@@ -1205,7 +1239,8 @@ impl EditorApp {
                         Err(reason) => Some(reason.to_owned()),
                     });
                 Button::new("run-debug-action")
-                    .label(t!("run.form_debug").to_string())
+                    .icon(Icon::default().path("icons/run-debug.svg"))
+                    .accessibility_label(t!("run.form_debug"))
                     .small()
                     .compact()
                     .ghost()
@@ -1218,40 +1253,36 @@ impl EditorApp {
             .child(
                 div().debug_selector(|| "run-stop".into()).child(
                     Button::new("run-stop-action")
-                        .label(t!("run.stop").to_string())
+                        .debug_selector(move || {
+                            if stopping {
+                                "run-terminate"
+                            } else {
+                                "run-stop-action"
+                            }
+                            .into()
+                        })
+                        .icon(Icon::default().path("icons/run-stop.svg"))
+                        .accessibility_label(if stopping {
+                            t!("run.force")
+                        } else {
+                            t!("run.stop")
+                        })
                         .small()
                         .compact()
                         .ghost()
                         .disabled(!running)
-                        .tooltip(t!("run.stop_hint").to_string())
-                        .on_click(cx.listener(|this, _, _, cx| this.stop_selected_run(cx))),
-                ),
-            )
-            .child(
-                div().debug_selector(|| "run-terminate".into()).child(
-                    Button::new("run-terminate-action")
-                        .label(t!("run.force"))
-                        .small()
-                        .compact()
-                        .ghost()
-                        .disabled(!running)
-                        .tooltip(t!("run.force_hint"))
-                        .on_click(cx.listener(|this, _, _, cx| this.terminate_selected_run(cx))),
-                ),
-            )
-            .child(
-                div().debug_selector(|| "run-rerun".into()).child(
-                    Button::new("run-rerun-action")
-                        .label(t!("run.rerun").to_string())
-                        .small()
-                        .compact()
-                        .ghost()
-                        // Rerunning is its own action: a repeat Run click only reveals a session.
-                        .disabled(!running)
-                        .tooltip(t!("run.rerun_hint").to_string())
-                        .on_click(
-                            cx.listener(|this, _, window, cx| this.rerun_selected(window, cx)),
-                        ),
+                        .tooltip(if stopping {
+                            t!("run.force_hint")
+                        } else {
+                            t!("run.stop_hint")
+                        })
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            if stopping {
+                                this.terminate_selected_run(cx);
+                            } else {
+                                this.stop_selected_run(cx);
+                            }
+                        })),
                 ),
             )
             .child(
