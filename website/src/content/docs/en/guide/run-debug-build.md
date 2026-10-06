@@ -22,6 +22,19 @@ Configurations stay on this machine, scoped to the workspace. They do not create
 
 ## Build and launch
 
+The Rust plugin offers a **Cargo** group with run, build and debug templates. Run defaults
+to `run --release`, Build to `build --release`, and Debug to `run`; all these arguments remain
+editable. Missing Cargo or a root Cargo project leaves these ordinary templates disabled
+with a reason. Debug uses a real Cargo artifact, supports dev/debug and release profiles,
+and asks for explicit `--package`/`--bin` when more than one binary applies.
+
+The terminal plugin offers Shell templates for the current operating system and installed
+interpreters only. Its read-only interpreter, editable arguments and multiline script belong
+to the plugin. Working directory and environment overrides live under **More settings**.
+Unsupported debugging is reported by the Shell provider. The simplified configuration
+window has no local/shared selector. Older fixed-form configurations are not imported;
+after an explicitly authorized cutover, create new configurations from plugin templates.
+
 The left toolbar offers Add, Delete, Copy and Add folder as icons with tooltips. Folders are virtual groups. Add creates a child of the selected folder, a sibling of the selected configuration, or a root entry when nothing is selected. Click empty tree space to select the root. Rename a folder with F2 or a double click; click its disclosure arrow to expand or collapse it.
 
 Drag rows into folders or onto empty tree space to move them to the root. The gap before a row changes order within its category; folders always precede configurations. Moving into a descendant is rejected. Copy creates an independent sibling with a copy name. Delete shows the recursive folder and configuration counts and changes only the draft. Save commits the deletion, while Cancel retains earlier applied data. X or Escape offers Save, Discard changes and Continue editing when unapplied changes remain.

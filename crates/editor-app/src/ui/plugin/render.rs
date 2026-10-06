@@ -410,6 +410,14 @@ impl PluginView {
                     node.theme_role(),
                 )
                 .into_any_element(),
+            Kind::Textarea(_) => self
+                .font(
+                    div().w_full().child(crate::ui::controls::Textarea::new(
+                        &self.textareas[&node.id].state,
+                    )),
+                    node.theme_role(),
+                )
+                .into_any_element(),
             Kind::Checkbox { label, checked } => {
                 let owner = cx.entity().downgrade();
                 let revision = self.document.revision;

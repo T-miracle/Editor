@@ -8,6 +8,7 @@ use editor_core::{RunConfig, RunConfigSet, RunTarget};
 use rust_i18n::t;
 use std::collections::BTreeMap;
 
+pub(crate) mod cleanup;
 mod debug_presentation;
 mod provider_preparation;
 pub(crate) mod ui;
@@ -464,6 +465,9 @@ impl RunControls {
         Self::load_with_project(workspace, root, None)
     }
 
+    /// Historical low-level fixtures retain their old stored/shared launch grammar; it is not a
+    /// production entry or a compatibility path for the replaced configuration window.
+    #[cfg(test)]
     /// Load this machine's configurations and merge the project's shared ones into them.
     ///
     /// The project file is read through the same validation the form uses, so a hand-edited file that
@@ -507,6 +511,31 @@ impl RunControls {
                     &editor_core::SharedSet::default(),
                 );
                 controls.error = Some(error.to_string());
+            }
+        }
+        controls
+    }
+
+    /// Load only plugin-owned configurations. Old entries are rejected without migration or writes;
+    /// an explicit one-workspace maintenance command performs the separately authorized deletion.
+    pub fn load_plugin_configurations(workspace: &str, root: Option<std::path::PathBuf>) -> Self {
+        let mut controls = Self {
+            root: root.clone(),
+            ..Self::default()
+        };
+        if let Some(root) = root {
+            match editor_core::load(&root, workspace) {
+                Ok(set) if set.configurations.len() == set.plugin_configurations.len() => {
+                    controls.configs = set
+                }
+                Ok(_) => {
+                    controls.error = Some(t!("run.legacy_configuration").into());
+                    controls.root = None;
+                }
+                Err(error) => {
+                    controls.error = Some(error.to_string());
+                    controls.root = None;
+                }
             }
         }
         controls

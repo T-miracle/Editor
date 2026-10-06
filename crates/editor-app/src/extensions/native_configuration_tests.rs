@@ -119,8 +119,14 @@ impl Driver {
             }
             assert!(
                 Instant::now() < deadline,
-                "configuration flow timed out: {}",
-                cx.update(|_, cx| app.read(cx).status.clone())
+                "configuration flow timed out: {}; debug={:?}; providers={:?}",
+                cx.update(|_, cx| app.read(cx).status.clone()),
+                manager.debug_observations(),
+                manager
+                    .published_entries()
+                    .iter()
+                    .map(|entry| (&entry.manifest.id, &entry.error))
+                    .collect::<Vec<_>>()
             );
             std::thread::sleep(Duration::from_millis(10));
         }

@@ -48,6 +48,39 @@ impl State {
     /// Service calls cannot provide a program, arguments, cwd, environment, or installer step.
     pub(super) fn process_request(&mut self, operation: Operation) -> Result<Value, Failure> {
         match operation {
+            Operation::Resolve { program } => {
+                self.process_authority("process.exec")?;
+                if !self
+                    .api
+                    .capabilities
+                    .get("process")
+                    .is_some_and(|version| *version >= semver::Version::new(1, 6, 0))
+                {
+                    return Err(Failure::new(
+                        ErrorCode::CapabilityUnavailable,
+                        "process 1.6 is required for tool resolution",
+                    ));
+                }
+                let declaration = Service {
+                    program: program.clone(),
+                    args: vec![],
+                    search_paths: vec![],
+                    check_args: vec![],
+                    installation: None,
+                };
+                if !declaration.valid() {
+                    return Err(Failure::new(
+                        ErrorCode::InvalidRequest,
+                        "Expected a bare tool name or absolute executable path",
+                    ));
+                }
+                // Never probe/start candidates, install tools, or reserve a process slot here.
+                let path = crate::toolchains::resolve(&program)
+                    .map_err(|error| Failure::new(ErrorCode::NotFound, error.to_string()))?;
+                Ok(Value::ResolvedProgram {
+                    program: path.display().to_string(),
+                })
+            }
             Operation::StartService { service } => {
                 // Delegated creation additionally requires the original caller's process.exec.
                 // This installed service grant approves fixed bytes/argv; callers cannot override it.

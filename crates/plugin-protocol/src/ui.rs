@@ -73,6 +73,9 @@ impl Document {
                 required.insert("ui.richtext", semver::Version::new(1, 0, 0));
             }
             match &node.kind {
+                Kind::Textarea(_) => {
+                    required.insert("ui.native", semver::Version::new(1, 1, 0));
+                }
                 Kind::Canvas(canvas) => {
                     let version = if canvas.scroll.is_some() || canvas.font != Default::default() {
                         semver::Version::new(1, 1, 0)
@@ -308,6 +311,9 @@ pub enum Kind {
         label: String,
     },
     Input(Input),
+    /// ui.native 1.1: ordinary multiline text using the same input revision/event contract.
+    /// Newlines remain literal; the host performs no command or script parsing.
+    Textarea(Input),
     Checkbox {
         label: String,
         checked: bool,
@@ -522,6 +528,11 @@ impl Node {
     pub fn input(id: impl Into<String>, input: Input) -> Self {
         Self::new(id, Kind::Input(input))
     }
+    /// Create a multiline field requiring ui.native 1.1. Stable value_revision retains native
+    /// selection, composition and undo across acknowledgements; bump it for explicit resets.
+    pub fn textarea(id: impl Into<String>, input: Input) -> Self {
+        Self::new(id, Kind::Textarea(input))
+    }
     pub fn checkbox(id: impl Into<String>, label: impl Into<String>, checked: bool) -> Self {
         Self::new(
             id,
@@ -574,7 +585,7 @@ impl Node {
             Kind::CodeBlock { .. } => "code_block",
             Kind::Image { .. } => "image",
             Kind::Button { .. } => "button",
-            Kind::Input(_) => "input",
+            Kind::Input(_) | Kind::Textarea(_) => "input",
             Kind::Checkbox { .. } => "checkbox",
             Kind::Choice { .. } => "choice",
             Kind::Tabs { .. } => "tabs",

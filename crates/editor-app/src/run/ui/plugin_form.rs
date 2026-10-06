@@ -13,6 +13,10 @@ mod state;
 pub(super) use state::*;
 #[cfg(test)]
 mod fault_tests;
+#[cfg(test)]
+mod native_profile;
+#[cfg(test)]
+mod rollout_tests;
 mod tree;
 mod tree_actions;
 #[cfg(test)]

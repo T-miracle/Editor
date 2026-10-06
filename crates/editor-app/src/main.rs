@@ -297,10 +297,9 @@ impl EditorApp {
         let session_state = SessionState::load(workspace.root());
         // Plugin configurations are host-local per workspace; project settings do not supply run data.
         // A malformed local store is reported rather than silently replaced.
-        let run_controls = run::RunControls::load_with_project(
+        let run_controls = run::RunControls::load_plugin_configurations(
             &workspace.root().display().to_string(),
             editor_core::default_root(),
-            None,
         );
         let tree_state = cx.new(|cx| TreeState::new(cx));
         let tree_subscription = cx.subscribe(&tree_state, |this, _, event: &TreeEvent, cx| {
@@ -761,6 +760,9 @@ fn resolve_startup_target() -> anyhow::Result<(Workspace, Option<PathBuf>)> {
 
 fn main() -> anyhow::Result<()> {
     if sdk_export::run_cli()? {
+        return Ok(());
+    }
+    if run::cleanup::run_cli()? {
         return Ok(());
     }
     // Use Simplified Chinese by default while keeping locale changes centralized.

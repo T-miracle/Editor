@@ -1,7 +1,7 @@
 {
   "id": "rust",
   "name": "Rust",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "protocol": 7,
   "contributions": "plugin.toml",
   "permissions": [
@@ -18,17 +18,254 @@
       "workspace.files": ">=1.1,<2",
       "host.sdk": "^1",
       "configuration": "^1",
-      "process": ">=1.5,<2",
+      "process": ">=1.6,<2",
       "plugin.services": ">=1.1,<2",
-      "ui.panels": "^1"
+      "ui.panels": "^1",
+      "ui.native": ">=1.1,<2"
     }
   },
   "component": "rust.wasm",
-  "plugin_services": {"provides":{"run.targets":{"version":"1.0.0","methods":{"discover":{"parameters":{"type":"record","fields":{"workspace":{"type":"string","max_bytes":4096}}},"result":{"type":"record","fields":{"targets":{"type":"array","items":{"type":"record","fields":{"identity":{"type":"string","max_bytes":256},"label":{"type":"string","max_bytes":256},"source":{"type":"string","max_bytes":4096},"target_type":{"type":"string","max_bytes":128},"type_version":{"type":"integer","min":1,"max":2147483647},"binding":{"type":"string","max_bytes":4096}}},"max_items":128}}},"permissions":["workspace.read","process.exec"]},"prepare":{"parameters":{"type":"record","fields":{"workspace":{"type":"string","max_bytes":4096},"binding":{"type":"string","max_bytes":4096},"env":{"type":"array","items":{"type":"record","fields":{"name":{"type":"string","max_bytes":128},"value":{"type":"string","max_bytes":32768}}},"max_items":64}}},"result":{"type":"record","fields":{"program":{"type":"string","max_bytes":4096}}},"permissions":["workspace.read","process.exec","ui.panels"]}}}}},
+  "plugin_services": {
+    "provides": {
+      "run.targets": {
+        "version": "1.0.0",
+        "methods": {
+          "discover": {
+            "parameters": {
+              "type": "record",
+              "fields": {
+                "workspace": {
+                  "type": "string",
+                  "max_bytes": 4096
+                }
+              }
+            },
+            "result": {
+              "type": "record",
+              "fields": {
+                "targets": {
+                  "type": "array",
+                  "items": {
+                    "type": "record",
+                    "fields": {
+                      "identity": {
+                        "type": "string",
+                        "max_bytes": 256
+                      },
+                      "label": {
+                        "type": "string",
+                        "max_bytes": 256
+                      },
+                      "source": {
+                        "type": "string",
+                        "max_bytes": 4096
+                      },
+                      "target_type": {
+                        "type": "string",
+                        "max_bytes": 128
+                      },
+                      "type_version": {
+                        "type": "integer",
+                        "min": 1,
+                        "max": 2147483647
+                      },
+                      "binding": {
+                        "type": "string",
+                        "max_bytes": 4096
+                      }
+                    }
+                  },
+                  "max_items": 128
+                }
+              }
+            },
+            "permissions": [
+              "workspace.read",
+              "process.exec"
+            ]
+          },
+          "prepare": {
+            "parameters": {
+              "type": "record",
+              "fields": {
+                "workspace": {
+                  "type": "string",
+                  "max_bytes": 4096
+                },
+                "binding": {
+                  "type": "string",
+                  "max_bytes": 4096
+                },
+                "env": {
+                  "type": "array",
+                  "items": {
+                    "type": "record",
+                    "fields": {
+                      "name": {
+                        "type": "string",
+                        "max_bytes": 128
+                      },
+                      "value": {
+                        "type": "string",
+                        "max_bytes": 32768
+                      }
+                    }
+                  },
+                  "max_items": 64
+                }
+              }
+            },
+            "result": {
+              "type": "record",
+              "fields": {
+                "program": {
+                  "type": "string",
+                  "max_bytes": 4096
+                }
+              }
+            },
+            "permissions": [
+              "workspace.read",
+              "process.exec",
+              "ui.panels"
+            ]
+          }
+        }
+      },
+      "run.configurations": {
+        "version": "1.0.0",
+        "methods": {
+          "catalog": {
+            "parameters": {
+              "type": "record",
+              "fields": {
+                "workspace": {
+                  "type": "string",
+                  "max_bytes": 4096
+                },
+                "locale": {
+                  "type": "string",
+                  "max_bytes": 64
+                },
+                "os": {
+                  "type": "string",
+                  "max_bytes": 64
+                }
+              }
+            },
+            "result": {
+              "type": "record",
+              "fields": {
+                "payload": {
+                  "type": "string",
+                  "max_bytes": 65536
+                }
+              }
+            },
+            "permissions": [
+              "workspace.read",
+              "process.exec"
+            ]
+          },
+          "form": {
+            "parameters": {
+              "type": "record",
+              "fields": {
+                "workspace": {
+                  "type": "string",
+                  "max_bytes": 4096
+                },
+                "locale": {
+                  "type": "string",
+                  "max_bytes": 64
+                },
+                "os": {
+                  "type": "string",
+                  "max_bytes": 64
+                },
+                "template": {
+                  "type": "string",
+                  "max_bytes": 256
+                },
+                "values": {
+                  "type": "string",
+                  "max_bytes": 16384
+                },
+                "event": {
+                  "type": "string",
+                  "max_bytes": 65536
+                }
+              }
+            },
+            "result": {
+              "type": "record",
+              "fields": {
+                "payload": {
+                  "type": "string",
+                  "max_bytes": 65536
+                }
+              }
+            },
+            "permissions": [
+              "workspace.read",
+              "ui.panels"
+            ]
+          },
+          "validate": {
+            "parameters": {
+              "type": "record",
+              "fields": {
+                "workspace": {
+                  "type": "string",
+                  "max_bytes": 4096
+                },
+                "locale": {
+                  "type": "string",
+                  "max_bytes": 64
+                },
+                "os": {
+                  "type": "string",
+                  "max_bytes": 64
+                },
+                "template": {
+                  "type": "string",
+                  "max_bytes": 256
+                },
+                "values": {
+                  "type": "string",
+                  "max_bytes": 16384
+                },
+                "intent": {
+                  "type": "string",
+                  "max_bytes": 64
+                }
+              }
+            },
+            "result": {
+              "type": "record",
+              "fields": {
+                "payload": {
+                  "type": "string",
+                  "max_bytes": 65536
+                }
+              }
+            },
+            "permissions": [
+              "workspace.read",
+              "process.exec"
+            ]
+          }
+        }
+      }
+    }
+  },
   "settings": {
     "executable": {
       "title": "Rust Analyzer 可执行文件（留空默认值时自动查找）",
-      "value_type": {"kind": "string", "max_length": 4096},
+      "value_type": {
+        "kind": "string",
+        "max_length": 4096
+      },
       "default": "",
       "scope": "project"
     }

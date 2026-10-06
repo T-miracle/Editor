@@ -46,6 +46,30 @@ fn store_configuration(workspace_key: &str, name: &str) -> std::path::PathBuf {
     path
 }
 
+/// Store a current plugin-backed identity for selector tests, without pretending it authorizes a run.
+/// The provider is intentionally absent: execution still requires a fresh public validation receipt.
+fn store_plugin_configuration(workspace_key: &str, name: &str) -> std::path::PathBuf {
+    let path = store_configuration(workspace_key, name);
+    let base = editor_core::default_root().unwrap();
+    let mut set = editor_core::load(&base, workspace_key).unwrap();
+    let configuration = set.configurations[0].clone();
+    set.plugin_configurations.insert(
+        configuration.id,
+        editor_core::PluginConfiguration {
+            provider: "configuration-provider".into(),
+            template: "program".into(),
+            values: "{}".into(),
+            pending_events: vec![],
+            name: name.into(),
+            program: configuration.target.executable().into(),
+            revision: 0,
+            validation: editor_core::ConfigurationValidation::Unchecked,
+        },
+    );
+    editor_core::save(&base, workspace_key, &set).unwrap();
+    path
+}
+
 /// Open the editor on a temporary workspace and return its window context.
 fn open_editor<'a>(
     cx: &'a mut TestAppContext,
@@ -746,7 +770,7 @@ fn the_selector_opens_the_unified_dropdown(cx: &mut TestAppContext) {
         .unwrap()
         .display()
         .to_string();
-    let stored = store_configuration(&key, "本机程序");
+    let stored = store_plugin_configuration(&key, "本机程序");
     let (app, cx) = open_editor(cx, &workspace);
     // Nothing is open until the selector is used.
     assert!(cx.debug_bounds("run-menu").is_none());

@@ -6,7 +6,7 @@ pub(super) fn projection(
     id: &str,
     launch: Option<contract::Launch>,
 ) -> Result<RunConfig, String> {
-    let launch = launch.unwrap_or(contract::Launch {
+    let mut launch = launch.unwrap_or(contract::Launch {
         target: serde_json::json!({"mode":"program","program":data.program,"args":[]}),
         directory: None,
         env: Default::default(),
@@ -15,6 +15,14 @@ pub(super) fn projection(
         prelaunch: vec![],
         provider: None,
     });
+    // The public self-reference binds a provider-owned target to its authenticated contributor.
+    // It never selects an execution provider or grants that contributor additional permissions.
+    bind_self_target(&mut launch.target, &data.provider);
+    for step in launch.build.iter_mut().chain(launch.prelaunch.iter_mut()) {
+        if step["target"]["kind"] == "action" {
+            bind_self_target(&mut step["target"]["target"], &data.provider);
+        }
+    }
     let config: RunConfig = serde_json::from_value(serde_json::json!({
         "id":id,"name":if data.name.trim().is_empty(){id}else{&data.name},"target":launch.target,
         "directory":launch.directory,"env":launch.env,"tool_paths":launch.tool_paths,
@@ -23,6 +31,13 @@ pub(super) fn projection(
     .map_err(|error| error.to_string())?;
     config.validate().map_err(|error| error.to_string())?;
     Ok(config)
+}
+
+/// Replace only the public provided-target provider token, never opaque bindings or other fields.
+fn bind_self_target(target: &mut serde_json::Value, provider: &str) {
+    if target["mode"] == "provided" && target["provider"] == "$self" {
+        target["provider"] = provider.into();
+    }
 }
 
 /// A malformed success is unavailable, not valid; old prepared data remains non-authoritative.

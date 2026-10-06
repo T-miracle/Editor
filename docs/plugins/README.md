@@ -9,6 +9,6 @@
 - [本批调试器、受控传输与单目标握手决定](specs/run-debug-build-debugger.md)。
 - [构建与运行配置 B2：IDEA 参考设计提案](specs/run-config-idea-design.md)（用户已选 A / 方案 1）；[B3：双栏简洁版](specs/run-config-simple-design.md)（已落地原生弹窗，支持插件默认目标）；[B3 实现与验收](verification/run-config-simple-2026-10-06.md)。设计图与真实验证的范围在对应记录中区分。
 - [运行配置重构：插件模板、原生表单与配置树](specs/run-config-plugin-tree.md)／[规格 #67](https://github.com/T-miracle/Editor/issues/67)（2026-10-07 产品基线及测试入口已确认）。新规格替代 B3 的表单、目录组织、提交和存储约定，不将旧验收计作新功能通过。
-- [运行配置重构实施工单](tickets/run-config-plugin-tree/README.md)：4 个端到端切片已发布为 #68–#71，原生依赖已核对；01、02 已交付，03 最终检查通过，04 待实施。30 个验收场景逐项归属，按交付节点成批验证，证据见 [验收记录](verification/run-config-plugin-tree.md)。
+- [运行配置重构实施工单](tickets/run-config-plugin-tree/README.md)：4 个端到端切片 #68–#71 的实现与验收均完成，普通提交及 GitHub 交付记录见各工单；没有合并主分支。30 个验收场景的实际包、Windows 与真实调试证据见 [验收记录](verification/run-config-plugin-tree.md)。
 
 平台历史资料当前仍跟踪在 `docs/specs/`；后续重归档应同步修改本入口及消费者链接，不能依赖其他聊天尚未提交的副本。

@@ -1,6 +1,10 @@
 # 终端 WebAssembly 插件
 
-当前版本 0.11.0 使用清单 protocol 7 和类型化能力接口。插件通过通用布局树组合 `SideTabs`、`Canvas` 和原生菜单；终端解析、网格、历史、会话与 Shell 配置由 WASM 插件持有。宿主仅提供授权后的进程、文件、剪贴板、文档和 UI 能力。架构与包格式见 [运行时插件说明](../../docs/runtime-plugins.md)。
+当前版本 0.12.0 使用清单 protocol 7 和类型化能力接口。插件通过通用布局树组合 `SideTabs`、`Canvas` 和原生菜单；终端解析、网格、历史、会话与 Shell 配置由 WASM 插件持有。宿主仅提供授权后的进程、文件、剪贴板、文档和 UI 能力。架构与包格式见 [运行时插件说明](../../docs/runtime-plugins.md)。
+
+0.12.0 增加公开 `run.configurations 1.0` 的 Shell 脚本配置。Windows 只提供本机可用的 Windows PowerShell、PowerShell 7、cmd；Linux/macOS 只提供本机可用的 sh、bash、zsh。未安装和其他系统的解释器不显示，WSL 保留既有交互终端入口，但不以仅存在 wsl.exe 推断脚本环境可用。
+
+配置包含名称、只读解释器、可编辑完整参数和原生多行脚本；工作目录与环境变量放在更多设置中。默认解释器开关由插件提供，脚本作为一个原始参数传递。添加与编辑不启动解释器；保存、构建、运行时重新校验，Shell 模板明确报告不支持调试。工具探测通过公开 `process 1.6` Resolve，不执行程序；多行字段要求 `ui.native 1.1`。既有 ConPTY 会话、历史、复制粘贴和停止行为保留。
 
 ## 安装与更新
 

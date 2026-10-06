@@ -313,7 +313,9 @@ impl State {
             },
             api::Operation::Process {
                 operation:
-                    process::Operation::Execute { .. } | process::Operation::StartService { .. },
+                    process::Operation::Execute { .. }
+                    | process::Operation::StartService { .. }
+                    | process::Operation::Resolve { .. },
             } => "process.exec",
             api::Operation::Process {
                 operation:

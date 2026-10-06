@@ -4,6 +4,8 @@
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
+pub mod command_form;
+
 /// Every compatible plugin can provide this contract; provider identity comes from authenticated routing.
 pub const CONTRACT: &str = "run.configurations";
 /// Opaque editable data is bounded independently from the native view's drawing budget.

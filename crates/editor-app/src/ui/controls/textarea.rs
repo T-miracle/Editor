@@ -1,5 +1,4 @@
 //! Multi-line form appearance; gpui-base retains selection, IME, undo, scrolling and keyboard input.
-use gpui_base::StyledExt as _;
 use gpui_base::input::{Textarea as BaseTextarea, TextareaState};
 use gpui_kit::component::ActiveTheme as _;
 use gpui_kit::{App, Entity, IntoElement, ParentElement, RenderOnce, Styled, Window, div, px};

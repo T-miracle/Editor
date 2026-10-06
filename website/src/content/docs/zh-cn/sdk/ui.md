@@ -8,6 +8,11 @@ alternate: /en/sdk/ui/
 
 # 原生界面
 
+`ui.native >=1.1,<2` 增加 `Kind::Textarea(Input)` 和 `Node::textarea`，用于原生多行字段。
+沿用单行输入框的值、占位文字、重置版本、启用状态及 Change/Submit 事件校验。普通回显
+保留原生焦点、选择和 IME 组合；仅在明确替换时增加 `value_revision`。移除控件时释放订阅。
+多行字段使用编辑器本地主题与编辑行为，不创建文档会话或 WebView。
+
 ## 可组合布局（清单 protocol 7）
 
 `ui.collections ^1` 增加 `Kind::SideTabs` 与 `Document.menu`。SideTabs 是普通布局节点，可在行列树任意位置组合；节点 ID 与集合 ID 相同，条目动作仍按稳定 ID 返回。插件通过节点宽度响应 `Resize(width)`，相邻画布会得到独立的实际尺寸测量。PopupMenu 锚点相对文档，覆盖正文、不占布局空间；显示时只接受该菜单的选择或关闭，Dialog 优先。

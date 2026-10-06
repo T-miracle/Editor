@@ -6,11 +6,19 @@ order: 3
 alternate: /zh-cn/sdk/processes/
 ---
 
-# Native process capability 1.5
+# Native process capability 1.6
 
 The `process: ^1` capability is negotiated independently. Operations are sent through the
 ordinary SDK request as `api::Operation::Process { operation }`; a capability is never
 decided by the plugin's name.
+
+`Resolve { program }` requires `process >=1.6,<2`, `process.exec`, a live instance
+and a trusted workspace. It accepts a bare tool name or an absolute executable path and
+returns `Value::ResolvedProgram { program }` with the resolved absolute path. It uses the
+same tool lookup as execution, without starting a process, running a version probe,
+installing a tool or reserving a process handle. Missing tools return `NotFound`; invalid
+paths, permission failures and unsupported capability versions are explicit errors.
+Delegated service calls retain the caller's permission boundary.
 
 ## Declaration and authorization
 

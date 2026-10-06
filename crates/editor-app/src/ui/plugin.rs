@@ -13,6 +13,7 @@ mod render;
 mod svg;
 #[cfg(test)]
 mod tests;
+mod textareas;
 mod theme;
 mod viewport;
 #[cfg(test)]
@@ -48,6 +49,7 @@ pub(crate) struct PluginView {
     environment: Environment,
     sink: EventSink,
     inputs: BTreeMap<String, NativeInput>,
+    textareas: BTreeMap<String, textareas::NativeTextarea>,
     scrolls: BTreeMap<String, ScrollHandle>,
     /// Read-only source block ownership and one revision-bound reveal; native scroll remains in Base.
     scene_layout: layout::SceneLayout,
@@ -190,6 +192,7 @@ impl PluginView {
             environment,
             sink: Rc::new(sink),
             inputs: BTreeMap::new(),
+            textareas: BTreeMap::new(),
             scrolls: BTreeMap::new(),
             scene_layout: Default::default(),
             viewport: Default::default(),
@@ -323,6 +326,7 @@ impl PluginView {
             .map(|n| n.id.clone())
             .collect();
         self.inputs.retain(|id, _| input_ids.contains(id));
+        self.sync_textareas(&nodes, window, cx);
         let scroll_ids: BTreeSet<_> = nodes
             .iter()
             .filter(|n| matches!(n.kind, Kind::Scroll { .. }))

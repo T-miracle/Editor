@@ -309,7 +309,9 @@ impl EditorApp {
             .get(id)
             .cloned()
         else {
-            return false;
+            self.status = t!("run.legacy_configuration").into();
+            cx.notify();
+            return true;
         };
         if !self.run_permitted(cx) {
             self.status = t!("run.restricted").into();

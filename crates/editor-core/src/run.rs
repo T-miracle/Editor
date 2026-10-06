@@ -24,8 +24,10 @@ pub use breakpoints::{
 mod configuration_tree;
 mod plugin_configurations;
 pub use configuration_tree::{ConfigurationFolder, ConfigurationPlacement, ConfigurationTree};
+mod legacy_cleanup;
 mod store;
 pub use discovery::{DiscoveryOutcome, configuration_for, reconcile, repair};
+pub use legacy_cleanup::{clear_legacy_configurations, legacy_configuration_paths};
 pub use plugin_configurations::{ConfigurationValidation, PluginConfiguration};
 pub use shared::{
     SHARED_CONFIG_VERSION, SharedConfig, SharedSet, SharedStoreError, WORKSPACE_TOKEN, merge,

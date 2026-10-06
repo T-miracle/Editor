@@ -1,5 +1,4 @@
-//! Simplified native configuration layout: a sidebar, three main fields and controlled disclosures.
-//! Plugin candidates fill an unsaved draft; all execution semantics remain in the existing contracts.
+//! Provider-owned native configuration entry. Historical fixed-form rendering remains test-only.
 use super::*;
 mod actions;
 mod editor;
@@ -26,6 +25,26 @@ pub(crate) fn render_run_config_form(
     if form.read(cx).plugin.is_some() {
         return content.child(super::plugin_form::render(&app, &form, window, cx));
     }
+    // Initialization can paint once before the provider state attaches. Never expose the retired form.
+    #[cfg(not(test))]
+    {
+        content
+    }
+    #[cfg(test)]
+    {
+        render_historical_form(&app, &form, content, window, cx)
+    }
+}
+
+/// Keep pre-refactor state/control fixtures available without a production compatibility entry.
+#[cfg(test)]
+fn render_historical_form(
+    app: &Entity<EditorApp>,
+    form: &Entity<RunConfigForm>,
+    content: DialogContent,
+    window: &mut Window,
+    cx: &mut gpui_kit::App,
+) -> DialogContent {
     let body = if form.read(cx).editor.is_some() {
         editor::render_editor(&app, &form, cx)
     } else if form.read(cx).pending_selection.is_some() {

@@ -18,8 +18,18 @@ struct Binding {
     package: String,
     bin: String,
     profile: String,
+    /// Configuration Debug retains the user's explicit Cargo build switches and working directory.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    build_args: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    directory: Option<String>,
 }
 enum Kind {
+    Configuration {
+        fields: plugin_protocol::configurations::command_form::Fields,
+        workspace: String,
+        locale: String,
+    },
     Discover {
         workspace: String,
     },
@@ -45,6 +55,76 @@ thread_local! {static STATE:RefCell<State>=RefCell::new(State::default());}
 /// Process notifications are consumed at full fidelity; bounded UI history never determines an artifact.
 pub fn dispatch(input: api::Input) -> Result<api::Output, Failure> {
     STATE.with(|state| state.borrow_mut().dispatch(input))
+}
+/// Metadata waits use the same cancellation, quota and process notification ownership as targets.
+pub(super) fn begin_configuration(
+    call: service::Invocation,
+    fields: plugin_protocol::configurations::command_form::Fields,
+) -> Result<api::Output, Failure> {
+    STATE.with(|state| {
+        let mut state = state.borrow_mut();
+        if state.operations.len() >= 8 {
+            return Err(limit("Cargo preparation quota exceeded"));
+        }
+        let reply = call
+            .reply
+            .ok_or_else(|| failure("plugin.services 1.1 is required"))?;
+        let workspace = call.arguments["workspace"]
+            .as_str()
+            .unwrap_or_default()
+            .to_owned();
+        let locale = call.arguments["locale"].as_str().unwrap_or("en").to_owned();
+        let mut args = vec![
+            "metadata".into(),
+            "--no-deps".into(),
+            "--format-version=1".into(),
+            "--offline".into(),
+        ];
+        let cargo = &fields.args[..fields
+            .args
+            .iter()
+            .position(|arg| arg == "--")
+            .unwrap_or(fields.args.len())];
+        for (index, argument) in cargo.iter().enumerate() {
+            if argument == "--manifest-path" {
+                if let Some(path) = cargo.get(index + 1) {
+                    args.extend([argument.clone(), path.clone()]);
+                }
+            } else if argument.starts_with("--manifest-path=") {
+                args.push(argument.clone());
+            }
+        }
+        let cwd = fields.directory(&workspace).unwrap_or(workspace.clone());
+        let env = fields
+            .env
+            .iter()
+            .map(|entry| (entry.name.clone(), entry.value.clone()))
+            .collect();
+        let api::Value::Resource(handle) = api::guest::request(api::Operation::Process {
+            operation: process::Operation::Execute {
+                program: "cargo".into(),
+                args,
+                transport: process::Transport::Stdio,
+                cwd: Some(cwd),
+                env,
+            },
+        })?
+        else {
+            return Err(failure("Expected Cargo metadata process"));
+        };
+        state.operations.push(Operation {
+            reply,
+            handle,
+            kind: Kind::Configuration {
+                fields,
+                workspace,
+                locale,
+            },
+            stdout: vec![],
+            diagnostics: String::new(),
+        });
+        Ok(Default::default())
+    })
 }
 impl State {
     fn dispatch(&mut self, input: api::Input) -> Result<api::Output, Failure> {
@@ -165,6 +245,9 @@ impl State {
             if binding.profile == "release" {
                 args.push("--release".into());
             }
+            if !binding.build_args.is_empty() {
+                args = binding.build_args.clone();
+            }
             (
                 Kind::Build {
                     binding,
@@ -190,7 +273,11 @@ impl State {
                     .collect()
             })
             .unwrap_or_default();
-        let api::Value::Resource(handle)=api::guest::request(api::Operation::Process {operation:process::Operation::Execute {program:"cargo".into(),args,transport:process::Transport::Stdio,cwd:Some(workspace),env}}).map_err(|error|Failure::new(error.code,format!("Cargo unavailable or preparation failed: {}. Configure a local tool path; no compiler is installed automatically.",error.message)))? else {return Err(failure("Expected Cargo process handle"));};
+        let cwd = match &kind {
+            Kind::Build { binding, .. } => binding.directory.clone().unwrap_or(workspace.clone()),
+            _ => workspace,
+        };
+        let api::Value::Resource(handle)=api::guest::request(api::Operation::Process {operation:process::Operation::Execute {program:"cargo".into(),args,transport:process::Transport::Stdio,cwd:Some(cwd),env}}).map_err(|error|Failure::new(error.code,format!("Cargo unavailable or preparation failed: {}. Configure a local tool path; no compiler is installed automatically.",error.message)))? else {return Err(failure("Expected Cargo process handle"));};
         self.operations.push(Operation {
             reply,
             handle,
@@ -213,7 +300,10 @@ impl State {
                     );
                     return None;
                 }
-                let bound = if matches!(operation.kind, Kind::Discover { .. }) {
+                let bound = if matches!(
+                    operation.kind,
+                    Kind::Discover { .. } | Kind::Configuration { .. }
+                ) {
                     MAX_METADATA
                 } else {
                     MAX_LINE
@@ -251,6 +341,21 @@ impl State {
                     ))));
                 }
                 Some(match &mut operation.kind {
+                    Kind::Configuration {
+                        fields,
+                        workspace,
+                        locale,
+                    } => super::configurations::debug_validation(
+                        &operation.stdout,
+                        fields,
+                        workspace,
+                        locale,
+                    )
+                    .and_then(|validation| {
+                        serde_json::to_string(&validation)
+                            .map(|payload| json!({"payload":payload}))
+                            .map_err(|error| failure(&error.to_string()))
+                    }),
                     Kind::Discover { workspace } => candidates(&operation.stdout, workspace)
                         .map(|targets| json!({"targets":targets})),
                     Kind::Build {
@@ -283,6 +388,17 @@ impl State {
 /// Version and path bounds are enforced before any project process starts.
 fn validate_binding(binding: &Binding) -> Result<(), Failure> {
     if binding.version != 1
+        || (!binding.build_args.is_empty()
+            && (binding.build_args.first().is_none_or(|arg| arg != "build")
+                || binding.build_args.len() > 128
+                || binding
+                    .build_args
+                    .iter()
+                    .any(|arg| arg.len() > 4096 || arg.contains('\0'))))
+        || binding
+            .directory
+            .as_ref()
+            .is_some_and(|directory| directory.len() > 4096 || directory.contains('\0'))
         || !matches!(binding.profile.as_str(), "debug" | "release")
         || binding.package.is_empty()
         || binding.package.len() > 256
@@ -325,7 +441,10 @@ fn normalized(path: &str) -> String {
     }
 }
 /// Cargo's workspace member table handles virtual manifests and both explicit/implicit bin targets.
-fn candidates(bytes: &[u8], workspace: &str) -> Result<Vec<targets::Candidate>, Failure> {
+pub(super) fn candidates(
+    bytes: &[u8],
+    workspace: &str,
+) -> Result<Vec<targets::Candidate>, Failure> {
     let metadata: Value =
         serde_json::from_slice(bytes).map_err(|_| failure("Cargo metadata is malformed"))?;
     let members = metadata["workspace_members"]
@@ -380,6 +499,8 @@ fn candidates(bytes: &[u8], workspace: &str) -> Result<Vec<targets::Candidate>, 
                         .into(),
                     bin: bin.into(),
                     profile: profile.into(),
+                    build_args: vec![],
+                    directory: None,
                 };
                 validate_binding(&binding)?;
                 // JSON tuples distinguish delimiters in names; the host additionally namespaces providers.

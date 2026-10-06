@@ -98,6 +98,12 @@ pub enum ExitMode {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Operation {
+    /// process 1.6: resolve a bare executable or absolute path without starting it.
+    /// Requires process.exec and the active/trusted instance. This is observation only;
+    /// Execute still checks permissions and resolves the path again.
+    Resolve {
+        program: String,
+    },
     StartService {
         service: String,
     },

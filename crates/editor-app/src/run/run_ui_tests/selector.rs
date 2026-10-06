@@ -60,7 +60,7 @@ fn empty_configuration_selector_is_anchored_and_opens_editing(cx: &mut TestAppCo
 #[gpui::test]
 fn saved_configuration_selector_has_only_two_sections(cx: &mut TestAppContext) {
     let root = tempfile::tempdir().unwrap();
-    let stored = store_configuration(&storage_key_of(root.path()), "Saved program");
+    let stored = store_plugin_configuration(&storage_key_of(root.path()), "Saved program");
     let (app, cx) = open_editor(cx, root.path());
     let button = cx.debug_bounds("run-config-selector").unwrap();
     cx.simulate_click(button.center(), Default::default());

@@ -26,6 +26,19 @@ Catalog, form and validation requests expire after 30 seconds. The host accepts 
 
 ## Structured launch
 
+The optional guest helper `configurations::command_form::Fields` composes a name field,
+read-only executable, one native input per literal argument and collapsed working-directory
+and environment fields. An optional script uses `ui.native >=1.1` multiline input. Plugins
+own its serialized values and validation and may replace the helper with another native
+layout. `command_form::resolve` uses public `process >=1.6` tool lookup; the helper never
+starts a process while adding or editing a form.
+
+In `Launch.target` and action targets inside `build`/`prelaunch`, `provider: "$self"` refers to the
+authenticated configuration provider. The host replaces this token with that provider's
+identity before validating the projection. It does not select an execution provider or
+grant target, process or debug permissions. This allows the same guest package to retain
+its own target preparation after a package identity change.
+
 An unsuccessful form call does not acknowledge its event. The host retains pending events with the local draft (at most 512 events and 64 KiB combined), stops automatic retries after failure, and may save them as unavailable. Reopening replays them in order before validation. Canonical values alone cannot authorize execution while input remains unacknowledged. Input exceeding the storage budget keeps the window open with an explicit error. Deferred native events retain their window and provider incarnation; replacement surfaces cannot adopt old callbacks.
 
 `Launch` contains `target`, optional `directory`, `env`, `tool_paths`, ordered `build` and `prelaunch` actions, and optional execution `provider`. A program target is `{ "mode": "program", "program": "cargo", "args": ["run", "--release"] }`. The subcommand is part of the editable full argument array. Spaces, quotes, Chinese text and metacharacters stay inside their original argument elements; the host never joins them into a Shell command.

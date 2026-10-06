@@ -74,3 +74,68 @@ fn popup_menu_pointer_selects_command_without_dismissal(cx: &mut TestAppContext)
     cx.run_until_parked();
     assert_eq!(*events.borrow(), vec![Action::Select("run".into())]);
 }
+
+/// Long dropdowns retain their lower-edge anchor and a visible footer; scrolling under a stationary
+/// pointer must preserve End/Enter's keyboard target rather than silently selecting another row.
+#[gpui::test]
+fn long_dropdown_keeps_footer_and_keyboard_selection(cx: &mut TestAppContext) {
+    cx.update(|cx| {
+        gpui_kit::init(cx);
+        crate::ui::typography::init(cx);
+        crate::ui::theme::apply_theme(crate::ui::theme::builtin_theme(false), cx);
+    });
+    let events = Rc::new(RefCell::new(vec![]));
+    let sink = events.clone();
+    let (_, cx) = cx.add_window_view(move |window, cx| {
+        let mut items: Vec<_> = (0..80)
+            .map(|index| MenuItem {
+                id: format!("row-{index}"),
+                label: format!("Configuration {index}"),
+                disabled: false,
+                separator_before: false,
+            })
+            .collect();
+        items.push(MenuItem {
+            id: "edit".into(),
+            label: "Edit configurations".into(),
+            disabled: false,
+            separator_before: true,
+        });
+        let view = cx.new(|cx| {
+            PopupMenu::new(
+                items,
+                MenuStyle::current(cx),
+                point(px(30.), px(40.)),
+                move |action, _, _| sink.borrow_mut().push(action),
+                window,
+                cx,
+            )
+            .fixed_footer(1)
+            .below_anchor()
+        });
+        Root::new(view, window, cx)
+    });
+    cx.simulate_resize(gpui_kit::size(px(400.), px(300.)));
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+    let menu = cx.debug_bounds("native-popup-menu").unwrap();
+    let footer = cx.debug_bounds("native-menu-edit").unwrap();
+    assert_eq!(menu.top(), px(40.));
+    assert!(
+        menu.bottom() <= px(292.) && menu.contains(&footer.center()),
+        "menu={menu:?}; footer={footer:?}"
+    );
+    let pointer = cx.debug_bounds("native-menu-row-0").unwrap().center();
+    let movement = gpui_kit::MouseMoveEvent {
+        position: pointer,
+        pressed_button: None,
+        modifiers: Default::default(),
+    };
+    cx.simulate_event(movement.clone());
+    cx.run_until_parked();
+    cx.simulate_keystrokes("end");
+    cx.run_until_parked();
+    cx.simulate_event(movement);
+    cx.simulate_keystrokes("enter");
+    cx.run_until_parked();
+    assert_eq!(*events.borrow(), [Action::Select("edit".into())]);
+}

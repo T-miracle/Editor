@@ -15,6 +15,10 @@ const SDK_FILES: &[(&str, &[u8])] = &[
         "src/configurations.rs",
         include_bytes!("../../plugin-protocol/src/configurations.rs"),
     ),
+    (
+        "src/configurations/command_form.rs",
+        include_bytes!("../../plugin-protocol/src/configurations/command_form.rs"),
+    ),
     // Reader-facing English is the canonical documentation exported with the identical public SDK.
     (
         "DEBUG.md",

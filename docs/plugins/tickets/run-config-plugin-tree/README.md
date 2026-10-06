@@ -2,7 +2,7 @@
 
 日期：2026-10-07
 
-状态：用户于 2026-10-07 批准粒度、阻塞关系及主要测试入口并要求依次实施。规格 [#67](https://github.com/T-miracle/Editor/issues/67) 与工单 [#68](https://github.com/T-miracle/Editor/issues/68)、[#69](https://github.com/T-miracle/Editor/issues/69)、[#70](https://github.com/T-miracle/Editor/issues/70)、[#71](https://github.com/T-miracle/Editor/issues/71) 已发布，正文、标签和原生阻塞关系已读回确认，映射见 [publication.json](publication.json)。01、02 已推送并核对关闭；03 的最终检查通过，推送后核对关闭；04 尚待实施。证据见 [验收记录](../../verification/run-config-plugin-tree.md)，标签 `ready-for-agent` 不代表实现完成。
+状态：用户于 2026-10-07 批准粒度、阻塞关系及主要测试入口并要求依次实施。规格 [#67](https://github.com/T-miracle/Editor/issues/67) 与工单 [#68](https://github.com/T-miracle/Editor/issues/68)、[#69](https://github.com/T-miracle/Editor/issues/69)、[#70](https://github.com/T-miracle/Editor/issues/70)、[#71](https://github.com/T-miracle/Editor/issues/71) 已发布，正文、标签和原生阻塞关系已读回确认，映射见 [publication.json](publication.json)。01–04 的实现与验收均完成，按普通提交、推送、核对关闭的流程交付；各议题终验评论记录完整 SHA。证据见 [验收记录](../../verification/run-config-plugin-tree.md)，标签 `ready-for-agent` 不代表实现完成。
 
 依据：[运行配置重构规格](../../specs/run-config-plugin-tree.md)，稳定标识 `run-config-plugin-tree-v1`。本批只有 **4 张实施工单**，不按控件、协议层或单条测试继续拆分。实现限定于 `Editor-run-debug-build` 分支和工作区，不合并主分支。
 

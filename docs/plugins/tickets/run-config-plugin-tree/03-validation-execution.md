@@ -2,7 +2,7 @@
 
 稳定标识：`run-config-plugin-tree-v1/t03`
 
-**Status:** implemented-and-verified — C20、C21、C23–C26 和最终成批检查通过；推送后核对关闭 #70。
+**Status:** completed — C20、C21、C23–C26 和最终成批检查通过；提交 `f6d4067a87f2ef2f646e5da396b4d50645841f44` 已推送并读回 #70 为 closed / completed。
 
 GitHub：[#70](https://github.com/T-miracle/Editor/issues/70)；规格：[#67](https://github.com/T-miracle/Editor/issues/67)。
 

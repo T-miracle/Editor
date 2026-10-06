@@ -1,6 +1,7 @@
 //! Terminal application: VT parsing, layout, profiles and interaction live in this guest.
 mod commands;
 mod config;
+mod configurations;
 mod controls;
 mod emulator;
 mod events;
@@ -36,6 +37,19 @@ impl Guest for TerminalPlugin {
     /// A serial event loop keeps parsing and UI mutation in the same isolated instance.
     fn dispatch(payload: String) -> Result<String, String> {
         api::guest::dispatch(&payload, |message| {
+            if let api::Input::Event {
+                event:
+                    api::Notification::Service(plugin_protocol::service::Notification::Invoke(call)),
+                ..
+            } = &message
+            {
+                if call.contract == plugin_protocol::configurations::CONTRACT {
+                    return Ok(api::Output {
+                        service_reply: Some(configurations::invoke(call)),
+                        ..Default::default()
+                    });
+                }
+            }
             APP.with(|cell| {
                 if let api::Input::Event {
                     event: api::Notification::MigrateData { snapshot, .. },

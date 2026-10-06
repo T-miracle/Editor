@@ -438,6 +438,8 @@ impl EditorApp {
                 cx,
             )
             .notices(notices)
+            .fixed_footer(1)
+            .below_anchor()
             .width(RUN_MENU_WIDTH)
         });
         let popup_id = popup.entity_id();
@@ -669,9 +671,14 @@ impl EditorApp {
             if let Some(reason) = self.run_controls.plugin_configuration_blocker(&config.id) {
                 return Some(reason);
             }
-            self.run_controls
-                .preparation_error(&config.id)
-                .filter(|_| config.build.is_empty())
+            self.run_controls.preparation_error(&config.id).filter(|_| {
+                config.build.is_empty()
+                    && !self
+                        .run_controls
+                        .configuration_set()
+                        .plugin_configurations
+                        .contains_key(&config.id)
+            })
         });
         let plugin_blocker = selected
             .as_ref()

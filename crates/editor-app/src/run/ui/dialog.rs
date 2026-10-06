@@ -1,4 +1,4 @@
-//! The simplified form lives in the same owned native dialog mechanism as plugin management.
+//! Provider-owned forms use the same owned native dialog mechanism as plugin management.
 //! Window ownership and draft lifetime are kept together; detail editors never create extra HWNDs.
 use super::*;
 
@@ -37,22 +37,12 @@ impl Render for RunConfigModal {
             self.focus.clone(),
             render_run_config_form(&self.owner, DialogContent::new(), window, cx)
                 .into_any_element(),
-            move |window, cx| {
+            move |_, cx| {
                 cancel
-                    .update(cx, |state, cx| {
-                        if state
-                            .run_form
-                            .as_ref()
-                            .is_some_and(|form| form.read(cx).plugin.is_some())
-                        {
-                            state.request_plugin_close(cx)
-                        } else {
-                            state.cancel_run_form(window, cx)
-                        }
-                    })
+                    .update(cx, |state, cx| state.request_plugin_close(cx))
                     .unwrap_or(true)
             },
-            move |window, cx| {
+            move |_, cx| {
                 save.update(cx, |state, cx| {
                     let Some(form) = &state.run_form else {
                         return true;
@@ -62,11 +52,8 @@ impl Render for RunConfigModal {
                         state.begin_plugin_commit(super::plugin_form::CommitMode::Save, cx);
                         return false;
                     }
-                    if matches!(form.read(cx).pending_selection, Some(FormSelection::Delete)) {
-                        return false;
-                    }
-                    state.commit_run_form(window, cx);
-                    state.run_form.is_none()
+                    // A first initialization paint has no provider state and cannot save old fields.
+                    false
                 })
                 .unwrap_or(true)
             },
@@ -89,7 +76,7 @@ impl EditorApp {
         }
     }
 
-    /// Open or activate one native modal window; `editing` initializes only a newly opened draft.
+    /// Open or activate one native modal window, following the external configuration selection.
     /// The shared AppDialog uses WindowKind::Dialog, keeping it above and modal to its parent.
     pub(crate) fn open_run_config_dialog(
         &mut self,
@@ -109,24 +96,14 @@ impl EditorApp {
         cx.defer(move |cx| open_native_run_dialog(owner, parent, editing, cx));
     }
 
-    /// Native close requests cancel an inner edit first; accepted outer close is left to the platform.
+    /// Native close requests follow the same draft decision as X and Escape.
     /// Draft cleanup runs on the close receipt, avoiding destruction inside the native close callback.
-    fn allow_native_run_form_close(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
-        if self
-            .run_form
-            .as_ref()
-            .is_some_and(|form| form.read(cx).plugin.is_some())
-        {
-            return self.request_plugin_close(cx);
-        }
-        let inner_edit = self.run_form.as_ref().is_some_and(|form| {
-            form.read(cx).editor.is_some() || form.read(cx).pending_selection.is_some()
-        });
-        if inner_edit {
-            self.cancel_run_form(window, cx)
-        } else {
-            true
-        }
+    fn allow_native_run_form_close(
+        &mut self,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        self.request_plugin_close(cx)
     }
 
     /// Discard the draft and close only its native window, after the editor's update lease ends.
@@ -151,7 +128,7 @@ impl EditorApp {
 fn open_native_run_dialog(
     owner: WeakEntity<EditorApp>,
     parent: gpui_kit::AnyWindowHandle,
-    editing: Option<String>,
+    _editing: Option<String>,
     cx: &mut gpui_kit::App,
 ) {
     let Some(app) = owner.upgrade() else {
@@ -176,8 +153,6 @@ fn open_native_run_dialog(
         app.update(cx, |state, _| state.run_dialog_opening = false);
         return;
     }
-    let key = app.read(cx).workspace_key();
-    let controls = app.read(cx).run_controls.clone();
     let body = cx.new(|cx| RunConfigModal {
         owner: owner.clone(),
         focus: cx.focus_handle(),
@@ -207,8 +182,7 @@ fn open_native_run_dialog(
     let form = handle
         .update(cx, |_, window, cx| {
             // Inputs must use this dialog's window, not the parent's input/IME geometry.
-            let form =
-                cx.new(|cx| RunConfigForm::open(&controls, &key, editing.as_deref(), window, cx));
+            let form = cx.new(RunConfigForm::for_plugins);
             focus.focus(window, cx);
             window.on_window_should_close(cx, move |window, cx| {
                 owner

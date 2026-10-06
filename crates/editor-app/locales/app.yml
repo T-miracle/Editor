@@ -1,4 +1,7 @@
 _version: 2
+run.legacy_configuration:
+  en: "Legacy configurations are no longer supported. Clear only the explicitly approved workspace before saving new configurations."
+  zh-CN: "旧运行配置已停止支持。请先清理已明确授权的工作区，再保存新配置。"
 run.plugin_add_prompt:
   en: "Please add a configuration"
   zh-CN: "请添加配置"

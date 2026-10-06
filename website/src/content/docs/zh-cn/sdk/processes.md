@@ -6,10 +6,16 @@ order: 3
 alternate: /en/sdk/processes/
 ---
 
-# 原生进程
+# 原生进程能力 1.6
 
 独立协商 `process: ^1`。通过普通 SDK `request` 发送
 `api::Operation::Process { operation }`；能力不由插件名称决定。
+
+`Resolve { program }` 要求 `process >=1.6,<2`、`process.exec`、活动实例及受信任工作区。
+接受裸工具名或绝对可执行路径，返回 `Value::ResolvedProgram { program }`，其中为解析后的
+绝对路径。使用与执行相同的工具查找，不启动进程、运行版本探测、安装工具或预留进程句柄。
+缺少工具返回 `NotFound`；路径无效、权限不足及能力版本不支持都明确报错。委托服务调用
+仍受调用者的权限边界约束。
 
 ## 声明与授权
 

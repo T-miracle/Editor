@@ -1,6 +1,10 @@
 # Rust 插件
 
-版本 0.4.0 使用协议 7。语言识别、Tree-sitter 高亮和图标由资源声明提供；独立 WASM 钩子负责 Rust Analyzer 的 SDK 配置和项目发现，宿主不识别 Rust 名称。
+版本 0.5.0 使用协议 7。语言识别、Tree-sitter 高亮和图标由资源声明提供；独立 WASM 钩子负责 Rust Analyzer 的 SDK 配置和项目发现，宿主不识别 Rust 名称。
+
+运行配置使用公开 `run.configurations 1.0`，提供 Cargo 分组的 run、build、debug 模板，默认参数为 `run --release`、`build --release` 和 `run`。程序只读，子命令与选项都是可编辑的独立参数，空格与引号不会被重新拆分。添加不运行命令；保存和每个执行入口重新进行插件校验。缺少 Cargo 或根目录 Cargo.toml 时模板置灰；工具查找使用公开 `process 1.6`，不运行版本探测。
+
+更多设置包含工作目录和环境变量。Run 由 Cargo 自行构建并运行一次，不重复添加宿主构建；Build 仅编译。Debug 查询真实 metadata，明确选中包和 bin 后准备真实产物，支持 dev/debug、release 配置；多目标时请提供 `--package`／`--bin`，其他 profile 明确拒绝。`--` 后的参数只传给目标程序。表单使用原生滚动控件，保留输入、焦点与中文 IME。
 
 Rust Analyzer 服务使用包内固定声明：优先检查 HOME 下 Scoop、VS Code 和 VS Code Insiders 的扩展目录，再检查系统 PATH。候选程序必须通过 `--version` 探测；缺少可用程序时报告服务准备失败。仅按声明路径查找工具，不自动安装工具，语言服务仍使用独立的声明式权限。
 

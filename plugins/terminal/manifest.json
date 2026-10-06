@@ -1,13 +1,13 @@
 {
   "id": "terminal",
   "name": "终端",
-  "version": "0.11.0",
+  "version": "0.12.0",
   "protocol": 7,
   "api": {
     "base": "^1",
     "required": {
-      "process": ">=1.5, <2",
-      "ui.native": "^1",
+      "process": ">=1.6,<2",
+      "ui.native": ">=1.1,<2",
       "ui.canvas": ">=1.1, <2",
       "ui.grid": "^1",
       "ui.collections": "^1",
@@ -18,7 +18,7 @@
       "storage.private": "^1",
       "storage.editor": "^1",
       "storage.migration": "^1",
-      "plugin.services": "^1"
+      "plugin.services": ">=1.1,<2"
     }
   },
   "data_format": {
@@ -175,7 +175,7 @@
                 },
                 "bytes": {
                   "type": "array",
-                "max_items": 1024,
+                  "max_items": 1024,
                   "items": {
                     "type": "integer",
                     "min": 0,
@@ -312,6 +312,131 @@
               }
             },
             "permissions": [
+              "process.exec"
+            ]
+          }
+        }
+      },
+      "run.configurations": {
+        "version": "1.0.0",
+        "methods": {
+          "catalog": {
+            "parameters": {
+              "type": "record",
+              "fields": {
+                "workspace": {
+                  "type": "string",
+                  "max_bytes": 4096
+                },
+                "locale": {
+                  "type": "string",
+                  "max_bytes": 64
+                },
+                "os": {
+                  "type": "string",
+                  "max_bytes": 64
+                }
+              }
+            },
+            "result": {
+              "type": "record",
+              "fields": {
+                "payload": {
+                  "type": "string",
+                  "max_bytes": 65536
+                }
+              }
+            },
+            "permissions": [
+              "workspace.read",
+              "process.exec"
+            ]
+          },
+          "form": {
+            "parameters": {
+              "type": "record",
+              "fields": {
+                "workspace": {
+                  "type": "string",
+                  "max_bytes": 4096
+                },
+                "locale": {
+                  "type": "string",
+                  "max_bytes": 64
+                },
+                "os": {
+                  "type": "string",
+                  "max_bytes": 64
+                },
+                "template": {
+                  "type": "string",
+                  "max_bytes": 256
+                },
+                "values": {
+                  "type": "string",
+                  "max_bytes": 16384
+                },
+                "event": {
+                  "type": "string",
+                  "max_bytes": 65536
+                }
+              }
+            },
+            "result": {
+              "type": "record",
+              "fields": {
+                "payload": {
+                  "type": "string",
+                  "max_bytes": 65536
+                }
+              }
+            },
+            "permissions": [
+              "workspace.read",
+              "ui.panels"
+            ]
+          },
+          "validate": {
+            "parameters": {
+              "type": "record",
+              "fields": {
+                "workspace": {
+                  "type": "string",
+                  "max_bytes": 4096
+                },
+                "locale": {
+                  "type": "string",
+                  "max_bytes": 64
+                },
+                "os": {
+                  "type": "string",
+                  "max_bytes": 64
+                },
+                "template": {
+                  "type": "string",
+                  "max_bytes": 256
+                },
+                "values": {
+                  "type": "string",
+                  "max_bytes": 16384
+                },
+                "intent": {
+                  "type": "string",
+                  "max_bytes": 64
+                }
+              }
+            },
+            "result": {
+              "type": "record",
+              "fields": {
+                "payload": {
+                  "type": "string",
+                  "max_bytes": 65536
+                }
+              }
+            },
+            "permissions": [
+              "workspace.read",
               "process.exec"
             ]
           }

@@ -256,12 +256,18 @@ pub struct Request {
 /// Result variants carry structured values, never JSON hidden inside a string result.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum Value {
+    /// process 1.6: an existing native executable, never an execution grant or process handle.
+    ResolvedProgram {
+        program: String,
+    },
     Files(FileMatches),
     Sdk(SdkDescriptor),
     Process(crate::process::Update),
     Cancellation(CancellationEffect),
     Accepted(ResourceHandle),
-    Asset { bytes: Vec<u8> },
+    Asset {
+        bytes: Vec<u8>,
+    },
     Resource(ResourceHandle),
     Bytes(Vec<u8>),
     Unit,

@@ -178,6 +178,30 @@ pub struct RunConfigForm {
 }
 
 impl RunConfigForm {
+    /// A new plugin window creates no hidden B3 inputs or second editable command form.
+    /// Historical fields remain inert; the plugin draft is attached in the owned native window.
+    pub(super) fn for_plugins(cx: &mut Context<Self>) -> Self {
+        let draft = RunConfigDraft::from_config(None, String::new());
+        Self {
+            plugin: None,
+            startup_open: false,
+            more_open: false,
+            disclosure_focus: [cx.focus_handle(), cx.focus_handle()],
+            page_scroll: gpui_kit::ScrollHandle::new(),
+            original: draft.clone(),
+            pending_selection: None,
+            editor: None,
+            return_focus: None,
+            manual_target: false,
+            draft,
+            error: None,
+            inputs: vec![],
+            textareas: vec![],
+            rows: vec![],
+            picker: None,
+            _subscriptions: vec![],
+        }
+    }
     /// Open the dialog on a stored configuration, or on an empty draft that creates a new one.
     pub fn open(
         controls: &RunControls,

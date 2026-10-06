@@ -26,7 +26,7 @@ pub(crate) fn negotiate(manifest: &Manifest) -> anyhow::Result<api::Negotiated> 
         .ok_or_else(|| anyhow::anyhow!("Missing API requirements"))?;
     let available = [
         ("package.assets".into(), Version::new(1, 0, 0)),
-        ("ui.native".into(), Version::new(1, 0, 0)),
+        ("ui.native".into(), Version::new(1, 1, 0)),
         ("ui.richtext".into(), Version::new(1, 0, 0)),
         ("ui.code_highlighting".into(), Version::new(1, 0, 0)),
         ("ui.links".into(), Version::new(1, 0, 0)),
@@ -50,8 +50,8 @@ pub(crate) fn negotiate(manifest: &Manifest) -> anyhow::Result<api::Negotiated> 
         ("configuration".into(), Version::new(1, 0, 0)),
         ("ui.panels".into(), Version::new(1, 0, 0)),
         ("ui.clipboard".into(), Version::new(1, 0, 0)),
-        // 1.5 adds exit requests whose actual completion remains observable through process events.
-        ("process".into(), Version::new(1, 5, 0)),
+        // 1.6 adds read-only tool resolution; availability never grants execution authority.
+        ("process".into(), Version::new(1, 6, 0)),
         ("language.lsp".into(), Version::new(1, 1, 0)),
         ("dependencies".into(), Version::new(1, 0, 0)),
     ]
