@@ -23,7 +23,8 @@ impl EditorApp {
             {
                 return None;
             }
-            let id = state.draft.generate_id(&workspace);
+            let parent = state.draft.insertion_parent(state.selected.as_deref());
+            let id = state.draft.allocate_tree_id(&workspace).ok()?;
             let data = PluginConfiguration {
                 provider,
                 template: template.id,
@@ -36,6 +37,7 @@ impl EditorApp {
             let configuration = projection(&data, &id, None).ok()?;
             state.draft.upsert(configuration).ok()?;
             state.draft.plugin_configurations.insert(id.clone(), data);
+            state.draft.place_tree_node(&id, parent, None).ok()?;
             state.selected = Some(id.clone());
             state.drawer = false;
             state.error = None;
@@ -56,12 +58,21 @@ impl EditorApp {
             let Some(state) = form.plugin.as_mut() else {
                 return false;
             };
-            if !state.draft.plugin_configurations.contains_key(id) {
+            if state.commit.is_some() {
+                state.tree_signature.clear();
+                cx.notify();
+                return false;
+            }
+            if !state.draft.plugin_configurations.contains_key(id)
+                && !state.draft.tree.folders.contains_key(id)
+            {
                 return false;
             }
             state.selected = Some(id.into());
             cx.notify();
-            !state.documents.contains_key(id) && !state.editing.contains_key(id)
+            state.draft.plugin_configurations.contains_key(id)
+                && !state.documents.contains_key(id)
+                && !state.editing.contains_key(id)
         });
         if load {
             self.request_plugin_form(&form, id, None, cx);
@@ -88,7 +99,7 @@ impl EditorApp {
             if state.editing.contains_key(id) {
                 let queue = state.events.entry(id.into()).or_default();
                 if queue.len() < 512 {
-                    queue.push_back(event.clone());
+                    queue.push_back(contract::FormEvent::Native(event.clone()));
                 } else {
                     state.error = Some(t!("run.plugin_edit_quota").into());
                 }
@@ -99,7 +110,7 @@ impl EditorApp {
             }
         });
         if send {
-            self.request_plugin_form(&form, id, Some(event), cx);
+            self.request_plugin_form(&form, id, Some(contract::FormEvent::Native(event)), cx);
         }
     }
 
@@ -119,13 +130,19 @@ impl EditorApp {
                 return None;
             }
             let ids = match mode {
-                CommitMode::Apply => state.selected.clone().into_iter().collect::<Vec<_>>(),
+                CommitMode::Apply => state
+                    .selected
+                    .clone()
+                    .filter(|id| state.draft.plugin_configurations.contains_key(id))
+                    .into_iter()
+                    .collect::<Vec<_>>(),
                 CommitMode::Save => state.draft.plugin_configurations.keys().cloned().collect(),
             };
             state.error = None;
             state.commit = Some(Commit {
                 mode,
                 waiting: ids.clone(),
+                selected: state.selected.clone(),
             });
             cx.notify();
             Some(ids)
@@ -213,22 +230,36 @@ impl EditorApp {
                 CommitMode::Save => state.draft.clone(),
                 CommitMode::Apply => {
                     let mut baseline = state.baseline.clone();
-                    if let Some(id) = &state.selected {
-                        baseline.upsert(state.draft.find(id)?.clone()).ok()?;
-                        baseline
-                            .plugin_configurations
-                            .insert(id.clone(), state.draft.plugin_configurations[id].clone());
+                    if let Some(id) = &commit.selected {
+                        if let Err(error) = baseline.apply_tree_configuration(&state.draft, id) {
+                            return Some((commit.mode, Err(error.to_string())));
+                        }
                     }
                     baseline
                 }
             };
             if matches!(commit.mode, CommitMode::Save) {
-                set.selected = state.selected.clone();
+                set.selected = commit
+                    .selected
+                    .clone()
+                    .filter(|id| set.plugin_configurations.contains_key(id));
             }
-            Some((commit.mode, set))
+            Some((commit.mode, Ok(set)))
         });
         let Some((mode, set)) = snapshot else {
             return;
+        };
+        let set = match set {
+            Ok(set) => set,
+            Err(error) => {
+                form.update(cx, |form, cx| {
+                    let state = form.plugin.as_mut().unwrap();
+                    state.commit = None;
+                    state.error = Some(error);
+                    cx.notify();
+                });
+                return;
+            }
         };
         let workspace = self.workspace_key();
         match self

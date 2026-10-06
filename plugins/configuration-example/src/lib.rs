@@ -97,16 +97,24 @@ fn invoke(call: service::Invocation) -> Result<Value, Failure> {
             let event = call.arguments["event"]
                 .as_str()
                 .filter(|event| !event.is_empty())
-                .map(serde_json::from_str::<ui::UiEvent>)
+                .map(serde_json::from_str::<config::FormEvent>)
                 .transpose()
                 .map_err(invalid)?;
             if let Some(event) = &event {
-                apply_event(&mut values, event);
+                match event {
+                    config::FormEvent::Rename { configuration_name } => {
+                        values.name = configuration_name.clone()
+                    }
+                    config::FormEvent::Native(event) => apply_event(&mut values, event),
+                }
             }
             let document = form(
                 &values,
                 call.arguments["locale"].as_str().unwrap_or("en"),
-                event.as_ref().map_or(0, |event| event.revision + 1),
+                event.as_ref().map_or(0, |event| match event {
+                    config::FormEvent::Native(event) => event.revision + 1,
+                    _ => 0,
+                }),
             );
             serde_json::to_string(&config::Form {
                 values: serde_json::to_string(&values).unwrap(),

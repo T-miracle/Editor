@@ -954,6 +954,21 @@ run.form_plugin_preparation:
 run.form_actions:
   en: "More configuration actions"
   zh-CN: "更多配置操作"
+run.plugin_new_folder:
+  en: "New folder"
+  zh-CN: "新建文件夹"
+run.plugin_tree_move_error:
+  en: "Cannot move a folder into itself or a descendant, or across sibling categories."
+  zh-CN: "不能移入自身或后代，也不能跨类别排序。"
+run.plugin_delete_count:
+  en: "Delete %{folders} folders and %{configurations} configurations? Changes take effect after Save."
+  zh-CN: "删除 %{folders} 个文件夹和 %{configurations} 条配置？保存后才会生效。"
+run.plugin_close_question:
+  en: "Save all unapplied changes before closing?"
+  zh-CN: "关闭前是否保存全部未应用的修改？"
+run.plugin_continue:
+  en: "Continue editing"
+  zh-CN: "继续编辑"
 run.form_copy:
   en: "Copy configuration"
   zh-CN: "复制配置"

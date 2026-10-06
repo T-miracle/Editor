@@ -7,6 +7,10 @@ use std::collections::{BTreeMap, VecDeque};
 
 mod actions;
 mod render;
+mod tree;
+mod tree_actions;
+#[cfg(test)]
+mod tree_tests;
 pub(super) use render::render;
 
 /// Window-local canonical values and keyed native views; the persisted baseline remains in RunControls.
@@ -18,12 +22,18 @@ pub(super) struct State {
     pub drawer: bool,
     pub documents: BTreeMap<String, native::Document>,
     pub views: BTreeMap<String, Entity<crate::ui::plugin::PluginView>>,
-    pub events: BTreeMap<String, VecDeque<native::UiEvent>>,
+    pub events: BTreeMap<String, VecDeque<contract::FormEvent>>,
     pub editing: BTreeMap<String, u64>,
     pub commit_requested: Option<CommitMode>,
     pub commit: Option<Commit>,
     pub error: Option<String>,
     pub scroll: gpui_kit::ScrollHandle,
+    pub tree: Option<Entity<gpui_base::TreeState>>,
+    pub tree_signature: String,
+    pub tree_observer: Option<Subscription>,
+    pub rename: Option<(String, Entity<gpui_base::input::InputState>)>,
+    pub rename_observer: Option<Subscription>,
+    pub decision: Option<Decision>,
 }
 
 impl State {
@@ -43,17 +53,43 @@ impl State {
             commit: None,
             error: None,
             scroll: gpui_kit::ScrollHandle::new(),
+            tree: None,
+            tree_signature: String::new(),
+            tree_observer: None,
+            rename: None,
+            rename_observer: None,
+            decision: None,
         }
     }
     /// Compare actual user data; rendered native controls and transient request state are not drafts.
     pub fn dirty(&self) -> bool {
-        self.draft.to_json().ok() != self.baseline.to_json().ok()
+        // Selection, validation receipts and executable caches are not unsaved user edits.
+        fn user_data(set: &RunConfigSet) -> serde_json::Value {
+            let values = set
+                .plugin_configurations
+                .iter()
+                .map(|(id, data)| {
+                    (
+                        id.clone(),
+                        serde_json::json!([data.provider, data.template, data.values, data.name]),
+                    )
+                })
+                .collect::<BTreeMap<_, _>>();
+            serde_json::json!([set.tree.folders, set.tree.placements, values])
+        }
+        user_data(&self.draft) != user_data(&self.baseline) || self.busy()
     }
     pub fn busy(&self) -> bool {
         self.commit.is_some()
             || !self.editing.is_empty()
             || self.events.values().any(|queue| !queue.is_empty())
     }
+}
+
+/// Decisions stay inside the owned native window and never implicitly commit a destructive edit.
+pub(super) enum Decision {
+    Close,
+    Delete(String),
 }
 
 #[derive(Clone, Copy)]
@@ -64,6 +100,7 @@ pub(super) enum CommitMode {
 pub(super) struct Commit {
     pub mode: CommitMode,
     pub waiting: Vec<String>,
+    pub selected: Option<String>,
 }
 
 /// Execution intent captures its original arguments; changing external selection cannot retarget a Run.
@@ -125,8 +162,30 @@ impl EditorApp {
     ) {
         let set = self.run_controls.configuration_set();
         let selected = set.selected.clone();
+        let tree = cx.new(|cx| gpui_base::TreeState::new(cx));
+        let observed_window = form.entity_id();
+        let observer = cx.observe(&tree, move |app, tree, cx| {
+            let chosen = tree
+                .read(cx)
+                .selected_item()
+                .map(|item| item.id.to_string());
+            let current = app
+                .run_form
+                .as_ref()
+                .filter(|form| form.entity_id() == observed_window)
+                .and_then(|form| form.read(cx).plugin.as_ref())
+                .and_then(|state| state.selected.clone());
+            if chosen != current {
+                if let Some(id) = chosen {
+                    app.select_plugin_configuration(&id, cx);
+                }
+            }
+        });
         form.update(cx, |form, cx| {
-            form.plugin = Some(Box::new(State::new(set, selected.clone())));
+            let mut state = State::new(set, selected.clone());
+            state.tree = Some(tree);
+            state.tree_observer = Some(observer);
+            form.plugin = Some(Box::new(state));
             cx.notify();
         });
         let request = self
@@ -159,7 +218,7 @@ impl EditorApp {
         &mut self,
         form: &Entity<RunConfigForm>,
         id: &str,
-        event: Option<native::UiEvent>,
+        event: Option<contract::FormEvent>,
         cx: &mut Context<Self>,
     ) {
         let Some(snapshot) = form

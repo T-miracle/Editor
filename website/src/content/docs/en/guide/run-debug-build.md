@@ -22,6 +22,10 @@ Configurations stay on this machine, scoped to the workspace. They do not create
 
 ## Build and launch
 
+The left toolbar offers Add, Delete, Copy and Add folder as icons with tooltips. Folders are virtual groups. Add creates a child of the selected folder, a sibling of the selected configuration, or a root entry when nothing is selected. Click empty tree space to select the root. Rename a folder with F2 or a double click; click its disclosure arrow to expand or collapse it.
+
+Drag rows into folders or onto empty tree space to move them to the root. The gap before a row changes order within its category; folders always precede configurations. Moving into a descendant is rejected. Copy creates an independent sibling with a copy name. Delete shows the recursive folder and configuration counts and changes only the draft. Save commits the deletion, while Cancel retains earlier applied data. X or Escape offers Save, Discard changes and Continue editing when unapplied changes remain.
+
 Build executes ordered build steps and stops before running the final program. Run first saves modified documents through the ordinary save path, then executes build and prelaunch steps and starts the final target once. A disk conflict or failed save prevents launch. A failed preparation identifies its step and output and does not start the program.
 
 A provider may prepare an exact build artifact for the selected target and profile. For example, debug and release configurations remain separate; Build does not substitute an unrelated executable. The attempt snapshots the effective configuration, so later edits do not change a running attempt.

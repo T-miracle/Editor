@@ -4,6 +4,8 @@
 
 ## 01 / GitHub #68
 
+交付提交：`af1e0c73131aceecfc7e3376a4969d03052391fd`；已核对 origin 分支一致，并读回 #68 为 closed / completed。
+
 本阶段交付公开 `run.configurations 1.0`、有界异步调用、独立插件模板与原生表单、本机存储、应用／保存／取消及实际执行的最小闭环。沿用此前已确认的原生父子弹窗、选择器和本地按钮外观，必要的未提交前置实现随本切片纳入。
 
 两个独立包 `configuration-alpha`、`configuration-beta` 由公共 SDK 在仓库外构建，再通过公开管理器安装；它们分别提供纵向、横向原生布局。夹具不是宿主白名单，真实 Rust 与终端插件由 04 接入。
@@ -33,7 +35,15 @@
 
 ## 02 / GitHub #69
 
-待实施：C03、C11–C19、C22。
+已实现 C03、C11–C19、C22，最终阶段检查进行中。公开 SDK 的 `FormEvent::Rename` 使复制后的名称由插件更新自己的业务值，宿主不猜测表单节点或 JSON 字段。文件夹、父级与同类别顺序进入同一工作区存储；应用只合并当前配置及完整必要路径，不改变外部选择。
+
+共用实际包与原生驱动新增 3 个成组场景：多配置编辑／应用／独立复制／取消／全部保存；原生鼠标拖动、根目录移动、同类别排序与循环拒绝；计数删除以及 X／Esc 的保存、放弃、继续路径。核心增加 3 个存储与树事务行为用例。生产字段与 Reference 均未为测试开放，仅共享已有的测试包驱动。
+
+原生批次发现并修复内部虚拟列表零高度、拖动时被默认文件夹点击折叠，以及确认控件退场后 Esc 焦点失去接收路径的问题；异步加载后输入的夹具顺序也已修正。
+
+2026-10-07 最终内容通过 `cargo fmt --check`、`cargo test --workspace --exclude editor-app`、`cargo check --workspace`；应用常规批次 `cargo test -p editor-app --bin editor-app -- configuration_icons selector sdk_export` 为 9 passed；实际包批次 `cargo test -p editor-app --bin editor-app plugin_configuration -- --ignored` 为 6 passed，0 failed。公开 SDK 分发及独立包重新构建通过；fixture 包版本提升至 0.1.1。文档源检查 9 passed，提交差异检查通过。
+
+代码检查对应最终完整提交内容；所有相关源码与文档纳入 index，范围外 `Cargo.lock` 的 Git 规范化内容哈希与 HEAD 一致。没有借用后续工单代码或未纳入的生产源码使本阶段通过。03、04 尚待实施。
 
 ## 03 / GitHub #70
 

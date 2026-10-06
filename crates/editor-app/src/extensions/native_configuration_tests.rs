@@ -8,16 +8,16 @@ use std::time::{Duration, Instant};
 
 /// Persistent request state mirrors the production actor instead of synthesizing provider answers.
 #[derive(Default)]
-struct Driver {
+pub(crate) struct Driver {
     renderer: images::VectorRenderer,
-    launches: Vec<(u64, String, u64)>,
+    pub(crate) launches: Vec<(u64, String, u64)>,
     debug: BTreeMap<u64, (String, plugin_runtime::DebugRequest)>,
     targets: super::worker::targets::TargetCalls,
     configurations: super::worker::configurations::ConfigurationCalls,
 }
 impl Driver {
     /// Paint the active native window after publishing one real manager/actor iteration.
-    fn frame(
+    pub(crate) fn frame(
         &mut self,
         manager: &mut Manager,
         app: &Entity<EditorApp>,
@@ -45,7 +45,7 @@ impl Driver {
     }
     /// Bound asynchronous acceptance by elapsed time, retaining every queued event between frames.
     #[track_caller]
-    fn wait(
+    pub(crate) fn wait(
         &mut self,
         manager: &mut Manager,
         app: &Entity<EditorApp>,
@@ -69,7 +69,7 @@ impl Driver {
 }
 
 /// Install two separately identified packages through ordinary public management, with fixture-local storage.
-fn fixture<'a>(
+pub(crate) fn fixture<'a>(
     cx: &'a mut TestAppContext,
     root: &Path,
 ) -> (
@@ -123,7 +123,7 @@ fn fixture<'a>(
 }
 
 /// Open the production owned dialog and direct physical input to its own window context.
-fn open_form(
+pub(crate) fn open_form(
     app: &Entity<EditorApp>,
     cx: &mut gpui_kit::VisualTestContext,
 ) -> gpui_kit::AnyWindowHandle {
@@ -137,12 +137,13 @@ fn open_form(
 }
 
 /// Click actual hit regions; hover participates in native button routing.
-fn click(cx: &mut gpui_kit::VisualTestContext, selector: &'static str) {
+#[track_caller]
+pub(crate) fn click(cx: &mut gpui_kit::VisualTestContext, selector: &'static str) {
     cx.update(|window, cx| window.draw(cx).clear(cx));
-    let point = cx
-        .debug_bounds(selector)
-        .unwrap_or_else(|| panic!("missing control {selector}"))
-        .center();
+    let Some(bounds) = cx.debug_bounds(selector) else {
+        panic!("missing control {selector}");
+    };
+    let point = bounds.center();
     if selector.starts_with("plugin-") {
         let viewport = cx.debug_bounds("plugin-ui-form-scroll").unwrap();
         assert!(
@@ -154,7 +155,10 @@ fn click(cx: &mut gpui_kit::VisualTestContext, selector: &'static str) {
 }
 
 /// Pointer input uses a real painted coordinate, including tree rows with generated identities.
-fn click_at(cx: &mut gpui_kit::VisualTestContext, point: gpui_kit::Point<gpui_kit::Pixels>) {
+pub(crate) fn click_at(
+    cx: &mut gpui_kit::VisualTestContext,
+    point: gpui_kit::Point<gpui_kit::Pixels>,
+) {
     cx.simulate_event(gpui::MouseMoveEvent {
         position: point,
         pressed_button: None,
@@ -306,7 +310,8 @@ fn plugin_configuration_failed_write_keeps_the_draft(cx: &mut TestAppContext) {
 }
 
 /// Use native focus, selection and text entry; tests never write a provider's private form values.
-fn edit(cx: &mut gpui_kit::VisualTestContext, selector: &'static str, value: &str) {
+#[track_caller]
+pub(crate) fn edit(cx: &mut gpui_kit::VisualTestContext, selector: &'static str, value: &str) {
     click(cx, selector);
     cx.simulate_keystrokes("ctrl-a");
     cx.simulate_keystrokes("backspace");

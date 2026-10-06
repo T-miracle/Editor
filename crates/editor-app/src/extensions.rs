@@ -32,7 +32,7 @@ mod markdown_tests;
 #[cfg(test)]
 mod native_build_tests;
 #[cfg(test)]
-mod native_configuration_tests;
+pub(crate) mod native_configuration_tests;
 mod native_controls;
 #[cfg(test)]
 mod native_discovery_tests;

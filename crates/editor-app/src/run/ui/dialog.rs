@@ -39,7 +39,17 @@ impl Render for RunConfigModal {
                 .into_any_element(),
             move |window, cx| {
                 cancel
-                    .update(cx, |state, cx| state.cancel_run_form(window, cx))
+                    .update(cx, |state, cx| {
+                        if state
+                            .run_form
+                            .as_ref()
+                            .is_some_and(|form| form.read(cx).plugin.is_some())
+                        {
+                            state.request_plugin_close(cx)
+                        } else {
+                            state.cancel_run_form(window, cx)
+                        }
+                    })
                     .unwrap_or(true)
             },
             move |window, cx| {
@@ -67,6 +77,18 @@ impl Render for RunConfigModal {
 }
 
 impl EditorApp {
+    /// Removing a prompt or inline editor retires its focus node; return keyboard routing to the body.
+    pub(in crate::run::ui) fn focus_run_form_body(
+        &self,
+        window: &mut Window,
+        cx: &mut gpui_kit::App,
+    ) {
+        if let Some(dialog) = &self.run_dialog {
+            let focus = dialog.read(cx).focus.clone();
+            focus.focus(window, cx);
+        }
+    }
+
     /// Open or activate one native modal window; `editing` initializes only a newly opened draft.
     /// The shared AppDialog uses WindowKind::Dialog, keeping it above and modal to its parent.
     pub(crate) fn open_run_config_dialog(
@@ -90,6 +112,13 @@ impl EditorApp {
     /// Native close requests cancel an inner edit first; accepted outer close is left to the platform.
     /// Draft cleanup runs on the close receipt, avoiding destruction inside the native close callback.
     fn allow_native_run_form_close(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
+        if self
+            .run_form
+            .as_ref()
+            .is_some_and(|form| form.read(cx).plugin.is_some())
+        {
+            return self.request_plugin_close(cx);
+        }
         let inner_edit = self.run_form.as_ref().is_some_and(|form| {
             form.read(cx).editor.is_some() || form.read(cx).pending_selection.is_some()
         });

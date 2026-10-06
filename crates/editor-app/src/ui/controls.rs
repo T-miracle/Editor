@@ -22,6 +22,7 @@ mod tabs;
 mod text;
 mod textarea;
 mod tooltip;
+mod tree;
 
 pub(crate) use button::{Button, ButtonCustomVariant};
 pub(crate) use checkbox::Checkbox;
@@ -44,3 +45,4 @@ pub(crate) use tabs::tab_strip;
 pub(crate) use text::{RichTextColors, markdown_view, rich_text_view};
 pub(crate) use textarea::Textarea;
 pub(crate) use tooltip::Tooltip;
+pub(crate) use tree::tree_row;

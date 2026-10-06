@@ -9,6 +9,10 @@ pub(in crate::run::ui) fn render(
     window: &mut Window,
     cx: &mut gpui_kit::App,
 ) -> AnyElement {
+    tree::synchronize(form, cx);
+    if form.read(cx).plugin.as_ref().unwrap().decision.is_some() {
+        return tree::decision(app, form, cx);
+    }
     let environment = crate::extensions::environment(app.read(cx).workspace.root(), cx);
     let selected = form.read(cx).plugin.as_ref().unwrap().selected.clone();
     if let Some(id) = &selected {
@@ -50,14 +54,15 @@ pub(in crate::run::ui) fn render(
     }
     let state = form.read(cx).plugin.as_ref().unwrap();
     let right = match selected.as_ref() {
-        Some(id) => state
+        Some(id) if state.draft.plugin_configurations.contains_key(id) => state
             .views
             .get(id)
             .map(|view| div().size_full().child(view.clone()).into_any_element())
             .unwrap_or_else(|| empty(t!("run.plugin_loading").into(), cx)),
-        None => empty(t!("run.plugin_add_prompt").into(), cx),
+        _ => empty(t!("run.plugin_add_prompt").into(), cx),
     };
     let error = state.error.clone();
+    let applying = state.commit.is_some();
     let body = h_flex()
         // h_flex centers children by default; both panes must instead fill the native dialog body.
         // Otherwise the percentage-height plugin scroller has no usable input/paint area.
@@ -75,6 +80,16 @@ pub(in crate::run::ui) fn render(
                 .min_h_0()
                 .p_5()
                 .child(div().flex_1().min_h_0().child(right))
+                .when(applying, |pane| {
+                    pane.child(
+                        div()
+                            .id("run-config-validating-cover")
+                            .absolute()
+                            .inset_0()
+                            .occlude()
+                            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation()),
+                    )
+                })
                 .when_some(error, |pane, error| {
                     pane.child(
                         div()
@@ -86,9 +101,15 @@ pub(in crate::run::ui) fn render(
                 }),
         );
     v_flex()
+        .id("run-config-content")
         .debug_selector(|| "run-config-form".into())
         .size_full()
         .min_h_0()
+        .capture_key_down(move |_, _, cx| {
+            if applying {
+                cx.stop_propagation();
+            }
+        })
         .child(body)
         .child(footer(app, form, cx))
         .into_any_element()
@@ -114,6 +135,10 @@ fn sidebar(
 ) -> AnyElement {
     let state = form.read(cx).plugin.as_ref().unwrap();
     let add = app.clone();
+    let delete = app.clone();
+    let copy = app.clone();
+    let folder = app.clone();
+    let locked = state.commit.is_some();
     let header = h_flex()
         .h(px(42.))
         .gap_1()
@@ -121,7 +146,7 @@ fn sidebar(
         .border_b_1()
         .border_color(cx.theme().border)
         .child(
-            toolbar("run-config-add", IconName::Plus, t!("run.form_new").into()).on_click(
+            toolbar("run-config-add", thin_icon("add"), t!("run.form_new").into()).disabled(locked).on_click(
                 move |_, _, cx| {
                     let Some(form) = add.read(cx).run_form.clone() else {
                         return;
@@ -140,23 +165,24 @@ fn sidebar(
                 Icon::default().data(br#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13M10 10v7M14 10v7"/></svg>"#),
                 t!("run.form_delete").into(),
             )
-            .disabled(true),
+            .disabled(locked || state.selected.is_none()).on_click(move |_, _, cx| delete.update(cx, |app, cx| app.request_plugin_delete(cx))),
         )
         .child(
             toolbar(
                 "run-config-copy",
-                IconName::Copy,
+                thin_icon("copy"),
                 t!("run.form_copy").into(),
             )
-            .disabled(true),
+            .disabled(state.busy() || state.selected.as_ref().is_none_or(|id| !state.draft.plugin_configurations.contains_key(id)))
+            .on_click(move |_, _, cx| copy.update(cx, |app, cx| app.copy_plugin_configuration(cx))),
         )
         .child(
             toolbar(
                 "run-config-folder",
-                IconName::Folder,
+                thin_icon("folder"),
                 t!("run.plugin_add_folder").into(),
             )
-            .disabled(true),
+            .disabled(locked).on_click(move |_, window, cx| folder.update(cx, |app, cx| app.add_plugin_folder(window, cx))),
         );
     let mut rows = Vec::new();
     let drawer = state.drawer;
@@ -209,46 +235,18 @@ fn sidebar(
             rows.push(empty(t!("run.plugin_no_templates").into(), cx));
         }
     } else {
-        for configuration in &state.draft.configurations {
-            let Some(data) = state.draft.plugin_configurations.get(&configuration.id) else {
-                continue;
-            };
-            let id = configuration.id.clone();
-            let selector = format!("run-config-tree-{id}");
-            let owner = app.clone();
-            let label = if data.name.is_empty() {
-                t!("run.plugin_unnamed").into()
-            } else {
-                data.name.clone()
-            };
-            let valid = matches!(data.validation, ConfigurationValidation::Valid);
-            rows.push(
-                Button::new(format!("run-config-tree-{id}"))
-                    .debug_selector(move || selector.clone())
-                    .ghost()
-                    .w_full()
-                    .content_full_width()
-                    .min_w_0()
-                    .h(px(34.))
-                    .icon(IconName::Play)
-                    .label(label.clone())
-                    .tooltip(actions::validation_reason(&data.validation))
-                    .bg(if state.selected.as_deref() == Some(&id) {
-                        cx.theme().accent
-                    } else {
-                        cx.theme().transparent
-                    })
-                    .text_color(if valid {
-                        cx.theme().foreground
-                    } else {
-                        cx.theme().danger
-                    })
-                    .on_click(move |_, _, cx| {
-                        owner.update(cx, |app, cx| app.select_plugin_configuration(&id, cx))
-                    })
-                    .into_any_element(),
-            );
-        }
+        return v_flex()
+            .debug_selector(|| "run-config-sidebar".into())
+            .h_full()
+            .w(px(220.))
+            .flex_shrink_0()
+            .min_h_0()
+            .bg(cx.theme().muted)
+            .border_r_1()
+            .border_color(cx.theme().border)
+            .child(header)
+            .child(div().flex_1().min_h_0().child(tree::render(app, form, cx)))
+            .into_any_element();
     }
     v_flex()
         .debug_selector(|| "run-config-sidebar".into())
@@ -295,6 +293,16 @@ fn toolbar(id: &'static str, icon: impl Into<Icon>, label: String) -> Button {
         .accessibility_label(label)
 }
 
+/// Toolbar paths share one stroke width and hit rectangle, independent from theme scaling.
+fn thin_icon(kind: &str) -> Icon {
+    let path = match kind {
+        "copy" => "M9 9h11v11H9zM15 9V4H4v11h5",
+        "folder" => "M3 6h7l2 3h9v11H3zM16 12v5M13.5 14.5h5",
+        _ => "M12 4v16M4 12h16",
+    };
+    Icon::default().data(format!("<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'><path d='{path}'/></svg>").as_bytes())
+}
+
 fn template_icon(name: &str) -> Icon {
     // Plugins may provide a bounded self-contained SVG instead of using the stock command artwork.
     if name.trim_start().starts_with("<svg") {
@@ -329,7 +337,13 @@ fn footer(app: &Entity<EditorApp>, form: &Entity<RunConfigForm>, cx: &gpui_kit::
             Button::new("run-config-apply")
                 .debug_selector(|| "run-config-apply".into())
                 .label(t!("run.plugin_apply"))
-                .disabled(applying || state.selected.is_none())
+                .disabled(
+                    applying
+                        || state
+                            .selected
+                            .as_ref()
+                            .is_none_or(|id| !state.draft.plugin_configurations.contains_key(id)),
+                )
                 .on_click(move |_, _, cx| {
                     apply.update(cx, |app, cx| app.begin_plugin_commit(CommitMode::Apply, cx))
                 }),

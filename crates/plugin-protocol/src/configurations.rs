@@ -73,6 +73,15 @@ pub struct Form {
     pub document: crate::ui::Document,
 }
 
+/// Window actions affecting provider-owned values. Copies request a domain rename without guessing
+/// a form node or JSON field; ordinary native events retain their existing wire shape.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum FormEvent {
+    Rename { configuration_name: String },
+    Native(crate::ui::UiEvent),
+}
+
 /// Plugin business validation cannot grant execution permissions or replace host configuration identity.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]

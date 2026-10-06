@@ -21,7 +21,9 @@ pub use breakpoints::{
     BreakpointError, MAX_BREAKPOINT_SOURCE_BYTES, MAX_RUN_BREAKPOINTS, RunBreakpoint,
     RunBreakpoints,
 };
+mod configuration_tree;
 mod plugin_configurations;
+pub use configuration_tree::{ConfigurationFolder, ConfigurationPlacement, ConfigurationTree};
 mod store;
 pub use discovery::{DiscoveryOutcome, configuration_for, reconcile, repair};
 pub use plugin_configurations::{ConfigurationValidation, PluginConfiguration};
@@ -32,6 +34,8 @@ pub use shared::{
 /// Reading and writing the project's shared file, named so it cannot be confused with the local one.
 pub use shared::{load as load_shared, save as save_shared};
 pub use store::{RunStoreError, default_root, load, save, storage_path};
+#[cfg(test)]
+mod configuration_tree_tests;
 #[cfg(test)]
 mod tests;
 
@@ -529,6 +533,9 @@ pub enum RunConfigReadiness {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct RunConfigSet {
+    /// Virtual organization is host-owned and does not change executable working directories.
+    #[serde(default)]
+    pub tree: ConfigurationTree,
     /// Opaque plugin values are authoritative; configurations retain bounded executable projections.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub plugin_configurations: BTreeMap<String, PluginConfiguration>,
@@ -553,6 +560,7 @@ impl Default for RunConfigSet {
             version: RUN_CONFIG_VERSION,
             configurations: Vec::new(),
             plugin_configurations: BTreeMap::new(),
+            tree: ConfigurationTree::default(),
             selected: None,
         }
     }
@@ -575,6 +583,7 @@ impl RunConfigSet {
         for configuration in &set.configurations {
             configuration.validate().map_err(RunStoreError::Invalid)?;
         }
+        set.validate_tree().map_err(RunStoreError::Invalid)?;
         if set
             .plugin_configurations
             .iter()
@@ -624,6 +633,7 @@ impl RunConfigSet {
         let before = self.configurations.len();
         self.configurations.retain(|entry| entry.id != id);
         self.plugin_configurations.remove(id);
+        self.tree.placements.remove(id);
         if self.selected.as_deref() == Some(id) {
             self.selected = None;
         }
