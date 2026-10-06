@@ -1,0 +1,71 @@
+{
+  "date": "2026-10-07",
+  "repository": "T-miracle/Editor",
+  "branch": "Editor-run-debug-build",
+  "label": "ready-for-agent",
+  "specification": {
+    "identity": "run-config-plugin-tree-v1",
+    "number": 67,
+    "id": 5733179873,
+    "node_id": "I_kwDOUnHq-M8AAAABVblh4Q",
+    "title": "[Spec] 运行配置重构：插件模板、原生表单与配置树",
+    "url": "https://github.com/T-miracle/Editor/issues/67",
+    "state": "open"
+  },
+  "tickets": [
+    {
+      "identity": "run-config-plugin-tree-v1/t01",
+      "number": 68,
+      "id": 5733180334,
+      "node_id": "I_kwDOUnHq-M8AAAABVbljrg",
+      "title": "[Run Config 01] 从插件模板创建并使用配置",
+      "url": "https://github.com/T-miracle/Editor/issues/68",
+      "state": "open",
+      "ticket": "01",
+      "blocked_by": [],
+      "native_dependency_verified": true
+    },
+    {
+      "identity": "run-config-plugin-tree-v1/t02",
+      "number": 69,
+      "id": 5733180719,
+      "node_id": "I_kwDOUnHq-M8AAAABVbllLw",
+      "title": "[Run Config 02] 配置树组织与多配置保存事务",
+      "url": "https://github.com/T-miracle/Editor/issues/69",
+      "state": "open",
+      "ticket": "02",
+      "blocked_by": [
+        68
+      ],
+      "native_dependency_verified": true
+    },
+    {
+      "identity": "run-config-plugin-tree-v1/t03",
+      "number": 70,
+      "id": 5733181779,
+      "node_id": "I_kwDOUnHq-M8AAAABVblpUw",
+      "title": "[Run Config 03] 插件校验、执行门禁与故障隔离",
+      "url": "https://github.com/T-miracle/Editor/issues/70",
+      "state": "open",
+      "ticket": "03",
+      "blocked_by": [
+        69
+      ],
+      "native_dependency_verified": true
+    },
+    {
+      "identity": "run-config-plugin-tree-v1/t04",
+      "number": 71,
+      "id": 5733182861,
+      "node_id": "I_kwDOUnHq-M8AAAABVbltjQ",
+      "title": "[Run Config 04] 实际插件接入与原生交付验收",
+      "url": "https://github.com/T-miracle/Editor/issues/71",
+      "state": "open",
+      "ticket": "04",
+      "blocked_by": [
+        70
+      ],
+      "native_dependency_verified": true
+    }
+  ]
+}
