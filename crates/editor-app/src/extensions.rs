@@ -1233,6 +1233,9 @@ impl EditorApp {
         self.persist_session();
         self.status = "正在保存插件状态…".into();
         self.extensions.read(cx).worker.cancel_installation();
+        // File workers and their private backups may outlive the platform's 200 ms quit grace.
+        // Share the native close gate's cleanup and prevent new file commands while it runs.
+        let file_cleanup = self.shutdown_file_transfers(cx);
         cx.notify();
         let (tx, rx) = futures::channel::oneshot::channel();
         let _ = self
@@ -1242,6 +1245,7 @@ impl EditorApp {
             .tx
             .send(Work::Shutdown(Some(tx)));
         cx.spawn(async move |_, cx| {
+            file_cleanup.await;
             let _ = rx.await;
             let _ = cx.update(|cx| cx.quit());
         })

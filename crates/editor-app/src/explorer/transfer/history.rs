@@ -36,6 +36,7 @@ impl EditorApp {
     }
     pub(crate) fn file_history_available(&self, redo: bool) -> bool {
         !self.file_transfers.is_running()
+            && !self.file_transfers.closing
             && if redo {
                 !self.file_transfers.redo.is_empty()
             } else {

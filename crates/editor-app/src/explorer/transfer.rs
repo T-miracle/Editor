@@ -15,7 +15,8 @@ mod tests;
 
 use crate::*;
 use futures::channel::{mpsc, oneshot};
-use gpui_kit::AnyElement;
+use futures::{FutureExt as _, future::Shared};
+use gpui_kit::{AnyElement, Task};
 pub(crate) use operation::Kind;
 use operation::{Approval, Choice, Decision, Event, Outcome, Receipt, Worker};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -30,6 +31,7 @@ pub(crate) struct TransferState {
     deferred_renames: Vec<(PathBuf, PathBuf)>,
     resources: Arc<resources::Resources>,
     closing: bool,
+    cleanup: Option<Shared<Task<()>>>,
 }
 
 struct Active {
@@ -85,24 +87,43 @@ impl TransferState {
 }
 
 impl EditorApp {
+    /// Every normal exit path awaits the same cleanup; taking the registry twice cannot shorten that wait.
+    pub(crate) fn shutdown_file_transfers(&mut self, cx: &mut Context<Self>) -> Shared<Task<()>> {
+        if let Some(cleanup) = &self.file_transfers.cleanup {
+            return cleanup.clone();
+        }
+        self.file_transfers.closing = true;
+        if let Some(active) = &self.file_transfers.active {
+            active.cancel.store(true, Ordering::Relaxed);
+        }
+        // Dropping the decision sender releases a worker awaiting a conflict answer before cancellation.
+        self.file_transfers.prompt.take();
+        let resources = self.file_transfers.resources.clone();
+        let executor = cx.background_executor().clone();
+        let cleanup = cx
+            .background_executor()
+            .spawn(async move {
+                resources.cleanup(&executor).await;
+            })
+            .shared();
+        self.file_transfers.cleanup = Some(cleanup.clone());
+        cx.notify();
+        cleanup
+    }
+
     /// Normal window close waits for cancellation and background cleanup instead of relying on GPUI's short quit timeout.
     pub(crate) fn close_file_transfer_session(
         &mut self,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> bool {
-        if self.file_transfers.closing {
+        if self.file_transfers.closing && self.file_transfers.cleanup.is_none() {
             return false;
         }
-        if self.file_transfers.resources.is_empty() {
+        if self.file_transfers.cleanup.is_none() && self.file_transfers.resources.is_empty() {
             return true;
         }
-        self.file_transfers.closing = true;
-        self.file_transfers.prompt.take();
-        let cleanup = self
-            .file_transfers
-            .resources
-            .cleanup(cx.background_executor());
+        let cleanup = self.shutdown_file_transfers(cx);
         cx.spawn_in(window, async move |_, cx| {
             cleanup.await;
             let _ = cx.update(|window, _| window.remove_window());
