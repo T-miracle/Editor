@@ -3,11 +3,24 @@ param([string]$HostExe = "$PSScriptRoot/../target/debug/editor-app.exe")
 $ErrorActionPreference = 'Stop'
 $projectRoot = (Resolve-Path "$PSScriptRoot/..").Path
 $hostPath = (Resolve-Path -LiteralPath $HostExe).Path
+# A native program writes its progress to stderr, and with $ErrorActionPreference = 'Stop' that
+# output becomes a terminating error before the exit code below can be read. Run it as a native
+# command so the same failure is reported by that check instead of by PowerShell's own handling.
+function Invoke-HostTool {
+    param([Parameter(Mandatory)][string]$Exe, [Parameter(ValueFromRemainingArguments)][string[]]$Arguments)
+    $previous = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    try {
+        & $Exe @Arguments
+    } finally {
+        $ErrorActionPreference = $previous
+    }
+}
 $previousTarget = $env:CARGO_TARGET_DIR
 Push-Location $projectRoot
 try {
     $env:CARGO_TARGET_DIR = Join-Path $projectRoot 'target'
-    & $hostPath --plugin-cargo 'plugins/capability-example/Cargo.toml' build --target wasm32-wasip2 --release
+    Invoke-HostTool -Exe $hostPath --plugin-cargo 'plugins/capability-example/Cargo.toml' build --target wasm32-wasip2 --release
     if ($LASTEXITCODE -ne 0) { throw 'Capability example build failed' }
     $output = Join-Path $projectRoot 'target/plugin-api-test'
     New-Item -ItemType Directory -Force -Path $output | Out-Null
@@ -21,6 +34,9 @@ try {
         'capability-example.wasm' = 'target/wasm32-wasip2/release/capability_example_guest.wasm'
     }
     $stream = [IO.File]::Create($destination)
+    # The compression types are not loaded into a fresh Windows PowerShell session, and reading a
+    # type that is absent fails before anything is packed.
+    Add-Type -AssemblyName System.IO.Compression -ErrorAction Stop
     $archive = [IO.Compression.ZipArchive]::new($stream, [IO.Compression.ZipArchiveMode]::Create)
     try {
         foreach ($entry in $files.GetEnumerator()) {

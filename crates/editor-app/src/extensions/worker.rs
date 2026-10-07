@@ -1,9 +1,12 @@
 //! A single worker owns plugin stores; the UI thread never compiles or executes WASM.
 use plugin_runtime::{Installed, Manager, Package, plugin_protocol::*};
+mod admission;
 #[cfg(test)]
 mod bundled_tests;
+pub(super) mod configurations;
 mod preparation;
 mod runner;
+pub(super) mod targets;
 #[cfg(test)]
 mod worker_tests;
 use std::{
@@ -13,7 +16,49 @@ use std::{
     time::{Duration, Instant},
 };
 
-pub(super) enum Work {
+/// What one provider reported about the program it started.
+///
+/// This mirrors the provider's own words rather than the host's interpretation: `Running` is an
+/// observation with no exit seen, and `Unknown` means the provider could not answer at all.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum RunStatus {
+    Running,
+    /// The program ended, with the status the provider observed when it has one.
+    Ended {
+        code: Option<u32>,
+    },
+    /// The provider terminated the program rather than the program ending on its own.
+    Terminated,
+    /// The provider could not report, or the session is gone without a status.
+    Unknown,
+}
+
+impl RunStatus {
+    /// Read the provider's answer, accepting only the states the contract defines.
+    pub fn from_value(value: &serde_json::Value) -> Self {
+        match value.get("state").and_then(serde_json::Value::as_str) {
+            Some("starting" | "running" | "stopping" | "terminating") => Self::Running,
+            Some("exited") => Self::Ended {
+                code: value
+                    .get("code")
+                    .and_then(serde_json::Value::as_u64)
+                    .map(|code| code as u32),
+            },
+            // A program that ended without a status of its own is still an end, but the caller must
+            // not read a success into it.
+            Some("ended") => Self::Ended { code: None },
+            // A program the caller stopped has no exit status of its own. The execution contract's
+            // providers report exactly this word — the terminal provider answers a stop with it — and
+            // without this arm a stop would arrive as `Unknown`, which is the same thing the editor
+            // says when a provider cannot answer at all. The two are different facts: one is a program
+            // that ended because it was told to, the other is one nobody can describe.
+            Some("stopped" | "terminated") => Self::Terminated,
+            _ => Self::Unknown,
+        }
+    }
+}
+
+pub enum Work {
     /// One-time opaque migration uses current scoped storage consent, never the UI filesystem thread.
     ImportPreference {
         plugin: String,
@@ -23,7 +68,75 @@ pub(super) enum Work {
         key: api::PreferenceKey,
         data: serde_json::Value,
     },
+    /// A delayed launch keeps the service receipt's origin until actor admission.
+    Validated {
+        origin: plugin_runtime::TargetOrigin,
+        operation: Box<Work>,
+    },
+    /// Public template discovery never creates a user configuration or starts its target.
+    ConfigurationCatalog {
+        request: u64,
+        arguments: serde_json::Value,
+    },
+    /// Explicit provider and host request identity are immutable across native window selection changes.
+    ConfigurationCall {
+        request: u64,
+        provider: String,
+        method: String,
+        arguments: serde_json::Value,
+    },
+    /// Closing a window cancels only its own pending configuration calls.
+    CancelConfigurations {
+        requests: Vec<u64>,
+    },
+    /// Explicit target contributors prepare their own projects; the worker never interprets tool output.
+    PrepareTarget {
+        config: String,
+        index: usize,
+        request: u64,
+        provider: String,
+        binding: String,
+        env: Vec<plugin_runtime::RunEnvEntry>,
+    },
+    /// Stop the individual preparation root, including when no native creation receipt exists yet.
+    CancelTarget {
+        request: u64,
+        mode: plugin_runtime::plugin_protocol::process::ExitMode,
+    },
+    /// Discovery results retain the workspace and invocation nonce until the window accepts them.
+    DiscoverTargets {
+        workspace: String,
+        request: u64,
+    },
     /// Provider choices are explicit host actions, never executable project configuration.
+    /// Ask the runtime which providers it has for the run execution contract.
+    ///
+    /// A plain read: it opens no session and changes no selection, so it is safe to ask whenever a
+    /// page that shows providers becomes visible.
+    ListRunProviders,
+    /// Call one method on the selected debug provider, on behalf of the editor.
+    ///
+    /// The request identity is the editor's own, so the answer is joined to what it answers; the
+    /// method and arguments are the debug contract's, so nothing here decides what a call means.
+    DebugCall {
+        request: u64,
+        /// Stable configuration identity is host metadata, never an extra provider parameter.
+        configuration: Option<String>,
+        method: String,
+        arguments: serde_json::Value,
+    },
+    /// User-selected immediate cleanup revokes only this opaque host debug target's native root.
+    ForceDebug {
+        session: String,
+        request: u64,
+    },
+    /// Record the execution provider a workspace's launches should use.
+    ///
+    /// Applying a choice never touches a session that is already running: a launch that has started
+    /// keeps the provider that started it.
+    SetRunProvider {
+        provider: Option<String>,
+    },
     SetServiceProvider {
         request: u64,
         owner: api::InstanceScope,
@@ -75,6 +188,43 @@ pub(super) enum Work {
         command: String,
         arguments: serde_json::Value,
     },
+    /// The editor's run controls start a program through the public execution contract.
+    ///
+    /// The request already carries literal arguments and an absolute directory; the worker only asks
+    /// the runtime, which selects a compatible provider by contract rather than by plugin identity.
+    StartRun {
+        request: plugin_runtime::RunRequest,
+        config: String,
+        /// Identity of the launch that requested this start, so the answer joins its own request.
+        request_id: u64,
+    },
+    /// Stop the program one host session owns, through the provider that started it.
+    ///
+    /// The worker never touches a provider's private process handle; it asks the session's own
+    /// provider, which is the participant that owns the program.
+    StopRun {
+        session: u64,
+        config: String,
+        /// Normal cleanup and explicit immediate force share the same owned-session control path.
+        mode: process::ExitMode,
+        /// Identity of the stop that requested this, so its answer reaches the requester that asked.
+        request_id: u64,
+    },
+    /// Ask a session's own provider whether its program is still running.
+    ///
+    /// A preparation step's completion condition is an observed exit, so the host asks the provider
+    /// that owns the program rather than inferring an end from elapsed time or from output.
+    PollRun {
+        session: u64,
+        config: String,
+        /// Identity of the request that is waiting on this answer.
+        request_id: u64,
+    },
+    /// Select the retained provider view for one pinned session, including a hidden provider tab.
+    LocateRun {
+        session: u64,
+        request: u64,
+    },
     Shutdown(Option<futures::channel::oneshot::Sender<()>>),
 }
 impl Work {
@@ -89,6 +239,8 @@ impl Work {
             Self::InstallBundle(candidate) | Self::DeclineBundle(candidate) => {
                 Some(&candidate.package.manifest.id)
             }
+            // A status query observes a program another owner already has, so it claims no plugin.
+            Self::PollRun { .. } => None,
             Self::Enable(id)
             | Self::Restart(id)
             | Self::Disable(id)
@@ -121,6 +273,8 @@ impl Work {
                 action: LifecycleAction::Install,
                 delete_data: None,
             }),
+            // A status query observes a program another owner already has, so it claims no plugin.
+            Self::PollRun { .. } => None,
             Self::Enable(id) => Some(OperationProgress {
                 id: id.clone(),
                 action: LifecycleAction::Enable,
@@ -190,6 +344,58 @@ pub(super) struct Published {
     /// Bounded typed work has a completion gate that survives queue transfer and rejects stale callbacks.
     pub editor_requests: Vec<(String, plugin_runtime::EditorRequest)>,
     pub entries: Vec<Installed>,
+    /// One entry per execution this editor started, joined to the configuration that produced it.
+    ///
+    /// A snapshot is a view of the runtime's session, never a second process model: the worker
+    /// republishes it and the UI joins it to the saved configuration.
+    pub host_executions: Vec<HostRunSnapshot>,
+    /// Result of a start request the worker could not even queue, keyed by launch identity.
+    pub run_errors: Vec<(String, u64, String)>,
+    /// Answers to stop requests this editor made, keyed by stop identity.
+    pub stop_results: Vec<(String, u64, Result<(), String>)>,
+    /// What a provider reported about one session's program, keyed by the request that asked.
+    ///
+    /// The answer is an observation, so a state of `Running` here means the program exists and its
+    /// exit has not been seen — never that it is expected to end.
+    pub run_status: Vec<(String, u64, RunStatus)>,
+    /// A location is acknowledged only after the session's own provider accepts its identity.
+    pub locate_results: Vec<(u64, u64, Result<(), String>)>,
+    /// The execution providers the runtime has, and which one a launch here would use.
+    ///
+    /// Descriptive only: publishing this never changes a selection, and a launch is not delayed by
+    /// waiting for it. `None` means no listing has been asked for since the last lifecycle change.
+    pub run_providers: Option<Vec<plugin_runtime::ProviderCandidate>>,
+    /// Which debug provider a debug launch would use, or the reason there is none.
+    ///
+    /// Held apart from the execution listing because the two are asked different questions: this one
+    /// answers "can a debug session start here at all", which is what an entry point must know before
+    /// it offers debugging.
+    pub debug_availability: Option<Result<String, String>>,
+    /// What the debug provider that would serve a session says it can do.
+    ///
+    /// Availability answers whether a session can start; this answers what it can do once paused, which
+    /// is what decides whether the panel may ask for a stack at all. Both come from the same selected
+    /// provider, so a control and the call it stages cannot disagree about whether the call is offered.
+    pub debug_abilities: Option<plugin_runtime::DebugAbilities>,
+    /// Optional controls remain attached to each original provider, independent of the start default.
+    pub debug_provider_abilities: BTreeMap<String, plugin_runtime::DebugAbilities>,
+    /// Answers to debug calls this editor made, keyed by the request that asked.
+    ///
+    /// A failed call is reported as a failure rather than as an empty answer: a provider that could
+    /// not report frames has said nothing about the target.
+    pub debug_answers: Vec<(u64, DebugAnswerMessage)>,
+    /// Actual provider observations are separate from one-shot control request completions.
+    pub debug_observations: Vec<plugin_runtime::DebugSession>,
+    /// Bounded one-shot target receipts are joined to the original plan step, never current selection.
+    pub target_preparations: Vec<(String, usize, u64, Result<String, String>)>,
+    /// One latest snapshot per request bounds UI traffic while keeping concurrent output separate.
+    pub target_snapshots: BTreeMap<u64, (String, usize, plugin_runtime::PreparationSnapshot)>,
+    /// Every discovery publication carries workspace and nonce for late-result rejection.
+    pub target_discoveries: Vec<(String, u64, Result<targets::TargetCatalog, String>)>,
+    pub configuration_catalogs: Vec<(u64, configurations::ConfigurationCatalog)>,
+    pub configuration_replies: Vec<configurations::ConfigurationReply>,
+    /// Provider incarnations let the UI reject receipts published just before retirement.
+    pub configuration_origins: Vec<plugin_runtime::TargetOrigin>,
     pub startup: BTreeMap<String, String>,
     pub views: BTreeMap<String, Arc<ui::Document>>,
     /// Each scene's full-color image operations are ready before the UI observes that scene.
@@ -209,11 +415,92 @@ pub(super) struct PreferenceImport {
     pub data: serde_json::Value,
     pub succeeded: bool,
 }
+impl Published {
+    /// Preserve each newly published real failure in host-owned logs, independent of live resources.
+    pub(super) fn publish_entries(&mut self, entries: Vec<Installed>) {
+        for entry in &entries {
+            let previous = self
+                .entries
+                .iter()
+                .find(|old| old.manifest.id == entry.manifest.id);
+            if entry.error.is_some()
+                && previous.and_then(|old| old.error.as_ref()) != entry.error.as_ref()
+            {
+                self.logs.append(
+                    &entry.manifest.id,
+                    plugin_runtime::logs::LogLevel::Error,
+                    "host.plugin",
+                    entry.error.clone().unwrap(),
+                );
+            }
+        }
+        self.entries = entries;
+    }
+}
+
+/// One answer to one debug call, or the reason there is none.
+#[derive(Clone, Debug)]
+pub enum DebugAnswerMessage {
+    /// Pin an early stop to its resource root before the adapter returns a creation receipt.
+    Connecting(String),
+    Frames(Vec<plugin_runtime::DebugFrame>),
+    Variables(Vec<plugin_runtime::DebugVariable>),
+    /// A step's answer, which is the session's new state rather than a view of a pause.
+    State(plugin_runtime::DebugSession),
+    /// The positions a provider could bind, which is where a breakpoint became real or did not.
+    Breakpoints(Vec<plugin_runtime::DebugBreakpoint>),
+    /// The provider reported a failure, with its own account of what went wrong.
+    Failed(String),
+}
+
+/// Decode only the published contract's answer; failures retain their real provider reason.
+pub(super) fn debug_answer(
+    method: &str,
+    result: Result<serde_json::Value, String>,
+) -> DebugAnswerMessage {
+    let decoded = result.and_then(|value| match method {
+        "frames" => plugin_runtime::frames_from_value(&value)
+            .map(DebugAnswerMessage::Frames)
+            .map_err(|error| error.message),
+        "variables" => plugin_runtime::variables_from_value(&value)
+            .map(DebugAnswerMessage::Variables)
+            .map_err(|error| error.message),
+        "set_breakpoints" => plugin_runtime::DebugBreakpoint::list_from_value(&value)
+            .map(DebugAnswerMessage::Breakpoints)
+            .map_err(|error| error.message),
+        "start" | "status" | "step" | "pause" | "resume" | "stop" => {
+            plugin_runtime::DebugSession::from_value(&value)
+                .map(DebugAnswerMessage::State)
+                .map_err(|error| error.message)
+        }
+        _ => Err("Unknown native debug method".into()),
+    });
+    decoded.unwrap_or_else(DebugAnswerMessage::Failed)
+}
+
 /// One transient operation error retains its target; manager failures cannot become another plugin's log.
 #[derive(Clone, Debug)]
 pub(super) struct OperationStatus {
     pub plugin: Option<String>,
     pub message: String,
+}
+
+/// A published execution session, carrying only what the run controls display or join.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct HostRunSnapshot {
+    /// Runtime session identity.
+    pub id: u64,
+    /// Configuration that requested this session, from the launching editor.
+    pub config: String,
+    /// Launch identity, so an answer is adopted only by the request that produced it.
+    pub request_id: u64,
+    /// Resolved provider package identity, reported rather than used for routing.
+    pub plugin: String,
+    pub state: plugin_runtime::ExecutionState,
+    /// Provider-reported session identity, when its answer carried one.
+    pub provider_session: Option<String>,
+    /// Provider-reported failure, retained as the visible result of the launch.
+    pub failure: Option<String>,
 }
 /// The channel disconnect also shuts down when the last UI owner is released.
 pub(super) struct Worker {
@@ -225,6 +512,10 @@ pub(super) struct Worker {
     image_offers: Arc<std::sync::atomic::AtomicUsize>,
     #[cfg(test)]
     pub recorded: Mutex<mpsc::Receiver<Work>>,
+    /// Test transport retains actual public completions just as the production actor does.
+    /// A pending reply must never be reported as an unknown terminal state.
+    #[cfg(test)]
+    pub run_queries: Mutex<BTreeMap<(String, u64), plugin_runtime::Completion<serde_json::Value>>>,
 }
 
 /// Queue ownership is released on rejection, worker shutdown or completion of native-to-manager transfer.
@@ -350,6 +641,7 @@ impl Worker {
             trusted: Arc::new(std::sync::atomic::AtomicBool::new(trusted)),
             image_offers: Default::default(),
             recorded: Mutex::new(rx),
+            run_queries: Default::default(),
         }
     }
     #[cfg(not(test))]

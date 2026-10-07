@@ -5,19 +5,20 @@ use gpui_kit::{
     IntoElement, KeyDownEvent, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent,
     ParentElement, Render, SharedString, Styled, Window, WindowBounds, WindowControlArea,
     WindowHandle, WindowKind,
-    component::{
-        ActiveTheme, IconName, Root, Sizable, StyledExt, TitleBar, WindowExt as _,
-        button::{Button, ButtonVariants as _},
-        h_flex, v_flex,
-    },
+    component::{ActiveTheme, IconName, Root, StyledExt, TitleBar, WindowExt as _, h_flex, v_flex},
     div, px, size,
 };
 use std::rc::Rc;
 
-use crate::{PANEL_HEADER_HEIGHT, ui::controls::DialogContent};
+use crate::{
+    PANEL_HEADER_HEIGHT,
+    ui::controls::{Button, DialogContent},
+};
 
 type ContentBuilder = Rc<dyn Fn(DialogContent, &mut Window, &mut App) -> DialogContent>;
 type TitleBuilder = Rc<dyn Fn(&mut Window, &mut App) -> AnyElement>;
+/// Controlled content may cancel its innermost edit before allowing native chrome to close.
+type CloseRequest = Rc<dyn Fn(&mut Window, &mut App) -> bool>;
 
 /// Initial window width leaves room for the settings navigation and content.
 const DIALOG_WIDTH: f32 = 760.;
@@ -30,7 +31,10 @@ pub struct AppDialog {
     content: ContentBuilder,
     /// Keeps keyboard events inside the dialog so Escape can close it by default.
     focus: FocusHandle,
+    /// Chrome focus stays separate from the content's focus trap and keyboard actions.
+    close_focus: FocusHandle,
     should_move: bool,
+    close_request: Option<CloseRequest>,
 }
 
 impl AppDialog {
@@ -40,7 +44,29 @@ impl AppDialog {
             title,
             content,
             focus: cx.focus_handle(),
+            close_focus: cx.focus_handle(),
             should_move: false,
+            close_request: None,
+        }
+    }
+
+    /// Delegate native chrome dismissal to content with staged edits; `false` keeps the window open.
+    /// The content then owns Escape through its gpui-base dialog, preserving child menu dismissal.
+    pub(crate) fn set_close_request(
+        &mut self,
+        close: impl Fn(&mut Window, &mut App) -> bool + 'static,
+    ) {
+        self.close_request = Some(Rc::new(close));
+    }
+
+    /// Remove the native window only after its content has accepted dismissal.
+    fn request_close(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self
+            .close_request
+            .as_ref()
+            .is_none_or(|close| close(window, cx))
+        {
+            window.remove_window();
         }
     }
 
@@ -51,13 +77,17 @@ impl AppDialog {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        // Controlled content handles Escape in the bubble/action phase, after its focused menu.
+        if self.close_request.is_some() && !self.close_focus.is_focused(window) {
+            return;
+        }
         if event.keystroke.key == "escape" && event.keystroke.modifiers == Default::default() {
             // The active child Dialog owns Escape while its confirmation is open.
             if window.has_active_dialog(cx) {
                 return;
             }
             cx.stop_propagation();
-            window.remove_window();
+            self.request_close(window, cx);
         }
     }
 
@@ -126,10 +156,16 @@ impl Render for AppDialog {
                         )
                         .child(
                             Button::new("app-dialog-close")
+                                .debug_selector(|| "app-dialog-close".into())
+                                .track_focus(&self.close_focus)
                                 .icon(IconName::Close)
                                 .small()
+                                .compact()
                                 .ghost()
-                                .on_click(|_, window, _| window.remove_window()),
+                                .accessibility_label(rust_i18n::t!("notification.close"))
+                                .on_click(cx.listener(|this, _, window, cx| {
+                                    this.request_close(window, cx);
+                                })),
                         )
                         .child(div().w(px(8.))),
                 )

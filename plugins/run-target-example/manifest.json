@@ -1,0 +1,10 @@
+{
+  "id": "run-target-example",
+  "name": "Run target example",
+  "version": "0.1.0",
+  "protocol": 7,
+  "contributions": "plugin.toml",
+  "permissions": [],
+  "storage_limit": 1024,
+  "api": {"base": "^1"}
+}

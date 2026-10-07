@@ -292,20 +292,21 @@ impl EditorApp {
 
     pub(crate) fn open_file(&mut self, path: PathBuf, window: &mut Window, cx: &mut Context<Self>) {
         // Explorer and other explicit file navigation retain their reveal behavior.
-        self.open_file_with_reveal(path, true, window, cx);
+        self.open_file_with_navigation(path, true, true, window, cx);
     }
 
-    /// Apply one reveal policy to both an existing tab and a newly opened document.
-    fn open_file_with_reveal(
+    /// Apply explicit reveal/focus policies to existing tabs and newly opened documents alike.
+    fn open_file_with_navigation(
         &mut self,
         path: PathBuf,
         reveal: bool,
+        focus_editor: bool,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         let path = path.canonicalize().unwrap_or(path);
         if let Some(index) = self.tabs.iter().position(|tab| tab.path() == path) {
-            self.activate_tab_with_reveal(index, reveal, window, cx);
+            self.activate_tab_with_navigation(index, reveal, focus_editor, window, cx);
             return;
         }
 
@@ -320,7 +321,13 @@ impl EditorApp {
                 file_error: None,
             });
             self.sync_watched_documents();
-            self.activate_tab_with_reveal(self.tabs.len() - 1, reveal, window, cx);
+            self.activate_tab_with_navigation(
+                self.tabs.len() - 1,
+                reveal,
+                focus_editor,
+                window,
+                cx,
+            );
             cx.notify();
             return;
         }
@@ -421,7 +428,13 @@ impl EditorApp {
                     }),
                 });
                 self.sync_watched_documents();
-                self.activate_tab_with_reveal(self.tabs.len() - 1, reveal, window, cx);
+                self.activate_tab_with_navigation(
+                    self.tabs.len() - 1,
+                    reveal,
+                    focus_editor,
+                    window,
+                    cx,
+                );
                 self.refresh_syntax_diagnostics(self.editor.entity_id(), cx);
                 let editor = self.editor.downgrade();
                 // Start highlighting only after the loaded text has painted once.
@@ -443,7 +456,13 @@ impl EditorApp {
                         file_error: None,
                     });
                     self.sync_watched_documents();
-                    self.activate_tab_with_reveal(self.tabs.len() - 1, reveal, window, cx);
+                    self.activate_tab_with_navigation(
+                        self.tabs.len() - 1,
+                        reveal,
+                        focus_editor,
+                        window,
+                        cx,
+                    );
                     cx.notify();
                     return;
                 }
@@ -501,6 +520,73 @@ impl EditorApp {
             .is_ok_and(|count| crate::ui::plugin::bitmap::recognizes_encoding(&prefix[..count]))
     }
 
+    /// Opens a debugger's source location and places the caret on the line it stopped at.
+    ///
+    /// A debug provider reports a source and a one-based line, not an LSP position, so this follows
+    /// the same reveal and centering path a definition jump uses without inventing a URI for it. A
+    /// source that does not name an existing local file is reported as not located: the provider's
+    /// word for a path is not evidence that the file is here, and guessing one would put the caret
+    /// somewhere the target never stopped.
+    pub(crate) fn open_debug_location(
+        &mut self,
+        source: &str,
+        line: u32,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let path = std::path::PathBuf::from(source);
+        // A provider may report a path relative to the workspace it launched in.
+        let path = if path.is_absolute() {
+            path
+        } else {
+            self.workspace.root().join(path)
+        };
+        if !path.is_file() || line == 0 {
+            return false;
+        }
+        let path = path.canonicalize().unwrap_or(path);
+        // Source navigation updates the document without taking keyboard focus from the debug
+        // panel. Consecutive frame keys and step shortcuts must stay in the user's active surface.
+        let previous_focus = window.focused(cx);
+        self.open_file_with_navigation(path.clone(), true, false, window, cx);
+        if self.active_path.as_deref() != Some(path.as_path()) {
+            return false;
+        }
+        // File-only viewers have no text session to lend to debugger source navigation.
+        let Some(tab) = self
+            .active_text_tab_index()
+            .and_then(|index| self.text_tab(index))
+        else {
+            return false;
+        };
+        let editor = tab.editor.clone();
+        let revision = tab.session.revision();
+        let generation = tab.definition_highlight_generation;
+        let position = editor.update(cx, |editor, cx| {
+            let row = (line - 1) as usize;
+            // A line beyond the file the provider named is refused rather than clamped: the target
+            // did not stop there, and putting the caret at the end would claim it did.
+            let offset = editor.text().line_start_offset(row);
+            let position = editor.text().offset_to_position(offset);
+            // A line inside a fold must be exposed before the caret can be shown at it.
+            editor.unfold_at(position, cx);
+            editor.set_cursor_position(position, window, cx);
+            let _ = center_editor_cursor(editor, cx);
+            position
+        });
+        // A newly opened tab has no layout yet, so its centering is revisited until it has painted.
+        let app = cx.entity().downgrade();
+        reveal_definition_after_layout(
+            app, editor, position, revision, generation, false, 2, window,
+        );
+        // Base cursor positioning focuses the input immediately; restore the caller's focus once.
+        // The navigation policy above schedules no later focus, so this cannot be overwritten.
+        if let Some(focus) = previous_focus {
+            focus.focus(window, cx);
+        }
+        true
+    }
+
     /// Opens local LSP targets, including sources in the Cargo registry and sysroot.
     pub(crate) fn open_definition_uri(
         &mut self,
@@ -520,9 +606,10 @@ impl EditorApp {
         }
         let path = path.canonicalize().unwrap_or(path);
         // Definition jumps follow the same explorer preference as tab switching.
-        self.open_file_with_reveal(
+        self.open_file_with_navigation(
             path.clone(),
             self.session_state.explorer_reveal_on_tab_switch,
+            true,
             window,
             cx,
         );
@@ -627,19 +714,21 @@ impl EditorApp {
         cx: &mut Context<Self>,
     ) {
         // Ordinary switches follow the saved preference; explicit navigation supplies its own policy.
-        self.activate_tab_with_reveal(
+        self.activate_tab_with_navigation(
             index,
             self.session_state.explorer_reveal_on_tab_switch,
+            true,
             window,
             cx,
         );
     }
 
-    /// Activate document content while keeping explorer navigation an explicit caller choice.
-    fn activate_tab_with_reveal(
+    /// Activate document content while keeping explorer reveal and keyboard focus caller choices.
+    fn activate_tab_with_navigation(
         &mut self,
         index: usize,
         reveal: bool,
+        focus_editor: bool,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
@@ -698,7 +787,8 @@ impl EditorApp {
         let max_scroll = (px(190.) * self.tabs.len() - viewport).max(px(0.));
         self.tabs_scroll
             .set_offset(point(-target.clamp(px(0.), max_scroll), px(0.)));
-        if self.active_text_tab_index().is_some() {
+        // Debugger source updates preserve inspection focus; explicit navigation focuses editing.
+        if focus_editor && self.active_text_tab_index().is_some() {
             let focus = self.editor.focus_handle(cx);
             let app = cx.entity().downgrade();
             window.defer(cx, move |window, cx| {

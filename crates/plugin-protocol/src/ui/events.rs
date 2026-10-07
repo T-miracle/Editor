@@ -60,7 +60,9 @@ impl Document {
             (Kind::Button { .. }, Action::Click) | (Kind::Checkbox { .. }, Action::Toggle(_)) => {
                 true
             }
-            (Kind::Input(_), Action::Change(value) | Action::Submit(value)) => value.len() <= 65536,
+            (Kind::Input(_) | Kind::Textarea(_), Action::Change(value) | Action::Submit(value)) => {
+                value.len() <= 65536
+            }
             (Kind::Choice { options, .. }, Action::Select(id)) => options
                 .iter()
                 .any(|option| option.id == *id && !option.disabled),

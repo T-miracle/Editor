@@ -1,7 +1,10 @@
 //! Loads installed declarative resources through the same registry as WASM plugins.
 
 use plugin_runtime::{Installed, Manager};
-use plugin_schema::{FileIconConfig, PluginManifest, ThemeDefinition, ThemeFile, ThemeMode};
+use plugin_schema::{
+    DiscoveredTarget, FileIconConfig, PluginManifest, ProviderFailure, RunTargetDiscovery,
+    ThemeDefinition, ThemeFile, ThemeMode,
+};
 use std::{
     collections::BTreeMap,
     path::{Path, PathBuf},
@@ -22,6 +25,8 @@ struct Contribution {
     icons: Option<FileIconConfig>,
     theme_icons: Option<FileIconConfig>,
     theme: Option<ThemeFile>,
+    /// Discovery declarations this plugin contributes, already validated.
+    run_targets: Vec<Arc<RunTargetDiscovery>>,
     assets: BTreeMap<String, Vec<u8>>,
 }
 
@@ -157,6 +162,15 @@ impl Contribution {
                 )?)?)?)
             })
             .transpose()?;
+        let (run_targets, failures) = read_run_targets(&root, &manifest.run_targets);
+        for failure in &failures {
+            tracing::warn!(
+                plugin = %id,
+                provider = %failure.provider,
+                error = %failure.error,
+                "run target discovery unavailable"
+            );
+        }
         let mut assets = BTreeMap::new();
         for config in [&icons, &theme_icons].into_iter().flatten() {
             for icon in &config.icons {
@@ -183,9 +197,59 @@ impl Contribution {
             icons,
             theme_icons,
             theme,
+            run_targets,
             assets,
         })
     }
+}
+
+/// Whether a declaration may stand for the contribution that announced it.
+///
+/// The declaration's own identity is what a saved configuration names, so it has to be the identity
+/// the contribution file announced; otherwise the two could disagree silently and a configuration
+/// would point at a provider nobody installed.
+pub fn declaration_matches_contribution(
+    contribution: &str,
+    declaration: &str,
+) -> Result<(), String> {
+    if contribution == declaration {
+        return Ok(());
+    }
+    Err(format!(
+        "declaration names provider {declaration} but the contribution names {contribution}"
+    ))
+}
+
+/// Read every discovery declaration a plugin contributes.
+///
+/// Each declaration is validated as it is read, so a plugin that ships an unusable one is reported
+/// with the file that failed instead of taking the rest of its contributions down with it.
+fn read_run_targets(
+    root: &Path,
+    contributions: &[plugin_schema::RunTargetContribution],
+) -> (Vec<Arc<RunTargetDiscovery>>, Vec<ProviderFailure>) {
+    let mut providers = Vec::new();
+    let mut failures = Vec::new();
+    // The package root is resolved once, so a declaration may only name files inside it.
+    let resolved = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
+    for contribution in contributions {
+        let provider = contribution.id.clone();
+        let read = || -> anyhow::Result<RunTargetDiscovery> {
+            let bytes = read_asset(&resolved, &contribution.file)?;
+            Ok(RunTargetDiscovery::from_json(&bytes)?)
+        };
+        match read() {
+            Ok(discovery) => match declaration_matches_contribution(&provider, &discovery.id) {
+                Ok(()) => providers.push(Arc::new(discovery)),
+                Err(error) => failures.push(ProviderFailure { provider, error }),
+            },
+            Err(error) => failures.push(ProviderFailure {
+                provider,
+                error: format!("{error:#}"),
+            }),
+        }
+    }
+    (providers, failures)
 }
 
 fn read_icons(root: &Path, path: &Path) -> anyhow::Result<FileIconConfig> {
@@ -250,6 +314,128 @@ fn language_for_path_in_catalog(
     None
 }
 
+/// Run every enabled plugin's discovery declarations against one workspace.
+///
+/// Each declaration is applied independently, so a provider that offers nothing — or offers
+/// something unusable — cannot stop another provider from offering its own targets. The candidates
+/// are gathered here and handed on; nothing in this module decides what a candidate means.
+pub fn discover_run_targets(workspace: &Path) -> Result<Vec<DiscoveredTarget>, String> {
+    let catalog = CATALOG.read().unwrap().clone();
+    let providers = catalog
+        .plugins
+        .iter()
+        .flat_map(|(owner, contribution)| {
+            contribution
+                .run_targets
+                .iter()
+                .map(move |provider| (owner.clone(), provider.clone()))
+        })
+        .collect::<Vec<_>>();
+    if providers.is_empty() {
+        return Ok(Vec::new());
+    }
+    let root = workspace
+        .canonicalize()
+        .map_err(|error| error.to_string())?;
+    let files = workspace_files(&root)?;
+    let mut targets = Vec::new();
+    for (owner, provider) in providers {
+        let candidates = provider.discover(&files, |path| {
+            let resolved = root.join(path).canonicalize().ok()?;
+            // Recheck each selected input against the canonical root, including changed symlinks.
+            if !resolved.starts_with(&root)
+                || !resolved.is_file()
+                || std::fs::metadata(&resolved).ok()?.len() > 256 * 1024
+            {
+                return None;
+            }
+            std::fs::read_to_string(resolved).ok()
+        });
+        for mut target in candidates {
+            target.id = format!(
+                "{}:{}:{}:{}:{}",
+                owner.len(),
+                owner,
+                target.found_in.len(),
+                target.found_in,
+                target.id
+            );
+            target.provider = owner.clone();
+            targets.push(target);
+            if targets.len() > 128 {
+                return Err("Discovery exceeds 128 candidates".into());
+            }
+        }
+    }
+    Ok(targets)
+}
+
+/// Canonical paths and a visited-directory set bound links, cycles and empty-directory floods.
+fn workspace_files(workspace: &Path) -> Result<Vec<String>, String> {
+    let root = workspace
+        .canonicalize()
+        .map_err(|error| error.to_string())?;
+    let mut files = std::collections::BTreeSet::new();
+    let mut visited = std::collections::BTreeSet::new();
+    let mut pending = vec![root.clone()];
+    let mut scanned = 0usize;
+    while let Some(directory) = pending.pop() {
+        if !directory.starts_with(&root) || !visited.insert(directory.clone()) {
+            continue;
+        }
+        if visited.len() > 20000 {
+            return Err("Discovery directory limit exceeded".into());
+        }
+        let entries = std::fs::read_dir(directory).map_err(|error| error.to_string())?;
+        for entry in entries {
+            let entry = entry.map_err(|error| error.to_string())?;
+            scanned += 1;
+            if scanned > 60000 {
+                return Err("Discovery entry limit exceeded".into());
+            }
+            if matches!(
+                entry.file_name().to_str(),
+                Some(".git" | "target" | "node_modules" | "vendor")
+            ) {
+                continue;
+            }
+            let Ok(path) = entry.path().canonicalize() else {
+                continue;
+            };
+            if !path.starts_with(&root) {
+                continue;
+            }
+            if path.is_dir() {
+                pending.push(path);
+            } else if path.is_file() {
+                let relative = path
+                    .strip_prefix(&root)
+                    .unwrap()
+                    .to_string_lossy()
+                    .replace('\\', "/");
+                files.insert(relative);
+                if files.len() > 20000 {
+                    return Err("Discovery file limit exceeded".into());
+                }
+            }
+        }
+    }
+    Ok(files.into_iter().collect())
+}
+
+/// Publish one plugin's declarative contributions the way the registry does.
+///
+/// Exists for the native acceptance, which must exercise the shipped package's own declaration
+/// without installing a whole registry into a temporary runtime.
+#[cfg(test)]
+pub fn publish_declarative_plugin_for_test(root: &Path, id: &str) {
+    let contribution = Contribution::read(root, "plugin.toml", id, &"c".repeat(64))
+        .unwrap_or_else(|error| panic!("the plugin's contributions read: {error:#}"));
+    let mut catalog = Catalog::default();
+    catalog.plugins.insert(id.to_owned(), contribution);
+    *CATALOG.write().unwrap() = Arc::new(catalog);
+}
+
 /// Locate an enabled package so its grammar can be validated off the UI thread.
 #[cfg(test)]
 pub fn plugin_root(id: &str) -> Option<PathBuf> {
@@ -301,6 +487,77 @@ pub fn asset(path: &str) -> Option<Vec<u8>> {
 mod tests {
     use super::*;
 
+    /// A differently named resource-only provider uses the same catalog and stable source identity.
+    #[test]
+    fn an_independent_declaration_offers_distinct_sources_without_language_rules() {
+        let plugins = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../plugins");
+        let example = Contribution::read(
+            &plugins.join("run-target-example"),
+            "plugin.toml",
+            "run-target-example",
+            &"b".repeat(64),
+        )
+        .unwrap();
+        assert_eq!(example.run_targets.len(), 1);
+        let project = tempfile::tempdir().unwrap();
+        for directory in ["one", "two"] {
+            std::fs::create_dir_all(project.path().join(directory)).unwrap();
+            std::fs::write(
+                project.path().join(directory).join("native-tool.toml"),
+                "[tool]\nname=\"Same label\"\nprogram=\"tool.exe\"\n",
+            )
+            .unwrap();
+        }
+        let mut catalog = Catalog::default();
+        catalog.plugins.insert("run-target-example".into(), example);
+        *CATALOG.write().unwrap() = Arc::new(catalog);
+        let targets = discover_run_targets(project.path()).unwrap();
+        assert_eq!(targets.len(), 2);
+        assert_ne!(
+            targets[0].id, targets[1].id,
+            "equal labels in different files are different targets"
+        );
+        assert!(
+            targets
+                .iter()
+                .all(|target| target.provider == "run-target-example"
+                    && target.target_type == "native-tool"
+                    && target.program == "tool.exe")
+        );
+        assert!(
+            discover_run_targets(tempfile::tempdir().unwrap().path())
+                .unwrap()
+                .is_empty()
+        );
+        *CATALOG.write().unwrap() = Arc::new(Catalog::default());
+    }
+
+    /// A declaration that disagrees with its contribution file is reported, not silently accepted.
+    #[test]
+    fn a_mismatched_discovery_identity_is_refused() {
+        assert!(declaration_matches_contribution("rust-binary", "rust-binary").is_ok());
+        let error = declaration_matches_contribution("declared", "other")
+            .expect_err("a declaration naming another provider is refused");
+        assert!(
+            error.contains("other") && error.contains("declared"),
+            "{error}"
+        );
+        // A contribution whose file is absent is reported with the file it named.
+        let directory = tempfile::tempdir().unwrap();
+        let (providers, failures) = read_run_targets(
+            directory.path(),
+            &[plugin_schema::RunTargetContribution {
+                id: "declared".into(),
+                file: PathBuf::from("missing.json"),
+            }],
+        );
+        assert!(providers.is_empty());
+        assert_eq!(failures.len(), 1);
+        assert_eq!(failures[0].provider, "declared");
+        // The reason comes from the platform and is not asserted word for word, but a plugin that
+        // names a file it does not ship has to be reported rather than quietly offering nothing.
+        assert!(!failures[0].error.trim().is_empty());
+    }
     /// Startup resource loading must reject old protocols before opening their grammar/theme/icon assets.
     #[test]
     fn incompatible_resource_records_do_not_publish_contributions() {

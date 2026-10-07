@@ -35,7 +35,15 @@ mod management;
 mod management_tests;
 #[cfg(test)]
 mod markdown_tests;
+#[cfg(test)]
+mod native_build_tests;
+#[cfg(test)]
+pub(crate) mod native_configuration_tests;
 mod native_controls;
+#[cfg(test)]
+mod native_discovery_tests;
+#[cfg(test)]
+mod native_run_tests;
 #[cfg(test)]
 mod native_ui_tests;
 #[cfg(test)]
@@ -76,6 +84,10 @@ use plugin_runtime::{
 #[cfg(test)]
 use std::cell::RefCell;
 use std::collections::BTreeMap;
+pub(crate) use worker::DebugAnswerMessage;
+pub(crate) use worker::configurations::{ConfigurationCatalog, ConfigurationReply};
+pub(crate) use worker::targets::TargetCatalog;
+pub use worker::{HostRunSnapshot, RunStatus, Work as HostWork};
 use worker::{LifecycleAction, OperationProgress, Work, Worker};
 
 actions!(extensions, [ToggleExtensions, QuitEditor]);
@@ -838,7 +850,7 @@ impl ExtensionPanel {
     }
 }
 /// Convert current host palette into explicit plugin context.
-fn environment(workspace: &Path, cx: &App) -> protocol::Environment {
+pub(crate) fn environment(workspace: &Path, cx: &App) -> protocol::Environment {
     fn color(c: gpui_kit::Hsla) -> u32 {
         let c = gpui_kit::Rgba::from(c);
         // Round float channels back to their exact theme bytes before sending them to plugins.
@@ -985,6 +997,229 @@ impl DockPanel for ExtensionPanel {
         true
     }
 }
+impl ExtensionPanel {
+    /// Whether this workspace may start programs and language tools at all.
+    ///
+    /// The run controls read the same host-local authority the worker enforces, so a restricted
+    /// workspace never offers a launch.
+    pub(crate) fn workspace_trusted(&self) -> bool {
+        self.worker
+            .trusted
+            .load(std::sync::atomic::Ordering::Acquire)
+    }
+
+    /// Read the actor's latest immutable provider snapshot, including revocation between UI frames.
+    pub(crate) fn configuration_origins(&self) -> Vec<plugin_runtime::TargetOrigin> {
+        self.worker
+            .state
+            .lock()
+            .unwrap()
+            .configuration_origins
+            .clone()
+    }
+
+    /// Stage one host start for the plugin worker, reporting whether it could be queued.
+    pub(crate) fn stage_host_run(&self, work: HostWork) -> bool {
+        match self.worker.tx.send(work) {
+            Ok(()) => true,
+            Err(error) => {
+                // A stopped actor terminates configuration waits rather than leaving Save spinning.
+                let mut state = self.worker.state.lock().unwrap();
+                let reason = t!("run.plugin_worker_unavailable").to_string();
+                match error.0 {
+                    Work::ConfigurationCall { request, .. } => {
+                        state.configuration_replies.push(ConfigurationReply {
+                            request,
+                            origin: None,
+                            result: Err(reason),
+                        })
+                    }
+                    Work::ConfigurationCatalog { request, .. } => {
+                        state.configuration_catalogs.push((
+                            request,
+                            ConfigurationCatalog {
+                                templates: vec![],
+                                failures: [("runtime".into(), reason)].into(),
+                                origins: vec![],
+                            },
+                        ))
+                    }
+                    _ => return false,
+                }
+                state.configuration_revision += 1;
+                false
+            }
+        }
+    }
+
+    /// Ask the runtime which run execution providers it has; the answer arrives with the next pump.
+    pub(crate) fn ask_run_providers(&self) {
+        let _ = self
+            .worker
+            .tx
+            .send(crate::extensions::worker::Work::ListRunProviders);
+    }
+
+    /// The provider listing the runtime last published, if one has been asked for.
+    pub(crate) fn run_providers(&self) -> Option<Vec<plugin_runtime::ProviderCandidate>> {
+        self.worker.state.lock().unwrap().run_providers.clone()
+    }
+
+    /// Queue a debug call for the runtime, keyed by the request the editor will join the answer to.
+    ///
+    /// The method and arguments are the debug contract's, so nothing here decides what a call means,
+    /// and a request that cannot be queued produces no answer at all rather than a pretended one.
+    pub(crate) fn stage_debug_call(
+        &self,
+        request: u64,
+        method: &str,
+        arguments: serde_json::Value,
+    ) -> bool {
+        self.worker
+            .tx
+            .send(crate::extensions::worker::Work::DebugCall {
+                request,
+                configuration: None,
+                method: method.to_owned(),
+                arguments,
+            })
+            .is_ok()
+    }
+
+    /// Debug answers published since the last read, keyed by the request that asked.
+    pub(crate) fn stage_debug_launch(
+        &self,
+        request: u64,
+        configuration: &str,
+        arguments: serde_json::Value,
+    ) -> bool {
+        self.worker
+            .tx
+            .send(worker::Work::DebugCall {
+                request,
+                configuration: Some(configuration.into()),
+                method: "start".into(),
+                arguments,
+            })
+            .is_ok()
+    }
+
+    /// Drain actual observations; the immutable host IDs associate them with their owning config.
+    pub(crate) fn take_debug_observations(&self) -> Vec<plugin_runtime::DebugSession> {
+        std::mem::take(&mut self.worker.state.lock().unwrap().debug_observations)
+    }
+
+    /// Debug answers published since the last read, keyed by the request that asked.
+    pub(crate) fn take_debug_answers(
+        &self,
+    ) -> Vec<(u64, crate::extensions::worker::DebugAnswerMessage)> {
+        std::mem::take(&mut self.worker.state.lock().unwrap().debug_answers)
+    }
+
+    /// Whether a debug session could start, as the runtime last reported it.
+    ///
+    /// `None` means the question has not been asked yet, which an entry point treats as "not
+    /// available" rather than "available".
+    pub(crate) fn debug_availability(&self) -> Option<Result<String, String>> {
+        self.worker.state.lock().unwrap().debug_availability.clone()
+    }
+
+    /// What the provider that would serve a debug session says it can do, in the editor's own words.
+    ///
+    /// The host's ability names are translated here rather than at each control, so the panel and the
+    /// calls it stages read one value. A missing answer stays `None`, which leaves every ability
+    /// disabled with a reason: an ability the editor has not been told about is not one it may offer.
+    pub(crate) fn debug_capabilities(&self) -> Option<editor_core::DebugCapabilities> {
+        let abilities = self.worker.state.lock().unwrap().debug_abilities.clone()?;
+        Some(editor_core::DebugCapabilities {
+            breakpoints: abilities.breakpoints,
+            resume_pause: abilities.resume_pause,
+            step: abilities.step,
+            // The host states inspection as one ability, because a frame list without variables is not
+            // an inspection view; the editor mirrors that rather than inventing a split.
+            inspect: abilities.inspect,
+        })
+    }
+
+    /// Translate the actual registry once; each session then reads the capabilities of its owner.
+    pub(crate) fn all_debug_capabilities(
+        &self,
+    ) -> BTreeMap<String, editor_core::DebugCapabilities> {
+        self.worker
+            .state
+            .lock()
+            .unwrap()
+            .debug_provider_abilities
+            .iter()
+            .map(|(id, abilities)| {
+                (
+                    id.clone(),
+                    editor_core::DebugCapabilities {
+                        breakpoints: abilities.breakpoints,
+                        resume_pause: abilities.resume_pause,
+                        step: abilities.step,
+                        inspect: abilities.inspect,
+                    },
+                )
+            })
+            .collect()
+    }
+
+    /// Drain each target receipt once; UI applies only the request identity belonging to its plan.
+    /// Consume actual per-request output independently from provider terminal receipts.
+    pub(crate) fn take_target_snapshots(
+        &self,
+    ) -> BTreeMap<u64, (String, usize, plugin_runtime::PreparationSnapshot)> {
+        std::mem::take(&mut self.worker.state.lock().unwrap().target_snapshots)
+    }
+    pub(crate) fn take_target_preparations(
+        &self,
+    ) -> Vec<(String, usize, u64, Result<String, String>)> {
+        std::mem::take(&mut self.worker.state.lock().unwrap().target_preparations)
+    }
+    /// Discovery is asynchronous and never implicitly creates a saved configuration.
+    pub(crate) fn take_target_discoveries(
+        &self,
+    ) -> Vec<(String, u64, Result<worker::targets::TargetCatalog, String>)> {
+        std::mem::take(&mut self.worker.state.lock().unwrap().target_discoveries)
+    }
+
+    /// Drain immutable configuration receipts; each consumer retains its own original request identity.
+    pub(crate) fn take_configuration_replies(
+        &self,
+    ) -> (Vec<(u64, ConfigurationCatalog)>, Vec<ConfigurationReply>) {
+        let mut published = self.worker.state.lock().unwrap();
+        (
+            std::mem::take(&mut published.configuration_catalogs),
+            std::mem::take(&mut published.configuration_replies),
+        )
+    }
+
+    /// Published host sessions, start refusals and stop answers reported by the worker.
+    ///
+    /// Reading drains the answer lists, so each outcome is explained exactly once.
+    pub(crate) fn take_host_runs(
+        &self,
+    ) -> (
+        Vec<HostRunSnapshot>,
+        Vec<(String, u64, String)>,
+        Vec<(String, u64, Result<(), String>)>,
+        Vec<(String, u64, RunStatus)>,
+    ) {
+        let mut state = self.worker.state.lock().unwrap();
+        (
+            state.host_executions.clone(),
+            std::mem::take(&mut state.run_errors),
+            std::mem::take(&mut state.stop_results),
+            std::mem::take(&mut state.run_status),
+        )
+    }
+    /// Drain provider location replies once; the window checks whether that session is still selected.
+    pub(crate) fn take_run_locations(&self) -> Vec<(u64, u64, Result<(), String>)> {
+        std::mem::take(&mut self.worker.state.lock().unwrap().locate_results)
+    }
+}
+
 impl EditorApp {
     /// Keep the window alive while snapshots finish; GPUI's final quit grace is only 200 ms.
     pub(crate) fn shutdown_plugins(&mut self, cx: &mut Context<Self>) {
@@ -1012,6 +1247,35 @@ impl EditorApp {
         })
         .detach();
     }
+    /// Show every panel one provider declared, because a session's output lives in its own surface.
+    ///
+    /// The host holds no panel naming convention beyond the provider's own declaration: it reveals
+    /// what that package contributed and reports the first failure rather than guessing a name.
+    pub(crate) fn show_provider_panel(
+        &mut self,
+        plugin: &str,
+        window: &mut Window,
+        cx: &mut Context<EditorApp>,
+    ) -> Result<(), String> {
+        let prefix = format!("{plugin}/");
+        let panels = self
+            .plugin_panels
+            .iter()
+            .filter(|(key, _)| key.starts_with(&prefix))
+            .map(|(key, panel)| (key.clone(), panel.clone()))
+            .collect::<Vec<_>>();
+        if panels.is_empty() {
+            return Err("提供者没有可显示的界面".into());
+        }
+        for (key, panel) in panels {
+            panel.update(cx, |panel, cx| panel.show(window, cx));
+            self.session_state.plugin_panel_visibility.insert(key, true);
+        }
+        self.persist_session();
+        self.dock_area.update(cx, |_, cx| cx.notify());
+        Ok(())
+    }
+
     /// Register and remove native panels directly from installed manifest contributions.
     pub(crate) fn sync_plugin_panels(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.finish_preference_imports(cx);

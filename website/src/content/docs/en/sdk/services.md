@@ -6,7 +6,7 @@ order: 4
 alternate: /zh-cn/sdk/services/
 ---
 
-# Plugin services `plugin.services` 1.0
+# Plugin services `plugin.services` 1.1
 
 A consumer declares a contract ID and a SemVer range; it does not reference a particular
 provider plugin. A protocol 7 WASM package publishes contracts with
@@ -88,7 +88,7 @@ array items.
 
 The plugin, instance, scope and permissions in `Invocation.caller` are produced by the host.
 A consumer and a provider must both hold the permissions listed by the method, and each hop
-can only narrow them further. Version 1.0 supports delegating `workspace.read`,
+can only narrow them further. Version 1.1 supports delegating `workspace.read`,
 `editor.read`, `editor.write`, `ui.panels` and `process.exec`; a delegated permission that was
 not declared is always rejected.
 
@@ -108,6 +108,10 @@ operations or read provider private data, and it is not delivered once the provi
 disabled. A repeated instance in the chain is rejected immediately, and a chain holds at most
 8 instances; nested calls enter the next queue round instead of recursing into the WASM store.
 
-The independent verification package uses the public SDK build artifact of
-`capability-example`, packaged by the test into one consumer and two providers with different
-IDs; the host has no branch on any example plugin ID or method name at runtime.
+## Deferred provider replies
+
+With plugin.services 1.1, an invocation supplies an optional provider-owned `reply` handle. A provider can return its immediate result through `Output.service_reply`, or retain that handle and complete it later through `service::guest::reply(&handle, result)` from an authorized native event or nested-service callback. No immediate reply means the invocation is deferred, not completed.
+
+At most 32 deferred invocations may remain per provider instance. Each retains the original caller, narrowed permissions, exact result schema and original deadline; deferral does not renew a timeout. The reply handle belongs only to that provider invocation and is single-use. Another origin cannot finish it, a duplicate or retired reply is rejected, and invalid result shape or size is rejected before completion. Closing the handle abandons the reply. Cancellation, timeout, caller/provider retirement and scope changes release the slot and reject late replies. Providers must revoke delegated work; completing a reply does not transfer its native resources to a new origin.
+
+Current service callbacks require plugin.services 1.1. Consumers and providers use the same SDK contract; installation of an old callback implementation does not add a legacy execution branch.

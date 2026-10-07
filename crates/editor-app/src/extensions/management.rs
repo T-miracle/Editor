@@ -76,7 +76,22 @@ impl ExtensionPanel {
             self.confirm_dialog_open = true;
             cx.defer_in(window, move |this, window, cx| {
                 if this.confirm.as_ref() == Some(&(id.clone(), remove)) {
-                    this.open_remove_dialog(id, remove, window, cx);
+                    // The sessions this plugin is serving are read from the editor, which owns the run
+                    // controls, so the user sees what the change would take away before deciding.
+                    let extra = this.parent.upgrade().and_then(|parent| {
+                        let debug_provider = parent
+                            .read(cx)
+                            .run_controls
+                            .debug_availability()
+                            .ok()
+                            .map(str::to_owned);
+                        let impact = parent
+                            .read(cx)
+                            .run_controls
+                            .plugin_session_impact(&id, debug_provider.as_deref());
+                        impact.summary()
+                    });
+                    this.open_remove_dialog(id, remove, extra, window, cx);
                 }
             });
         }

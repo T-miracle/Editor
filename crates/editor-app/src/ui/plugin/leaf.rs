@@ -160,6 +160,11 @@ impl PluginView {
             Kind::Button { label } => self
                 .font(
                     Button::new(native_id.clone())
+                        .debug_selector({
+                            // Keep native form actions addressable after splitting the leaf renderer.
+                            let control = format!("plugin-button-{}", node.id);
+                            move || control.clone()
+                        })
                         .label(label.clone())
                         .when_some(node.tooltip.clone(), |button, tooltip| {
                             button.accessibility_label(tooltip.clone()).tooltip(tooltip)
@@ -185,6 +190,15 @@ impl PluginView {
                         .bg(colors.background)
                         .text_color(colors.foreground)
                         .border_color(colors.border),
+                    node.theme_role(),
+                )
+                .into_any_element(),
+            // Multiline form fields share the stable state and revision rules of single-line input.
+            Kind::Textarea(_) => self
+                .font(
+                    div().w_full().child(crate::ui::controls::Textarea::new(
+                        &self.textareas[&node.id].state,
+                    )),
                     node.theme_role(),
                 )
                 .into_any_element(),

@@ -28,3 +28,4 @@ and states what the editor actually does today, including the limits.
 Each plugin documents its own features in its package README, and the editor shows that
 README inside the plugin manager. This site only covers the host behaviour: how a package
 is installed, what the permission prompt means, and what happens on update or removal.
+[Run, debug and build](/en/guide/run-debug-build/) explains configurations, portable targets, ordered preparation, independent sessions and real debug inspection.

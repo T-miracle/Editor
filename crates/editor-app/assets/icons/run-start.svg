@@ -1,0 +1,4 @@
+<!-- A filled triangle matches B1's Run icon; the button supplies the project's success color. -->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor">
+  <path d="M6 3.5a1 1 0 0 1 1.5-.86l13 8.5a1 1 0 0 1 0 1.72l-13 8.5A1 1 0 0 1 6 20.5Z"/>
+</svg>

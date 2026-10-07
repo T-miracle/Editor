@@ -6,10 +6,16 @@ order: 3
 alternate: /en/sdk/processes/
 ---
 
-# 原生进程
+# 原生进程能力 1.6
 
 独立协商 `process: ^1`。通过普通 SDK `request` 发送
 `api::Operation::Process { operation }`；能力不由插件名称决定。
+
+`Resolve { program }` 要求 `process >=1.6,<2`、`process.exec`、活动实例及受信任工作区。
+接受裸工具名或绝对可执行路径，返回 `Value::ResolvedProgram { program }`，其中为解析后的
+绝对路径。使用与执行相同的工具查找，不启动进程、运行版本探测、安装工具或预留进程句柄。
+缺少工具返回 `NotFound`；路径无效、权限不足及能力版本不支持都明确报错。委托服务调用
+仍受调用者的权限边界约束。
 
 ## 声明与授权
 
@@ -24,7 +30,7 @@ alternate: /en/sdk/processes/
 修改环境、工作目录或插入安装步骤。每项服务独立授权，安装弹窗展示程序及参数数组。
 更新新增权限需确认；拒绝后旧包、旧授权及运行实例保持可用。
 
-`Execute { program, args, transport, cwd }` 单独要求 **`process.exec`**，允许显式选择
+`Execute { program, args, transport, cwd, env }` 单独要求 **`process.exec`**，允许显式选择
 程序（包括解释器），不能由普通服务权限获得。当前没有原生安装器操作。
 
 `cwd` 默认为空；显式指定需要协商 `process >=1.2`，且必须是存在的绝对目录，长度不超过 4096 字节、不含 NUL。它只选择已授权任意进程的启动目录，不授予 WASM 文件访问权限，也不能用于覆盖 `StartService` 的声明。省略时继续使用实例默认目录。
@@ -42,7 +48,7 @@ alternate: /en/sdk/processes/
   不引入终端转义和行转换。
 - 显式执行可以选择 Stdio 或 **Pty { columns, rows, inherit_cursor }**。PTY 合并输出，可能包含
   终端转义；宿主不解释终端画面。
-- `inherit_cursor` 默认 `false`，序列化时省略默认值，保留旧能力消费者的行为。设为 `true` 需要 `process >=1.3`，且仅 Windows 支持；其他平台在创建进程前返回 `UnsupportedOperation`。Windows 使用标准 `PSEUDOCONSOLE_INHERIT_CURSOR`，将光标查询原样交给字节流消费者，由插件通过 `Write` 异步回答。宿主不解析提示符、快照或光标回复；不会根据插件 ID 自动启用。协议依据见 [CreatePseudoConsole](https://learn.microsoft.com/en-us/windows/console/createpseudoconsole)。
+- `inherit_cursor` 默认 `false`，序列化时省略默认值，保留旧能力消费者的行为。设为 `true` 需要 `process >=1.5`，且仅 Windows 支持；其他平台在创建进程前返回 `UnsupportedOperation`。Windows 使用标准 `PSEUDOCONSOLE_INHERIT_CURSOR`，将光标查询原样交给字节流消费者，由插件通过 `Write` 异步回答。宿主不解析提示符、快照或光标回复；不会根据插件 ID 自动启用。协议依据见 [CreatePseudoConsole](https://learn.microsoft.com/en-us/windows/console/createpseudoconsole)。
 - 启动返回 `Value::Resource`，句柄绑定实例和作用域。其他插件、已销毁实例及进程
   退出后的旧句柄无法使用它。
 - `Write` 返回 `Unit` 表示进入有界输入队列，不代表程序已消费或执行这些输入。
@@ -63,3 +69,10 @@ alternate: /en/sdk/processes/
 每实例最多 32 个进程、128 个总资源句柄。单次输入至多 1 MiB，每进程最多排队 8 次；
 输出块为 8 KiB，队列容量 64，以反压控制积压，每轮有界读取。权限不足、能力未协商、
 失效句柄、实例未激活、请求超限和原生 I/O 失败通过统一类型化错误返回。
+## 环境与正常退出
+
+process 1.4 增加调用方环境覆盖 `Execute.env`：最多 64 项，名称 128 字节、值 32768 字节。名称非空，不能包含 NUL 或 `=`；值不能包含 NUL。子进程继承原生环境，再采用这些显式覆盖；宿主不记录值，也不授予读取其他实例环境或操作其进程的权限。此覆盖不能替换声明式 StartService 设置。
+
+process 1.5 增加 `RequestExit { handle, mode }`。graceful PTY 退出发送中断字节；Stdio 没有通用正常退出协议，返回 UnsupportedOperation。force 只请求终止句柄所属进程树。两者保留观察直到实际原生终止事件；受理请求不等于退出。调用方选择有界宽限期并可显式升级；宿主会话服务默认 3000 ms。
+
+正常 `Update::Exited { code }` 保留完整 32 位无符号原生退出码，包括 Windows 中断码；输出经过 EOF 排空后才发布退出。强制终止是独立的 Terminated 事件，不伪造退出码。访客不能复用已关闭资源；宿主清理观察者独立等待原始所属进程树与 EOF。清理失败会报告，不能转换为虚构的成功退出。

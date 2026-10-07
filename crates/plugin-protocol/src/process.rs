@@ -85,10 +85,25 @@ pub enum Update {
     Terminated,
 }
 
+/// process 1.5 separates a supported normal-exit request from an explicit forceful tree termination.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ExitMode {
+    #[default]
+    Graceful,
+    Force,
+}
+
 /// Start is separated from handle operations so service callers cannot override executable fields.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Operation {
+    /// process 1.6: resolve a bare executable or absolute path without starting it.
+    /// Requires process.exec and the active/trusted instance. This is observation only;
+    /// Execute still checks permissions and resolves the path again.
+    Resolve {
+        program: String,
+    },
     StartService {
         service: String,
     },
@@ -100,6 +115,12 @@ pub enum Operation {
         /// Omission preserves the instance's workspace/private-data default; this grants no WASI access.
         #[serde(default)]
         cwd: Option<String>,
+        /// process 1.4: caller-supplied environment applied over the environment the child inherits.
+        ///
+        /// The host neither reads nor logs these values. They belong to the program a caller asked for,
+        /// so they cannot widen another instance's environment or reach a process it already started.
+        #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+        env: std::collections::BTreeMap<String, String>,
     },
     Write {
         handle: crate::api::ResourceHandle,
@@ -109,6 +130,15 @@ pub enum Operation {
         handle: crate::api::ResourceHandle,
         columns: u16,
         rows: u16,
+    },
+    /// process 1.5: request exit while retaining the handle until actual completion is observed.
+    ///
+    /// Graceful PTY exit delivers a console interrupt. Stdio has no universal exit protocol and
+    /// returns `UnsupportedOperation`. Neither mode acknowledges the program's completed exit.
+    RequestExit {
+        handle: crate::api::ResourceHandle,
+        #[serde(default)]
+        mode: ExitMode,
     },
     Terminate {
         handle: crate::api::ResourceHandle,

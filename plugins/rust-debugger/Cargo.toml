@@ -1,0 +1,16 @@
+[package]
+name = "rust-debugger-guest"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.95"
+license = "MIT"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+# The building host supplies this public SDK; no repository path is part of the guest package.
+plugin-protocol = { version = "=0.2.0", features = ["guest"] }
+serde_json = "1.0"
+
+[workspace]

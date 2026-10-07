@@ -5,10 +5,15 @@ use gpui_base::Button as BaseButton;
 use gpui_base::StyledExt as _;
 use gpui_kit::component::{ActiveTheme as _, IconName};
 use gpui_kit::{
-    AnyElement, App, ClickEvent, ElementId, FocusHandle, Hsla, InteractiveElement, IntoElement,
-    ParentElement, RenderOnce, SharedString, StatefulInteractiveElement, StyleRefinement, Styled,
-    Window, div, prelude::FluentBuilder as _, px,
+    AnyElement, App, ClickEvent, ElementId, FocusHandle, Global, Hsla, InteractiveElement,
+    IntoElement, KeyBinding, NoAction, ParentElement, RenderOnce, SharedString,
+    StatefulInteractiveElement, StyleRefinement, Styled, Window, div, prelude::FluentBuilder as _,
+    px,
 };
+
+/// Register the local button context once per application, including independent native test apps.
+struct ButtonKeymap;
+impl Global for ButtonKeymap {}
 
 #[derive(Clone, Copy)]
 enum Variant {
@@ -106,6 +111,18 @@ impl Button {
         self
     }
 
+    /// Report the owner's disclosure state without storing another mutable expansion state.
+    pub(crate) fn expanded(mut self, expanded: bool) -> Self {
+        self.base = self.base.aria_expanded(expanded);
+        self
+    }
+
+    /// Publish the actual Base button hit region for native interaction acceptance.
+    pub(crate) fn debug_selector(mut self, selector: impl Fn() -> String + 'static) -> Self {
+        self.base = self.base.debug_selector(selector);
+        self
+    }
+
     /// Use an owner-managed handle for focus observation; Base still owns tab order and activation.
     pub(crate) fn track_focus(mut self, handle: &FocusHandle) -> Self {
         self.base = self.base.track_focus(handle);
@@ -197,6 +214,12 @@ impl ParentElement for Button {
 
 impl RenderOnce for Button {
     fn render(self, _: &mut Window, cx: &mut App) -> impl IntoElement {
+        // Dialog binds Enter to Confirm. A focused button must receive its own native Enter click
+        // instead of confirming its parent; NoAction leaves GPUI's keyboard-click behavior intact.
+        if !cx.has_global::<ButtonKeymap>() {
+            cx.bind_keys([KeyBinding::new("enter", NoAction, Some("EditorActivate"))]);
+            cx.set_global(ButtonKeymap);
+        }
         let palette = cx.theme();
         let (background, foreground, hover, active) = match self.variant {
             Variant::Default => (
@@ -266,6 +289,7 @@ impl RenderOnce for Button {
             .when_some(self.label.clone(), |this, label| this.child(label))
             .children(self.children);
         self.base
+            .key_context("EditorActivate")
             .disabled(self.disabled || self.loading)
             .h(px(height))
             .min_w(px(if self.compact { height } else { 48. }))

@@ -6,13 +6,43 @@
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
+mod breakpoints;
+mod debug_state;
+mod discovery;
+mod inspection;
+mod sessions;
+pub use debug_state::{
+    DebugCapabilities, DebugControlReason, DebugControls, DebugSessionState, DebugStep,
+};
+pub use inspection::{DebugVariable, InspectionError, PauseData, PauseScope, StackFrame};
+pub use sessions::{DebugSession, DebugSessions};
+mod shared;
+pub use breakpoints::{
+    BreakpointError, MAX_BREAKPOINT_SOURCE_BYTES, MAX_RUN_BREAKPOINTS, RunBreakpoint,
+    RunBreakpoints,
+};
+mod configuration_tree;
+mod plugin_configurations;
+pub use configuration_tree::{ConfigurationFolder, ConfigurationPlacement, ConfigurationTree};
+mod legacy_cleanup;
 mod store;
-pub use store::{RunStoreError, default_root, load, save};
+pub use discovery::{DiscoveryOutcome, configuration_for, reconcile, repair};
+pub use legacy_cleanup::{clear_legacy_configurations, legacy_configuration_paths};
+pub use plugin_configurations::{ConfigurationValidation, PluginConfiguration};
+pub use shared::{
+    SHARED_CONFIG_VERSION, SharedConfig, SharedSet, SharedStoreError, WORKSPACE_TOKEN, merge,
+    project_path,
+};
+/// Reading and writing the project's shared file, named so it cannot be confused with the local one.
+pub use shared::{load as load_shared, save as save_shared};
+pub use store::{RunStoreError, default_root, load, save, storage_path};
+#[cfg(test)]
+mod configuration_tree_tests;
 #[cfg(test)]
 mod tests;
 
 /// Current stored format. A newer file is refused instead of being read with missing fields.
-pub const RUN_CONFIG_VERSION: u32 = 1;
+pub const RUN_CONFIG_VERSION: u32 = 2;
 /// Bound on saved configurations per workspace; the menu is not an unbounded list.
 pub const MAX_RUN_CONFIGS: usize = 128;
 /// Arguments are a literal vector, bounded exactly like the execution contract they become.
@@ -21,6 +51,10 @@ const MAX_NAME_BYTES: usize = 256;
 const MAX_PROGRAM_BYTES: usize = 4096;
 const MAX_ARGUMENT_BYTES: usize = 4096;
 const MAX_DIRECTORY_BYTES: usize = 4096;
+/// Environment entries are bounded exactly like the execution contract they become.
+const MAX_ENV_ENTRIES: usize = 64;
+const MAX_ENV_NAME_BYTES: usize = 128;
+const MAX_ENV_VALUE_BYTES: usize = 32 * 1024;
 
 /// What a configuration launches: a literal program, or an explicitly chosen interpreter.
 ///
@@ -29,6 +63,14 @@ const MAX_DIRECTORY_BYTES: usize = 4096;
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "mode", rename_all = "snake_case", deny_unknown_fields)]
 pub enum RunTarget {
+    /// Portable provider binding; a successful build receipt resolves the executable for one launch.
+    Provided {
+        provider: String,
+        binding: String,
+        label: String,
+        #[serde(default)]
+        args: Vec<String>,
+    },
     Program {
         program: String,
         #[serde(default)]
@@ -47,13 +89,17 @@ impl RunTarget {
     /// The executable the execution provider is asked to start.
     pub fn executable(&self) -> &str {
         match self {
+            Self::Provided { label, .. } => label,
             Self::Program { program, .. } => program,
             Self::Script { interpreter, .. } => interpreter,
         }
     }
     /// The complete literal argument vector, including a script body for interpreter mode.
-    fn arguments(&self) -> Vec<&str> {
+    ///
+    /// Public so a caller can show or store exactly what will be passed, without re-deriving it.
+    pub fn arguments(&self) -> Vec<&str> {
         match self {
+            Self::Provided { args, .. } => args.iter().map(String::as_str).collect(),
             Self::Program { args, .. } => args.iter().map(String::as_str).collect(),
             Self::Script { args, script, .. } => args
                 .iter()
@@ -75,14 +121,228 @@ pub struct RunConfig {
     /// Absolute or project-relative directory; empty means the workspace root.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub directory: Option<String>,
+    /// Environment entries applied to this configuration's program, over what it would inherit.
+    ///
+    /// Values are host-local by default and never shared; the host neither interprets nor logs them.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub env: BTreeMap<String, String>,
+    /// Directories searched before the inherited path when this configuration's program is found.
+    ///
+    /// This is the local tool-path override: it affects only this configuration's launch and never
+    /// changes the editor, the plugin platform or any other program's search order.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tool_paths: Vec<String>,
+    /// The configuration's own build actions, kept apart from starting the program.
+    ///
+    /// Build is a separate operation so Build can run without launching, and Launch can require it
+    /// without duplicating the command.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub build: Vec<RunStep>,
+    /// Steps that run in order before the program starts, each of which must succeed.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub prelaunch: Vec<RunStep>,
+    /// Where this configuration came from, which decides what an edit writes back.
+    ///
+    /// A shared configuration lives in the project, so editing it changes a file other people read;
+    /// the provenance is what lets the store save it back there instead of copying it locally.
+    #[serde(default, skip_serializing_if = "RunConfigSource::is_local")]
+    pub source: RunConfigSource,
+    /// The discovered target this configuration came from, when a plugin offered it.
+    ///
+    /// This is what lets a later discovery recognize the configuration as its own: re-discovery
+    /// updates or repairs that configuration instead of saving a second copy of it, and it is the
+    /// only thing an update is allowed to change.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub from_target: Option<String>,
+    /// The execution provider this configuration asks for, or `None` to follow the scope's choice.
+    ///
+    /// Recorded per configuration so a later change of the default cannot silently retarget a
+    /// configuration that asked for a specific provider.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider: Option<String>,
+    /// Where this configuration's program should stop when it is debugged.
+    ///
+    /// A breakpoint is a source and a line, so it is portable and belongs with the configuration that
+    /// runs the program rather than with the machine that happens to set it.
+    #[serde(default, skip_serializing_if = "RunBreakpoints::is_empty")]
+    pub breakpoints: RunBreakpoints,
     /// Local-only configurations never modify project files; sharing is an explicit user action.
     #[serde(default = "crate::run::default_local")]
     pub local: bool,
 }
 
+/// Whether a configuration was read from this machine or from the project.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RunConfigSource {
+    /// Created and stored on this machine; project files are untouched.
+    #[default]
+    Local,
+    /// Read from the project's shared file, so an edit belongs back in that file.
+    Project,
+}
+
+impl RunConfigSource {
+    /// The default source is left out of a stored file rather than written as a redundant field.
+    fn is_local(&self) -> bool {
+        matches!(self, Self::Local)
+    }
+}
+
+/// One prepared action: a program, or an explicitly chosen interpreter running a script.
+///
+/// A step reuses the launch target so a build command is validated and stored by the same rules as
+/// a program the user starts directly, instead of a second, weaker grammar.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RunStep {
+    /// Shown while the step runs, and in the failure that stops the sequence.
+    pub name: String,
+    pub target: StepTarget,
+}
+
+/// What one prepared action does: run something, or build a configuration by identity.
+///
+/// A build step that names another configuration is a reference, not a copy: editing that
+/// configuration's build actions changes what this step does, and no command is duplicated.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum StepTarget {
+    /// A program, or an explicitly chosen interpreter running a script.
+    Action { target: RunTarget },
+    /// The build actions of the configuration with this identity.
+    Build { config: String },
+}
+
+impl StepTarget {
+    /// The program this action starts, for a step that starts one directly.
+    pub fn executable(&self) -> Option<&str> {
+        match self {
+            Self::Action { target } => Some(target.executable()),
+            Self::Build { .. } => None,
+        }
+    }
+
+    /// The literal argument vector this action passes, empty for a reference.
+    pub fn arguments(&self) -> Vec<&str> {
+        match self {
+            Self::Action { target } => target.arguments(),
+            Self::Build { .. } => Vec::new(),
+        }
+    }
+}
+
+/// Bound on prepared actions per list; the build page is a short sequence, not a task system.
+pub const MAX_RUN_STEPS: usize = 16;
+const MAX_STEP_NAME_BYTES: usize = 128;
+
+impl RunStep {
+    /// Validate a prepared action by the same rules the launch target obeys.
+    ///
+    /// A reference is checked for shape only: whether it resolves is a property of the whole set,
+    /// which one configuration cannot answer about itself.
+    /// Returns the same field error used by configuration validation, for native detail editors.
+    pub fn validate(&self) -> Result<(), RunConfigError> {
+        if self.name.trim().is_empty() {
+            return Err(RunConfigError::EmptyStepName);
+        }
+        if self.name.len() > MAX_STEP_NAME_BYTES {
+            return Err(RunConfigError::StepNameTooLong);
+        }
+        match &self.target {
+            StepTarget::Action { target } => validate_target(target),
+            StepTarget::Build { config } => {
+                if config.trim().is_empty() || config.len() > 128 {
+                    return Err(RunConfigError::InvalidBuildReference {
+                        config: config.clone(),
+                    });
+                }
+                Ok(())
+            }
+        }
+    }
+}
+
+/// The program or interpreter a target starts, with its bounded literal arguments.
+///
+/// This is public to the crate because the project's shared file holds the same targets without the
+/// machine-specific parts of a configuration, and both files must be refused for the same reasons.
+pub(crate) fn validate_target(target: &RunTarget) -> Result<(), RunConfigError> {
+    if let RunTarget::Provided {
+        provider, binding, ..
+    } = target
+    {
+        if provider.is_empty()
+            || provider.len() > 128
+            || !provider
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_'))
+            || binding.is_empty()
+            || binding.len() > 4096
+            || serde_json::from_str::<serde_json::Value>(binding).is_err()
+        {
+            return Err(RunConfigError::ProgramTooLong);
+        }
+    }
+    let executable = target.executable();
+    if executable.trim().is_empty() {
+        return Err(RunConfigError::EmptyProgram);
+    }
+    if executable.len() > MAX_PROGRAM_BYTES || executable.contains('\0') {
+        return Err(RunConfigError::ProgramTooLong);
+    }
+    let arguments = target.arguments();
+    if arguments.len() > MAX_RUN_ARGUMENTS {
+        return Err(RunConfigError::TooManyArguments);
+    }
+    if arguments
+        .iter()
+        .any(|argument| argument.len() > MAX_ARGUMENT_BYTES || argument.contains('\0'))
+    {
+        return Err(RunConfigError::ArgumentTooLong);
+    }
+    Ok(())
+}
+
 /// Sharing is off unless the user opts in, including for files written by older versions.
 pub(crate) fn default_local() -> bool {
     true
+}
+
+/// Longest accepted tool directory, matching the bounded environment it becomes.
+const MAX_TOOL_PATH_BYTES: usize = 4096;
+/// Most directories one configuration may search before the inherited path.
+const MAX_TOOL_PATHS: usize = 16;
+
+/// The environment this configuration's launch needs beyond what the user typed.
+///
+/// Tool directories become a leading `PATH`, so the program resolves from the configuration's own
+/// choice of tools. The value is derived rather than stored: the file keeps the directories, and a
+/// user's own `PATH` entry is preserved behind them instead of being replaced.
+pub fn launch_environment(
+    env: &BTreeMap<String, String>,
+    tool_paths: &[String],
+) -> BTreeMap<String, String> {
+    let mut entries = env.clone();
+    if tool_paths.is_empty() {
+        return entries;
+    }
+    let separator = if cfg!(windows) { ';' } else { ':' };
+    let inherited = entries
+        .iter()
+        .find(|(name, _)| name.eq_ignore_ascii_case("PATH"))
+        .map(|(_, value)| value.clone())
+        .or_else(|| std::env::var("PATH").ok())
+        .unwrap_or_default();
+    let mut value = tool_paths.join(&separator.to_string());
+    if !inherited.is_empty() {
+        value.push(separator);
+        value.push_str(&inherited);
+    }
+    // One `PATH` reaches the child: the override first, then whatever it was going to search.
+    entries.retain(|name, _| !name.eq_ignore_ascii_case("PATH"));
+    entries.insert("PATH".to_owned(), value);
+    entries
 }
 
 /// Why a configuration cannot be launched; the form shows the same reason before starting.
@@ -100,6 +360,33 @@ pub enum RunConfigError {
     TooManyArguments,
     DirectoryNotAbsolute,
     DirectoryTooLong,
+    /// A shared path cannot be resolved portably inside the selected project.
+    InvalidSharedPath {
+        path: String,
+    },
+    /// A hand-edited stop location must obey the same bounds as one entered in the form.
+    InvalidBreakpoint(BreakpointError),
+    /// More environment entries than one launch may carry.
+    TooManyEnvEntries,
+    /// An entry whose name or value could not be passed to a native program.
+    InvalidEnvEntry {
+        name: String,
+    },
+    /// More tool directories than one launch may search before the inherited path.
+    TooManyToolPaths,
+    /// A tool directory that is not an absolute, searchable path.
+    InvalidToolPath {
+        path: String,
+    },
+    /// More prepared actions than one configuration may hold.
+    TooManySteps,
+    /// A prepared action without a name to show while it runs.
+    EmptyStepName,
+    StepNameTooLong,
+    /// A build reference that names no configuration, or could not be one.
+    InvalidBuildReference {
+        config: String,
+    },
     /// The identifier is empty or duplicated inside one set.
     InvalidIdentity {
         id: String,
@@ -124,6 +411,32 @@ impl std::fmt::Display for RunConfigError {
                 "Working directory must be absolute; relative paths are resolved from the workspace"
             ),
             Self::DirectoryTooLong => write!(formatter, "Working directory is too long"),
+            Self::InvalidSharedPath { path } => write!(
+                formatter,
+                "Shared path must be project-relative or use ${{workspace}}: {path}"
+            ),
+            Self::InvalidBreakpoint(error) => write!(formatter, "Invalid breakpoint: {error}"),
+            Self::TooManyEnvEntries => {
+                write!(
+                    formatter,
+                    "Too many environment entries for one configuration"
+                )
+            }
+            Self::InvalidEnvEntry { name } => {
+                write!(formatter, "Invalid environment entry: {name}")
+            }
+            Self::TooManyToolPaths => {
+                write!(formatter, "Too many tool directories for one configuration")
+            }
+            Self::InvalidToolPath { path } => {
+                write!(formatter, "Invalid tool directory: {path}")
+            }
+            Self::TooManySteps => write!(formatter, "Too many build or pre-launch steps"),
+            Self::EmptyStepName => write!(formatter, "A build or pre-launch step needs a name"),
+            Self::StepNameTooLong => write!(formatter, "A step name is too long"),
+            Self::InvalidBuildReference { config } => {
+                write!(formatter, "Invalid build reference: {config}")
+            }
             Self::InvalidIdentity { id } => write!(formatter, "Invalid run configuration id: {id}"),
         }
     }
@@ -145,22 +458,15 @@ impl RunConfig {
         if self.name.len() > MAX_NAME_BYTES {
             return Err(RunConfigError::NameTooLong);
         }
-        let executable = self.target.executable();
-        if executable.trim().is_empty() {
-            return Err(RunConfigError::EmptyProgram);
+        validate_target(&self.target)?;
+        self.breakpoints
+            .validate()
+            .map_err(RunConfigError::InvalidBreakpoint)?;
+        if self.build.len() > MAX_RUN_STEPS || self.prelaunch.len() > MAX_RUN_STEPS {
+            return Err(RunConfigError::TooManySteps);
         }
-        if executable.len() > MAX_PROGRAM_BYTES || executable.contains('\0') {
-            return Err(RunConfigError::ProgramTooLong);
-        }
-        let arguments = self.target.arguments();
-        if arguments.len() > MAX_RUN_ARGUMENTS {
-            return Err(RunConfigError::TooManyArguments);
-        }
-        if arguments
-            .iter()
-            .any(|argument| argument.len() > MAX_ARGUMENT_BYTES || argument.contains('\0'))
-        {
-            return Err(RunConfigError::ArgumentTooLong);
+        for step in self.build.iter().chain(self.prelaunch.iter()) {
+            step.validate()?;
         }
         if let Some(directory) = &self.directory {
             if directory.len() > MAX_DIRECTORY_BYTES || directory.contains('\0') {
@@ -170,6 +476,37 @@ impl RunConfig {
             // depend on whatever directory a provider happened to inherit.
             if !std::path::Path::new(directory).is_absolute() {
                 return Err(RunConfigError::DirectoryNotAbsolute);
+            }
+        }
+        if self.tool_paths.len() > MAX_TOOL_PATHS {
+            return Err(RunConfigError::TooManyToolPaths);
+        }
+        for directory in &self.tool_paths {
+            // A directory a native program could not search is refused while the form is open. An
+            // entry containing a separator would silently become two search directories.
+            let valid = !directory.is_empty()
+                && directory.len() <= MAX_TOOL_PATH_BYTES
+                && !directory.contains('\0')
+                && !directory.contains(';')
+                && std::path::Path::new(directory).is_absolute();
+            if !valid {
+                return Err(RunConfigError::InvalidToolPath {
+                    path: directory.clone(),
+                });
+            }
+        }
+        if self.env.len() > MAX_ENV_ENTRIES {
+            return Err(RunConfigError::TooManyEnvEntries);
+        }
+        for (name, value) in &self.env {
+            // A name that could not be passed to a native child is refused while the form is open,
+            // rather than failing after a console window has already appeared.
+            let valid_name = !name.is_empty()
+                && name.len() <= MAX_ENV_NAME_BYTES
+                && !name.contains('=')
+                && !name.chars().any(char::is_control);
+            if !valid_name || value.len() > MAX_ENV_VALUE_BYTES || value.contains('\0') {
+                return Err(RunConfigError::InvalidEnvEntry { name: name.clone() });
             }
         }
         Ok(())
@@ -198,6 +535,12 @@ pub enum RunConfigReadiness {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct RunConfigSet {
+    /// Virtual organization is host-owned and does not change executable working directories.
+    #[serde(default)]
+    pub tree: ConfigurationTree,
+    /// Opaque plugin values are authoritative; configurations retain bounded executable projections.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub plugin_configurations: BTreeMap<String, PluginConfiguration>,
     /// Format of this set; only this module decides which versions are writable.
     #[serde(default = "current_version")]
     version: u32,
@@ -218,6 +561,8 @@ impl Default for RunConfigSet {
         Self {
             version: RUN_CONFIG_VERSION,
             configurations: Vec::new(),
+            plugin_configurations: BTreeMap::new(),
+            tree: ConfigurationTree::default(),
             selected: None,
         }
     }
@@ -240,6 +585,16 @@ impl RunConfigSet {
         for configuration in &set.configurations {
             configuration.validate().map_err(RunStoreError::Invalid)?;
         }
+        set.validate_tree().map_err(RunStoreError::Invalid)?;
+        if set
+            .plugin_configurations
+            .iter()
+            .any(|(id, data)| set.find(id).is_none() || !data.storage_valid())
+        {
+            return Err(RunStoreError::Invalid(RunConfigError::InvalidIdentity {
+                id: "invalid plugin configuration envelope".into(),
+            }));
+        }
         if set.configurations.len() > MAX_RUN_CONFIGS {
             return Err(RunStoreError::Invalid(RunConfigError::InvalidIdentity {
                 id: format!("more than {MAX_RUN_CONFIGS} configurations"),
@@ -255,6 +610,8 @@ impl RunConfigSet {
     /// Save or replace one configuration, keeping its identity and the current selection.
     pub fn upsert(&mut self, configuration: RunConfig) -> Result<(), RunConfigError> {
         configuration.validate()?;
+        // The first successful write migrates an older readable document to the current format.
+        self.version = RUN_CONFIG_VERSION;
         match self
             .configurations
             .iter_mut()
@@ -277,6 +634,8 @@ impl RunConfigSet {
     pub fn remove(&mut self, id: &str) -> bool {
         let before = self.configurations.len();
         self.configurations.retain(|entry| entry.id != id);
+        self.plugin_configurations.remove(id);
+        self.tree.placements.remove(id);
         if self.selected.as_deref() == Some(id) {
             self.selected = None;
         }
@@ -335,6 +694,7 @@ impl RunConfigSet {
             let key = match configuration.target {
                 RunTarget::Program { .. } => "program",
                 RunTarget::Script { .. } => "script",
+                RunTarget::Provided { .. } => "provided",
             };
             *counts.entry(key).or_insert(0) += 1;
         }

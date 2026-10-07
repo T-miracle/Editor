@@ -175,6 +175,14 @@ composed interface, and the `ui-layout` command takes `form`, `canvas` or `combi
 
 ## Common interface elements
 
+
+`ui.native >=1.1,<2` adds `Kind::Textarea(Input)` and `Node::textarea` for native
+multiline fields. It uses the same input value, placeholder, reset revision, enabled state
+and Change/Submit event validation as a single-line input. Ordinary echoes retain native
+focus, selection and IME composition; advance `value_revision` only for an intentional
+replacement. Removed controls release their subscriptions. Textareas use the editor's
+local theme and editing behavior and do not create a document session or WebView.
+
 | Kind / constructor | Purpose | Events |
 | --- | --- | --- |
 | `Column` / `Node::column` | Vertical automatic layout | — |

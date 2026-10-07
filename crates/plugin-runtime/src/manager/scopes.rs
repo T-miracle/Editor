@@ -103,6 +103,9 @@ impl Manager {
         if self.workspace_open && old_key == next_key {
             return self.set_workspace_trust(trusted);
         }
+        // Confirmed project changes cannot detach old programs in a parked scope. Drive their
+        // normal/force cleanup while their original providers and scope are still dispatchable.
+        self.stop_owned_programs();
         self.retire_workspace_images();
         self.retire_workspace_image_inputs();
         let ids = self
@@ -185,6 +188,10 @@ impl Manager {
         let key = workspace_key(workspace);
         let current = workspace_key(&self.environment.workspace) == key;
         if current {
+            // Trust revocation skips guest callbacks; ordinary close retains its bounded cleanup.
+            if self.trusted {
+                self.stop_owned_programs();
+            }
             self.retire_workspace_images();
             self.retire_workspace_image_inputs();
             self.language_services.clear();
@@ -278,6 +285,9 @@ impl Manager {
     pub fn shutdown(&mut self) {
         self.retire_workspace_images();
         self.retire_workspace_image_inputs();
+        // Programs get a shared bounded cleanup window and then forceful tree termination. The UI
+        // awaits the actor's shutdown acknowledgement; only afterwards may its window disappear.
+        self.stop_owned_programs();
         // Host execution sessions end with the window that owns them; no start is left queued.
         self.host_sessions.retire();
         let _ = self.checkpoint();

@@ -20,6 +20,7 @@ mod plugin_services;
 mod preferences;
 mod process_calls;
 mod resource_roots;
+mod service_replies;
 mod settings;
 mod stdio;
 mod tools;
@@ -380,6 +381,17 @@ impl Instance {
                 self.diagnostics.remove(0);
             }
             if error.downcast_ref::<api::Failure>().is_none() {
+                // Publish the provider fault before retirement cancels retained invocations.
+                // Otherwise a trap is silently rewritten as a caller-initiated cancellation.
+                let failure = api::Failure::new(
+                    api::ErrorCode::OperationFailed,
+                    self.error
+                        .clone()
+                        .unwrap_or_else(|| "Service provider failed".into()),
+                );
+                for incoming in self.store.data().plugin_services.incoming.values() {
+                    incoming.call.completion.finish(Err(failure.clone()));
+                }
                 self.stop();
             }
         }
@@ -535,6 +547,8 @@ impl Instance {
     /// Seal already-published work before the final snapshot, while retaining private-file access for serialization.
     pub(crate) fn quiesce(&mut self) {
         self.clear_image_inputs();
+        // Native cleanup keeps its original observer before quiesce seals delegated service roots.
+        self.store.data_mut().retire_native_processes();
         self.store.data_mut().plugin_services.clear();
         self.store.data_mut().subscriptions.clear();
         self.store.data_mut().preference_subscriptions.clear();
@@ -593,6 +607,7 @@ impl Instance {
     pub fn poll(&mut self) -> anyhow::Result<bool> {
         self.reconcile_image_inputs();
         self.retire_service_sources();
+        self.poll_service_replies()?;
         let revoked = self.poll_service_revocations()?;
         self.poll_service_requests()?;
         self.poll_editor_requests()?;

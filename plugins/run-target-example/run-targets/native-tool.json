@@ -1,0 +1,16 @@
+{
+  "version": 1,
+  "id": "native-tool",
+  "name": "Native tool",
+  "target_type": "native-tool",
+  "program_field": "program",
+  "rules": [{
+    "file": "*/native-tool.toml",
+    "fields": [
+      {"name":"name","section":"tool","key":"name"},
+      {"name":"program","section":"tool","key":"program"},
+      {"name":"program_args","section":"tool","key":"arguments","optional":true}
+    ],
+    "targets": [{"name_from":"name","fields":["name","program","program_args"]}]
+  }]
+}

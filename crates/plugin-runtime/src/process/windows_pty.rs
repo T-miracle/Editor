@@ -127,19 +127,35 @@ fn wide(value: &str) -> Vec<u16> {
     OsStr::new(value).encode_wide().chain(Some(0)).collect()
 }
 
-/// Match the existing terminal environment without exposing an environment override to service callers.
-fn environment() -> Vec<u16> {
+/// Build the child environment: the host environment, then the caller's entries, then the terminal
+/// identity. A caller's entry replaces an inherited one case-insensitively, which is how Windows
+/// compares environment variable names.
+fn environment(overrides: &std::collections::BTreeMap<String, String>) -> Vec<u16> {
     let mut entries = std::env::vars_os()
         .filter(|(key, _)| {
             !key.eq_ignore_ascii_case("TERM") && !key.eq_ignore_ascii_case("COLORTERM")
         })
-        .map(|(key, value)| {
+        .map(|(key, value)| (key.to_string_lossy().to_uppercase(), key, value))
+        .collect::<Vec<_>>();
+    for (key, value) in overrides {
+        let upper = key.to_uppercase();
+        entries.retain(|(existing, _, _)| *existing != upper);
+        entries.push((
+            upper,
+            std::ffi::OsString::from(key),
+            std::ffi::OsString::from(value),
+        ));
+    }
+    let mut entries = entries
+        .into_iter()
+        .map(|(_, key, value)| {
             let mut entry = key;
             entry.push("=");
             entry.push(value);
             entry
         })
         .collect::<Vec<_>>();
+    // The terminal identity stays the host's, so a caller cannot misdescribe the transport.
     entries.extend(["TERM=xterm-256color".into(), "COLORTERM=truecolor".into()]);
     entries.sort_by_key(|entry| entry.to_string_lossy().to_uppercase());
     entries
@@ -338,6 +354,7 @@ pub(super) fn spawn(
     cwd: &str,
     size: PtySize,
     inherit_cursor: bool,
+    env: &std::collections::BTreeMap<String, String>,
     diagnostics: crate::faults::NativeReporter,
 ) -> anyhow::Result<(
     Box<dyn Child + Send + Sync>,
@@ -393,7 +410,7 @@ pub(super) fn spawn(
     let mut info: PROCESS_INFORMATION = unsafe { std::mem::zeroed() };
     let exe = wide(program);
     let cwd = wide(cwd);
-    let environment = environment();
+    let environment = environment(env);
     let mut command = wide(
         &std::iter::once(program)
             .chain(args.iter().map(String::as_str))

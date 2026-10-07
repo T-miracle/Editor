@@ -3,8 +3,14 @@ use std::{collections::BTreeMap, path::PathBuf};
 use thiserror::Error;
 
 mod languages;
+mod run_targets;
 mod theme_effects;
 pub use languages::{Highlighter, LanguageDefinition};
+pub use run_targets::{
+    DiscoveredTarget, DiscoveryError, DiscoveryRule, FieldShape, MAX_DISCOVERED_TARGETS,
+    ProviderFailure, RUN_TARGET_DISCOVERY_VERSION, RunTargetDiscovery, TargetShape,
+    pattern_matches,
+};
 pub use theme_effects::{ThemeWindow, ThemeWindowBackground};
 
 /// Read pre-rename identifiers without retaining their prefix in current manifests or UI state.
@@ -40,6 +46,22 @@ pub struct PluginManifest {
     pub file_icons: Option<PathBuf>,
     #[serde(default)]
     pub theme: Option<ThemeContribution>,
+    /// Runnable targets this plugin can offer, declared as a list of discovery files.
+    ///
+    /// A plugin may declare several providers with different identities and target types; the host
+    /// reads each declaration and applies it without knowing what the plugin runs.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub run_targets: Vec<RunTargetContribution>,
+}
+
+/// One discovery declaration a plugin contributes, and where it lives in the package.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct RunTargetContribution {
+    /// Stable identity of this provider within the plugin, so a saved configuration can name it.
+    pub id: String,
+    /// JSON file holding the declaration, relative to the plugin root.
+    pub file: PathBuf,
 }
 
 /// Identifies a theme's JSON file containing forced file icon overrides.

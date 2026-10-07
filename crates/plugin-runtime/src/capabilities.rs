@@ -38,7 +38,7 @@ pub(crate) fn negotiate(manifest: &Manifest) -> anyhow::Result<api::Negotiated> 
         ("ui.canvas".into(), Version::new(1, 1, 0)),
         ("ui.collections".into(), Version::new(1, 0, 0)),
         ("ui.grid".into(), Version::new(1, 0, 0)),
-        ("plugin.services".into(), Version::new(1, 0, 0)),
+        ("plugin.services".into(), Version::new(1, 1, 0)),
         ("workspace.files".into(), Version::new(1, 1, 0)),
         ("host.sdk".into(), Version::new(1, 0, 0)),
         ("storage.private".into(), Version::new(1, 1, 0)),
@@ -54,7 +54,8 @@ pub(crate) fn negotiate(manifest: &Manifest) -> anyhow::Result<api::Negotiated> 
         ("configuration".into(), Version::new(1, 0, 0)),
         ("ui.panels".into(), Version::new(1, 0, 0)),
         ("ui.clipboard".into(), Version::new(1, 0, 0)),
-        ("process".into(), Version::new(1, 3, 0)),
+        // 1.6 adds read-only tool resolution; availability never grants execution authority.
+        ("process".into(), Version::new(1, 6, 0)),
         ("language.lsp".into(), Version::new(1, 1, 0)),
         ("dependencies".into(), Version::new(1, 0, 0)),
     ]

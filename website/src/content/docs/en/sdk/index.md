@@ -28,7 +28,7 @@ instance are described in [Private data and migration](/en/sdk/migration/). The 
 applied to guest execution, and what recovery does and does not promise, are described in
 [Execution limits and recovery](/en/sdk/faults/).
 
-## process 1.1 and language.lsp 1.1
+## Service discovery and language.lsp 1.1
 
 A native service may declare `search_paths` and `check_args`. The former holds at most 32
 absolute path globs and the only supported variable is a leading `${HOME}/`; it must not
@@ -100,34 +100,11 @@ Old runtime protocols and their converters have been removed. Legacy installatio
 only take part in management-view display and limited data import; they never resume
 execution.
 
-## Independent verification
+## Run, debug and target services
 
-The independent verification plugin is `capability-example`, which is not part of the
-official distribution. Build the development host first, then run
-`scripts/verify-plugin-sdk.ps1`: the script copies the example sources, manifest, README and
-resources into a temporary directory and builds from there through the host's public
-`--plugin-cargo` entry point, without using the host repository's Cargo workspace or business
-source paths. The script also verifies a complete export and recovery from damaged files
-through `--export-plugin-sdk`. Verification commands:
+[Run sessions](/en/sdk/sessions/) specify public input, presentation, output subscriptions and normal/forced stopping. [Debug sessions](/en/sdk/debug/) specify pause generations, real inspection and breakpoint verification. [Run target providers](/en/sdk/targets/) contribute portable bindings and controlled artifact preparation.
 
-```powershell
-cargo build -p editor-app
-./scripts/verify-plugin-sdk.ps1 -HostExe ./target/debug/editor-app.exe
-cargo test -p plugin-runtime --test sdk_distribution -- --ignored
-cargo test -p plugin-runtime --test capability_packages
-cargo test -p plugin-runtime --test capability_packages -- --ignored
-cargo test -p editor-app --bin editor-app capability_package_consent -- --ignored
-```
-
-Tests that need the real component are ignored by default and require the test package to be
-built first; they are not skipped acceptance. The script writes the same ZIP to
-`target/plugin-sdk-test/capability-example.zip` and to the archive other tests already use,
-`target/plugin-api-test/capability-example.zip`; the package contains only the manifest,
-README, component and declared resources. The `sdk_distribution` test reads that package
-README, installs the real component and invokes a typed error-diagnostic command through the
-public `Package` and `Manager` interfaces. For everyday work
-`scripts/build-capability-example.ps1` is faster, but acceptance outside the repository is
-defined by `verify-plugin-sdk.ps1`.
+[Configuration templates](/en/sdk/configurations/) provide plugin-owned defaults, native forms and validation for local configuration drafts.
 
 ## workspace.files 1.1 and host.sdk 1.0
 
@@ -172,9 +149,7 @@ temporary handles are revoked when it returns. It cannot start writes, processes
 operations through discovery. Migration hooks still have private-copy permission only. The
 host supplies an immutable `HostResources` through `Manager::open_with_resources`, and the
 same resource snapshot reaches background installation, settings replacement, workspace
-switching and instances restored after a failed rollback. Public integration regressions run
-through `cargo test -p plugin-runtime --test sdk_discovery -- --ignored` after the
-independent SDK build script above.
+switching and instances restored after a failed rollback.
 
 ## ui.clipboard 1.0 and storage.editor 1.0
 
@@ -273,3 +248,4 @@ provides type completion, hover documentation and go-to-definition. A plugin dir
 no SDK, no Cargo configuration and no path into host sources; go-to-definition opens the
 protocol sources in the host cache. This needs the Rust language plugin enabled and Rust
 Analyzer installed.
+[Semantic viewports](/en/sdk/viewport/), [links and navigation](/en/sdk/navigation/) and [read-only code highlighting](/en/sdk/code-highlighting/) add versioned native preview interactions without creating another mutable document.

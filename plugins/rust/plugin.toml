@@ -4,7 +4,7 @@ file_icons = "icons.json"
 [plugin]
 id = "rust"
 name = "Rust"
-version = "0.2.1"
+version = "0.5.0"
 host_version = ">=0.1.0"
 
 [[language_definitions]]
@@ -20,3 +20,4 @@ grammar = "grammar/rust.wasm"
 highlights = "queries/highlights.scm"
 # Keep the ABI exported by the bundled upstream grammar.
 tree_sitter_abi = 15
+# Runnable targets use run.targets 1.0 in the independent guest; Cargo metadata owns their meaning.

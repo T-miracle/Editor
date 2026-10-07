@@ -108,6 +108,16 @@ pub(crate) struct PopupMenu {
     selected: Option<usize>,
     closed: bool,
     scroll: ScrollHandle,
+    /// The caller chooses a local layout width; actual rendering still clamps it to the viewport.
+    width: f32,
+    /// Optional trailing actions stay reachable while only the preceding items scroll.
+    footer_items: usize,
+    /// Dropdowns retain their trigger's lower edge rather than moving above it when long.
+    below_anchor: bool,
+    /// Scroll-induced hover changes must not replace a keyboard selection with a stationary pointer.
+    pointer_position: Point<Pixels>,
+    /// Generic row diagnostics supplied by a caller; keyboard selection remains available for repair.
+    notices: std::collections::BTreeMap<String, String>,
     sink: Rc<dyn Fn(Action, &mut Window, &mut App)>,
 }
 impl PopupMenu {
@@ -132,6 +142,11 @@ impl PopupMenu {
             selected,
             closed: false,
             scroll: ScrollHandle::new(),
+            width: 230.,
+            footer_items: 0,
+            below_anchor: false,
+            pointer_position: window.mouse_position(),
+            notices: Default::default(),
             sink: Rc::new(sink),
         }
     }
@@ -144,7 +159,25 @@ impl PopupMenu {
             focus.focus(window, cx);
         }
         (self.sink)(action, window, cx);
+        cx.emit(gpui_kit::DismissEvent);
         cx.notify();
+    }
+    /// Configure width without duplicating popup focus, scroll or button behavior in callers.
+    pub fn width(mut self, width: f32) -> Self {
+        if width.is_finite() && width > 0. {
+            self.width = width;
+        }
+        self
+    }
+    /// Pin a bounded number of final actions; callers still use one identity/navigation list.
+    pub fn fixed_footer(mut self, count: usize) -> Self {
+        self.footer_items = count.min(self.items.len());
+        self
+    }
+    /// Keep the menu directly below its supplied trigger position, constraining body height instead.
+    pub fn below_anchor(mut self) -> Self {
+        self.below_anchor = true;
+        self
     }
     fn key(&mut self, key: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
         cx.stop_propagation();
@@ -180,11 +213,18 @@ impl PopupMenu {
                     _ => (old + 1) % enabled.len(),
                 };
                 self.selected = Some(enabled[index]);
-                self.scroll.scroll_to_item(enabled[index]);
+                if enabled[index] < self.items.len().saturating_sub(self.footer_items) {
+                    self.scroll.scroll_to_item(enabled[index]);
+                }
                 cx.notify();
             }
             _ => {}
         }
+    }
+    /// Color diagnostic rows with the local danger token and expose their full reason on hover.
+    pub fn notices(mut self, notices: std::collections::BTreeMap<String, String>) -> Self {
+        self.notices = notices;
+        self
     }
 }
 impl Render for PopupMenu {
@@ -193,22 +233,35 @@ impl Render for PopupMenu {
             return div().into_any_element();
         }
         let viewport = window.viewport_size();
-        let width = 230_f32.min((viewport.width / px(1.) - 16.).max(0.));
-        let height = (self.items.len() as f32 * 29. + 2. * self.style.padding_y)
+        let width = self.width.min((viewport.width / px(1.) - 16.).max(0.));
+        let height = (self.items.len() as f32 * 29. + 2. * self.style.padding_y + 2.)
             .min((viewport.height / px(1.) - 16.).max(0.));
         let left = self
             .position
             .x
             .clamp(px(8.), (viewport.width - px(width + 8.)).max(px(8.)));
-        let top = self
-            .position
-            .y
-            .clamp(px(8.), (viewport.height - px(height + 8.)).max(px(8.)));
+        let top = self.position.y.clamp(
+            px(8.),
+            if self.below_anchor {
+                (viewport.height - px(8.)).max(px(8.))
+            } else {
+                (viewport.height - px(height + 8.)).max(px(8.))
+            },
+        );
+        let height = height.min((viewport.height - top - px(8.)) / px(1.));
+        let split = self.items.len().saturating_sub(self.footer_items);
+        let footer_height = self.footer_items as f32 * 29.;
         let mut rows = div()
             .id("menu-scroll")
-            .max_h(px(height))
+            .debug_selector(|| "native-menu-scroll".into())
+            .h(px((height
+                - footer_height
+                - 2. * self.style.padding_y
+                - 2.)
+                .max(0.)))
             .overflow_y_scroll()
             .track_scroll(&self.scroll);
+        let mut footer = div().flex().flex_col().flex_shrink_0();
         for (index, item) in self.items.iter().enumerate() {
             let id = item.id.clone();
             let debug = format!("native-menu-{}", id);
@@ -220,21 +273,39 @@ impl Render for PopupMenu {
                     self.selected == Some(index),
                 )
                 .debug_selector(move || debug.clone())
+                .flex_shrink_0()
                 .disabled(item.disabled)
+                // Non-actionable placeholders stay readable in both themes without looking enabled.
+                .when(item.disabled, |row| {
+                    row.text_color(cx.theme().muted_foreground)
+                })
+                .when_some(self.notices.get(&item.id).cloned(), |row, reason| {
+                    row.text_color(cx.theme().danger)
+                        .tooltip(move |window, cx| {
+                            super::Tooltip::new(reason.clone()).build(window, cx)
+                        })
+                })
                 .when(item.separator_before, |row| {
                     row.border_t_1().border_color(self.style.border)
                 })
-                .on_hover(cx.listener(move |this, hovered, _, cx| {
-                    if *hovered && !this.items[index].disabled {
-                        this.selected = Some(index);
-                        cx.notify();
-                    }
-                }))
+                .on_mouse_move(
+                    cx.listener(move |this, event: &gpui_kit::MouseMoveEvent, _, cx| {
+                        if event.position != this.pointer_position && !this.items[index].disabled {
+                            this.selected = Some(index);
+                            cx.notify();
+                        }
+                        this.pointer_position = event.position;
+                    }),
+                )
                 .on_click(cx.listener(move |this, _, window, cx| {
                     this.finish(Action::Select(id.clone()), window, cx)
                 }))
                 .child(item.label.clone());
-            rows = rows.child(row);
+            if index < split {
+                rows = rows.child(row);
+            } else {
+                footer = footer.child(row);
+            }
         }
         let card = self
             .style
@@ -243,7 +314,8 @@ impl Render for PopupMenu {
             .debug_selector(|| "native-popup-menu".into())
             .role(Role::Menu)
             .on_any_mouse_down(|_, _, cx| cx.stop_propagation())
-            .child(rows);
+            .child(rows)
+            .when(self.footer_items > 0, |card| card.child(footer));
         deferred(
             anchored().position(point(px(0.), px(0.))).child(
                 div()
@@ -254,6 +326,26 @@ impl Render for PopupMenu {
                     .on_mouse_up(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                     .on_mouse_up(MouseButton::Right, |_, _, cx| cx.stop_propagation())
                     .capture_key_down(cx.listener(Self::key))
+                    // A popup inside a dialog owns these actions as well as raw key events.
+                    // Without this boundary, Enter selects a row and also confirms the parent modal.
+                    .on_action(
+                        cx.listener(|this, _: &gpui_base::actions::Confirm, window, cx| {
+                            if let Some(item) = this
+                                .selected
+                                .and_then(|index| this.items.get(index))
+                                .filter(|item| !item.disabled)
+                            {
+                                this.finish(Action::Select(item.id.clone()), window, cx);
+                            }
+                            cx.stop_propagation();
+                        }),
+                    )
+                    .on_action(
+                        cx.listener(|this, _: &gpui_base::actions::Cancel, window, cx| {
+                            this.finish(Action::Dismiss, window, cx);
+                            cx.stop_propagation();
+                        }),
+                    )
                     .on_any_mouse_down(cx.listener(|this, _, window, cx| {
                         this.finish(Action::Dismiss, window, cx);
                         cx.stop_propagation();
@@ -265,3 +357,11 @@ impl Render for PopupMenu {
         .into_any_element()
     }
 }
+
+/// The shell can retain focus and dismiss a superseded popup by its own entity identity.
+impl gpui_kit::Focusable for PopupMenu {
+    fn focus_handle(&self, _cx: &App) -> FocusHandle {
+        self.focus.clone()
+    }
+}
+impl gpui_kit::EventEmitter<gpui_kit::DismissEvent> for PopupMenu {}

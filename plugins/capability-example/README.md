@@ -1,5 +1,7 @@
 # Capability Example
 
+The panel menu explicitly offers the execution-budget and memory-budget fault demonstrations. Use an isolated fixture profile: each command deliberately traps this example instance so the native fault reminder and resource cleanup can be inspected.
+
 版本 0.15.7 的普通 `preview-probe` 命令接收完整公开 `ui::Document` 并原样发布到 welcome 面板，用于独立检查版本、能力与权限的发布门禁；它不修正或伪造 source。组合 UI 资产的 `code_highlighting` 在没有 Preview source 时暂时关闭，绑定版本后恢复原声明。代码高亮消费者需要协商 `ui.code_highlighting`、`ui.richtext` 与 `editor.documents` 并获得 `editor.read`；普通等宽代码保持默认惰性。
 
 0.15.6 使用当前独立 SDK 验证 `editor.navigation`／`ui.links`。公开 `scope-probe` 能发起版本化通用导航；测试重新打包为另一身份，验证非 Markdown 文档、权限、场景归属及取消。默认示例不增加浏览器权限，导航按测试夹具的声明与批准执行。
@@ -67,3 +69,9 @@ SDK 提供 open_workspace、open_data、read_file、write_file、close_resource�
 示例钩子在 Validate 阶段提供 label 的自动发现值 `Discovered label`；显式 label 为 `invalid` 时拒绝应用，保留之前实例和配置。显式有效值不会被发现值替换。Apply 阶段把最终配置送入候选实例，激活后显示 enabled 的实际值。清单声明 `restart_instance`，修改仅替换受影响的实例，不重启编辑器。全局更改也更新其他已打开逻辑工作区，但保留其项目覆盖。
 
 禁用插件时修改配置只执行受限的准备/校验，不激活插件；启用后采用已保存值。普通卸载保留配置，选择删除数据时删除配置。该示例仍通过公开 SDK 构建，不访问宿主业务源码。
+
+## 运行与调试公开接缝验收（0.16.0）
+
+消费者通过 `service-open`、`service-call` 和 `service-cancel` 使用 SDK 中的 `interactive.execute` 2.0、`session.host` 2.0 与 `debug.session` 1.1。真实执行夹具以公开的 `input`、`events`、`locate` 和 `stop` 方法验证输入归属、输出/状态订阅、隐藏后的定位、正常退出与强制终止；不读取终端私有进程句柄。
+
+`service-forge-host-reference` 在 guest 可见的资源句柄上伪造宿主实例字符串，验证宿主拒绝伪造来源。它不改变宿主私有引用字段或授权规则。订阅夹具验证跨来源、已关闭引用和配额耗尽；调试声明夹具只证明契约接入，真实 Rust 断点与步进由独立 Rust 调试提供者验收。

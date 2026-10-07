@@ -16,6 +16,7 @@ mod render;
 mod svg;
 #[cfg(test)]
 mod tests;
+mod textareas;
 mod theme;
 mod viewport;
 #[cfg(test)]
@@ -63,6 +64,7 @@ pub(crate) struct PluginView {
     /// Nested canvas/control sinks share the gate; retained readonly trees cannot dispatch stale input.
     scene_current: Rc<Cell<bool>>,
     inputs: BTreeMap<String, NativeInput>,
+    textareas: BTreeMap<String, textareas::NativeTextarea>,
     scrolls: BTreeMap<String, ScrollHandle>,
     /// Read-only source block ownership and one revision-bound reveal; native scroll remains in Base.
     scene_layout: layout::SceneLayout,
@@ -243,6 +245,7 @@ impl PluginView {
             }),
             scene_current,
             inputs: BTreeMap::new(),
+            textareas: BTreeMap::new(),
             scrolls: BTreeMap::new(),
             scene_layout: Default::default(),
             viewport: Default::default(),
@@ -394,6 +397,7 @@ impl PluginView {
             .map(|n| n.id.clone())
             .collect();
         self.inputs.retain(|id, _| input_ids.contains(id));
+        self.sync_textareas(&nodes, window, cx);
         let scroll_ids: BTreeSet<_> = nodes
             .iter()
             .filter(|n| matches!(n.kind, Kind::Scroll { .. }))

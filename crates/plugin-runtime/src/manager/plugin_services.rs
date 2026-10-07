@@ -40,6 +40,10 @@ impl Manager {
         }
     }
     /// Registry snapshots include exact live incarnations, including parked workspaces and consumers.
+    ///
+    /// The host is published beside them so a consumer's selection and this registry agree: the
+    /// session contract has exactly one provider per workspace, and it is the runtime that owns the
+    /// table those sessions live in.
     pub(super) fn refresh_services(&mut self) {
         let providers = self
             .live
@@ -47,7 +51,15 @@ impl Manager {
             .chain(self.parked.values().flat_map(|scope| scope.live.values()))
             .filter_map(Instance::service_provider)
             .collect();
-        self.plugin_services.lock().unwrap().reconcile(providers);
+        let scope = self.host_scope().to_owned();
+        let host = vec![super::host_services::session_provider(
+            &scope,
+            self.host_alive.clone(),
+        )];
+        self.plugin_services
+            .lock()
+            .unwrap()
+            .reconcile(providers, host);
         for instance in self.live.values_mut().chain(
             self.parked
                 .values_mut()
@@ -121,6 +133,12 @@ impl Manager {
     /// No service callback can recursively invoke another store; callbacks enqueue their next hop.
     pub(super) fn route_services(&mut self) {
         self.refresh_services();
+        for (call, result) in self.plugin_services.lock().unwrap().take_completed() {
+            match result {
+                Ok(value) => self.host_sessions.observe_status(&call, &value),
+                Err(error) => self.host_sessions.observe_error(&call, &error),
+            }
+        }
         let calls = self.plugin_services.lock().unwrap().take_batch();
         for call in calls {
             self.refresh_services();
@@ -140,6 +158,9 @@ impl Manager {
                 continue;
             }
             let result = self.dispatch_service(&call).and_then(|value| {
+                let Some(value) = value else {
+                    return Ok(None);
+                };
                 if serde_json::to_vec(&value).map_or(true, |bytes| bytes.len() > 65536) {
                     return Err(api::Failure::new(
                         api::ErrorCode::LimitExceeded,
@@ -147,12 +168,43 @@ impl Manager {
                     ));
                 }
                 call.signature.result.accepts(&value)?;
-                Ok(value)
+                Ok(Some(value))
             });
-            call.completion.finish(result);
+            match &result {
+                Ok(Some(value)) => self.host_sessions.observe_status(&call, value),
+                Ok(None) => continue,
+                Err(failure) => self.host_sessions.observe_error(&call, failure),
+            }
+            call.completion
+                .finish(result.map(|value| value.expect("deferred calls continue above")));
         }
     }
-    fn dispatch_service(&mut self, call: &Call) -> Result<serde_json::Value, api::Failure> {
+    fn dispatch_service(&mut self, call: &Call) -> Result<Option<serde_json::Value>, api::Failure> {
+        // The host is a participant like any provider, so a call addressed to its session contract is
+        // answered here instead of being searched for among the running instances. The identity is
+        // compared exactly, so a plugin cannot reach the host's session surface by naming it.
+        let host = self.host_scope().to_owned();
+        if call.reference.provider.caller.instance
+            == super::host_services::host_caller(&host).instance
+        {
+            if call.reference.provider.caller.plugin != "me-editor" {
+                return Err(api::Failure::new(
+                    api::ErrorCode::InvalidHandle,
+                    "Service provider exited",
+                ));
+            }
+            if matches!(call.method.as_str(), "input" | "locate" | "next") {
+                self.forward_session_operation(call)?;
+                return Ok(None);
+            }
+            return super::host_services::session_answer(
+                self,
+                &call.context,
+                &call.method,
+                &call.arguments,
+            )
+            .map(Some);
+        }
         let provider = self
             .live
             .values_mut()
@@ -185,4 +237,101 @@ pub(super) fn read_preferences(root: &Path) -> anyhow::Result<Preferences> {
         "Service provider preferences exceed quota"
     );
     Ok(serde_json::from_slice(&std::fs::read(path)?)?)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::request_state::Completion;
+    use plugin_protocol::{
+        api::{ErrorCode, RequestUpdate},
+        service::Caller,
+    };
+
+    /// A consumer's call on the session contract is answered by the host, through the real queue.
+    ///
+    /// This is the route, not the rule: a call is resolved, enqueued and dispatched exactly as a
+    /// plugin's `service::guest::Task` would be, and the answer must therefore come from the host's
+    /// own session table rather than from any running instance. What it deliberately does not do is
+    /// fake a guest: the caller here stands in for a consumer, so what is under test is the host's
+    /// side of the seam.
+    #[test]
+    fn a_session_call_reaches_the_hosts_own_table() {
+        let root = tempfile::tempdir().unwrap();
+        let workspace = root.path().join("workspace");
+        std::fs::create_dir_all(&workspace).unwrap();
+        let mut manager = Manager::open(
+            root.path().join("plugins"),
+            plugin_protocol::Environment {
+                workspace: workspace.display().to_string(),
+                os: "windows".into(),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let scope = manager.host_scope().to_owned();
+        let consumer = Caller {
+            plugin: "consumer".into(),
+            instance: "consumer@1".into(),
+            scope: scope.clone(),
+            permissions: Default::default(),
+        };
+        let dependency = crate::manager::host_services::session_dependency().unwrap();
+        manager.refresh_services();
+        // Resolution finds the host itself as the session contract's provider for this workspace.
+        let reference = manager
+            .plugin_services
+            .lock()
+            .unwrap()
+            .resolve(
+                &consumer,
+                crate::manager::host_services::SESSION_CONTRACT,
+                &dependency,
+            )
+            .expect("the host offers the session contract in its own workspace");
+        assert_eq!(
+            reference.provider.caller.plugin, "me-editor",
+            "the provider a consumer reaches is the host, not a guest"
+        );
+        // A list is the least eventful call: it must answer with the host's table, which is empty.
+        let completion = Completion::new(5_000);
+        let signature = dependency.methods["list"].clone();
+        let call = Call {
+            handle: plugin_protocol::api::ResourceHandle {
+                instance: reference.provider.caller.instance.clone(),
+                scope: scope.clone(),
+                resource: 0,
+            },
+            reference,
+            method: "list".into(),
+            signature,
+            arguments: serde_json::json!({}),
+            context: crate::plugin_services::Context {
+                lifetimes: vec![manager.host_alive.clone()],
+                caller: consumer,
+                ancestry: Vec::new(),
+                permissions: Default::default(),
+            },
+            completion: completion.clone(),
+        };
+        manager
+            .plugin_services
+            .lock()
+            .unwrap()
+            .enqueue(call)
+            .expect("the call is queued");
+        manager.route_services();
+        match completion.status() {
+            RequestUpdate::Completed { result } => {
+                let value = result.expect("the host answered");
+                assert_eq!(
+                    value["sessions"].as_array().map(Vec::len),
+                    Some(0),
+                    "the answer is the host's own session table: {value}"
+                );
+            }
+            other => panic!("the host did not answer through the queue: {other:?}"),
+        }
+        manager.shutdown();
+    }
 }

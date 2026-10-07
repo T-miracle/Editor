@@ -185,203 +185,240 @@ impl ExtensionPanel {
         let source = package.source.clone();
         let permissions = package.manifest.permissions.clone();
         let services = package.manifest.services.clone();
+        // Updating/reinstalling retires the same original owners as disable/uninstall. Display their
+        // targets in this confirmation too; preparing a failed update must leave them running.
+        let impact_parent = self.parent.clone();
+        let impact_id = package.manifest.id.clone();
         let owner = cx.entity().downgrade();
         let install_owner = owner.clone();
-        window.open_dialog(cx, move |dialog, _, cx| {
-            let source = source.clone();
-            let permissions = permissions.clone();
-            let services = services.clone();
-            let install_package = package.clone();
-            let install_bundle = bundled.clone();
-            let cancel_bundle = bundled.clone();
-            let action_label = action_label.clone();
-            let install_owner = install_owner.clone();
-            let cancel_owner = owner.clone();
-            dialog
-                .title(title.clone())
-                .width(px(520.))
-                .overlay_closable(false)
-                .close_button(false)
-                .content(move |content, _, cx| {
-                    let mut details = v_flex()
-                        .id("plugin-install-consent")
-                        .debug_selector(|| "plugin-install-consent".into())
-                        .gap_3()
-                        .child(
-                            div()
-                                .text_color(cx.theme().muted_foreground)
-                                .child(t!("plugins.consent_unsigned").to_string()),
-                        );
-                    if let Some(source) = &source {
-                        details = details
-                            .child(t!("plugins.consent_source", source = source).to_string());
-                    }
-                    details = details.child(if executable {
-                        t!(
-                            "plugins.consent_capabilities",
-                            action = action_label.clone()
-                        )
-                        .to_string()
-                    } else {
-                        t!("plugins.consent_resources").to_string()
-                    });
-                    for permission in &permissions {
-                        let explanation = match permission.as_str() {
-                            "assets.read" => t!("plugins.permission_assets"),
-                            "process.exec" => t!("plugins.permission_process"),
-                            "dependencies.prepare" => t!("plugins.permission_dependencies_prepare"),
-                            "dependencies.install" => t!("plugins.permission_dependencies_install"),
-                            value if value.starts_with("process.service.") => {
-                                t!("plugins.permission_service")
-                            }
-                            "editor.read" => t!("plugins.permission_editor_read"),
-                            "editor.write" => t!("plugins.permission_editor_write"),
-                            "workspace.read" => t!("plugins.permission_workspace_read"),
-                            "workspace.write" => t!("plugins.permission_workspace_write"),
-                            "network.images" => t!("plugins.permission_network_images"),
-                            "navigation.external" => t!("plugins.permission_external_navigation"),
-                            "clipboard" => t!("plugins.permission_clipboard"),
-                            "storage" => t!("plugins.permission_storage"),
-                            _ => std::borrow::Cow::Borrowed(permission.as_str()),
-                        }
-                        .to_string();
-                        details = details.child(format!("• {explanation}"));
-                        if let Some(service) = permission
-                            .strip_prefix("process.service.")
-                            .and_then(|id| services.get(id))
-                        {
-                            // Show the approved executable and argument vector separately from prose.
-                            details = details.child(
-                                t!(
-                                    "plugins.consent_program",
-                                    program = service.program.clone(),
-                                    args = format!("{:?}", service.args)
-                                )
-                                .to_string(),
+        // First-use may ask during EditorApp::render, when the parent entity is borrowed.
+        // Read session impact and open the native confirmation only after that borrow has ended.
+        window.defer(cx, move |window, cx| {
+            let impact = impact_parent.upgrade().and_then(|parent| {
+                parent
+                    .read(cx)
+                    .run_controls
+                    .plugin_session_impact(&impact_id, None)
+                    .summary()
+            });
+            window.open_dialog(cx, move |dialog, _, cx| {
+                let source = source.clone();
+                let permissions = permissions.clone();
+                let services = services.clone();
+                let impact = impact.clone();
+                let install_package = package.clone();
+                let install_bundle = bundled.clone();
+                let cancel_bundle = bundled.clone();
+                let action_label = action_label.clone();
+                let install_owner = install_owner.clone();
+                let cancel_owner = owner.clone();
+                dialog
+                    .title(title.clone())
+                    .width(px(520.))
+                    .overlay_closable(false)
+                    .close_button(false)
+                    .content(move |content, _, cx| {
+                        let mut details = v_flex()
+                            .id("plugin-install-consent")
+                            .debug_selector(|| "plugin-install-consent".into())
+                            .gap_3()
+                            .child(
+                                div()
+                                    .text_color(cx.theme().muted_foreground)
+                                    .child(t!("plugins.consent_unsigned").to_string()),
                             );
-                            if let Some(plan) = &service.installation {
-                                for artifact in &plan.artifacts {
-                                    details = details.child(
-                                        t!(
-                                            "plugins.consent_dependency",
-                                            id = artifact.id.clone(),
-                                            version = artifact.version.clone(),
-                                            platform = artifact.platform.clone(),
-                                            source = format!("{:?}", artifact.source),
-                                            sha256 = artifact.sha256.clone()
-                                        )
-                                        .to_string(),
-                                    );
-                                }
-                            }
+                        if let Some(source) = &source {
+                            details = details
+                                .child(t!("plugins.consent_source", source = source).to_string());
                         }
-                    }
-                    details = details.child(if executable {
-                        if action == "安装" {
-                            t!("plugins.consent_after_install").to_string()
+                        if let Some(impact) = &impact {
+                            details = details.child(
+                                div()
+                                    .debug_selector(|| "plugin-install-session-impact".into())
+                                    .child(impact.clone()),
+                            );
+                        }
+                        details = details.child(if executable {
+                            t!(
+                                "plugins.consent_capabilities",
+                                action = action_label.clone()
+                            )
+                            .to_string()
                         } else {
-                            t!("plugins.consent_after_update").to_string()
-                        }
-                    } else {
-                        t!("plugins.consent_resource_install", action = action_label).to_string()
-                    });
-                    content.child(details)
-                })
-                // Base Dialog needs an explicit footer; button props only label actions.
-                .footer(
-                    DialogFooter::new()
-                        .child(
-                            div()
-                                .id("plugin-install-cancel")
-                                .debug_selector(|| "plugin-install-cancel".into())
-                                .child(DialogClose::new().trigger(|button| {
-                                    button.label(t!("plugins.cancel").to_string())
-                                })),
-                        )
-                        .child(
-                            div()
-                                .id("plugin-install-confirm")
-                                .debug_selector(|| "plugin-install-confirm".into())
-                                .child(
-                                    DialogAction::new().child(
-                                        Button::new("confirm-plugin-install")
-                                            .label(confirm_label.clone())
-                                            .primary()
-                                            .when(action == "更新", |button| {
-                                                button.custom(update_button_style(cx))
-                                            })
-                                            .outline(),
-                                    ),
-                                ),
-                        ),
-                )
-                .on_ok(move |_, _, cx| {
-                    install_owner
-                        .update(cx, |this, cx| {
-                            // Native authority is checked in this event as well as by the serialized manager.
-                            let work = if let Some(candidate) = &install_bundle {
-                                let current =
-                                    this.bundled.confirmation(&install_package).is_some_and(
-                                        |current| current.request.token == candidate.request.token,
-                                    ) && this
-                                        .worker
-                                        .trusted
-                                        .load(std::sync::atomic::Ordering::Acquire)
-                                        && this.bundled.ready
-                                        && !this.entries.iter().any(|entry| {
-                                            bundled::matches_editor_preview(
-                                                entry,
-                                                &candidate.request.file,
-                                            )
-                                        })
-                                        && this.parent.upgrade().is_some_and(|parent| {
-                                            this.bundled.source_current(parent.read(cx))
-                                        });
-                                if !current {
-                                    this.bundled.cancel_request();
-                                    this.bundled.finish();
-                                    cx.notify();
-                                    return true;
+                            t!("plugins.consent_resources").to_string()
+                        });
+                        for permission in &permissions {
+                            let explanation = match permission.as_str() {
+                                "assets.read" => t!("plugins.permission_assets"),
+                                "process.exec" => t!("plugins.permission_process"),
+                                "dependencies.prepare" => {
+                                    t!("plugins.permission_dependencies_prepare")
                                 }
-                                Work::InstallBundle(candidate.clone())
-                            } else {
-                                Work::Install(install_package.as_ref().clone())
-                            };
-                            if this.queue_lifecycle(work) {
-                                if install_bundle.is_some() {
-                                    this.bundled.finish();
+                                "dependencies.install" => {
+                                    t!("plugins.permission_dependencies_install")
                                 }
-                                this.pending = None;
-                                this.pending_dialog_open = false;
-                                cx.notify();
-                                true
-                            } else {
-                                false
+                                value if value.starts_with("process.service.") => {
+                                    t!("plugins.permission_service")
+                                }
+                                "editor.read" => t!("plugins.permission_editor_read"),
+                                "editor.write" => t!("plugins.permission_editor_write"),
+                                "workspace.read" => t!("plugins.permission_workspace_read"),
+                                "workspace.write" => t!("plugins.permission_workspace_write"),
+                                "network.images" => t!("plugins.permission_network_images"),
+                                "navigation.external" => {
+                                    t!("plugins.permission_external_navigation")
+                                }
+                                "clipboard" => t!("plugins.permission_clipboard"),
+                                "storage" => t!("plugins.permission_storage"),
+                                _ => std::borrow::Cow::Borrowed(permission.as_str()),
                             }
-                        })
-                        .unwrap_or(false)
-                })
-                .on_cancel(move |_, _, cx| {
-                    let _ = cancel_owner.update(cx, |this, cx| {
-                        if let Some(candidate) = &cancel_bundle {
-                            this.bundled.cancel_request();
-                            this.bundled.finish();
-                            let _ = this.worker.tx.send(Work::DeclineBundle(candidate.clone()));
+                            .to_string();
+                            details = details.child(format!("• {explanation}"));
+                            if let Some(service) = permission
+                                .strip_prefix("process.service.")
+                                .and_then(|id| services.get(id))
+                            {
+                                // Show the approved executable and argument vector separately from prose.
+                                details = details.child(
+                                    t!(
+                                        "plugins.consent_program",
+                                        program = service.program.clone(),
+                                        args = format!("{:?}", service.args)
+                                    )
+                                    .to_string(),
+                                );
+                                if let Some(plan) = &service.installation {
+                                    for artifact in &plan.artifacts {
+                                        details = details.child(
+                                            t!(
+                                                "plugins.consent_dependency",
+                                                id = artifact.id.clone(),
+                                                version = artifact.version.clone(),
+                                                platform = artifact.platform.clone(),
+                                                source = format!("{:?}", artifact.source),
+                                                sha256 = artifact.sha256.clone()
+                                            )
+                                            .to_string(),
+                                        );
+                                    }
+                                }
+                            }
                         }
-                        this.pending = None;
-                        this.pending_dialog_open = false;
-                        cx.notify();
-                    });
-                    true
-                })
+                        details = details.child(if executable {
+                            if action == "安装" {
+                                t!("plugins.consent_after_install").to_string()
+                            } else {
+                                t!("plugins.consent_after_update").to_string()
+                            }
+                        } else {
+                            t!("plugins.consent_resource_install", action = action_label)
+                                .to_string()
+                        });
+                        content.child(details)
+                    })
+                    // Base Dialog needs an explicit footer; button props only label actions.
+                    .footer(
+                        DialogFooter::new()
+                            .child(
+                                div()
+                                    .id("plugin-install-cancel")
+                                    .debug_selector(|| "plugin-install-cancel".into())
+                                    .child(DialogClose::new().trigger(|button| {
+                                        button.label(t!("plugins.cancel").to_string())
+                                    })),
+                            )
+                            .child(
+                                div()
+                                    .id("plugin-install-confirm")
+                                    .debug_selector(|| "plugin-install-confirm".into())
+                                    .child(
+                                        DialogAction::new().child(
+                                            Button::new("confirm-plugin-install")
+                                                .label(confirm_label.clone())
+                                                .primary()
+                                                .when(action == "更新", |button| {
+                                                    button.custom(update_button_style(cx))
+                                                })
+                                                .outline(),
+                                        ),
+                                    ),
+                            ),
+                    )
+                    .on_ok(move |_, _, cx| {
+                        install_owner
+                            .update(cx, |this, cx| {
+                                // Native authority is checked in this event as well as by the serialized manager.
+                                let work = if let Some(candidate) = &install_bundle {
+                                    let current =
+                                        this.bundled.confirmation(&install_package).is_some_and(
+                                            |current| {
+                                                current.request.token == candidate.request.token
+                                            },
+                                        ) && this
+                                            .worker
+                                            .trusted
+                                            .load(std::sync::atomic::Ordering::Acquire)
+                                            && this.bundled.ready
+                                            && !this.entries.iter().any(|entry| {
+                                                bundled::matches_editor_preview(
+                                                    entry,
+                                                    &candidate.request.file,
+                                                )
+                                            })
+                                            && this.parent.upgrade().is_some_and(|parent| {
+                                                this.bundled.source_current(parent.read(cx))
+                                            });
+                                    if !current {
+                                        this.bundled.cancel_request();
+                                        this.bundled.finish();
+                                        cx.notify();
+                                        return true;
+                                    }
+                                    Work::InstallBundle(candidate.clone())
+                                } else {
+                                    Work::Install(install_package.as_ref().clone())
+                                };
+                                if this.queue_lifecycle(work) {
+                                    if install_bundle.is_some() {
+                                        this.bundled.finish();
+                                    }
+                                    this.pending = None;
+                                    this.pending_dialog_open = false;
+                                    cx.notify();
+                                    true
+                                } else {
+                                    false
+                                }
+                            })
+                            .unwrap_or(false)
+                    })
+                    .on_cancel(move |_, _, cx| {
+                        let _ = cancel_owner.update(cx, |this, cx| {
+                            if let Some(candidate) = &cancel_bundle {
+                                this.bundled.cancel_request();
+                                this.bundled.finish();
+                                let _ = this.worker.tx.send(Work::DeclineBundle(candidate.clone()));
+                            }
+                            this.pending = None;
+                            this.pending_dialog_open = false;
+                            cx.notify();
+                        });
+                        true
+                    })
+            });
         });
     }
 
     /// Confirm the uninstall impact and keep both data-retention choices visible.
+    ///
+    /// `extra_impact` names the sessions the plugin is serving, which the caller computes because
+    /// only it can see the run controls. Naming them before the change is what lets a user cancel
+    /// instead of discovering afterwards that a program or a debug session was taken away.
     pub(super) fn open_remove_dialog(
         &mut self,
         id: String,
         remove: bool,
+        extra_impact: Option<String>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
@@ -393,11 +430,18 @@ impl ExtensionPanel {
             entry.manifest.component.is_some() || !entry.manifest.services.is_empty()
         });
         let count = self.processes.get(&id).copied().unwrap_or(0);
-        let impact = if executable {
-            format!("将关闭 {count} 个运行中的程序。")
+        let mut impact = if executable {
+            t!("plugins.remove_programs", count = count.to_string()).to_string()
         } else {
-            "将撤销此插件提供的语法、主题或图标资源。".to_owned()
+            t!("plugins.remove_resources").to_string()
         };
+        // Sessions this plugin is serving are named before the change rather than discovered
+        // afterwards. Cancelling leaves both the sessions and the plugin exactly as they are, so this
+        // only informs the decision.
+        if let Some(summary) = extra_impact {
+            impact.push('\n');
+            impact.push_str(&summary);
+        }
         let owner = cx.entity().downgrade();
         window.open_dialog(cx, move |dialog, _, cx| {
             let preserve_owner = owner.clone();
@@ -407,10 +451,18 @@ impl ExtensionPanel {
             let delete_id = id.clone();
             let impact = impact.clone();
             dialog
-                .title(format!(
-                    "{}插件 · {name}",
-                    if remove { "卸载" } else { "停用" }
-                ))
+                .title(
+                    t!(
+                        "plugins.remove_title",
+                        action = if remove {
+                            t!("plugins.uninstall")
+                        } else {
+                            t!("plugins.disable")
+                        },
+                        name = &name
+                    )
+                    .to_string(),
+                )
                 .width(px(520.))
                 .overlay_closable(false)
                 .close_button(false)
@@ -425,7 +477,7 @@ impl ExtensionPanel {
                                 details.child(
                                     div()
                                         .text_color(cx.theme().muted_foreground)
-                                        .child("可保留插件配置，也可同时删除插件保存的数据。"),
+                                        .child(t!("plugins.remove_data_hint").to_string()),
                                 )
                             }),
                     )
@@ -437,7 +489,10 @@ impl ExtensionPanel {
                             div()
                                 .id("plugin-remove-cancel")
                                 .debug_selector(|| "plugin-remove-cancel".into())
-                                .child(DialogClose::new().trigger(|button| button.label("取消"))),
+                                .child(
+                                    DialogClose::new()
+                                        .trigger(|button| button.label(t!("plugins.cancel"))),
+                                ),
                         )
                         .child(
                             div()
@@ -447,9 +502,9 @@ impl ExtensionPanel {
                                     DialogAction::new().child(
                                         Button::new("confirm-plugin-preserve")
                                             .label(if remove {
-                                                "卸载，保留数据"
+                                                t!("plugins.remove_preserve")
                                             } else {
-                                                "确认停用"
+                                                t!("plugins.confirm_disable")
                                             })
                                             .primary()
                                             .when(remove, |button| {
@@ -466,7 +521,7 @@ impl ExtensionPanel {
                                     .debug_selector(|| "plugin-remove-delete".into())
                                     .child(
                                         Button::new("confirm-plugin-delete")
-                                            .label("卸载并删除数据")
+                                            .label(t!("plugins.remove_delete"))
                                             .custom(uninstall_button_style(cx))
                                             .outline()
                                             .on_click(move |_, window, cx| {

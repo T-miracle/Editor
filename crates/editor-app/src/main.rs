@@ -3,6 +3,8 @@ mod editor;
 mod explorer;
 mod extensions;
 pub mod language;
+/// Run controls own saved configurations and the sessions launched from them.
+mod run;
 mod sdk_export;
 #[cfg(test)]
 mod tests;
@@ -198,6 +200,32 @@ struct EditorApp {
     plugin_popup_snapshot: Option<PluginPopupSnapshot>,
     dark_theme: bool,
     session_state: SessionState,
+    /// Saved run configurations and the sessions this editor launched from them.
+    run_controls: run::RunControls,
+    /// Local presentation state; all debug targets and inspection data remain in RunControls.
+    debug_panel: run::ui::panel::DebugPanelState,
+    /// The configuration draft stays alive while its owned native dialog is open.
+    run_form: Option<Entity<run::RunConfigForm>>,
+    /// Public configuration requests retain origin identity across window and selection changes.
+    plugin_configuration_bridge: crate::run::ui::plugin_form::Bridge,
+    /// Retained content and focus for the configuration window, observing replacement drafts.
+    run_dialog: Option<Entity<crate::run::ui::RunConfigModal>>,
+    /// The same native modal window kind used by plugin management; repeated opening activates it.
+    run_dialog_window: Option<WindowHandle<Root>>,
+    /// Coalesces opens deferred until the editor's update lease has ended.
+    run_dialog_opening: bool,
+    /// Unexpected native closure releases draft and popup state without affecting another window.
+    _run_dialog_closed_subscription: Option<Subscription>,
+    /// Editor window handle, used to continue a close the user has confirmed.
+    ///
+    /// The platform reports an untyped handle, which is downcast only where the close continues.
+    main_window: Option<gpui_kit::AnyWindowHandle>,
+    /// Set once the user has decided to leave with run sessions still active.
+    leave_confirmed: bool,
+    /// Sessions the leave confirmation is asking about; `None` while no decision is pending.
+    leave_confirm: Option<Vec<u64>>,
+    /// The unified run dropdown: active sessions, saved configurations and the edit entries.
+    run_menu: Option<run::RunMenu>,
     _tree_subscription: Subscription,
     _dock_subscription: Subscription,
     _bounds_subscription: Option<Subscription>,
@@ -222,9 +250,16 @@ impl EditorApp {
     ) -> Self {
         let (file_watch, mut watch_updates) = FileWatch::start(workspace.clone());
         let closing = cx.entity().downgrade();
-        window.on_window_should_close(cx, move |_, cx| {
-            let _ = closing.update(cx, |app, cx| app.shutdown_plugins(cx));
-            false
+        window.on_window_should_close(cx, move |window, cx| {
+            // The gate answers the platform, where `false` keeps the window open. Closing with managed
+            // work in flight asks the user first instead of discarding a running program silently.
+            let handle = window.window_handle();
+            closing
+                .update(cx, |app, cx| {
+                    app.main_window = Some(handle);
+                    app.should_close_window(cx)
+                })
+                .unwrap_or(true)
         });
         let editor = cx.new(|cx| {
             EditorState::new(window, cx)
@@ -239,6 +274,12 @@ impl EditorApp {
                 .placeholder(t!("editor.select_file").to_string())
         });
         let session_state = SessionState::load(workspace.root());
+        // Plugin configurations are host-local per workspace; project settings do not supply run data.
+        // A malformed local store is reported rather than silently replaced.
+        let run_controls = run::RunControls::load_plugin_configurations(
+            &workspace.root().display().to_string(),
+            editor_core::default_root(),
+        );
         let tree_state = cx.new(|cx| TreeState::new(cx));
         let tree_subscription = cx.subscribe(&tree_state, |this, _, event: &TreeEvent, cx| {
             let id = match event {
@@ -401,6 +442,18 @@ impl EditorApp {
             plugin_popup_snapshot: None,
             dark_theme: false,
             session_state,
+            run_controls,
+            debug_panel: run::ui::panel::DebugPanelState::new(cx),
+            run_form: None,
+            plugin_configuration_bridge: Default::default(),
+            run_dialog: None,
+            run_dialog_window: None,
+            run_dialog_opening: false,
+            _run_dialog_closed_subscription: None,
+            main_window: None,
+            leave_confirmed: false,
+            leave_confirm: None,
+            run_menu: None,
             _tree_subscription: tree_subscription,
             _dock_subscription: dock_subscription,
             _bounds_subscription: None,
@@ -688,6 +741,9 @@ fn resolve_startup_target() -> anyhow::Result<(Workspace, Option<PathBuf>)> {
 
 fn main() -> anyhow::Result<()> {
     if sdk_export::run_cli()? {
+        return Ok(());
+    }
+    if run::cleanup::run_cli()? {
         return Ok(());
     }
     // Use Simplified Chinese by default while keeping locale changes centralized.

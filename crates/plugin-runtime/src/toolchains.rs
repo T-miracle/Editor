@@ -27,7 +27,8 @@ pub(crate) fn resolve_service_until(
                     .to_string_lossy()
                     .replace('\\', "/")
             } else {
-                pattern.replace('\\', "/")
+                // Preserve Windows verbatim prefixes; their '?' is path syntax, not a glob.
+                pattern.clone()
             };
             let mut matches = expand_pattern(&expanded, deadline, &mut visited)?;
             anyhow::ensure!(
@@ -74,7 +75,9 @@ fn expand_pattern(
             .as_os_str()
             .to_str()
             .ok_or_else(|| anyhow::anyhow!("Tool path is not Unicode"))?;
-        if !text.contains(['*', '?', '[']) {
+        // Drive/UNC/verbatim prefixes and root separators are literal path components.
+        if !matches!(component, std::path::Component::Normal(_)) || !text.contains(['*', '?', '['])
+        {
             for candidate in &mut candidates {
                 candidate.push(component);
             }

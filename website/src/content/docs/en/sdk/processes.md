@@ -6,11 +6,19 @@ order: 3
 alternate: /zh-cn/sdk/processes/
 ---
 
-# Native process capability 1.3
+# Native process capability 1.6
 
 The `process: ^1` capability is negotiated independently. Operations are sent through the
 ordinary SDK request as `api::Operation::Process { operation }`; a capability is never
 decided by the plugin's name.
+
+`Resolve { program }` requires `process >=1.6,<2`, `process.exec`, a live instance
+and a trusted workspace. It accepts a bare tool name or an absolute executable path and
+returns `Value::ResolvedProgram { program }` with the resolved absolute path. It uses the
+same tool lookup as execution, without starting a process, running a version probe,
+installing a tool or reserving a process handle. Missing tools return `NotFound`; invalid
+paths, permission failures and unsupported capability versions are explicit errors.
+Delegated service calls retain the caller's permission boundary.
 
 ## Declaration and authorization
 
@@ -28,7 +36,7 @@ program and its argument array. An update that adds a permission requires confir
 the user refuses, the old package, its existing authorization and its running instances stay
 usable.
 
-`Execute { program, args, transport, cwd }` separately requires **`process.exec`** and allows
+`Execute { program, args, transport, cwd, env }` separately requires **`process.exec`** and allows
 an explicit program choice, including an interpreter. It cannot be obtained from an ordinary
 service permission. No native installer operation exists today.
 
@@ -103,3 +111,10 @@ most 1 MiB and each process queues at most 8 of them; output blocks are 8 KiB wi
 capacity of 64, applying backpressure to bound the backlog with a bounded read per turn.
 Insufficient permission, an unnegotiated capability, an invalid handle, an inactive instance,
 an exceeded request limit and native I/O failure are all returned as unified typed errors.
+## Environment and normal exit
+
+process 1.4 adds `Execute.env`, a caller-supplied environment overlay: at most 64 entries, names of 128 bytes and values of 32768 bytes. Names must be nonempty and contain neither NUL nor `=`; values must not contain NUL. The child inherits the native environment and receives these explicit overrides. The host neither logs values nor grants access to another instance's environment or process. Declared StartService settings cannot be replaced by this overlay.
+
+process 1.5 adds `RequestExit { handle, mode }`. Graceful PTY exit sends an interrupt byte; a universal graceful protocol for Stdio is unavailable and returns UnsupportedOperation. Force requests termination of only the handle's owned process tree. Both retain observation until an actual terminal native event; accepting a request does not mean exit. Callers choose a bounded grace period and may escalate explicitly. The host session service uses 3000 ms by default.
+
+Normal `Update::Exited { code }` preserves the full unsigned 32-bit native exit code, including Windows interrupt codes. Output is drained through EOF before exit is published. Forced termination is a distinct `Terminated` event, without a fake exit code. A closed resource cannot be reused by the guest; the host's cleanup observer independently waits for the original owned tree and EOF. Cleanup failures are reported, never converted into an invented successful exit.

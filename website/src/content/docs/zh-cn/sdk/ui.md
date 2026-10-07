@@ -121,6 +121,12 @@ Panel 与 Command 拒绝未知字段；含退役字段或要求退役能力的�
 
 ## 常用界面元素
 
+
+`ui.native >=1.1,<2` 增加 `Kind::Textarea(Input)` 和 `Node::textarea`，用于原生多行字段。
+沿用单行输入框的值、占位文字、重置版本、启用状态及 Change/Submit 事件校验。普通回显
+保留原生焦点、选择和 IME 组合；仅在明确替换时增加 `value_revision`。移除控件时释放订阅。
+多行字段使用编辑器本地主题与编辑行为，不创建文档会话或 WebView。
+
 | Kind / 构造方法 | 用途 | 事件 |
 | --- | --- | --- |
 | `Column` / `Node::column` | 纵向自动布局 | — |

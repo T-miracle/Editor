@@ -1,13 +1,13 @@
 {
   "id": "terminal",
   "name": "终端",
-  "version": "0.8.0",
+  "version": "0.12.1",
   "protocol": 7,
   "api": {
     "base": "^1",
     "required": {
-      "process": ">=1.3, <2",
-      "ui.native": "^1",
+      "process": ">=1.6,<2",
+      "ui.native": ">=1.1,<2",
       "ui.canvas": ">=1.1, <2",
       "ui.grid": "^1",
       "ui.collections": "^1",
@@ -18,7 +18,7 @@
       "storage.private": "^1",
       "storage.editor": "^1",
       "storage.migration": "^1",
-      "plugin.services": "^1",
+      "plugin.services": ">=1.1,<2",
       "ui.tools": "^1",
       "ui.content_colors": "^1"
     }
@@ -30,7 +30,7 @@
   "plugin_services": {
     "provides": {
       "interactive.execute": {
-        "version": "1.0.0",
+        "version": "2.0.0",
         "methods": {
           "execute": {
             "parameters": {
@@ -55,11 +55,29 @@
                 "name": {
                   "type": "string",
                   "max_bytes": 256
+                },
+                "env": {
+                  "type": "array",
+                  "max_items": 64,
+                  "items": {
+                    "type": "record",
+                    "fields": {
+                      "name": {
+                        "type": "string",
+                        "max_bytes": 128
+                      },
+                      "value": {
+                        "type": "string",
+                        "max_bytes": 32768
+                      }
+                    }
+                  }
                 }
               },
               "optional": [
                 "cwd",
-                "name"
+                "name",
+                "env"
               ]
             },
             "result": {
@@ -78,6 +96,350 @@
             "permissions": [
               "process.exec",
               "ui.panels"
+            ]
+          },
+          "stop": {
+            "parameters": {
+              "type": "record",
+              "fields": {
+                "session": {
+                  "type": "string",
+                  "max_bytes": 128
+                },
+                "mode": {
+                  "type": "string",
+                  "max_bytes": 16
+                }
+              },
+              "optional": [
+                "mode"
+              ]
+            },
+            "result": {
+              "type": "record",
+              "fields": {
+                "session": {
+                  "type": "string",
+                  "max_bytes": 128
+                },
+                "state": {
+                  "type": "string",
+                  "max_bytes": 32
+                }
+              }
+            },
+            "permissions": [
+              "process.exec"
+            ]
+          },
+          "status": {
+            "parameters": {
+              "type": "record",
+              "fields": {
+                "session": {
+                  "type": "string",
+                  "max_bytes": 128
+                }
+              }
+            },
+            "result": {
+              "type": "record",
+              "fields": {
+                "session": {
+                  "type": "string",
+                  "max_bytes": 128
+                },
+                "state": {
+                  "type": "string",
+                  "max_bytes": 32
+                },
+                "code": {
+                  "type": "integer",
+                  "min": 0,
+                  "max": 4294967295
+                }
+              },
+              "optional": [
+                "code"
+              ]
+            },
+            "permissions": [
+              "process.exec"
+            ]
+          },
+          "input": {
+            "parameters": {
+              "type": "record",
+              "fields": {
+                "session": {
+                  "type": "string",
+                  "max_bytes": 128
+                },
+                "bytes": {
+                  "type": "array",
+                  "max_items": 1024,
+                  "items": {
+                    "type": "integer",
+                    "min": 0,
+                    "max": 255
+                  }
+                }
+              }
+            },
+            "result": {
+              "type": "record",
+              "fields": {
+                "session": {
+                  "type": "string",
+                  "max_bytes": 128
+                },
+                "state": {
+                  "type": "string",
+                  "max_bytes": 32
+                }
+              }
+            },
+            "permissions": [
+              "process.exec"
+            ]
+          },
+          "locate": {
+            "parameters": {
+              "type": "record",
+              "fields": {
+                "session": {
+                  "type": "string",
+                  "max_bytes": 128
+                }
+              }
+            },
+            "result": {
+              "type": "record",
+              "fields": {
+                "session": {
+                  "type": "string",
+                  "max_bytes": 128
+                },
+                "state": {
+                  "type": "string",
+                  "max_bytes": 32
+                }
+              }
+            },
+            "permissions": [
+              "ui.panels"
+            ]
+          },
+          "events": {
+            "parameters": {
+              "type": "record",
+              "fields": {
+                "session": {
+                  "type": "string",
+                  "max_bytes": 128
+                },
+                "after": {
+                  "type": "integer",
+                  "min": 0,
+                  "max": 9223372036854775807
+                },
+                "limit": {
+                  "type": "integer",
+                  "min": 1,
+                  "max": 16
+                }
+              }
+            },
+            "result": {
+              "type": "record",
+              "fields": {
+                "session": {
+                  "type": "string",
+                  "max_bytes": 128
+                },
+                "events": {
+                  "type": "array",
+                  "max_items": 16,
+                  "items": {
+                    "type": "record",
+                    "fields": {
+                      "sequence": {
+                        "type": "integer",
+                        "min": 1,
+                        "max": 9223372036854775807
+                      },
+                      "kind": {
+                        "type": "string",
+                        "max_bytes": 32
+                      },
+                      "stream": {
+                        "type": "string",
+                        "max_bytes": 16
+                      },
+                      "bytes": {
+                        "type": "array",
+                        "max_items": 512,
+                        "items": {
+                          "type": "integer",
+                          "min": 0,
+                          "max": 255
+                        }
+                      },
+                      "state": {
+                        "type": "string",
+                        "max_bytes": 32
+                      },
+                      "code": {
+                        "type": "integer",
+                        "min": 0,
+                        "max": 4294967295
+                      }
+                    },
+                    "optional": [
+                      "stream",
+                      "bytes",
+                      "state",
+                      "code"
+                    ]
+                  }
+                },
+                "cursor": {
+                  "type": "integer",
+                  "min": 0,
+                  "max": 9223372036854775807
+                },
+                "gap": {
+                  "type": "boolean"
+                }
+              }
+            },
+            "permissions": [
+              "process.exec"
+            ]
+          }
+        }
+      },
+      "run.configurations": {
+        "version": "1.0.0",
+        "methods": {
+          "catalog": {
+            "parameters": {
+              "type": "record",
+              "fields": {
+                "workspace": {
+                  "type": "string",
+                  "max_bytes": 4096
+                },
+                "locale": {
+                  "type": "string",
+                  "max_bytes": 64
+                },
+                "os": {
+                  "type": "string",
+                  "max_bytes": 64
+                }
+              }
+            },
+            "result": {
+              "type": "record",
+              "fields": {
+                "payload": {
+                  "type": "string",
+                  "max_bytes": 65536
+                }
+              }
+            },
+            "permissions": [
+              "workspace.read",
+              "process.exec"
+            ]
+          },
+          "form": {
+            "parameters": {
+              "type": "record",
+              "fields": {
+                "workspace": {
+                  "type": "string",
+                  "max_bytes": 4096
+                },
+                "locale": {
+                  "type": "string",
+                  "max_bytes": 64
+                },
+                "os": {
+                  "type": "string",
+                  "max_bytes": 64
+                },
+                "template": {
+                  "type": "string",
+                  "max_bytes": 256
+                },
+                "values": {
+                  "type": "string",
+                  "max_bytes": 16384
+                },
+                "event": {
+                  "type": "string",
+                  "max_bytes": 65536
+                }
+              }
+            },
+            "result": {
+              "type": "record",
+              "fields": {
+                "payload": {
+                  "type": "string",
+                  "max_bytes": 65536
+                }
+              }
+            },
+            "permissions": [
+              "workspace.read",
+              "ui.panels"
+            ]
+          },
+          "validate": {
+            "parameters": {
+              "type": "record",
+              "fields": {
+                "workspace": {
+                  "type": "string",
+                  "max_bytes": 4096
+                },
+                "locale": {
+                  "type": "string",
+                  "max_bytes": 64
+                },
+                "os": {
+                  "type": "string",
+                  "max_bytes": 64
+                },
+                "template": {
+                  "type": "string",
+                  "max_bytes": 256
+                },
+                "values": {
+                  "type": "string",
+                  "max_bytes": 16384
+                },
+                "intent": {
+                  "type": "string",
+                  "max_bytes": 64
+                }
+              }
+            },
+            "result": {
+              "type": "record",
+              "fields": {
+                "payload": {
+                  "type": "string",
+                  "max_bytes": 65536
+                }
+              }
+            },
+            "permissions": [
+              "workspace.read",
+              "process.exec"
             ]
           }
         }

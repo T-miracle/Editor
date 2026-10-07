@@ -29,7 +29,7 @@ pub fn package(id: &str, provider: bool, optional: bool, version: &str) -> Packa
             "services.call"
         ])
     };
-    let mut methods:serde_json::Map<_,_>=["echo","probe","source","cycle","bad-result","trap"].into_iter().map(|id|(id.into(),json!({
+    let mut methods:serde_json::Map<_,_>=["echo","defer","reply-retained","probe","source","cycle","bad-result","trap"].into_iter().map(|id|(id.into(),json!({
         "parameters":{"type":"string","max_bytes":2048},"result":{"type":"string","max_bytes":4096}
     }))).collect();
     for (name, permission) in [
@@ -55,6 +55,32 @@ pub fn package(id: &str, provider: bool, optional: bool, version: &str) -> Packa
         serde_json::to_vec(&manifest).unwrap(),
     );
     files.insert("service-label.txt".into(), id.as_bytes().to_vec());
+    let mut archive = zip::ZipWriter::new(Cursor::new(Vec::new()));
+    for (name, bytes) in files {
+        archive
+            .start_file(name, zip::write::SimpleFileOptions::default())
+            .unwrap();
+        archive.write_all(&bytes).unwrap();
+    }
+    Package::from_bytes(&archive.finish().unwrap().into_inner()).unwrap()
+}
+
+/// A pure provider needs no consumer permission merely to reply to its own incoming requests.
+pub fn pure_provider(id: &str) -> Package {
+    let mut files = package(id, true, false, "1.0.0").files;
+    let mut manifest: Value = serde_json::from_slice(&files["manifest.json"]).unwrap();
+    manifest["plugin_services"]
+        .as_object_mut()
+        .unwrap()
+        .remove("requires");
+    manifest["permissions"]
+        .as_array_mut()
+        .unwrap()
+        .retain(|permission| permission != "services.call");
+    files.insert(
+        "manifest.json".into(),
+        serde_json::to_vec(&manifest).unwrap(),
+    );
     let mut archive = zip::ZipWriter::new(Cursor::new(Vec::new()));
     for (name, bytes) in files {
         archive

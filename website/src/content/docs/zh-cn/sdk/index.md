@@ -2,7 +2,7 @@
 title: 插件 SDK
 description: 协商能力、类型化消息、原生界面、打包与 SDK 的交付方式。
 section: sdk
-order: 1
+order: 0
 alternate: /en/sdk/
 ---
 
@@ -26,18 +26,11 @@ alternate: /en/sdk/
 
 当前包安装和实例恢复要求 `protocol = 7` 及可协商的基础 API。协议 1–6 的已安装记录保留设置、权限、启用范围和私有数据，并显示需要更新；旧组件不会激活。使用当前 SDK 重建并安装同一插件的新包后恢复使用。旧运行协议与转换器已经删除；旧安装记录只参与管理界面展示和有限数据导入，不恢复执行。
 
-独立验证插件为 `capability-example`，不属于正式发行包。先构建开发版宿主，再运行 `scripts/verify-plugin-sdk.ps1`：脚本将示例源文件、清单、README 和资源复制到系统临时目录，从该目录通过实际宿主的公开 `--plugin-cargo` 命令构建，不使用宿主仓库的 Cargo 工作区或业务源码路径。脚本还通过 `--export-plugin-sdk` 验证完整导出与损坏文件恢复。验证命令：
+## 运行、调试与目标服务
 
-```powershell
-cargo build -p editor-app
-./scripts/verify-plugin-sdk.ps1 -HostExe ./target/debug/editor-app.exe
-cargo test -p plugin-runtime --test sdk_distribution -- --ignored
-cargo test -p plugin-runtime --test capability_packages
-cargo test -p plugin-runtime --test capability_packages -- --ignored
-cargo test -p editor-app --bin editor-app capability_package_consent -- --ignored
-```
+[运行会话](/zh-cn/sdk/sessions/)说明公开输入、展示、输出订阅与正常／强制停止；[调试会话](/zh-cn/sdk/debug/)说明暂停代次、真实检查及断点验证；[运行目标提供者](/zh-cn/sdk/targets/)贡献可移植绑定并受控准备产物。
 
-真实组件测试显式忽略默认运行，需要先生成测试包；不是跳过验收。脚本将同一 ZIP 输出至 `target/plugin-sdk-test/capability-example.zip` 与既有测试使用的 `target/plugin-api-test/capability-example.zip`，包内仅有清单、README、组件和声明资源。`sdk_distribution` 通过公开 `Package` / `Manager` 接口读取 README、安装真实组件并调用类型化错误诊断命令。日常快速构建仍可使用 `scripts/build-capability-example.ps1`，但仓库外分发验收以 `verify-plugin-sdk.ps1` 为准。
+[配置模板](/zh-cn/sdk/configurations/)为本机配置草稿提供插件默认值、原生表单和校验。
 
 ## workspace.files 1.1 与 host.sdk 1.0
 
@@ -49,7 +42,7 @@ cargo test -p editor-app --bin editor-app capability_package_consent -- --ignore
 
 `api::guest::describe_sdk()` 需要协商 `host.sdk`，返回 `SdkDescriptor { digest, root, cargo_config }`，无需工作区读取权限。它描述宿主持有的同一份接口缓存：digest 是内容标识，root 与 cargo_config 是供原生语言工具使用的绝对路径。它不创建文件句柄、WASI preopen 或额外文件读取权限；将这些路径交给工作区 `read_file` 仍会被拒绝。宿主未提供 SDK 返回 `NotFound`，导出失败返回 `OperationFailed`，未协商返回 `CapabilityUnavailable`。
 
-这两个操作可在活动实例及只读 `LanguageService` 准备钩子中调用。钩子可以关闭本次创建的文件句柄，其余临时句柄在返回时统一撤销；它不能通过发现发起写入、进程或编辑器操作。迁移钩子仍只有私有副本权限。宿主经 `Manager::open_with_resources` 提供不可变 `HostResources`，同一资源快照传入后台安装、设置替换、工作区切换及失败回滚后的实例。公开集成回归通过 `cargo test -p plugin-runtime --test sdk_discovery -- --ignored` 运行，先执行上面的独立 SDK 构建脚本。
+这两个操作可在活动实例及只读 `LanguageService` 准备钩子中调用。钩子可以关闭本次创建的文件句柄，其余临时句柄在返回时统一撤销；它不能通过发现发起写入、进程或编辑器操作。迁移钩子仍只有私有副本权限。宿主经 `Manager::open_with_resources` 提供不可变 `HostResources`，同一资源快照传入后台安装、设置替换、工作区切换及失败回滚后的实例。
 
 ## ui.clipboard 1.0 与 storage.editor 1.0
 
@@ -103,3 +96,4 @@ Rust SDK 0.2.0 删除旧 Message/Event/Reply/Request、Scene/Widget 与 CanvasCo
 插件只使用 api::Input、api::Notification、api::Output 和 api::Operation；UI 返回 ui::Document，其中 Canvas、SideTabs 是普通节点。宿主嵌入端通过 Manager::event(plugin_id, panel, notification) 路由，读取 Instance::views 获取每个面板的已验证文档，不再经过旧场景转换。
 
 旧协议 1–6 的包拒绝安装和执行，保留安装记录以展示更新/卸载与启用偏好。仅保留有限的历史 ID、私有数据与布局导入；数据导入不会恢复旧代码执行能力。热更新和迁移详情见 [MIGRATION.md](/zh-cn/sdk/migration/)。
+[语义视口](/zh-cn/sdk/viewport/)、[链接与导航](/zh-cn/sdk/navigation/)和[只读代码高亮](/zh-cn/sdk/code-highlighting/)增加版本化原生预览交互，不建立另一份可变文档。

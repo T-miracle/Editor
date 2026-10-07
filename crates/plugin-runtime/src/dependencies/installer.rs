@@ -179,7 +179,7 @@ fn execute(
     source: &Path,
     control: &InstallControl,
 ) -> anyhow::Result<()> {
-    let mut spawned = crate::process::spawn_piped(program, args, source)?;
+    let mut spawned = crate::process::spawn_piped(program, args, source, &Default::default())?;
     drop(spawned.child.stdin.take());
     // Drain without retaining native output in memory; installers receive no interactive input channel.
     let output = spawned.child.stdout.take().unwrap();

@@ -336,7 +336,7 @@ impl Validator {
                 self.text(alt)?;
             }
             Kind::Button { label } | Kind::Checkbox { label, .. } => self.text(label)?,
-            Kind::Input(input) => {
+            Kind::Input(input) | Kind::Textarea(input) => {
                 self.text(&input.value)?;
                 self.text(&input.placeholder)?;
             }
