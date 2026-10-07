@@ -1,8 +1,8 @@
 # 可替换格式化与标签编辑工单 02 验收记录
 
-日期：2026-10-07。对应 [#74](https://github.com/T-miracle/Editor/issues/74)、[工单](../../tickets/xml-language-tools/02-format-and-tags.md)与[方案](../../specs/xml-language-tools.md)。
+日期：2026-10-07–08。对应 [#74](https://github.com/T-miracle/Editor/issues/74)、[工单](../../tickets/xml-language-tools/02-format-and-tags.md)与[方案](../../specs/xml-language-tools.md)。
 
-状态：本单针对性行为验收、最终共同门禁、SDK 分发、SVG 短组合与两个独立审查轴均通过；Spec 语义配对及未知格式化 ID 两项 P2 已解决。验收完成，待普通提交、推送及工单关闭读回；最终命令、产物与审查身份见[共同交付记录](02-03-delivery.md)。
+状态：已交付；本单针对性行为验收、最终共同门禁、SDK 分发、SVG 短组合与两个独立审查轴均通过。实现提交 `2ba72a0c866478353bdbe350b89ae4c79a974fd0` 已推送并核对远端 SHA；#74 于 `2026-10-07T16:16:21Z` 关闭，已读回 `closed/completed`。最终命令、产物、修复与审查身份见[共同交付记录](02-03-delivery.md)。
 
 ## 验证边界
 

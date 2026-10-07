@@ -4,7 +4,7 @@
 
 稳定标识：`xml-language-tools`
 
-状态：产品范围、测试入口和三单拆分已确认；方案已发布为 [#72](https://github.com/T-miracle/Editor/issues/72)，实施工单 #73–#75 已授权执行，尚未验收完成。
+状态：三个实施工单 #73–#75 已完成验收、普通提交与推送，并核对关闭；最终实现分支为 `codex/xml-language-tools`，02/03 实现提交 `2ba72a0`。行为、最终门禁、产物、独立审查与平台限制见[共同交付记录](../verification/xml-language-tools/02-03-delivery.md)；父设计议题 [#72](https://github.com/T-miracle/Editor/issues/72) 保持不变。
 
 发布目标：`T-miracle/Editor` 的 GitHub Issues，标签 `ready-for-agent`。发布前按稳定标识核对重复议题；用户已授权发布本方案和三张工单，并按真实阻塞关系执行。
 

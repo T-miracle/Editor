@@ -2,9 +2,9 @@
 
 日期：2026-10-07
 
-状态：三单拆分与测试入口已批准；方案 [#72](https://github.com/T-miracle/Editor/issues/72)、工单 #73–#75 已发布，原生阻塞关系已读回核对，用户授权执行全部工单及必要并行。
+状态：三个实施工单 #73–#75 均已验收、推送并核对 `closed/completed`；方案 [#72](https://github.com/T-miracle/Editor/issues/72) 保持不变。
 
-执行进度：01 / #73 已交付并核对关闭，提交 `400c5310`；02 / #74 与 03 / #75 已解除阻塞并行实施。整批完成状态仍等待后两单及最终短组合验收；父设计议题 #72 保持不变。
+执行进度：01 / #73 实现提交 `400c5310`；02 / #74 与 03 / #75 实现提交 `2ba72a0`。三单详测、最终共同门禁、SVG/XML 短组合及两个独立审查轴均通过；真实命令、产物、限制和交付 SHA 见[共同交付记录](../../verification/xml-language-tools/02-03-delivery.md)。
 
 真实议题：[01 / #73](https://github.com/T-miracle/Editor/issues/73)、[02 / #74](https://github.com/T-miracle/Editor/issues/74)、[03 / #75](https://github.com/T-miracle/Editor/issues/75)。编号与数据库 ID 见 [发布记录](publication.json)。
 

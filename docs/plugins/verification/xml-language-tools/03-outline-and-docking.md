@@ -1,8 +1,8 @@
 # 宿主大纲工单 03 验收记录
 
-日期：2026-10-07。对应 [#75](https://github.com/T-miracle/Editor/issues/75)、[工单](../../tickets/xml-language-tools/03-outline-and-docking.md)与[方案](../../specs/xml-language-tools.md)。
+日期：2026-10-07–08。对应 [#75](https://github.com/T-miracle/Editor/issues/75)、[工单](../../tickets/xml-language-tools/03-outline-and-docking.md)与[方案](../../specs/xml-language-tools.md)。
 
-状态：本单定向行为验收、最终共同门禁、SDK 分发、SVG 短组合与两个独立审查轴均通过。验收完成，待普通提交、推送及工单关闭读回；最终命令、产物与审查身份见[共同交付记录](02-03-delivery.md)。
+状态：已交付；本单定向行为验收、最终共同门禁、SDK 分发、SVG 短组合与两个独立审查轴均通过。实现提交 `2ba72a0c866478353bdbe350b89ae4c79a974fd0` 已推送并核对远端 SHA；#75 于 `2026-10-07T16:16:44Z` 关闭，已读回 `closed/completed`。最终命令、产物与审查身份见[共同交付记录](02-03-delivery.md)。
 
 ## 验证边界
 

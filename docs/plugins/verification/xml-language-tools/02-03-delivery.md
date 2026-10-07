@@ -2,7 +2,7 @@
 
 日期：2026-10-07–08。范围为 [02 / #74](../../tickets/xml-language-tools/02-format-and-tags.md)、[03 / #75](../../tickets/xml-language-tools/03-outline-and-docking.md)。详细行为结果分别见 [02](02-format-and-tags.md)、[03](03-outline-and-docking.md)；01 的既有验收见 [01](01-xml-language.md)。
 
-状态：最终共同 Rust 门禁、独立 SDK 分发、正式语言包、SVG 短组合及当前生产窗口启动均通过；三项审查 P2 与一项判断性 P3 均修复，两个最终审查轴发现为 0。验收完成，待普通提交、推送及工单关闭读回。
+状态：已交付。最终共同 Rust 门禁、独立 SDK 分发、正式语言包、SVG 短组合及当前生产窗口启动均通过；三项审查 P2 与一项判断性 P3 均修复，两个最终审查轴发现为 0。实现提交已推送，#74、#75 均关闭并读回 `closed/completed`。
 
 ## 固定范围与减少重复
 
@@ -86,6 +86,16 @@ XML `xml.wasm` 为 `E937BD84073F642A28CBD0DEE5EA4CCC0D82FD776137AC07D50E7E8CAFB0
 ## 审查与交付
 
 共同检查完成后，以不可变候选提交相对上述基线分别运行 Standards 与 Spec 独立审查；保留两轴原始结论、必要修复和最终候选身份。普通提交推送后核对远端 SHA，再关闭准确的 #74、#75 并读回状态；父设计议题 #72 不修改、不关闭。
+
+实际交付：普通功能提交 `2ba72a0c866478353bdbe350b89ae4c79a974fd0`，分支 `codex/xml-language-tools`；`git ls-remote origin refs/heads/codex/xml-language-tools` 已读回相同完整 SHA。最终暂存共 146 个本任务文件，与最终审查候选的差异只有三份验收记录，不改变源码或运行资源。02/03 的共享 SDK、宿主集成及 XML `0.2.0` 作为一次完整功能交付，避免引入仅为分单的过渡代码。
+
+| 议题 | 实现提交 | 关闭读回 |
+| --- | --- | --- |
+| 01 / #73 | `400c5310ca0dd9995b66f23ea1d440c24a89c5f3` | `closed/completed`，`2026-10-07T10:08:45Z` |
+| 02 / #74 | `2ba72a0c866478353bdbe350b89ae4c79a974fd0` | `closed/completed`，`2026-10-07T16:16:21Z` |
+| 03 / #75 | `2ba72a0c866478353bdbe350b89ae4c79a974fd0` | `closed/completed`，`2026-10-07T16:16:44Z` |
+
+已先验证实现推送再进行关闭，核对议题数据库 ID 与稳定标识后通过 GitHub API 写入，并逐个 GET 读回。关闭记录及两轴最终结果同步到本地工单和 `publication.json`；最终补记只改文档，执行链接、映射及差异检查，不重复 Rust 行为测试。
 
 第三轮复审固定候选 `167168dac4347cf7ba7e75fa3cebc73be723b73b`，146 个文件、tree `05645a3565e5ef5a9557f4c801859c30e12fa8e1`，父提交为同一已交付基线。记录比较命令 `git diff 2385535bbf8b5c4f6c4074440357c0d8867ddf52...167168dac4347cf7ba7e75fa3cebc73be723b73b` 与 `git log 2385535bbf8b5c4f6c4074440357c0d8867ddf52..167168dac4347cf7ba7e75fa3cebc73be723b73b --oneline`；引用可解析、非空差异及提交列表均核对。
 
