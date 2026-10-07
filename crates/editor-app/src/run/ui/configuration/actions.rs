@@ -80,13 +80,6 @@ impl EditorApp {
         };
         match result {
             Ok(draft) => {
-                if let Some(name) = deleted_name {
-                    self.record_host_message(
-                        MessageLevel::Info,
-                        t!("run.deleted_named", name = name).to_string(),
-                        cx,
-                    );
-                }
                 let form = cx.new(|cx| {
                     let mut form = RunConfigForm::from_draft(draft, window, cx);
                     form.manual_target = form.draft.provided.is_none();

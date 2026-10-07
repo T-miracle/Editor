@@ -92,26 +92,7 @@ impl EditorApp {
             Ok(()) => {
                 self.explorer_edit = None;
                 self.refresh_files(cx);
-                // The filesystem operation contributes one result; its internal tree refresh does not.
-                let message = match kind {
-                    ExplorerEditKind::Directory => t!(
-                        "explorer.created_directory",
-                        path = path.join(name.trim()).display()
-                    )
-                    .to_string(),
-                    ExplorerEditKind::File => t!(
-                        "explorer.created_file",
-                        path = path.join(name.trim()).display()
-                    )
-                    .to_string(),
-                    ExplorerEditKind::Rename => t!(
-                        "explorer.renamed",
-                        from = path.display(),
-                        to = path.with_file_name(name.trim()).display()
-                    )
-                    .to_string(),
-                };
-                self.record_host_message(MessageLevel::Info, message, cx);
+                // The updated tree shows routine success; only refusals and failures need a receipt.
             }
             Err(error) => {
                 self.report_host_message(
@@ -134,9 +115,7 @@ impl EditorApp {
     pub(crate) fn copy_explorer_path(&mut self, path: &Path, cx: &mut Context<Self>) {
         // Copy is a host clipboard operation, independent from any plugin log destination.
         match files::copy_to_clipboard(path) {
-            Ok(()) => {
-                self.report_host_message(MessageLevel::Info, t!("explorer.copied").to_string(), cx)
-            }
+            Ok(()) => self.status = t!("explorer.copied").to_string(),
             Err(error) => self.report_host_message(MessageLevel::Error, error, cx),
         }
         cx.notify();
@@ -161,17 +140,6 @@ impl EditorApp {
         match files::paste(&sources, &destination) {
             Ok(()) => {
                 self.refresh_files(cx);
-                // Keep the completed batch and destination after the menu and refresh have disappeared.
-                self.record_host_message(
-                    MessageLevel::Info,
-                    t!(
-                        "explorer.pasted",
-                        count = sources.len(),
-                        path = destination.display()
-                    )
-                    .to_string(),
-                    cx,
-                );
             }
             Err(error) => {
                 self.report_host_message(MessageLevel::Error, error, cx);
@@ -227,12 +195,6 @@ impl EditorApp {
             Ok(()) => {
                 self.explorer_delete = None;
                 self.refresh_files(cx);
-                // Record only the deletion that the user confirmed, not the preceding preview.
-                self.record_host_message(
-                    MessageLevel::Info,
-                    t!("explorer.deleted", path = path.display()).to_string(),
-                    cx,
-                );
             }
             Err(error) => {
                 let message = t!("explorer.delete_failed", error = error).to_string();

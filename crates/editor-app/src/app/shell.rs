@@ -456,15 +456,7 @@ impl Render for EditorApp {
                     .child(
                         StatusBar::new()
                             .left(self.render_plugin_toolbar(explorer_panel_icon(cx), window, cx))
-                            .left(
-                                div()
-                                    .flex_1()
-                                    .min_w_0()
-                                    .max_w(px(320.))
-                                    .truncate()
-                                    .child(self.status.clone()),
-                            )
-                            // Keep error counts separate from temporary save/loading messages.
+                            // Only persistent indicators remain here; operation notices live in messages.
                             .when(
                                 self.active_text_tab_index().is_some()
                                     && self
@@ -475,7 +467,6 @@ impl Render for EditorApp {
                                 |bar| bar.right(self.render_syntax_error_indicator(cx)),
                             )
                             // Keep plugin indicators immediately before the cursor position.
-                            .right(self.render_messages_button(cx))
                             .when_some(plugin_indicator, |bar, kind| {
                                 bar.right(self.render_plugin_indicator(kind, cx))
                             })

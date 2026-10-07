@@ -11,7 +11,8 @@ pub(crate) enum MessageLevel {
 }
 
 impl EditorApp {
-    /// Retain a completed host result without replacing its existing status or notification UI.
+    /// Retain an important host result without replacing its internal status or notification UI.
+    /// Routine file, tree, theme and configuration successes do not call this publication boundary.
     /// Plugin-owned results must continue through the plugin runtime log destination.
     pub(crate) fn record_host_message(
         &mut self,
@@ -24,7 +25,7 @@ impl EditorApp {
         cx.notify();
     }
 
-    /// Publish a host operation result to both the transient status and the bounded message history.
+    /// Publish an important result to bounded history while keeping the existing internal operation status.
     pub(crate) fn report_host_message(
         &mut self,
         level: MessageLevel,

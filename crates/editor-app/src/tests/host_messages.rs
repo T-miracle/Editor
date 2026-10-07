@@ -4,6 +4,8 @@ use crate::*;
 use gpui_kit::{TestAppContext, VisualTestContext, gpui};
 use std::cell::RefCell;
 
+mod policy;
+
 /// Keep the temporary workspace alive while a scenario exercises the actual shell and document routes.
 fn with_messages(
     cx: &mut TestAppContext,
@@ -87,7 +89,7 @@ fn host_messages_reminders_acknowledge_only_received_alerts(cx: &mut TestAppCont
         std::fs::write(&path, "editing").unwrap();
         form.update(|window, cx| app.update(cx, |app, cx| app.open_file(path, window, cx)));
         draw(form);
-        assert!(form.debug_bounds("host-message-info").is_some());
+        assert!(form.debug_bounds("host-messages-empty").is_some());
         assert!(form.debug_bounds("host-messages-dot").is_none());
         click(form, "host-messages-hide");
         form.update(|window, cx| {
@@ -114,7 +116,7 @@ fn host_messages_reminders_acknowledge_only_received_alerts(cx: &mut TestAppCont
         draw(form);
         assert!(
             form.debug_bounds("host-messages-dot").is_some(),
-            "information does not acknowledge an error"
+            "a routine save does not acknowledge an error"
         );
         let button = form.debug_bounds("host-messages-toggle").unwrap();
         // Deliver a new warning after activation but before the opened panel's deferred repaint.
@@ -131,7 +133,7 @@ fn host_messages_reminders_acknowledge_only_received_alerts(cx: &mut TestAppCont
         draw(form);
         assert!(form.debug_bounds("host-messages-panel").is_some());
         assert!(
-            form.debug_bounds(row(3)).is_some(),
+            form.debug_bounds(row(1)).is_some(),
             "opening retains the actual error"
         );
         assert!(form.debug_bounds("host-message-warning").is_some());
@@ -148,7 +150,7 @@ fn host_messages_reminders_acknowledge_only_received_alerts(cx: &mut TestAppCont
         assert!(form.debug_bounds("host-messages-dot").is_some());
         click(form, "host-messages-toggle");
         assert!(form.debug_bounds("host-messages-dot").is_none());
-        assert!(form.debug_bounds(row(3)).is_some());
+        assert!(form.debug_bounds(row(1)).is_some());
         form.update(|window, cx| {
             app.read(cx).editor.focus_handle(cx).focus(window, cx);
             app.update(cx, |app, cx| {
@@ -188,7 +190,7 @@ fn host_messages_clear_resets_disclosure_and_keeps_later_receipts(cx: &mut TestA
                 for _ in 0..500 {
                     app.record_host_message(
                         app::messages::MessageLevel::Info,
-                        "Routine host result",
+                        "Important host result",
                         cx,
                     );
                 }
@@ -333,7 +335,7 @@ fn host_messages_progressive_history_keeps_the_latest_five_hundred(cx: &mut Test
     });
 }
 
-/// A real save retains its result, while a fresh app restores native layout choices with an empty history.
+/// A real save stays quiet, while a fresh app restores native layout choices without previous alerts.
 #[gpui::test]
 fn host_messages_restore_hidden_width_without_restoring_history(cx: &mut TestAppContext) {
     with_messages(cx, |form, app, root| {
@@ -341,19 +343,19 @@ fn host_messages_restore_hidden_width_without_restoring_history(cx: &mut TestApp
         std::fs::write(&path, "original").unwrap();
         form.update(|window, cx| app.update(cx, |app, cx| app.open_file(path.clone(), window, cx)));
         draw(form);
-        assert!(form.debug_bounds("host-message-info").is_some());
+        assert!(form.debug_bounds("host-messages-empty").is_some());
         form.simulate_input("changed");
         draw(form);
         assert!(
-            form.debug_bounds(row(2)).is_none(),
+            form.debug_bounds("host-messages-empty").is_some(),
             "typing is not a receipt"
         );
         form.update(|_, cx| app.update(cx, |app, cx| app.save_current(cx)));
         draw(form);
         assert!(std::fs::read_to_string(&path).unwrap().contains("changed"));
         assert!(
-            form.debug_bounds(row(2)).is_some(),
-            "successful native save appears"
+            form.debug_bounds("host-messages-empty").is_some(),
+            "successful native save stays quiet"
         );
         let panel = form.debug_bounds("host-messages-panel").unwrap();
         let edge = point(panel.left() + px(1.), panel.center().y);

@@ -355,13 +355,9 @@ impl EditorApp {
                                 let workspace = app.workspace_key();
                                 match app.run_controls.confirm_target(id, &workspace) {
                                     Ok(stored) => {
-                                        // This explicit confirmation persists the host configuration, not a provider log.
-                                        app.report_host_message(
-                                            MessageLevel::Info,
-                                            t!("run.target_added", name = label.clone())
-                                                .to_string(),
-                                            cx,
-                                        );
+                                        // The opened configuration form shows the new target without a routine receipt.
+                                        app.status = t!("run.target_added", name = label.clone())
+                                            .to_string();
                                         app.open_run_config_dialog(window, cx, Some(stored));
                                     }
                                     Err(message) => {
@@ -411,7 +407,7 @@ impl EditorApp {
                                             serde_json::from_str::<(String, String)>(binding)
                                         {
                                             let workspace = app.workspace_key();
-                                            // Rebinding only records the host's completed local save or refusal.
+                                            // An explicit repair resolves a broken target; retain that important outcome.
                                             match app
                                                 .run_controls
                                                 .repair_target_with(&config, &target, &workspace)
@@ -1992,12 +1988,8 @@ impl EditorApp {
                 // Saving never starts the program; the target merely becomes the selected one.
                 self.run_controls.select(&configuration.id, &key);
                 self.apply_provider_choice(cx);
-                // Persisting the host's native form is a result, independent from provider runtime logs.
-                self.report_host_message(
-                    MessageLevel::Info,
-                    t!("run.saved_named", name = configuration.name).to_string(),
-                    cx,
-                );
+                // Ordinary configuration saves keep their state without adding notification history.
+                self.status = t!("run.saved_named", name = configuration.name).to_string();
                 let next = form.update(cx, |form, _| form.pending_selection.take());
                 if let Some(next) = next {
                     self.apply_run_form_selection(next, window, cx);
@@ -2082,12 +2074,7 @@ impl EditorApp {
                 tab.disk_state = crate::DiskState::Synced;
                 tab.overwrite_confirmed = false;
                 let path = tab.session.path().to_path_buf();
-                // Background documents use the same history destination as the active native save.
-                self.record_host_message(
-                    MessageLevel::Info,
-                    t!("status.saved", path = path.display()).to_string(),
-                    cx,
-                );
+                // Run preparation saves documents quietly, just like a successful active-document save.
                 self.notify_language_document_saved(&path, value, cx);
             }
             Err(error) => {

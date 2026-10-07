@@ -268,13 +268,8 @@ impl EditorApp {
             .commit_configuration_set(set.clone(), &workspace)
         {
             Ok(()) => {
-                // Provider business validation can remain unavailable in a successfully saved
-                // snapshot. This receipt describes only the completed host-local storage write.
-                self.record_host_message(
-                    MessageLevel::Info,
-                    t!("run.saved_configurations").to_string(),
-                    cx,
-                );
+                // Updating the saved baseline is sufficient feedback for a routine configuration save.
+                // Provider validation and host storage failures keep their separate error destinations.
                 form.update(cx, |form, cx| {
                     let state = form.plugin.as_mut().unwrap();
                     state.baseline = set;

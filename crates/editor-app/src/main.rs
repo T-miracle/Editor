@@ -128,8 +128,6 @@ struct EditorApp {
     /// Host-owned message history is independent from plugin resources and runtime logs.
     messages: Entity<ui::messages::MessagePanel>,
     _messages_subscription: Subscription,
-    /// Only explicit refresh requests produce completion messages; automatic scans remain quiet.
-    host_refresh_pending: bool,
     /// Saved plugin leaves are restored after the startup registry becomes available.
     pending_dock_restore: bool,
     /// Generic runtime plugin dock; packages own all feature behavior.
@@ -424,7 +422,6 @@ impl EditorApp {
             explorer_panel,
             messages,
             _messages_subscription: messages_subscription,
-            host_refresh_pending: false,
             pending_dock_restore: session_state.dock_layout.is_some(),
             extensions,
             plugin_panels: HashMap::new(),
@@ -582,8 +579,7 @@ impl EditorApp {
             "JetBrains 2023 Light"
         }
         .into();
-        // Explicit theme changes are host operation results, distinct from per-frame theme resolution.
-        self.record_host_message(app::messages::MessageLevel::Info, self.status.clone(), cx);
+        // The changed theme is the result itself; routine settings changes do not enter message history.
         window.refresh();
         self.refresh_dialog(cx);
         cx.notify();
@@ -743,7 +739,6 @@ impl EditorApp {
     }
 
     fn on_refresh_action(&mut self, _: &RefreshWorkspace, _: &mut Window, cx: &mut Context<Self>) {
-        self.host_refresh_pending = true;
         self.file_watch.reconcile();
         self.status = t!("status.refreshing_workspace").to_string();
         cx.notify();

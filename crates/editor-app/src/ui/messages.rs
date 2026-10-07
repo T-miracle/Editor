@@ -169,9 +169,16 @@ impl DockPanel for MessagePanel {
                             .debug_selector(|| "host-messages-clear".into())
                             .child(
                                 Button::new("clear-host-messages")
-                                    .label(t!("messages.clear").to_string())
+                                    // The catalog broom keeps the clear action compact in either theme.
+                                    .icon(
+                                        Icon::default()
+                                            .path(gpui_kit::assets::IconName::Broom.path())
+                                            .small(),
+                                    )
+                                    .tooltip(t!("messages.clear").to_string())
                                     .accessibility_label(t!("messages.clear").to_string())
                                     .small()
+                                    .compact()
                                     .ghost()
                                     .disabled(self.records.is_empty())
                                     .on_click(cx.listener(|this, _, _, cx| {
@@ -306,7 +313,7 @@ impl Render for MessagePanel {
 }
 
 impl EditorApp {
-    /// Local button behavior follows the same Base-backed focus and activation path as other controls.
+    /// The window toolbar owns this Base-backed button; its reminder remains visible during plugin overflow.
     pub(crate) fn render_messages_button(&self, cx: &Context<Self>) -> impl IntoElement {
         let pending = self.messages.read(cx).has_pending_alert();
         let label = if pending {

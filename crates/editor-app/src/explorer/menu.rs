@@ -1,6 +1,5 @@
 //! Explorer commands built with GPUI Kit's PopupMenu, menu items and native submenus.
 
-use crate::app::messages::MessageLevel;
 use crate::*;
 use gpui_kit::component::menu::{PopupMenu as KitPopupMenu, PopupMenuItem};
 use gpui_kit::{ClipboardItem, DismissEvent, anchored};
@@ -212,12 +211,7 @@ impl EditorApp {
                 // Tree targets and the workspace root are absolute; write text rather than CF_HDROP.
                 if let Some(text) = special_copy_text(command, &target, self.workspace.root()) {
                     cx.write_to_clipboard(ClipboardItem::new_string(text));
-                    // The explicit clipboard result is retained without observing later status changes.
-                    self.report_host_message(
-                        MessageLevel::Info,
-                        t!("explorer.text_copied").to_string(),
-                        cx,
-                    );
+                    self.status = t!("explorer.text_copied").to_string();
                 }
             }
             Command::Paste => self.paste_explorer_path(&target, menu.folder, cx),
@@ -237,7 +231,6 @@ impl EditorApp {
             }
             Command::Refresh => {
                 // Manual refresh also checks every open tab against its disk contents.
-                self.host_refresh_pending = true;
                 self.file_watch.reconcile();
                 self.status = t!("status.refreshing_workspace").to_string();
             }
