@@ -48,6 +48,7 @@ fn package(novel: bool) -> plugin_runtime::Package {
 }
 
 use crate::extensions::lsp_tests::publish;
+mod chrome;
 mod docking;
 mod folding;
 mod lifetime;

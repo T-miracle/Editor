@@ -57,6 +57,7 @@ impl DockPanel for OutlinePanel {
                     .gap_1()
                     .child(
                         crate::ui::controls::Button::new("outline-follow")
+                            .debug_selector(|| "outline-follow".into())
                             .icon(Icon::default().path("icons/explorer-locate.svg"))
                             .small()
                             .compact()
@@ -77,17 +78,22 @@ impl DockPanel for OutlinePanel {
                     )
                     .child(
                         crate::ui::controls::Button::new("outline-hide")
+                            .debug_selector(|| "outline-hide".into())
                             .icon(IconName::Minus)
                             .small()
                             .compact()
                             .ghost()
                             .tooltip(t!("outline.hide").to_string())
-                            .on_click(cx.listener(|this, _, window, cx| {
-                                cx.stop_propagation();
-                                let _ = this.parent.update(cx, |app, cx| {
-                                    app.toggle_outline(&ToggleOutline, window, cx)
-                                });
-                            })),
+                            .on_click({
+                                let parent = self.parent.clone();
+                                move |_, window, cx| {
+                                    cx.stop_propagation();
+                                    // Hiding notifies this panel; an App-scoped callback avoids borrowing it twice.
+                                    let _ = parent.update(cx, |app, cx| {
+                                        app.toggle_outline(&ToggleOutline, window, cx)
+                                    });
+                                }
+                            }),
                     ),
             )
     }
