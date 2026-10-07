@@ -506,6 +506,7 @@ impl Render for EditorApp {
             })
             .child(self.render_explorer_edit(cx))
             .child(self.render_explorer_delete(cx))
+            .child(self.render_file_transfer(cx))
             .when_some(self.notification.as_ref(), |this, notification| {
                 // Center the card near the top, keeping a margin when the window is narrow.
                 let width = px(380.).min((window.viewport_size().width - px(24.)).max(px(0.)));

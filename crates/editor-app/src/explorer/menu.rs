@@ -214,7 +214,7 @@ impl EditorApp {
                     self.status = t!("explorer.text_copied").to_string();
                 }
             }
-            Command::Paste => self.paste_explorer_path(&target, menu.folder, cx),
+            Command::Paste => self.paste_explorer_path(&target, menu.folder, window, cx),
             Command::NewDirectory => self.start_explorer_edit(
                 ExplorerEditKind::Directory,
                 target,

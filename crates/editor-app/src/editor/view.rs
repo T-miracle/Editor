@@ -214,11 +214,22 @@ impl EditorApp {
 
         v_flex()
             .id("explorer-root")
+            .key_context("ExplorerFiles")
             .debug_selector(|| "explorer-root".into())
             .size_full()
             .min_h_0()
             .bg(tree_style.background.unwrap_or(cx.theme().background))
             .relative()
+            .on_action(cx.listener(
+                |app, _: &explorer::transfer::shortcuts::PasteFiles, window, cx| {
+                    let selected = app
+                        .tree_state
+                        .read(cx)
+                        .selected_item()
+                        .map(|item| PathBuf::from(item.id.as_str()));
+                    app.paste_file_offer(selected.as_deref(), window, cx);
+                },
+            ))
             .child(tree)
             .child(
                 div()

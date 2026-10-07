@@ -1625,3 +1625,63 @@ plugins.confirm_disable:
 plugins.remove_delete:
   en: "Uninstall and delete data"
   zh-CN: "卸载并删除数据"
+transfer.title:
+  en: "File operation"
+  zh-CN: "文件操作"
+transfer.copy:
+  en: "Copy"
+  zh-CN: "复制"
+transfer.move:
+  en: "Move"
+  zh-CN: "移动"
+transfer.busy:
+  en: "A file operation is still running. Finish or cancel it first."
+  zh-CN: "文件操作仍在进行，请先完成或取消当前操作。"
+transfer.conflict:
+  en: "The destination already exists"
+  zh-CN: "目标已存在，请选择处理方式"
+transfer.skip:
+  en: "Skip"
+  zh-CN: "跳过"
+transfer.keep_both:
+  en: "Keep both"
+  zh-CN: "保留两份"
+transfer.replace:
+  en: "Replace"
+  zh-CN: "替换"
+transfer.merge:
+  en: "Merge directories"
+  zh-CN: "合并目录"
+transfer.apply_subsequent:
+  en: "Apply to subsequent conflicts in this batch"
+  zh-CN: "应用于本批后续冲突"
+transfer.dirty_target:
+  en: "The target has unsaved changes. Save it first, skip it, or keep both."
+  zh-CN: "目标存在未保存修改，请先保存、跳过或保留两份。"
+transfer.progress:
+  en: "%{completed} completed · %{bytes} bytes\n%{path}"
+  zh-CN: "已完成 %{completed} 项 · %{bytes} 字节\n%{path}"
+transfer.result:
+  en: "%{completed} completed, %{failed} failed, %{skipped} skipped, %{remaining} top-level items not started"
+  zh-CN: "成功 %{completed} 项，失败 %{failed} 项，跳过 %{skipped} 项，未执行 %{remaining} 个顶层项"
+transfer.cancelled:
+  en: "Cancelled; completed items were kept"
+  zh-CN: "已取消，保留已完成项"
+transfer.outside_workspace:
+  en: "The destination is outside the workspace"
+  zh-CN: "目标位于工作区之外"
+transfer.missing_parent:
+  en: "The destination has no parent directory"
+  zh-CN: "目标缺少父目录"
+transfer.window_closed:
+  en: "The operation window was closed"
+  zh-CN: "操作所在窗口已关闭"
+transfer.link_target:
+  en: "Refusing to follow or replace a link"
+  zh-CN: "不能跟随或替换链接目标"
+transfer.unsupported:
+  en: "Unsupported file type"
+  zh-CN: "不支持该文件类型"
+transfer.changed:
+  en: "Disk content changed while the operation was being prepared; retry after reviewing it"
+  zh-CN: "准备操作期间磁盘内容发生变化，请核对后重试"

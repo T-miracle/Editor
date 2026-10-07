@@ -1,5 +1,7 @@
 //! Exercises pointer gestures through real tree rows rather than calling handlers directly.
 
+mod transfer;
+
 use super::*;
 use gpui_kit::component::WindowExt as _;
 use gpui_kit::{TestAppContext, VisualTestContext, component::Root, gpui};

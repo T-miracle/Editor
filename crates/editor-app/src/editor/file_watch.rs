@@ -395,7 +395,23 @@ fn send_snapshot(
                 Some(snapshot)
             }
         });
-    let documents = documents
+    let documents = read_documents(documents);
+    updates
+        .unbounded_send(Reconciliation {
+            snapshot,
+            documents,
+            renames: std::mem::take(renames),
+            native,
+        })
+        .is_ok()
+}
+
+/// Shared background reads for native watch reconciliation and completed host file operations.
+/// The timestamp precedes I/O, allowing later saves and closed tabs to reject stale results.
+pub(crate) fn read_documents(
+    documents: &[WatchedFile],
+) -> Vec<(PathBuf, std::io::Result<DiskContent>, Instant)> {
+    documents
         .iter()
         .map(|file| {
             // Timestamp before I/O so a later local save can reject an older read.
@@ -407,15 +423,7 @@ fn send_snapshot(
             };
             (file.path.clone(), contents, read_at)
         })
-        .collect();
-    updates
-        .unbounded_send(Reconciliation {
-            snapshot,
-            documents,
-            renames: std::mem::take(renames),
-            native,
-        })
-        .is_ok()
+        .collect()
 }
 
 /// Fingerprints do not retain binary contents or allocate in proportion to the file size.

@@ -8,6 +8,7 @@ pub(crate) mod dialog;
 mod disclosure;
 pub(crate) mod dock;
 mod editor_canvas;
+pub(crate) mod file_operation;
 mod icon;
 mod input;
 pub(crate) mod menu;

@@ -157,6 +157,8 @@ struct EditorApp {
     /// A path is removed only after the delete preview is explicitly confirmed.
     explorer_delete: Option<ExplorerDelete>,
     explorer_menu: Option<ExplorerMenu>,
+    /// Background disk batches and their session-only recovery records.
+    file_transfers: explorer::transfer::TransferState,
     tabs: Vec<OpenTab>,
     active_path: Option<PathBuf>,
     /// Restoring saved tabs must not reveal files inside directories the user left collapsed.
@@ -248,6 +250,7 @@ impl EditorApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
+        explorer::transfer::shortcuts::init(cx);
         let (file_watch, mut watch_updates) = FileWatch::start(workspace.clone());
         let closing = cx.entity().downgrade();
         window.on_window_should_close(cx, move |window, cx| {
@@ -416,6 +419,7 @@ impl EditorApp {
             explorer_edit: None,
             explorer_delete: None,
             explorer_menu: None,
+            file_transfers: Default::default(),
             tabs: Vec::new(),
             active_path: None,
             restoring_documents: true,
@@ -508,7 +512,10 @@ impl EditorApp {
         cx.spawn_in(window, async move |app, cx| {
             while let Some(update) = watch_updates.next().await {
                 let _ = app.update_in(cx, |app, window, cx| {
-                    app.apply_reconciliation(update, window, cx);
+                    // Disk scans captured during a batch may still contain its intermediate paths.
+                    if !app.file_transfers.defer_reconciliation(&update) {
+                        app.apply_reconciliation(update, window, cx);
+                    }
                 });
             }
         })

@@ -1,0 +1,58 @@
+{
+  "repository": "T-miracle/Editor",
+  "feature": "explorer-file-transfer",
+  "updated_at": "2026-10-07",
+  "label": "ready-for-agent",
+  "spec": {
+    "number": 76,
+    "id": 5742116671,
+    "node_id": "I_kwDOUnHq-M8AAAABVkG_Pw",
+    "url": "https://github.com/T-miracle/Editor/issues/76",
+    "state": "open",
+    "publication_status": "published",
+    "readback_verified": true
+  },
+  "split_status": "approved",
+  "tickets": [
+    {
+      "sequence": "01",
+      "key": "explorer-file-transfer-01",
+      "title": "外部粘贴与可靠文件转移",
+      "blocked_by": [],
+      "publication_status": "published",
+      "number": 78,
+      "id": 5742262029,
+      "url": "https://github.com/T-miracle/Editor/issues/78",
+      "state": "open",
+      "readback_verified": true
+    },
+    {
+      "sequence": "02",
+      "key": "explorer-file-transfer-02",
+      "title": "目录树拖放与目标导航",
+      "blocked_by": [
+        "01"
+      ],
+      "publication_status": "published",
+      "number": 79,
+      "id": 5742262700,
+      "url": "https://github.com/T-miracle/Editor/issues/79",
+      "state": "open",
+      "readback_verified": true
+    },
+    {
+      "sequence": "03",
+      "key": "explorer-file-transfer-03",
+      "title": "文件操作撤销、重做与冲突恢复",
+      "blocked_by": [
+        "01"
+      ],
+      "publication_status": "published",
+      "number": 80,
+      "id": 5742317614,
+      "url": "https://github.com/T-miracle/Editor/issues/80",
+      "state": "open",
+      "readback_verified": true
+    }
+  ]
+}

@@ -4,6 +4,7 @@
 mod files;
 mod interaction;
 pub(crate) mod menu;
+pub(crate) mod transfer;
 pub(crate) mod tree;
 
 use crate::ui::controls::Input;
@@ -100,7 +101,7 @@ impl EditorApp {
     }
 
     pub(crate) fn copy_explorer_path(&mut self, path: &Path, cx: &mut Context<Self>) {
-        match files::copy_to_clipboard(path) {
+        match transfer::clipboard::write(&[path.to_path_buf()], transfer::Kind::Copy, cx) {
             Ok(()) => self.status = t!("explorer.copied").to_string(),
             Err(error) => self.status = error,
         }
@@ -111,24 +112,11 @@ impl EditorApp {
         &mut self,
         row: &Path,
         is_folder: bool,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let destination = if is_folder {
-            row
-        } else {
-            row.parent().unwrap_or(self.workspace.root())
-        };
-        let sources = cx
-            .read_from_clipboard()
-            .map(|item| files::clipboard_paths(&item))
-            .unwrap_or_default();
-        match files::paste(&sources, destination) {
-            Ok(()) => self.refresh_files(cx),
-            Err(error) => {
-                self.status = error;
-                cx.notify();
-            }
-        }
+        let _ = is_folder;
+        self.paste_file_offer(Some(row), window, cx);
     }
 
     pub(crate) fn start_explorer_delete(

@@ -17,6 +17,18 @@ pub(crate) struct Notification {
 }
 
 impl Notification {
+    /// File-operation failures remain readable until explicitly dismissed; they never take focus.
+    pub(crate) fn persistent(
+        title: impl Into<SharedString>,
+        message: impl Into<SharedString>,
+    ) -> Self {
+        Self {
+            title: title.into(),
+            message: message.into(),
+            dismissed: false,
+        }
+    }
+
     /// Display a message for 1.2 seconds; replacing the entity also replaces its expiration timer.
     pub(crate) fn new(
         title: impl Into<SharedString>,
