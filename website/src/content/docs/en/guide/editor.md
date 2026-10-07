@@ -26,7 +26,7 @@ single undo restores the original position.
 
 ## Saving
 
-`Ctrl+S` writes the buffer to disk. Saving is what triggers the local history snapshot; the
+By default, `Ctrl+S` writes the buffer to disk. Saving is what triggers the local history snapshot; the
 snapshot lives in the user data directory, not in your project.
 
 If the file changed on disk since it was read, the editor tells you instead of overwriting
@@ -34,8 +34,11 @@ silently, and keeps your unsaved edits. Saving again resolves the conflict.
 
 ## Shortcuts
 
+These are the default bindings. You can change them in the shortcuts panel.
+
 | Key | Action |
 | --- | --- |
+| `Ctrl+K` | Open the shortcuts panel |
 | `Ctrl+S` | Save the active document |
 | `Ctrl+Shift+R` | Refresh the file tree from disk |
 | `Ctrl+Alt+T` | Switch between the light and dark theme |
@@ -51,3 +54,31 @@ nothing.
 Not every shortcut applies while a plugin panel has focus: the editor's own keys bind to the
 editor surface, so typing inside a plugin's terminal or form does not save or navigate your
 document.
+
+## Viewing and changing bindings
+
+Press `Ctrl+K`, click the keyboard button in the title bar, or choose **Keyboard shortcuts**
+from the application menu. The panel opens over the current window. **Panel shortcuts** shows
+actions for the area that had focus when you opened it; **Global shortcuts** shows the available
+actions across the application. `Alt+Left` and `Alt+Right` switch tabs while keeping your search.
+
+Search by description, or click the shortcut search button and press the keys you want to find.
+Recording keys does not run their actions. Bindings can contain one key combination or two
+combinations pressed in order; the second combination must arrive within two seconds. `Esc`
+ends recording first; when editing a binding, it cancels the draft without saving. Another `Esc`
+closes the panel and restores the previous focus. Clicking the shaded background also closes it.
+
+Click a binding to edit it, or use the row's plus button to add another. The expanded row offers
+**Restore defaults**, **Delete binding**, **Cancel**, and **Save**. Delete removes the stored
+binding you selected and keeps its other bindings; it is unavailable for an unsaved addition.
+Restore resets the action's bindings after any conflicts are explicitly resolved. New letter and
+digit combinations require a modifier beyond `Shift`, such as `Ctrl` or `Alt`. Save applies the change
+immediately to all windows and keeps it across restarts and workspaces. Each action still uses
+its own focus context. If a binding conflicts, review the affected actions and explicitly replace
+the conflicting bindings; their other bindings stay available. Leaving an unsaved edit asks
+whether to continue editing or discard it.
+
+Commands from disabled, removed, or unavailable plugins disappear from the list, while their
+saved bindings remain. When a command returns, its binding is restored if available. If another
+action now owns that key or a conflicting sequence, the retained binding stays inactive and the
+row offers **Resolve conflict**. In a restricted workspace, plugin commands stay unavailable.

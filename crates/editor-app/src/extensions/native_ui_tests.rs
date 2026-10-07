@@ -2,99 +2,91 @@
 use super::*;
 use gpui_kit::{TestAppContext, gpui};
 
-/// A host command targets its plugin and reveals a hidden panel without depending on current focus.
+/// A real host command reveals a hidden component panel and preserves its argument in rendered output.
 #[gpui::test]
-fn host_command_reveals_hidden_terminal_and_preserves_arguments(cx: &mut TestAppContext) {
-    cx.update(|cx| {
-        gpui_kit::init(cx);
-        typography::init(cx);
-        apply_theme(builtin_theme(false), cx);
-    });
-    let directory = tempfile::tempdir().unwrap();
-    let workspace = Workspace::open(directory.path()).unwrap();
-    let slot = Rc::new(RefCell::new(None));
-    let capture = slot.clone();
-    let (_, cx) = cx.add_window_view(move |window, cx| {
-        let app = cx.new(|cx| EditorApp::new(workspace, None, window, cx));
-        *capture.borrow_mut() = Some(app.clone());
-        Root::new(app, window, cx)
-    });
-    let app = slot.borrow_mut().take().unwrap();
-    let arguments = serde_json::json!({ "name": "运行项目", "cwd": "C:/project" });
-    cx.update(|window, cx| {
-        let owner = app.read(cx).extensions.clone();
-        owner.update(cx, |owner, cx| {
-            let manifest: protocol::Manifest = crate::extensions::test_manifest(include_str!(
-                "../../../../plugins/terminal/manifest.json"
-            ));
-            let mut state = owner.worker.state.lock().unwrap();
-            state.entries = vec![Installed {
-                grants: manifest.permissions.clone(),
-                manifest,
-                digest: "fixture".into(),
-                enabled: true,
-                project_enabled: Default::default(),
-                global_enabled: None,
-                retired_ui_contract: false,
-                error: None,
-            }];
-            state.views.insert(
-                "terminal/terminal".into(),
-                Arc::new(protocol::ui::Document::new(protocol::ui::Node::text(
-                    "empty", "",
-                ))),
-            );
-            drop(state);
-            owner.poll(cx);
+#[ignore = "build the real SDK fixture with scripts/build-capability-example.ps1 first"]
+fn host_command_reveals_real_panel_and_preserves_arguments(cx: &mut TestAppContext) {
+    crate::tests::with_shortcut_editor(cx, false, vec![], |visual, app, path| {
+        let workspace = path.parent().unwrap();
+        std::fs::write(workspace.join("source.txt"), "workspace").unwrap();
+        let runtime = tempfile::tempdir().unwrap();
+        let mut manager = plugin_runtime::Manager::open(
+            runtime.path().to_path_buf(),
+            protocol::Environment {
+                workspace: workspace.display().to_string(),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let package = Package::read(
+            &PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .join("../../target/plugin-api-test/capability-example.zip"),
+        )
+        .unwrap();
+        manager
+            .install(&package, package.manifest.permissions.clone())
+            .unwrap();
+        let mut renderer = images::VectorRenderer::default();
+        composable_tests::publish(&mut manager, &mut renderer, &app, visual);
+        visual.update(|_, cx| {
+            app.update(cx, |app, cx| {
+                app.hide_plugin_panel("capability-example", "welcome", cx)
+            });
         });
-        app.update(cx, |app, cx| {
-            app.sync_plugin_panels(window, cx);
-            let panel = app.plugin_panels["terminal/terminal"].clone();
-            assert!(!panel.read(cx).visible.get());
-            app.invoke_plugin_command("terminal", "terminal.new", arguments.clone(), window, cx)
+        visual.run_until_parked();
+        visual.update(|window, cx| window.draw(cx).clear(cx));
+        assert!(visual.debug_bounds("plugin-ui-welcome-text").is_none());
+        visual.update(|window, cx| {
+            app.update(cx, |app, cx| {
+                app.invoke_plugin_command(
+                    "capability-example",
+                    "scope-write",
+                    serde_json::json!({"text":"运行项目"}),
+                    window,
+                    cx,
+                )
                 .unwrap();
-            assert!(panel.read(cx).visible.get());
-            assert!(panel.read(cx).focus.is_focused(window));
+            });
         });
-        assert!(owner.read(cx).worker.recorded.lock().unwrap().try_iter().any(|work| matches!(work,
-            Work::Invoke { plugin, command, arguments: received }
-                if plugin == "terminal" && command == "terminal.new" && received == arguments
-        )));
-        // Opening is explicit even when focus did not change, so an empty guest can initialize.
-        assert!(owner.read(cx).worker.recorded.lock().unwrap().try_iter().any(|work| matches!(work,
-            Work::Event(plugin, _, Some(panel), event)
-                if plugin == "terminal" && panel == "terminal"
-                    && matches!(&event, PluginEvent::Command { id, .. } if id == "panel.opened")
-        )));
-        owner.update(cx, |owner, _| {
-            let mut state = owner.worker.state.lock().unwrap();
-            state.entries[0].enabled = false;
+        composable_tests::pump(&mut manager, &app, visual);
+        composable_tests::publish(&mut manager, &mut renderer, &app, visual);
+        assert!(visual.debug_bounds("plugin-ui-welcome-text").is_some());
+        // The guest's published UI is the rendered result of its workspace/private-data request,
+        // so observing its text proves argument delivery beyond the host's queued work item.
+        assert!(matches!(
+            &manager.live["capability-example"].views["welcome"].root.kind,
+            protocol::ui::Kind::Text { text } if text == "workspace|运行项目"
+        ));
+        visual.update(|window, cx| {
+            let owner = app.read(cx).extensions.read(cx);
+            assert!(
+                owner
+                    .invoke_command("capability-example", "undeclared", serde_json::Value::Null)
+                    .is_err()
+            );
+            assert!(
+                app.read(cx).plugin_panels["capability-example/welcome"]
+                    .read(cx)
+                    .focus
+                    .is_focused(window)
+            );
         });
-        assert!(
-            owner
-                .read(cx)
-                .invoke_command("terminal", "terminal.new", arguments.clone())
-                .is_err()
-        );
-        owner.update(cx, |owner, _| {
-            owner.worker.state.lock().unwrap().entries[0].enabled = true
+        manager.disable("capability-example").unwrap();
+        composable_tests::publish(&mut manager, &mut renderer, &app, visual);
+        visual.update(|_, cx| {
+            assert!(
+                app.read(cx)
+                    .extensions
+                    .read(cx)
+                    .invoke_command(
+                        "capability-example",
+                        "scope-write",
+                        serde_json::json!({"text":"must not run"})
+                    )
+                    .is_err()
+            );
         });
-        assert!(
-            owner
-                .read(cx)
-                .invoke_command("terminal", "undeclared", arguments.clone())
-                .is_err()
-        );
-        assert!(
-            owner
-                .read(cx)
-                .worker
-                .recorded
-                .lock()
-                .unwrap()
-                .try_iter()
-                .all(|work| !matches!(work, Work::Invoke { .. }))
-        );
+        assert!(visual.debug_bounds("plugin-ui-welcome-text").is_none());
     });
 }
 

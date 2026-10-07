@@ -1,0 +1,72 @@
+{
+  "repository": "T-miracle/Editor",
+  "stable_id": "ui-keyboard-shortcuts-panel",
+  "parent": {
+    "number": 77,
+    "id": 5742122452,
+    "url": "https://github.com/T-miracle/Editor/issues/77",
+    "labels": ["ready-for-agent"],
+    "state": "open"
+  },
+  "tickets": [
+    {
+      "ticket": "01",
+      "stable_id": "ui-keyboard-shortcuts-panel-01",
+      "number": 81,
+      "id": 5742435109,
+      "url": "https://github.com/T-miracle/Editor/issues/81",
+      "labels": ["ready-for-agent"],
+      "state": "closed",
+      "body_verified": true,
+      "delivery_commit": "495a1d0",
+      "push_verified": true,
+      "closed_readback_verified": true,
+      "delivery_verified_on": "2026-10-07"
+    },
+    {
+      "ticket": "02",
+      "stable_id": "ui-keyboard-shortcuts-panel-02",
+      "number": 82,
+      "id": 5742437777,
+      "url": "https://github.com/T-miracle/Editor/issues/82",
+      "labels": ["ready-for-agent"],
+      "state": "closed",
+      "body_verified": true,
+      "delivery_commit": "66fb23a",
+      "push_verified": true,
+      "closed_readback_verified": true,
+      "delivery_verified_on": "2026-10-07"
+    },
+    {
+      "ticket": "03",
+      "stable_id": "ui-keyboard-shortcuts-panel-03",
+      "number": 83,
+      "id": 5742440718,
+      "url": "https://github.com/T-miracle/Editor/issues/83",
+      "labels": ["ready-for-agent"],
+      "state": "closed",
+      "body_verified": true,
+      "delivery_commit": "9d91893",
+      "push_verified": true,
+      "closed_readback_verified": true,
+      "delivery_verified_on": "2026-10-07"
+    }
+  ],
+  "dependencies": [
+    {"issue": 82, "blocked_by": 81, "blocked_by_id": 5742435109, "native": true, "readback_verified": true},
+    {"issue": 83, "blocked_by": 82, "blocked_by_id": 5742437777, "native": true, "readback_verified": true}
+  ],
+  "ticket_plan_status": "approved-and-published",
+  "implementation_branch": "main",
+  "implementation_workspace": "C:/Projects/RustProjects/Editor-shortcuts-main",
+  "implementation_base_commit": "ae63225",
+  "implementation_status": "complete",
+  "implementation_delivered_on": "2026-10-07",
+  "execution_authorization": {
+    "confirmed_on": "2026-10-07",
+    "scope": "发布并执行全部三张工单；遵守阻塞关系，在不阻塞任务的情况下允许子代理并行；完成测试与审查后按既有工单流程普通提交、推送并核对关闭对应实施议题，不改写或关闭父规格。",
+    "source": "用户明确要求：发布，开始执行所有工单，在不阻塞任务的情况下，允许使用子代理（子智能体）并行处理工单。"
+  },
+  "publication_verified_on": "2026-10-07",
+  "published_on": "2026-10-07"
+}

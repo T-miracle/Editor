@@ -89,12 +89,21 @@ fn operation_errors_retain_plugin_ownership_through_worker_publication() {
             plugin: "missing-plugin".into(),
             command: "unknown".into(),
             arguments: json!(null),
+            // The actor must reject an absent owner using the observed publication, not invent one.
+            expected_epoch: worker
+                .state
+                .lock()
+                .unwrap()
+                .instance_epochs
+                .get("missing-plugin")
+                .copied()
+                .unwrap_or_default(),
         })
         .unwrap();
     wait_for(&worker, |state| state.status.is_some());
     let status = worker.state.lock().unwrap().status.take().unwrap();
     assert_eq!(status.plugin.as_deref(), Some("missing-plugin"));
-    assert!(status.message.contains("Plugin is not running"));
+    assert!(status.message.contains("Plugin command owner changed"));
     let logs = worker.state.lock().unwrap().logs.clone();
     assert!(logs.records("missing-plugin").iter().any(|record| {
         record.level == plugin_runtime::logs::LogLevel::Error && record.source == "host.operation"
@@ -305,6 +314,7 @@ fn run_preparation(restrict: bool) {
             plugin: "capability-example".into(),
             command: "scope-write".into(),
             arguments: json!({"text":"during preparation"}),
+            expected_epoch: worker.state.lock().unwrap().instance_epochs["capability-example"],
         })
         .unwrap();
     wait_for(&worker, |state| {
@@ -318,6 +328,7 @@ fn run_preparation(restrict: bool) {
             plugin: "capability-example".into(),
             command: "active-directory".into(),
             arguments: json!(null),
+            expected_epoch: worker.state.lock().unwrap().instance_epochs["capability-example"],
         })
         .unwrap();
     wait_for(&worker, |state| !state.editor_requests.is_empty());
@@ -364,6 +375,7 @@ fn run_preparation(restrict: bool) {
                 plugin: "capability-example".into(),
                 command: "scope-read".into(),
                 arguments: json!(null),
+                expected_epoch: worker.state.lock().unwrap().instance_epochs["capability-example"],
             })
             .unwrap();
         // This later command is an ordering barrier after any queued grant; it must remain rejected.
@@ -371,7 +383,7 @@ fn run_preparation(restrict: bool) {
             state
                 .status
                 .as_ref()
-                .is_some_and(|status| status.message.contains("Plugin is not running"))
+                .is_some_and(|status| status.message.contains("Plugin command owner changed"))
         });
         let state = worker.state.lock().unwrap();
         assert!(state.views.is_empty());
@@ -405,6 +417,7 @@ fn run_preparation(restrict: bool) {
                 plugin: "capability-example".into(),
                 command: "scope-read".into(),
                 arguments: json!(null),
+                expected_epoch: worker.state.lock().unwrap().instance_epochs["capability-example"],
             })
             .unwrap();
         wait_for(&worker, |state| {

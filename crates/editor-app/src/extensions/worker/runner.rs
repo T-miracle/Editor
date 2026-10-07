@@ -42,7 +42,6 @@ impl Worker {
             // First-use preparation retains its native cancellation token until the serialized cutover.
             let mut bundled_install: Option<super::super::bundled::Candidate> = None;
             let mut deferred = VecDeque::new();
-            let mut instance_ids = BTreeMap::<String, String>::new();
             // Host session identity joined to the configuration and launch that requested it.
             let mut run_requests = BTreeMap::<u64, (String, u64)>::new();
             // Real adapter handshakes and inspections remain pending while the actor serves other work.
@@ -652,7 +651,20 @@ impl Worker {
                             plugin,
                             command,
                             arguments,
-                        }) => manager.invoke_command(&plugin, &command, arguments),
+                            expected_epoch,
+                        }) => {
+                            // Release publication ownership before entering WASM; guest execution
+                            // cannot hold the mutex needed by the native publication consumer.
+                            let admission = output.lock().unwrap().admit_command(
+                                &manager,
+                                authority.load(std::sync::atomic::Ordering::Acquire),
+                                &plugin,
+                                &command,
+                                expected_epoch,
+                            );
+                            admission
+                                .and_then(|()| manager.invoke_command(&plugin, &command, arguments))
+                        }
                         None => Ok(()),
                     }
                 };
@@ -908,8 +920,6 @@ impl Worker {
                         }
                     }
                 }
-                // Startup loading ends only after Manager::open has restored every enabled plugin.
-                published.startup.clear();
                 if let Err(e) = &result {
                     let message = if let Some(operation) = &lifecycle {
                         format!("{}失败：{e:#}", operation.action.label())
@@ -941,31 +951,9 @@ impl Worker {
                 if lifecycle.is_some() {
                     published.progress = None;
                 }
-                // Recovery is a new incarnation even when installation returns Err. Every native surface must
-                // resend its size/document and reject callbacks captured by the retired owner.
-                let next_instances = manager
-                    .live
-                    .keys()
-                    .filter_map(|id| {
-                        manager
-                            .instance_id(id)
-                            .map(|identity| (id.clone(), identity.to_owned()))
-                    })
-                    .collect::<BTreeMap<_, _>>();
-                for (id, identity) in &next_instances {
-                    if instance_ids.get(id) != Some(identity) {
-                        retire_publication(&mut published, id);
-                    }
-                }
-                for id in instance_ids
-                    .keys()
-                    .filter(|id| !next_instances.contains_key(*id))
-                {
-                    retire_publication(&mut published, id);
-                }
-                instance_ids = next_instances;
-                published.publish_entries(manager.published_entries());
-                published.ready = true;
+                // Recovery also changes ownership when installation returns Err; the same
+                // real-instance publication is used by application-level Manager fixtures.
+                published.publish_manager(&manager);
                 published.diagnostics = manager
                     .installed
                     .keys()
@@ -993,5 +981,5 @@ impl Worker {
 
 /// Native callbacks retain their original owner; replacement advances the publication epoch.
 fn retire_publication(published: &mut Published, id: &str) {
-    *published.instance_epochs.entry(id.to_owned()).or_default() += 1;
+    published.retire_instance(id);
 }

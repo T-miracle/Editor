@@ -8,6 +8,7 @@ pub(crate) mod plugins;
 pub(crate) mod session;
 mod settings;
 mod shell;
+pub(crate) mod shortcuts;
 
 pub(crate) use settings::SettingsSection;
 

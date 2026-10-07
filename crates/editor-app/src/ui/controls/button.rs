@@ -80,9 +80,20 @@ pub(crate) struct Button {
     loading: bool,
     disabled: bool,
     content_full_width: bool,
+    reveal_group: Option<SharedString>,
 }
 
 impl Button {
+    /// Register the native Enter boundary before taking the application default-keymap snapshot.
+    /// Render keeps this idempotent call for standalone controls and independent test apps.
+    pub(crate) fn init_keys(cx: &mut App) {
+        if !cx.has_global::<ButtonKeymap>() {
+            // A focused button receives its own keyboard click instead of confirming its parent.
+            cx.bind_keys([KeyBinding::new("enter", NoAction, Some("EditorActivate"))]);
+            cx.set_global(ButtonKeymap);
+        }
+    }
+
     pub(crate) fn new(id: impl Into<ElementId>) -> Self {
         Self {
             base: BaseButton::new(id),
@@ -98,6 +109,7 @@ impl Button {
             loading: false,
             disabled: false,
             content_full_width: false,
+            reveal_group: None,
         }
     }
 
@@ -198,6 +210,13 @@ impl Button {
         self.compact = true;
         self
     }
+
+    /// Reveal secondary row actions on pointer hover or keyboard focus, retaining their tab order.
+    /// The named parent group owns hover; Base still owns this button's focus and activation.
+    pub(crate) fn reveal_on_hover(mut self, group: impl Into<SharedString>) -> Self {
+        self.reveal_group = Some(group.into());
+        self
+    }
 }
 
 impl Styled for Button {
@@ -214,12 +233,7 @@ impl ParentElement for Button {
 
 impl RenderOnce for Button {
     fn render(self, _: &mut Window, cx: &mut App) -> impl IntoElement {
-        // Dialog binds Enter to Confirm. A focused button must receive its own native Enter click
-        // instead of confirming its parent; NoAction leaves GPUI's keyboard-click behavior intact.
-        if !cx.has_global::<ButtonKeymap>() {
-            cx.bind_keys([KeyBinding::new("enter", NoAction, Some("EditorActivate"))]);
-            cx.set_global(ButtonKeymap);
-        }
+        Self::init_keys(cx);
         let palette = cx.theme();
         let (background, foreground, hover, active) = match self.variant {
             Variant::Default => (
@@ -307,6 +321,12 @@ impl RenderOnce for Button {
             .styles(|styles| styles.disabled(|style| style.opacity(0.5)))
             .child(content)
             .refine_style(&self.style)
+            .when_some(self.reveal_group, |button, group| {
+                button
+                    .opacity(0.)
+                    .group_hover(group, |style| style.opacity(1.))
+                    .focus_visible(|style| style.opacity(1.))
+            })
             .when_some(self.tooltip, |this, tooltip| {
                 this.tooltip(move |window, cx| Tooltip::new(tooltip.clone()).build(window, cx))
             })

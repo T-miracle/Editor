@@ -610,7 +610,28 @@ pub(super) fn pump_recording_all(
                 plugin,
                 command,
                 arguments,
+                expected_epoch,
             } => {
+                // Use the actor's real-instance admission after any earlier lifecycle work in
+                // this batch; a queued callback must not borrow the replacement's ownership.
+                let accepted = cx.update(|_, cx| {
+                    let worker = &app.read(cx).extensions.read(cx).worker;
+                    worker
+                        .state
+                        .lock()
+                        .unwrap()
+                        .admit_command(
+                            manager,
+                            worker.trusted.load(std::sync::atomic::Ordering::Acquire),
+                            plugin,
+                            command,
+                            *expected_epoch,
+                        )
+                        .is_ok()
+                });
+                if !accepted {
+                    continue;
+                }
                 let result = manager.invoke_command(plugin, command, arguments.clone());
                 // Fault acceptance still uses the ordinary typed callback and published failure.
                 if let Err(error) = result {
@@ -736,7 +757,9 @@ pub(super) fn publish_frame(
     cx.update(|window, cx| {
         app.read(cx).extensions.clone().update(cx, |owner, cx| {
             let mut state = owner.worker.state.lock().unwrap();
-            state.publish_entries(manager.published_entries());
+            // A successfully opened Manager, rather than fabricated readiness or epochs,
+            // supplies the same complete ownership publication as the production actor.
+            state.publish_manager(manager);
             state.diagnostics = manager
                 .installed
                 .keys()

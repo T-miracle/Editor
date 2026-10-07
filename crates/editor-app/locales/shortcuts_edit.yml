@@ -1,0 +1,83 @@
+# Inline editing and validation keep the same Chinese/English contract as shortcut lookup.
+_version: 2
+shortcuts.edit.modify:
+  en: "Edit shortcut"
+  zh-CN: "修改快捷键"
+shortcuts.edit.delete:
+  en: "Remove this binding"
+  zh-CN: "删除此绑定"
+shortcuts.edit.add:
+  en: "Add binding"
+  zh-CN: "添加绑定"
+shortcuts.edit.restore:
+  en: "Restore defaults"
+  zh-CN: "恢复默认"
+shortcuts.edit.record:
+  en: "Record shortcut"
+  zh-CN: "录入快捷键"
+shortcuts.edit.press_new:
+  en: "Press a new shortcut"
+  zh-CN: "按下新快捷键"
+shortcuts.edit.delete_binding:
+  en: "Delete binding"
+  zh-CN: "删除绑定"
+shortcuts.help.capture:
+  en: "Cancel capture"
+  zh-CN: "取消录入"
+shortcuts.help.edit:
+  en: "Cancel editing"
+  zh-CN: "取消编辑"
+shortcuts.help.close:
+  en: "Close"
+  zh-CN: "关闭"
+shortcuts.edit.cancel:
+  en: "Cancel"
+  zh-CN: "取消"
+shortcuts.edit.save:
+  en: "Save"
+  zh-CN: "保存"
+shortcuts.edit.conflict:
+  en: "These bindings conflict. Replacement removes only the bindings listed below."
+  zh-CN: "以下绑定存在冲突；替换只解除列出的绑定。"
+shortcuts.edit.unsaved:
+  en: "Discard unsaved shortcut changes?"
+  zh-CN: "放弃未保存的快捷键修改？"
+shortcuts.edit.continue:
+  en: "Continue editing"
+  zh-CN: "继续编辑"
+shortcuts.edit.replace:
+  en: "Replace conflicting bindings"
+  zh-CN: "替换冲突绑定"
+shortcuts.edit.discard:
+  en: "Discard changes"
+  zh-CN: "放弃修改"
+shortcuts.edit.step_count:
+  en: "Enter a shortcut with one or two steps."
+  zh-CN: "请输入一到两步快捷键。"
+shortcuts.edit.invalid_key:
+  en: "Invalid key: %{detail}"
+  zh-CN: "无效按键：%{detail}"
+shortcuts.edit.text_modifier:
+  en: "Letters and digits require Ctrl, Alt or another modifier beyond Shift."
+  zh-CN: "字母或数字必须搭配 Ctrl、Alt 等修饰键，仅 Shift 不够。"
+shortcuts.edit.prefix_overlap:
+  en: "A single-step binding cannot use the prefix of another binding for this operation."
+  zh-CN: "同一操作的短绑定不能占用连续绑定的第一步。"
+shortcuts.edit.stale:
+  en: "Bindings changed. Cancel and edit again."
+  zh-CN: "绑定已更改，请取消并重新编辑。"
+shortcuts.edit.unavailable:
+  en: "This operation or binding is no longer available."
+  zh-CN: "操作或绑定已不可用。"
+shortcuts.edit.storage:
+  en: "Could not save shortcuts: %{detail}"
+  zh-CN: "无法保存快捷键：%{detail}"
+shortcuts.edit.help:
+  en: "Esc cancels editing"
+  zh-CN: "Esc 取消编辑"
+shortcuts.edit.resolve:
+  en: "Resolve conflict"
+  zh-CN: "处理冲突"
+shortcuts.edit.plugin_unavailable:
+  en: "The plugin command is no longer available. Editing was cancelled; saved bindings are retained."
+  zh-CN: "插件命令已不可用。本次编辑已取消，已保存绑定仍保留。"

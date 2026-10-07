@@ -1,4 +1,37 @@
 _version: 2
+shortcuts.global_tab:
+  en: "Global shortcuts"
+  zh-CN: "全局快捷键"
+shortcuts.search:
+  en: "Search operations"
+  zh-CN: "搜索操作描述"
+shortcuts.capture:
+  en: "Search by shortcut"
+  zh-CN: "按快捷键搜索"
+shortcuts.press_keys:
+  en: "Press a shortcut…"
+  zh-CN: "请按下快捷键…"
+shortcuts.unbound:
+  en: "Unbound"
+  zh-CN: "未绑定"
+shortcuts.empty:
+  en: "No matching operations"
+  zh-CN: "没有匹配的操作"
+shortcuts.switch_tabs:
+  en: "Switch tabs"
+  zh-CN: "切换标签"
+shortcuts.capture_help:
+  en: "Esc cancels capture · 2 seconds for the next key"
+  zh-CN: "Esc 取消录入 · 2 秒内可按下一步"
+shortcuts.close_help:
+  en: "Esc closes"
+  zh-CN: "Esc 关闭"
+shortcuts.title:
+  en: "Keyboard shortcuts"
+  zh-CN: "快捷键"
+shortcuts.panel_tab:
+  en: "Panel shortcuts"
+  zh-CN: "面板快捷键"
 plugins.command_menu:
   en: "Plugin commands"
   zh-CN: "插件命令"

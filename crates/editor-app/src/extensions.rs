@@ -66,6 +66,8 @@ mod service_tests;
 mod settings;
 #[cfg(test)]
 mod settings_tests;
+#[cfg(test)]
+mod shortcut_query_tests;
 mod surface;
 #[cfg(test)]
 mod ui_package_tests;
@@ -76,7 +78,7 @@ mod worker;
 use crate::ui::controls::Input;
 use crate::*;
 use gpui_base::input::InputState;
-use gpui_kit::{AnyElement, ClipboardItem, KeyDownEvent, PathPromptOptions, SharedString};
+use gpui_kit::{AnyElement, ClipboardItem, PathPromptOptions, SharedString};
 use plugin_runtime::{
     Installed, Package,
     plugin_protocol::{self as protocol, api::Notification as PluginEvent},
@@ -663,6 +665,15 @@ impl ExtensionPanel {
             });
         }
         self.refresh_tool_icons();
+        if self.surface_id.is_none() {
+            // The shortcut registry compares a stable same-lock lifecycle snapshot, including
+            // instance epochs. Polling itself never changes bindings or redraws an unchanged UI.
+            // Defer until this ExtensionPanel borrow ends before reading the shared publication.
+            let parent = self.parent.clone();
+            cx.defer(move |cx| {
+                let _ = parent.update(cx, |app, cx| app.sync_shortcut_plugins(cx));
+            });
+        }
         if changed {
             cx.notify();
             if self.surface_id.is_none() || self.editor_preview {
@@ -787,48 +798,6 @@ impl ExtensionPanel {
                 .then(|| scene.clone())
         })
     }
-    /// Dispatch manifest shortcuts without registering terminal-specific native actions.
-    pub fn shortcut(
-        &mut self,
-        event: &KeyDownEvent,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) -> bool {
-        for entry in &self.entries {
-            if !entry.enabled {
-                continue;
-            }
-            for command in &entry.manifest.commands {
-                if command
-                    .shortcut
-                    .as_ref()
-                    .is_some_and(|s| key_matches(s, event))
-                {
-                    let id = entry.manifest.id.clone();
-                    let command = command.id.clone();
-                    let parent = self.parent.clone();
-                    window.defer(cx, move |window, cx| {
-                        let _ = parent.update(cx, |app, cx| {
-                            // Manifest shortcuts use the same checked API as future project actions.
-                            if let Err(error) = app.invoke_plugin_command(
-                                &id,
-                                &command,
-                                serde_json::Value::Null,
-                                window,
-                                cx,
-                            ) {
-                                app.status = error;
-                                cx.notify();
-                            }
-                        });
-                    });
-                    cx.stop_propagation();
-                    return true;
-                }
-            }
-        }
-        false
-    }
     /// Use the native file picker; unsigned packages show their requested capabilities before install.
     fn choose_package(&mut self, cx: &mut Context<Self>) {
         let receiver = cx.prompt_for_paths(PathPromptOptions {
@@ -896,14 +865,6 @@ pub(crate) fn environment(workspace: &Path, cx: &App) -> protocol::Environment {
             })
             .collect(),
     }
-}
-fn key_matches(shortcut: &str, event: &KeyDownEvent) -> bool {
-    let parts: Vec<_> = shortcut.split('-').collect();
-    let m = event.keystroke.modifiers;
-    parts.last().is_some_and(|key| *key == event.keystroke.key)
-        && parts.contains(&"ctrl") == m.control
-        && parts.contains(&"alt") == m.alt
-        && parts.contains(&"shift") == m.shift
 }
 
 impl EventEmitter<PanelEvent> for ExtensionPanel {}
@@ -1283,6 +1244,8 @@ impl EditorApp {
     /// Register and remove native panels directly from installed manifest contributions.
     pub(crate) fn sync_plugin_panels(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.finish_preference_imports(cx);
+        // Explicit manager publication and normal rendering share the same live shortcut path.
+        self.sync_shortcut_plugins(cx);
         let contributions: Vec<_> = self
             .extensions
             .read(cx)
