@@ -267,6 +267,16 @@ impl EditorApp {
             .on_drag_move(cx.listener(Self::external_tree_drag_move))
             .capture_key_down(cx.listener(Self::cancel_explorer_drag))
             .on_action(cx.listener(
+                |app, _: &explorer::transfer::shortcuts::UndoFiles, window, cx| {
+                    app.undo_file_transfer(window, cx)
+                },
+            ))
+            .on_action(cx.listener(
+                |app, _: &explorer::transfer::shortcuts::RedoFiles, window, cx| {
+                    app.redo_file_transfer(window, cx)
+                },
+            ))
+            .on_action(cx.listener(
                 |app, _: &explorer::transfer::shortcuts::PasteFiles, window, cx| {
                     let selected = app
                         .tree_state

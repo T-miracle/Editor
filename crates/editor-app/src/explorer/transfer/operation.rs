@@ -38,6 +38,7 @@ pub(super) enum Choice {
 pub(super) struct Decision {
     pub choice: Choice,
     pub subsequent: bool,
+    pub discard: bool,
 }
 
 /// A completed atomic disk change, with its preimage and expected postimage for later undo.
@@ -64,10 +65,24 @@ pub(super) struct Outcome {
     pub error: Option<String>,
     pub remaining: usize,
     pub cancelled: bool,
+    pub pending: Option<Receipt>,
 }
 
 /// Responses cross executors as values; GPUI entities and document text remain on the UI thread.
 pub(super) enum Event {
+    Documents {
+        reply: oneshot::Sender<Vec<WatchedFile>>,
+    },
+    ReviewRecovery {
+        paths: Vec<PathBuf>,
+        preserve: Vec<PathBuf>,
+        changed: bool,
+        reply: oneshot::Sender<Decision>,
+    },
+    Discard {
+        update: Reconciliation,
+        reply: oneshot::Sender<()>,
+    },
     Conflict {
         source: PathBuf,
         target: PathBuf,
@@ -101,8 +116,8 @@ pub(super) struct Worker {
     pub skipped: Vec<PathBuf>,
     policy: Option<Choice>,
     bytes: u64,
-    workspace: Workspace,
-    watched: Vec<WatchedFile>,
+    pub(super) workspace: Workspace,
+    pub(super) watched: Vec<WatchedFile>,
 }
 
 impl Worker {
@@ -147,9 +162,14 @@ impl Worker {
         let mut remaining = 0;
         for (index, source) in sources.iter().enumerate() {
             let result = async {
+                snapshot::check_native_path(source)?;
                 snapshot::check_target(&self.root, &target)?;
                 if !target.is_dir() {
-                    return Err(format!("{}: target is not a directory", target.display()));
+                    return Err(format!(
+                        "{}: {}",
+                        target.display(),
+                        t!("transfer.invalid_directory")
+                    ));
                 }
                 let meta = fs::symlink_metadata(source)
                     .map_err(|error| format!("{}: {error}", source.display()))?;
@@ -185,12 +205,7 @@ impl Worker {
             }
         }
         let cancelled = self.cancelled.load(Ordering::Relaxed);
-        let reconciliation = Reconciliation {
-            snapshot: Some(self.workspace.snapshot()),
-            documents: read_documents(&self.watched),
-            renames: Vec::new(),
-            native: true,
-        };
+        let reconciliation = self.reconcile_current_documents().await;
         Outcome {
             reconciliation,
             receipt: self.receipt,
@@ -199,6 +214,22 @@ impl Worker {
             error,
             remaining,
             cancelled,
+            pending: None,
+        }
+    }
+
+    /// A tab opened during a long operation belongs in the final reload too; only path metadata crosses threads.
+    pub(super) async fn reconcile_current_documents(&mut self) -> Reconciliation {
+        let (reply, current) = oneshot::channel();
+        let _ = self.events.unbounded_send(Event::Documents { reply });
+        if let Ok(watched) = current.await {
+            self.watched = watched;
+        }
+        Reconciliation {
+            snapshot: Some(self.workspace.snapshot()),
+            documents: read_documents(&self.watched),
+            renames: Vec::new(),
+            native: true,
         }
     }
 
@@ -338,6 +369,7 @@ impl Worker {
             .collect::<Result<Vec<_>, _>>()
             .map_err(|error| error.to_string())?;
         entries.sort_by_key(|entry| entry.file_name());
+        let empty = entries.is_empty();
         let mut all_moved = true;
         for entry in entries {
             match self
@@ -367,6 +399,9 @@ impl Worker {
                 before: Snapshot::Directory { asset: None },
                 after: Stamp::Missing,
             });
+        }
+        if empty {
+            self.completed += 1;
         }
         Ok(all_moved)
     }

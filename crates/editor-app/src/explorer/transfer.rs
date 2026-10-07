@@ -1,7 +1,10 @@
 //! Application-facing transfer state; one worker serves paste, native drop and tree drag.
 
 pub(crate) mod clipboard;
+mod history;
 mod operation;
+mod prompt;
+mod recovery;
 pub(crate) mod shortcuts;
 mod snapshot;
 
@@ -29,6 +32,7 @@ struct Active {
     bytes: u64,
     path: PathBuf,
     cut_offer: Option<(gpui_kit::ClipboardItem, Option<u32>)>,
+    history: Option<history::Direction>,
 }
 
 struct Prompt {
@@ -41,6 +45,7 @@ struct Prompt {
     reply: oneshot::Sender<Decision>,
     focus: FocusHandle,
     previous_focus: Option<FocusHandle>,
+    affected: Vec<PathBuf>,
 }
 
 impl Drop for TransferState {
@@ -138,7 +143,16 @@ impl EditorApp {
             t!("transfer.copy")
         }
         .to_string();
-        let (events, mut updates) = mpsc::unbounded();
+        let label = format!(
+            "{label} {}",
+            sources
+                .iter()
+                .filter_map(|path| path.file_name())
+                .map(|name| name.to_string_lossy())
+                .collect::<Vec<_>>()
+                .join(", ")
+        );
+        let (events, updates) = mpsc::unbounded();
         let cancel = Arc::new(AtomicBool::new(false));
         let watched = self
             .tabs
@@ -162,7 +176,6 @@ impl EditorApp {
                 return;
             }
         };
-        let timer_cancel = cancel.clone();
         self.file_transfers.active = Some(Active {
             cancel,
             visible: false,
@@ -170,7 +183,19 @@ impl EditorApp {
             bytes: 0,
             path: destination.clone(),
             cut_offer: None,
+            history: None,
         });
+        self.show_file_progress_later(window, cx);
+        let task = cx
+            .background_executor()
+            .spawn(worker.run(sources, destination));
+        self.listen_file_worker(task, updates, window, cx);
+        cx.notify();
+    }
+
+    /// Transfer and recovery share task ownership, progress delay and UI channel delivery.
+    fn show_file_progress_later(&self, window: &mut Window, cx: &mut Context<Self>) {
+        let timer_cancel = self.file_transfers.active.as_ref().unwrap().cancel.clone();
         // A lightweight timer reveals progress only when the batch outlasts the normal quick interaction.
         cx.spawn_in(window, async move |app, cx| {
             cx.background_executor()
@@ -186,9 +211,15 @@ impl EditorApp {
             });
         })
         .detach();
-        let task = cx
-            .background_executor()
-            .spawn(worker.run(sources, destination));
+    }
+
+    fn listen_file_worker(
+        &self,
+        task: gpui_kit::Task<Outcome>,
+        mut updates: mpsc::UnboundedReceiver<Event>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         cx.spawn_in(window, async move |app, cx| {
             while let Some(event) = updates.next().await {
                 if app
@@ -211,6 +242,17 @@ impl EditorApp {
 
     fn file_transfer_event(&mut self, event: Event, window: &mut Window, cx: &mut Context<Self>) {
         match event {
+            Event::Documents { reply } => {
+                let _ = reply.send(
+                    self.tabs
+                        .iter()
+                        .map(|tab| crate::editor::file_watch::WatchedFile {
+                            path: tab.path().to_path_buf(),
+                            text: tab.text.is_some(),
+                        })
+                        .collect(),
+                );
+            }
             Event::Authorize { target, reply } => {
                 let _ = reply.send(!self.dirty_transfer_target(&target));
             }
@@ -225,6 +267,7 @@ impl EditorApp {
                 let focus = cx.focus_handle();
                 focus.focus(window, cx);
                 self.file_transfers.prompt = Some(Prompt {
+                    affected: vec![target.clone()],
                     source,
                     target,
                     merge,
@@ -249,6 +292,18 @@ impl EditorApp {
             }
             Event::Moved { old, new, reply } => {
                 self.retarget_transferred_documents(&old, &new, window, cx);
+                let _ = reply.send(());
+            }
+            Event::ReviewRecovery {
+                paths,
+                preserve,
+                changed,
+                reply,
+            } => {
+                self.review_file_recovery(paths, preserve, changed, reply, window, cx);
+            }
+            Event::Discard { update, reply } => {
+                self.discard_recovered_documents(update, window, cx);
                 let _ = reply.send(());
             }
         }
@@ -294,6 +349,7 @@ impl EditorApp {
         cx: &mut Context<Self>,
     ) {
         let active = self.file_transfers.active.take();
+        let direction = active.as_ref().and_then(|active| active.history);
         if outcome.error.is_none() && outcome.skipped.is_empty() && !outcome.cancelled {
             if let Some((offer, sequence)) = active.and_then(|active| active.cut_offer) {
                 if cx.read_from_clipboard().as_ref() == Some(&offer)
@@ -304,10 +360,7 @@ impl EditorApp {
             }
         }
         self.file_transfers.prompt = None;
-        if !outcome.receipt.changes.is_empty() {
-            self.file_transfers.redo.clear();
-            self.file_transfers.undo.push(outcome.receipt);
-        }
+        self.record_file_outcome(direction, outcome.receipt, outcome.pending);
         // Deferred external rename pairs still apply; stale disk reads are replaced with a fresh scan.
         let renames = std::mem::take(&mut self.file_transfers.deferred_renames);
         self.apply_reconciliation(
@@ -358,136 +411,5 @@ impl EditorApp {
             ui::controls::Notification::persistent(t!("transfer.title").to_string(), message)
         }));
         cx.notify();
-    }
-
-    fn choose_transfer_conflict(
-        &mut self,
-        choice: Choice,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        let Some(prompt) = self.file_transfers.prompt.take() else {
-            return;
-        };
-        if choice == Choice::Replace && !prompt.merge && self.dirty_transfer_target(&prompt.target)
-        {
-            self.file_transfers.prompt = Some(prompt);
-            cx.notify();
-            return;
-        }
-        let _ = prompt.reply.send(Decision {
-            choice,
-            subsequent: prompt.subsequent,
-        });
-        if let Some(previous) = prompt.previous_focus {
-            previous.focus(window, cx);
-        }
-        cx.notify();
-    }
-
-    /// UI painting stays in local controls; the explorer owns only choices and operation state.
-    pub(crate) fn render_file_transfer(&self, cx: &mut Context<Self>) -> AnyElement {
-        let mut surface = div();
-        if let Some(active) = &self.file_transfers.active
-            && active.visible
-        {
-            let cancel = active.cancel.clone();
-            surface = surface.child(ui::controls::file_operation::progress(
-                t!(
-                    "transfer.progress",
-                    completed = active.completed,
-                    bytes = active.bytes,
-                    path = active.path.display()
-                )
-                .to_string(),
-                move |_, _| {
-                    cancel.store(true, Ordering::Relaxed);
-                },
-                cx,
-            ));
-        }
-        if let Some(prompt) = &self.file_transfers.prompt {
-            // Merge preserves unique files; dirty protection applies to colliding leaf files.
-            let protected = !prompt.merge && self.dirty_transfer_target(&prompt.target);
-            let owner = cx.entity().downgrade();
-            let choices = [
-                (
-                    "transfer-skip",
-                    t!("transfer.skip").to_string(),
-                    Choice::Skip,
-                    true,
-                ),
-                (
-                    "transfer-keep-both",
-                    t!("transfer.keep_both").to_string(),
-                    Choice::KeepBoth,
-                    true,
-                ),
-                (
-                    "transfer-replace",
-                    if prompt.merge {
-                        t!("transfer.merge")
-                    } else {
-                        t!("transfer.replace")
-                    }
-                    .to_string(),
-                    Choice::Replace,
-                    !protected,
-                ),
-                (
-                    "transfer-conflict-cancel",
-                    t!("common.cancel").to_string(),
-                    Choice::Cancel,
-                    true,
-                ),
-            ]
-            .into_iter()
-            .map(|(id, label, choice, enabled)| {
-                let owner = owner.clone();
-                ui::controls::file_operation::FileChoice {
-                    id,
-                    label: label.into(),
-                    enabled,
-                    activate: Box::new(move |window, cx| {
-                        let _ = owner.update(cx, |app, cx| {
-                            app.choose_transfer_conflict(choice, window, cx)
-                        });
-                    }),
-                }
-            })
-            .collect();
-            let subsequent_owner = owner.clone();
-            let mut details = vec![
-                prompt.source.display().to_string(),
-                prompt.target.display().to_string(),
-            ];
-            if protected {
-                details.push(t!("transfer.dirty_target").to_string());
-            }
-            surface = surface.child(ui::controls::file_operation::conflict_prompt(
-                prompt.focus.clone(),
-                t!("transfer.conflict").to_string(),
-                details,
-                choices,
-                Some((
-                    prompt.subsequent,
-                    Box::new(move |checked, cx| {
-                        let _ = subsequent_owner.update(cx, |app, cx| {
-                            if let Some(prompt) = &mut app.file_transfers.prompt {
-                                prompt.subsequent = checked;
-                            }
-                            cx.notify();
-                        });
-                    }),
-                )),
-                move |window, cx| {
-                    let _ = owner.update(cx, |app, cx| {
-                        app.choose_transfer_conflict(Choice::Cancel, window, cx)
-                    });
-                },
-                cx,
-            ));
-        }
-        surface.into_any_element()
     }
 }

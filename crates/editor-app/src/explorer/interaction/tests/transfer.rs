@@ -19,7 +19,7 @@ fn click_menu(visual: &mut VisualTestContext, label: &str) {
 }
 
 /// Populate the platform clipboard and invoke the tree's existing paste menu.
-fn paste(visual: &mut VisualTestContext, sources: Vec<PathBuf>, index: usize) {
+pub(super) fn paste(visual: &mut VisualTestContext, sources: Vec<PathBuf>, index: usize) {
     paste_item(
         visual,
         ClipboardItem {
@@ -32,7 +32,7 @@ fn paste(visual: &mut VisualTestContext, sources: Vec<PathBuf>, index: usize) {
 }
 
 /// File URI clipboard payloads are also a real supported input, not a test-only command.
-fn paste_item(visual: &mut VisualTestContext, item: ClipboardItem, index: usize) {
+pub(super) fn paste_item(visual: &mut VisualTestContext, item: ClipboardItem, index: usize) {
     visual.update(|_, cx| cx.write_to_clipboard(item));
     // GPUI's diagnostic lookup requires a static selector; this allocation lasts only for the test.
     let selector = Box::leak(format!("explorer-row-{index}").into_boxed_str());

@@ -45,6 +45,11 @@ pub(super) fn is_link(metadata: &fs::Metadata) -> bool {
 
 /// Resolve existing ancestors and reject links below the canonical workspace boundary.
 pub(super) fn check_target(root: &Path, path: &Path) -> Result<(), String> {
+    check_native_path(path)?;
+    let root_metadata = fs::symlink_metadata(root).map_err(|error| error.to_string())?;
+    if is_link(&root_metadata) || !root_metadata.is_dir() {
+        return Err(t!("transfer.link_target").to_string());
+    }
     let relative = path
         .strip_prefix(root)
         .map_err(|_| t!("transfer.outside_workspace").to_string())?;
@@ -65,6 +70,55 @@ pub(super) fn check_target(root: &Path, path: &Path) -> Result<(), String> {
             Ok(_) => {}
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
             Err(error) => return Err(format!("{}: {error}", current.display())),
+        }
+    }
+    Ok(())
+}
+
+/// Reject device namespaces, alternate data streams and ambiguous native filenames before disk access.
+pub(super) fn check_native_path(path: &Path) -> Result<(), String> {
+    if !path.is_absolute() {
+        return Err(t!("explorer.invalid_source").to_string());
+    }
+    for component in path.components() {
+        match component {
+            std::path::Component::ParentDir | std::path::Component::CurDir => {
+                return Err(t!("explorer.invalid_source").to_string());
+            }
+            #[cfg(windows)]
+            std::path::Component::Prefix(prefix) => {
+                if !matches!(
+                    prefix.kind(),
+                    std::path::Prefix::Disk(_)
+                        | std::path::Prefix::VerbatimDisk(_)
+                        | std::path::Prefix::UNC(_, _)
+                        | std::path::Prefix::VerbatimUNC(_, _)
+                ) {
+                    return Err(t!("explorer.invalid_source").to_string());
+                }
+            }
+            #[cfg(windows)]
+            std::path::Component::Normal(name) => {
+                let name = name.to_string_lossy();
+                let stem = name
+                    .split('.')
+                    .next()
+                    .unwrap_or_default()
+                    .to_ascii_uppercase();
+                if name.contains(':')
+                    || name.ends_with(['.', ' '])
+                    || matches!(stem.as_str(), "CON" | "PRN" | "AUX" | "NUL")
+                    || stem
+                        .strip_prefix("COM")
+                        .or_else(|| stem.strip_prefix("LPT"))
+                        .is_some_and(|number| {
+                            matches!(number, "1" | "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9")
+                        })
+                {
+                    return Err(t!("explorer.invalid_source").to_string());
+                }
+            }
+            _ => {}
         }
     }
     Ok(())

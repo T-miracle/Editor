@@ -1,6 +1,7 @@
 //! Exercises pointer gestures through real tree rows rather than calling handlers directly.
 
 mod drag;
+mod history;
 mod transfer;
 
 use super::*;

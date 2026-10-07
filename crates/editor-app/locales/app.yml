@@ -1685,3 +1685,33 @@ transfer.unsupported:
 transfer.changed:
   en: "Disk content changed while the operation was being prepared; retry after reviewing it"
   zh-CN: "准备操作期间磁盘内容发生变化，请核对后重试"
+transfer.invalid_directory:
+  en: "The destination is not a directory"
+  zh-CN: "目标不是目录"
+transfer.undo:
+  en: "Undo file operation · %{operation}"
+  zh-CN: "撤销文件操作 · %{operation}"
+transfer.redo:
+  en: "Redo file operation · %{operation}"
+  zh-CN: "重做文件操作 · %{operation}"
+transfer.no_history:
+  en: "No available record"
+  zh-CN: "暂无记录"
+transfer.recovery_conflict:
+  en: "Review file recovery"
+  zh-CN: "请确认文件恢复冲突"
+transfer.recovery_hint:
+  en: "These paths have changed or contain unsaved edits. Force recovery overwrites later changes."
+  zh-CN: "这些路径已发生变化或包含未保存内容。强制恢复将覆盖后续修改。"
+transfer.force:
+  en: "Force recovery"
+  zh-CN: "强制恢复"
+transfer.discard_title:
+  en: "Discard unsaved changes?"
+  zh-CN: "确认丢弃未保存修改？"
+transfer.discard_hint:
+  en: "This will discard unsaved editor content in the listed paths. This cannot be undone as a text edit."
+  zh-CN: "将丢弃上述路径的未保存编辑内容，不能通过文本撤销恢复。"
+transfer.confirm_discard:
+  en: "Discard changes and recover"
+  zh-CN: "丢弃修改并恢复"

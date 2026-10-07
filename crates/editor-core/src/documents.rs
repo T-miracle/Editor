@@ -83,6 +83,13 @@ impl DocumentSession {
         self.revision = self.revision.saturating_add(1);
     }
 
+    /// A user-confirmed disk reload becomes the new saved revision without writing editor text to disk.
+    /// Call only after replacing the editor value, including an explicit discard of unsaved content.
+    pub fn accept_disk_reload(&mut self) {
+        self.revision = self.revision.saturating_add(1);
+        self.saved_revision = self.revision;
+    }
+
     pub fn save(
         &mut self,
         store: &impl DocumentStore,

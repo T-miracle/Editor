@@ -16,6 +16,8 @@ enum Command {
     CopyAbsolutePath,
     CopyProjectRoot,
     Paste,
+    Undo,
+    Redo,
     New,
     NewDirectory,
     NewFile,
@@ -31,9 +33,17 @@ const ROW_COMMANDS: &[Command] = &[
     Command::New,
     Command::Delete,
     Command::Rename,
+    Command::Undo,
+    Command::Redo,
     Command::Refresh,
 ];
-const ROOT_COMMANDS: &[Command] = &[Command::Paste, Command::New, Command::Refresh];
+const ROOT_COMMANDS: &[Command] = &[
+    Command::Paste,
+    Command::New,
+    Command::Undo,
+    Command::Redo,
+    Command::Refresh,
+];
 const NEW_COMMANDS: &[Command] = &[Command::NewDirectory, Command::NewFile];
 const SPECIAL_COPY_COMMANDS: &[Command] = &[
     Command::CopyFileName,
@@ -59,6 +69,8 @@ impl Command {
             Self::CopyAbsolutePath => t!("explorer.copy_absolute_path"),
             Self::CopyProjectRoot => t!("explorer.copy_project_root"),
             Self::Paste => t!("explorer.paste"),
+            Self::Undo => t!("transfer.undo", operation = t!("transfer.no_history")),
+            Self::Redo => t!("transfer.redo", operation = t!("transfer.no_history")),
             Self::New => t!("explorer.new"),
             Self::NewDirectory => t!("explorer.directory"),
             Self::NewFile => t!("explorer.file"),
@@ -78,6 +90,8 @@ impl Command {
             Self::CopyAbsolutePath => "explorer-menu-copy-absolute-path",
             Self::CopyProjectRoot => "explorer-menu-copy-project-root",
             Self::Paste => "explorer-menu-paste",
+            Self::Undo => "explorer-menu-undo",
+            Self::Redo => "explorer-menu-redo",
             Self::New => "explorer-menu-new",
             Self::NewDirectory => "explorer-menu-directory",
             Self::NewFile => "explorer-menu-file",
@@ -102,6 +116,7 @@ fn build_menu(
     mut menu: KitPopupMenu,
     commands: &'static [Command],
     owner: WeakEntity<EditorApp>,
+    history: &[(String, bool); 2],
     window: &mut Window,
     cx: &mut Context<KitPopupMenu>,
 ) -> KitPopupMenu {
@@ -111,6 +126,7 @@ fn build_menu(
         }
         if let Some(children) = command.submenu_commands() {
             let child_owner = owner.clone();
+            let child_history = history.clone();
             menu = menu.submenu(command.label(), window, cx, move |submenu, window, cx| {
                 let width = if command == Command::SpecialCopy {
                     SPECIAL_COPY_SUBMENU_WIDTH
@@ -121,19 +137,25 @@ fn build_menu(
                     submenu.min_w(px(width)),
                     children,
                     child_owner.clone(),
+                    &child_history,
                     window,
                     cx,
                 )
             });
         } else {
             let action_owner = owner.clone();
-            menu = menu.item(
-                PopupMenuItem::new(command.label()).on_click(move |_, window, cx| {
+            let (label, enabled) = match command {
+                Command::Undo => history[0].clone(),
+                Command::Redo => history[1].clone(),
+                _ => (command.label(), true),
+            };
+            menu = menu.item(PopupMenuItem::new(label).disabled(!enabled).on_click(
+                move |_, window, cx| {
                     let _ = action_owner.update(cx, |app, cx| {
                         app.run_explorer_menu_command(command, window, cx);
                     });
-                }),
-            );
+                },
+            ));
         }
     }
     menu
@@ -157,6 +179,17 @@ impl EditorApp {
             ROOT_COMMANDS
         };
         let owner = cx.entity().downgrade();
+        // Capture values before building the popup: the app is already exclusively borrowed here.
+        let history = [
+            (
+                self.file_history_label(false),
+                self.file_history_available(false),
+            ),
+            (
+                self.file_history_label(true),
+                self.file_history_available(true),
+            ),
+        ];
         let previous_focus = window
             .focused(cx)
             .unwrap_or_else(|| self.editor.focus_handle(cx));
@@ -165,6 +198,7 @@ impl EditorApp {
                 menu.min_w(px(MENU_WIDTH)).action_context(previous_focus),
                 commands,
                 owner,
+                &history,
                 window,
                 cx,
             )
@@ -215,6 +249,8 @@ impl EditorApp {
                 }
             }
             Command::Paste => self.paste_explorer_path(&target, menu.folder, window, cx),
+            Command::Undo => self.undo_file_transfer(window, cx),
+            Command::Redo => self.redo_file_transfer(window, cx),
             Command::NewDirectory => self.start_explorer_edit(
                 ExplorerEditKind::Directory,
                 target,
