@@ -43,8 +43,12 @@
       "id": 5742586717,
       "url": "https://github.com/T-miracle/Editor/issues/86",
       "readback_verified": true,
-      "state": "open",
-      "implementation_status": "in_progress"
+      "state": "closed",
+      "implementation_status": "delivered",
+      "implementation_commit": "4ac35d996d6c68832bc045c71f008802b4a4c5d4",
+      "push_commit": "08101f7b1009b19bbe6f984570446ef949b49adf",
+      "close_readback_verified": true,
+      "closed_at": "2026-10-07T10:58:20Z"
     }
   ],
   "worktree": "C:/Users/Tmiracle/.codex/worktrees/host-messages/Editor",
