@@ -2,7 +2,7 @@
 
 稳定标识：`xml-language-tools-01`
 
-状态：实现与验收完成 — 对应 [#73](https://github.com/T-miracle/Editor/issues/73)；待普通提交、推送后核对议题关闭。
+状态：已交付 — 对应 [#73](https://github.com/T-miracle/Editor/issues/73)；实现提交 `400c5310` 已推送并核对远端 SHA，2026-10-07T10:08:45Z 关闭后已读回 `closed/completed`。
 
 ## Parent
 

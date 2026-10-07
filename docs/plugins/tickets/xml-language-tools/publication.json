@@ -12,7 +12,10 @@
       "number": 73,
       "id": 5741227101,
       "url": "https://github.com/T-miracle/Editor/issues/73",
-      "state": "open"
+      "state": "closed",
+      "state_reason": "completed",
+      "implementation_commit": "400c5310ca0dd9995b66f23ea1d440c24a89c5f3",
+      "closed_at": "2026-10-07T10:08:45Z"
     },
     {
       "ordinal": "02",

@@ -4,6 +4,8 @@
 
 状态：三单拆分与测试入口已批准；方案 [#72](https://github.com/T-miracle/Editor/issues/72)、工单 #73–#75 已发布，原生阻塞关系已读回核对，用户授权执行全部工单及必要并行。
 
+执行进度：01 / #73 已交付并核对关闭，提交 `400c5310`；02 / #74 与 03 / #75 已解除阻塞并行实施。整批完成状态仍等待后两单及最终短组合验收；父设计议题 #72 保持不变。
+
 真实议题：[01 / #73](https://github.com/T-miracle/Editor/issues/73)、[02 / #74](https://github.com/T-miracle/Editor/issues/74)、[03 / #75](https://github.com/T-miracle/Editor/issues/75)。编号与数据库 ID 见 [发布记录](publication.json)。
 
 来源：[XML 插件与通用语言编辑能力方案](../../specs/xml-language-tools.md)。本目录采用仓库文档归档约定，逐单保存正文；实际跟踪器仍为 GitHub，不是新增本地 tracker。

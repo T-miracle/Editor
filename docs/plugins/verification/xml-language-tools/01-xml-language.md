@@ -2,7 +2,7 @@
 
 日期：2026-10-07。对应 [#73](https://github.com/T-miracle/Editor/issues/73)、[工单](../../tickets/xml-language-tools/01-xml-language.md)与[方案](../../specs/xml-language-tools.md)。
 
-状态：实现与本单验收完成，等待普通提交、推送和议题关闭读回。窗口截图限制见下文，不宣称已取得可用截图。
+状态：已交付。实现提交 `400c5310ca0dd9995b66f23ea1d440c24a89c5f3` 已推送，`git ls-remote` 核对远端分支 SHA 一致；2026-10-07T10:08:45Z 关闭 #73 后已读回 `closed/completed`。窗口截图限制见下文，不宣称已取得可用截图。
 
 ## 验证环境与边界
 
@@ -64,8 +64,9 @@ T21 初次编译遇到 Windows `LNK1104`：另一个正在运行的测试占用�
 - Windows x86_64 LemMinX `0.31.2` 固定 native 分发来源和下载 hash 见 [插件说明](../../../../plugins/xml/README.md)。其他平台支持显式已有程序配置，但本记录不宣称已做跨平台执行验收。
 - 最终 Windows 启动验收宿主 SHA-256：`763c3dab09695b07431eb3b545f62ae3112c7ac16a7df273b60031c511952a5f`。长路径修复没有改变协议/SDK 源，复用此前独立 SDK 契约验收，不重复无关构建矩阵。
 
-## 仍待完成
+## 交付记录
 
-- 普通提交、推送与 GitHub issue 状态读回。
+- 普通提交：`400c5310ca0dd9995b66f23ea1d440c24a89c5f3`，已推送 `origin/codex/xml-language-tools` 并核对远端 SHA。
+- #73 已关闭并读回 `state=closed`、`state_reason=completed`。02 与 03 因此解除阻塞；本记录只标记 01 完成，父 #72 未修改。
 
-主代理的设置、T21、原生输入、阶段检查、长路径与窗口日志位于 `target/xml-language-tools/`；XML 实施代理的服务矩阵、纯钩子、SVG 资源及独立 SDK 日志位于 `target/xml-verification/`。仅记录实际结果，完成后更新本记录与工单状态。
+主代理的设置、T21、原生输入、阶段检查、长路径与窗口日志位于 `target/xml-language-tools/`；XML 实施代理的服务矩阵、纯钩子、SVG 资源及独立 SDK 日志位于 `target/xml-verification/`。本单实际结果和关闭状态已更新。
