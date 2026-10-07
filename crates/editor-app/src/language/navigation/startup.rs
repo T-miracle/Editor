@@ -28,8 +28,15 @@ impl LanguageServerConnection {
             language_id: service.provider.language.clone(),
             next_id: 1,
             diagnostics: diagnostics::DiagnosticsStore::default(),
+            snapshot_uris: service
+                .provider
+                .diagnostic_snapshots
+                .then(snapshots::SnapshotUris::new)
+                .transpose()?,
             save_notifications: None,
             pull_diagnostics: false,
+            definition_provider: false,
+            type_definition_provider: false,
             configuration,
             failed: false,
         };
@@ -69,6 +76,7 @@ impl LanguageServerConnection {
                             "codeDescriptionSupport": true
                         },
                         "definition": { "linkSupport": true },
+                        "typeDefinition": { "linkSupport": true },
                         "completion": {
                             "completionItem": { "snippetSupport": false }
                         },
@@ -82,6 +90,12 @@ impl LanguageServerConnection {
         // Only send optional save notifications when the server requests them.
         self.pull_diagnostics = initialized["capabilities"]["diagnosticProvider"].is_object()
             || initialized["capabilities"]["diagnosticProvider"] == Value::Bool(true);
+        // Objects express options/registration data; false or absent means the method is unavailable.
+        self.definition_provider = initialized["capabilities"]["definitionProvider"].is_object()
+            || initialized["capabilities"]["definitionProvider"] == Value::Bool(true);
+        self.type_definition_provider = initialized["capabilities"]["typeDefinitionProvider"]
+            .is_object()
+            || initialized["capabilities"]["typeDefinitionProvider"] == Value::Bool(true);
         self.save_notifications = match &initialized["capabilities"]["textDocumentSync"]["save"] {
             Value::Bool(true) => Some(false),
             Value::Object(options) => Some(

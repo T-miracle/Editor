@@ -3,9 +3,9 @@ param(
     [string]$Output = "$PSScriptRoot/../dist/plugins",
     [string]$HostExe = '',
     # Restrict verification to named packages without rebuilding unrelated components.
-    [ValidateSet('terminal', 'example', 'svg', 'rust', 'rust-debugger', 'run-target-example', 'toml', 'html', 'javascript', 'markdown')]
+    [ValidateSet('terminal', 'example', 'svg', 'rust', 'rust-debugger', 'run-target-example', 'toml', 'html', 'javascript', 'markdown', 'xml')]
     # Default and release packaging include every bundled plugin; the host must provide their SDK capabilities.
-    [string[]]$Packages = @('terminal', 'example', 'svg', 'rust', 'rust-debugger', 'run-target-example', 'toml', 'html', 'javascript', 'markdown')
+    [string[]]$Packages = @('terminal', 'example', 'svg', 'rust', 'rust-debugger', 'run-target-example', 'toml', 'html', 'javascript', 'markdown', 'xml')
 )
 $ErrorActionPreference = 'Stop'
 $projectRoot = (Resolve-Path "$PSScriptRoot/..").Path
@@ -42,6 +42,11 @@ try {
         if ($Packages -contains 'markdown') {
         & $hostPath --plugin-cargo 'plugins/markdown/Cargo.toml' build --target wasm32-wasip2 --release
         if ($LASTEXITCODE -ne 0) { throw 'Markdown preview WASM build failed' }
+        }
+        # XML service policy builds independently against the same exported public SDK.
+        if ($Packages -contains 'xml') {
+        & $hostPath --plugin-cargo 'plugins/xml/Cargo.toml' build --target wasm32-wasip2 --release
+        if ($LASTEXITCODE -ne 0) { throw 'XML language WASM build failed' }
         }
     } finally { $env:CARGO_TARGET_DIR = $previousTargetDir }
     New-Item -ItemType Directory -Force $Output | Out-Null
@@ -98,9 +103,9 @@ try {
         # Local and release distributions use the same independent SDK and fixed byte bridge.
         & "$PSScriptRoot/build-rust-debugger.ps1" -HostExe $hostPath -Output $Output
     }
-    foreach ($name in @('rust', 'run-target-example', 'toml', 'html', 'javascript', 'markdown')) {
+    foreach ($name in @('rust', 'run-target-example', 'toml', 'html', 'javascript', 'markdown', 'xml')) {
         if ($Packages -notcontains $name) { continue }
-        # Rust and Markdown include guest components; the remaining language packages are resource-only.
+        # Rust, Markdown and XML include guest components; the remaining language packages are resource-only.
         $destination = [IO.Path]::GetFullPath((Join-Path $Output "$name.zip"))
         $stream = [IO.File]::Create($destination)
         $archive = [IO.Compression.ZipArchive]::new($stream, [IO.Compression.ZipArchiveMode]::Create)
@@ -114,7 +119,7 @@ try {
             if (Test-Path -LiteralPath (Join-Path $pluginRoot 'icons.json')) {
                 $packageFiles += ,@('icons.json', (Join-Path $pluginRoot 'icons.json'))
             }
-            foreach ($directory in @('grammar', 'queries', 'icons', 'run-targets')) {
+            foreach ($directory in @('grammar', 'queries', 'icons', 'run-targets', 'schemas', 'licenses')) {
                 # Resource-only examples and dynamic providers may legitimately omit these roots.
                 if (-not (Test-Path -LiteralPath (Join-Path $pluginRoot $directory))) { continue }
                 foreach ($file in Get-ChildItem -LiteralPath (Join-Path $pluginRoot $directory) -Recurse -File | Sort-Object FullName) {
@@ -136,6 +141,10 @@ try {
                 # Distribute only runtime resources and licenses, never source or build caches.
                 $packageFiles += ,@('markdown.wasm', (Join-Path $projectRoot 'target/wasm32-wasip2/release/markdown_guest.wasm'))
                 $packageFiles += ,@('licenses/pulldown-cmark-LICENSE', (Join-Path $pluginRoot 'src/pulldown-cmark-LICENSE'))
+            }
+            if ($name -eq 'xml') {
+                # Schema assistance and service configuration travel with the installed package.
+                $packageFiles += ,@('xml.wasm', (Join-Path $projectRoot 'target/wasm32-wasip2/release/xml_language_guest.wasm'))
             }
             foreach ($item in $packageFiles) {
                 $entryStream = $archive.CreateEntry($item[0]).Open()

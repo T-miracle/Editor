@@ -1,0 +1,22 @@
+# All XML dialects share the public language identity; image previews remain independent.
+file_icons = "icons.json"
+
+[plugin]
+id = "xml"
+name = "XML"
+version = "0.1.0"
+host_version = ">=0.1.0"
+
+[[language_definitions]]
+id = "xml"
+name = "XML"
+extensions = ["xml", "svg", "xsd", "xsl", "xslt"]
+
+[[highlighters]]
+id = "syntax"
+language = "xml"
+grammar_name = "xml"
+grammar = "grammar/xml.wasm"
+highlights = "queries/highlights.scm"
+# v0.7.0 exports ABI 14; package admission and the dynamic loader verify the actual module.
+tree_sitter_abi = 14

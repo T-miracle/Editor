@@ -2,6 +2,7 @@
 use crate::language::providers::{self, GrammarProvider};
 use crate::*;
 use gpui_kit::AnyElement;
+mod associations;
 
 /// The current request owns status; stale worker results never replace this state or global parsers.
 #[derive(Default)]
@@ -10,6 +11,8 @@ pub(crate) struct DynamicLanguages {
     generation: u64,
     scope: plugin_runtime::plugin_protocol::settings::Scope,
     error: Option<String>,
+    /// Optional native settings input, never a second document editor state.
+    extension_input: Option<Entity<gpui_base::input::InputState>>,
 }
 
 /// Reuse native host controls for independent recognition and grammar preferences.
@@ -39,6 +42,7 @@ pub(crate) fn render_settings(view: &Entity<EditorApp>, cx: &App) -> AnyElement 
                 }),
         ),
     );
+    content = content.child(associations::render(view, cx));
     let rows = providers::rows();
     if rows.is_empty() {
         content = content.child(t!("settings.providers_empty").to_string());

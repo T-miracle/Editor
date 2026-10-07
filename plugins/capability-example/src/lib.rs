@@ -5,6 +5,7 @@ use plugin_protocol::{
     ui,
 };
 use std::cell::RefCell;
+mod completion_probe;
 mod composition;
 mod discovery;
 mod execution_demo;
@@ -55,6 +56,12 @@ impl State {
     /// Preparation is side-effect free; missing optional functionality selects a visible fallback.
     fn handle(&mut self, input: api::Input) -> Result<api::Output, Failure> {
         match input {
+            api::Input::Event {
+                event: api::Notification::LanguageCompletion(request),
+                ..
+            } => {
+                return completion_probe::complete(request);
+            }
             api::Input::Event {
                 event: api::Notification::MigrateData { from, to, snapshot },
                 ..

@@ -226,6 +226,9 @@ fn event_operation(event: &Notification) -> String {
         plugin_protocol::api::Notification::LanguageService(context) => {
             format!("lsp-hook:{}", context.provider)
         }
+        plugin_protocol::api::Notification::LanguageCompletion(request) => {
+            format!("completion-hook:{}", request.provider)
+        }
         plugin_protocol::api::Notification::Service(
             plugin_protocol::service::Notification::Invoke(call),
         ) => format!("service:{}:{}", call.contract, call.method),

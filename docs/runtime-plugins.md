@@ -22,7 +22,7 @@ WIT 世界 `editor:plugin/plugin@0.1.0` 提供 host.request 导入与 dispatch �
 
 不再存在旧 Message/Reply/Scene、字符串宿主命令、chrome/controls 兼容字段或运行时转换。标准组件、SideTabs 与 Canvas 组成同一棵 UI 树，宿主的 gpui-base 行为和本地外观负责输入、焦点、布局、滚动、菜单及弹窗。SVG 预览接收带 DocumentVersion 的内存文本，必须回传 source，包含未保存编辑；过期结果不能覆盖新文档。
 
-详细接口见 [SDK](../crates/plugin-protocol/README.md)、[UI](../crates/plugin-protocol/UI.md)、[语言](../crates/plugin-protocol/LANGUAGES.md)、[LSP](../crates/plugin-protocol/LSP.md)、[进程](../crates/plugin-protocol/PROCESSES.md)、[服务](../crates/plugin-protocol/SERVICES.md)。
+详细接口见 [SDK](../crates/plugin-protocol/README.md)、[UI](../website/src/content/docs/zh-cn/sdk/ui.md)、[语言](../website/src/content/docs/zh-cn/sdk/languages.md)、[LSP](../website/src/content/docs/zh-cn/sdk/lsp.md)、[进程](../website/src/content/docs/zh-cn/sdk/processes.md)、[服务](../website/src/content/docs/zh-cn/sdk/services.md)。
 
 ## 权限与原生执行
 
@@ -51,7 +51,7 @@ WASM 不继承宿主目录、环境、输入输出或网络访问。每次调用
 4. 候选激活成功后以日志、备份和原子替换提交包记录与私有数据，再发布新实例。
 5. 准备失败保留旧实例；切换失败恢复旧版本及数据并分配新实例身份，旧句柄和回调不会复活。
 
-备份及恢复失败路径、休眠工作区升级见 [迁移契约](../crates/plugin-protocol/MIGRATION.md)。快照是插件的逻辑数据，不能恢复 OS 进程内存或撤销用户文档、外部文件等副作用。终端恢复有界历史和新 Shell；经 interactive.execute 服务创建的执行会话只恢复历史，不重跑程序。
+备份及恢复失败路径、休眠工作区升级见 [迁移契约](../website/src/content/docs/zh-cn/sdk/migration.md)。快照是插件的逻辑数据，不能恢复 OS 进程内存或撤销用户文档、外部文件等副作用。终端恢复有界历史和新 Shell；经 interactive.execute 服务创建的执行会话只恢复历史，不重跑程序。
 
 WASM 指令、时间和内存有独立预算；队列、进程、文件、绘图和事件均有上限。超限定位到插件/作用域/操作；插件可独立重启，LSP 有限重试。停用与卸载结清请求、撤销订阅和租约并回收进程树。
 
@@ -83,7 +83,9 @@ $testExe = $artifacts | ForEach-Object { $_ | ConvertFrom-Json } |
 & $testExe --ignored --test-threads=1
 ```
 
-发行包为 terminal、example、svg、rust、toml、html、javascript、markdown；每包包含 README。Rust 包附带公开 LSP 钩子，Markdown 包附带原生文件预览访客，纯语言资源包无需空生命周期组件。终端直接使用上游 term-wm-vt100，许可随包分发；基础主题内置。
+发行包为 terminal、example、svg、rust、toml、html、javascript、markdown、xml；每包包含 README。Rust 和 XML 包附带公开 LSP 钩子，XML 另使用只接收不可变文档的补全钩子；Markdown 包附带原生文件预览访客，纯语言资源包无需空生命周期组件。终端直接使用上游 term-wm-vt100，许可随包分发；基础主题内置。
+
+XML 的 grammar、原生语言服务、SVG 提示来源与平台限制见 [插件说明](../plugins/xml/README.md)，本批增量验收见 [XML 语言工单 01](plugins/verification/xml-language-tools/01-xml-language.md)。其服务准备失败保留资源高亮，更新失败保留旧版本；受限工作区仍不启动插件或服务。XML 和 Image 各自消费同一版本化内存文档，不相互依赖。
 
 正式脚本同时生成 `plugins/bundle-defaults.json`，按实际 ZIP 的哈希与文件扩展名声明首次提供候选。宿主检查索引、包和已有提供者，在受信任工作区的当前文件首次使用时复用正常权限确认；拒绝、禁用、卸载及替代提供者选择不会被默认包覆盖。索引不授予权限，也不使受限工作区运行插件。Markdown 的范围、命名规则及验收见[插件说明](../plugins/markdown/README.md)和[完整验收](../plugins/markdown/docs/verification/11-distribution-acceptance.md)。
 

@@ -7,3 +7,7 @@ pub(crate) mod hover;
 pub(crate) mod navigation;
 pub mod plugins;
 pub(crate) mod providers;
+
+// Actual XML packages enter through the same manager and language registry as installed plugins.
+#[cfg(test)]
+mod xml_tests;

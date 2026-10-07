@@ -1,5 +1,7 @@
 //! Host protocols borrow approved native services; retiring the package revokes every borrowed process.
 use crate::process::{Spawned, spawn_piped};
+mod completion;
+pub(crate) use completion::CompletionHook;
 use plugin_protocol::language::Provider;
 use std::{
     path::PathBuf,
@@ -20,6 +22,8 @@ pub struct LanguageService {
     runtime_logs: crate::RuntimeLogs,
     /// Active plans pin files even if another workspace removes the package's installation record.
     pub(crate) dependencies: Vec<Arc<std::fs::File>>,
+    /// Optional stateless worker uses the same immutable provider lease as the native service.
+    pub(crate) completion: Option<CompletionHook>,
 }
 #[derive(Default)]
 struct Lease {
@@ -141,6 +145,7 @@ impl LanguageService {
             state: Mutex::new(Lease::default()),
             runtime_logs,
             dependencies: vec![],
+            completion: None,
         }
     }
     /// Borrow the shared run history without transferring authority to launch or modify this plan.
@@ -241,6 +246,8 @@ impl LanguageService {
             && self.root == other.root
             && self.program == other.program
             && self.args == other.args
+            && self.completion.as_ref().map(|hook| &hook.settings)
+                == other.completion.as_ref().map(|hook| &hook.settings)
     }
     pub(crate) fn retire(&self) {
         let mut state = self.state.lock().unwrap();
@@ -253,6 +260,13 @@ impl LanguageService {
                 }
                 .stop();
             }
+        }
+        // Mark retired before waiting for a bounded pure call; its eventual result is rejected.
+        drop(state);
+        if let Some(hook) = &self.completion
+            && let Some(mut instance) = hook.instance.lock().unwrap().take()
+        {
+            instance.stop();
         }
     }
     /// Selection changes stop the current transport while keeping the installed startup plan reusable.

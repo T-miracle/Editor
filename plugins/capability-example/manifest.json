@@ -1,7 +1,7 @@
 {
   "id": "capability-example",
   "name": "Capability Example",
-  "version": "0.16.1",
+  "version": "0.16.2",
   "settings_hook": true,
   "settings": {
     "enabled": { "title": "启用示例功能", "value_type": { "kind": "boolean" }, "default": true, "scope": "project", "apply": "restart_instance" },
@@ -13,7 +13,7 @@
   "api": {
     "base": "^1",
     "required": { "package.assets": "^1", "ui.native": "^1", "workspace.files": "^1", "storage.private": "^1", "storage.editor": "^1", "ui.clipboard": "^1", "editor.documents": "^1", "ui.panels": "^1", "configuration": "^1" },
-    "optional": { "example.future": "^9", "ui.canvas": "^1", "editor.viewport": "^1" }
+    "optional": { "example.future": "^9", "ui.canvas": "^1", "editor.viewport": "^1", "language.completion": "^1" }
   },
   "component": "capability-example.wasm",
   "permissions": ["assets.read", "workspace.read", "storage", "clipboard", "editor.read", "editor.write", "ui.panels"],

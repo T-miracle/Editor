@@ -1043,6 +1043,8 @@ pub(crate) fn attach_language_server(
     app: WeakEntity<EditorApp>,
     cx: &mut Context<EditorApp>,
 ) {
+    let completion_owner = app.clone();
+    let editor_id = editor.entity_id();
     editor.update(cx, |editor, _| {
         let Some(provider) =
             language_navigation::LanguageDefinitionProvider::new(document_path, server.clone())
@@ -1079,8 +1081,13 @@ pub(crate) fn attach_language_server(
             crate::language::hover::LanguageHoverProvider::new(document_path, server.clone())
                 .map(|provider| Rc::new(provider) as _);
         editor.lsp_mut().completion_provider =
-            crate::language::completion::LanguageCompletionProvider::new(document_path, server)
-                .map(|provider| Rc::new(provider) as _);
+            crate::language::completion::LanguageCompletionProvider::for_editor(
+                document_path,
+                server,
+                completion_owner,
+                editor_id,
+            )
+            .map(|provider| Rc::new(provider) as _);
     });
 }
 

@@ -1,5 +1,11 @@
 # Capability Example
 
+0.16.2 adds a real public `language.completion` snapshot probe. A separately packaged language
+provider attempts normally granted asset, workspace, private-data, editor and subscription calls;
+its pure worker must receive `PermissionDenied` for all of them. Host integration checks stale
+metadata, invalid ranges, response limits and retirement using the independently built ZIP.
+默认包只声明可选补全能力，不增加新的语言或执行权限；验收包显式申请源文本读取与提供者能力。
+
 The panel menu explicitly offers the execution-budget and memory-budget fault demonstrations. Use an isolated fixture profile: each command deliberately traps this example instance so the native fault reminder and resource cleanup can be inspected.
 
 版本 0.15.7 的普通 `preview-probe` 命令接收完整公开 `ui::Document` 并原样发布到 welcome 面板，用于独立检查版本、能力与权限的发布门禁；它不修正或伪造 source。组合 UI 资产的 `code_highlighting` 在没有 Preview source 时暂时关闭，绑定版本后恢复原声明。代码高亮消费者需要协商 `ui.code_highlighting`、`ui.richtext` 与 `editor.documents` 并获得 `editor.read`；普通等宽代码保持默认惰性。

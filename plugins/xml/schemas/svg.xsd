@@ -1,0 +1,88 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Local assistance for common SVG source editing. Unknown children/attributes remain lax,
+     so this small authored vocabulary does not pretend to implement the complete SVG standard. -->
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns:s="http://www.w3.org/2000/svg" targetNamespace="http://www.w3.org/2000/svg" elementFormDefault="qualified">
+  <xs:complexType name="common" mixed="true">
+    <xs:sequence><xs:any minOccurs="0" maxOccurs="unbounded" processContents="lax"/></xs:sequence>
+    <xs:attribute name="id" type="xs:string"><xs:annotation><xs:documentation>Unique element identifier / 元素标识符。</xs:documentation></xs:annotation></xs:attribute>
+    <xs:attribute name="class" type="xs:string"/>
+    <xs:attribute name="style" type="xs:string"/>
+    <xs:attribute name="transform" type="xs:string"><xs:annotation><xs:documentation>Transformation applied to this element / 元素变换。</xs:documentation></xs:annotation></xs:attribute>
+    <xs:attribute name="fill" type="xs:string"><xs:annotation><xs:documentation>Paint used inside the shape / 填充颜色或绘制资源。</xs:documentation></xs:annotation></xs:attribute>
+    <xs:attribute name="stroke" type="xs:string"/>
+    <xs:attribute name="stroke-width" type="xs:string"/>
+    <xs:attribute name="stroke-dasharray" type="xs:string"/>
+    <!-- Presentation properties include CSS-wide and evolving values. Assistance keeps these
+         strings open instead of applying incomplete enumerations as document constraints. -->
+    <xs:attribute name="stroke-linecap" type="xs:string"/>
+    <xs:attribute name="stroke-linejoin" type="xs:string"/>
+    <xs:attribute name="fill-rule" type="xs:string"/>
+    <xs:attribute name="opacity" type="xs:string"/>
+    <xs:attribute name="fill-opacity" type="xs:string"/>
+    <xs:attribute name="stroke-opacity" type="xs:string"/>
+    <xs:attribute name="clip-path" type="xs:string"/>
+    <xs:attribute name="mask" type="xs:string"/>
+    <xs:attribute name="filter" type="xs:string"/>
+    <xs:attribute name="color" type="xs:string"/>
+    <xs:attribute name="display" type="xs:string"/>
+    <xs:attribute name="visibility" type="xs:string"/>
+    <xs:anyAttribute processContents="lax"/>
+  </xs:complexType>
+  <xs:complexType name="viewport" mixed="true"><xs:complexContent mixed="true"><xs:extension base="s:common">
+    <xs:attribute name="viewBox" type="xs:string"><xs:annotation><xs:documentation>min-x min-y width height of the user-space viewport / 视口坐标与尺寸。</xs:documentation></xs:annotation></xs:attribute>
+    <xs:attribute name="width" type="xs:string"/><xs:attribute name="height" type="xs:string"/>
+    <xs:attribute name="x" type="xs:string"/><xs:attribute name="y" type="xs:string"/>
+    <xs:attribute name="preserveAspectRatio" type="xs:string"/>
+  </xs:extension></xs:complexContent></xs:complexType>
+  <xs:complexType name="path" mixed="true"><xs:complexContent mixed="true"><xs:extension base="s:common">
+    <xs:attribute name="d" type="xs:string"><xs:annotation><xs:documentation>Path commands defining the geometry / 路径绘制命令。</xs:documentation></xs:annotation></xs:attribute>
+    <xs:attribute name="pathLength" type="xs:string"/>
+  </xs:extension></xs:complexContent></xs:complexType>
+  <xs:complexType name="shape" mixed="true"><xs:complexContent mixed="true"><xs:extension base="s:common">
+    <xs:attribute name="x" type="xs:string"/><xs:attribute name="y" type="xs:string"/>
+    <xs:attribute name="width" type="xs:string"/><xs:attribute name="height" type="xs:string"/>
+    <xs:attribute name="cx" type="xs:string"/><xs:attribute name="cy" type="xs:string"/><xs:attribute name="r" type="xs:string"/>
+    <xs:attribute name="rx" type="xs:string"/><xs:attribute name="ry" type="xs:string"/>
+    <xs:attribute name="x1" type="xs:string"/><xs:attribute name="y1" type="xs:string"/><xs:attribute name="x2" type="xs:string"/><xs:attribute name="y2" type="xs:string"/>
+    <xs:attribute name="points" type="xs:string"/><xs:attribute name="pathLength" type="xs:string"/>
+  </xs:extension></xs:complexContent></xs:complexType>
+  <xs:complexType name="text" mixed="true"><xs:complexContent mixed="true"><xs:extension base="s:common">
+    <xs:attribute name="x" type="xs:string"/><xs:attribute name="y" type="xs:string"/><xs:attribute name="dx" type="xs:string"/><xs:attribute name="dy" type="xs:string"/>
+    <xs:attribute name="font-size" type="xs:string"/><xs:attribute name="font-family" type="xs:string"/><xs:attribute name="font-weight" type="xs:string"/>
+    <xs:attribute name="text-anchor" type="xs:string"/>
+  </xs:extension></xs:complexContent></xs:complexType>
+  <xs:complexType name="reference" mixed="true"><xs:complexContent mixed="true"><xs:extension base="s:viewport">
+    <xs:attribute name="href" type="xs:string"/>
+  </xs:extension></xs:complexContent></xs:complexType>
+  <xs:complexType name="gradient" mixed="true"><xs:complexContent mixed="true"><xs:extension base="s:shape">
+    <xs:attribute name="gradientUnits"><xs:simpleType><xs:restriction base="xs:string"><xs:enumeration value="objectBoundingBox"/><xs:enumeration value="userSpaceOnUse"/></xs:restriction></xs:simpleType></xs:attribute>
+    <xs:attribute name="gradientTransform" type="xs:string"/><xs:attribute name="href" type="xs:string"/>
+  </xs:extension></xs:complexContent></xs:complexType>
+  <xs:complexType name="stop" mixed="true"><xs:complexContent mixed="true"><xs:extension base="s:common">
+    <xs:attribute name="offset" type="xs:string"/><xs:attribute name="stop-color" type="xs:string"/><xs:attribute name="stop-opacity" type="xs:string"/>
+  </xs:extension></xs:complexContent></xs:complexType>
+  <xs:element name="svg" type="s:viewport"><xs:annotation><xs:documentation>SVG root or nested viewport / SVG 根元素或嵌套视口。</xs:documentation></xs:annotation></xs:element>
+  <xs:element name="g" type="s:common"><xs:annotation><xs:documentation>Group related graphics / 图形分组。</xs:documentation></xs:annotation></xs:element>
+  <xs:element name="defs" type="s:common"/><xs:element name="symbol" type="s:viewport"/>
+  <xs:element name="use" type="s:reference"/><xs:element name="image" type="s:reference"/>
+  <xs:element name="path" type="s:path"><xs:annotation><xs:documentation>A shape described by path commands / 由路径命令描述的图形。</xs:documentation></xs:annotation></xs:element>
+  <xs:element name="rect" type="s:shape"/><xs:element name="circle" type="s:shape"/><xs:element name="ellipse" type="s:shape"/>
+  <xs:element name="line" type="s:shape"/><xs:element name="polyline" type="s:shape"/><xs:element name="polygon" type="s:shape"/>
+  <xs:element name="text" type="s:text"/><xs:element name="tspan" type="s:text"/><xs:element name="textPath" type="s:reference"/>
+  <xs:element name="clipPath" type="s:common"/><xs:element name="mask" type="s:viewport"/>
+  <xs:element name="pattern" type="s:viewport"/><xs:element name="marker" type="s:viewport"/>
+  <xs:element name="linearGradient" type="s:gradient"/><xs:element name="radialGradient" type="s:gradient"/>
+  <xs:element name="stop" type="s:stop"/><xs:element name="filter" type="s:viewport"/>
+  <xs:element name="feBlend" type="s:common"/><xs:element name="feColorMatrix" type="s:common"/>
+  <xs:element name="feComponentTransfer" type="s:common"/><xs:element name="feComposite" type="s:common"/>
+  <xs:element name="feConvolveMatrix" type="s:common"/><xs:element name="feDiffuseLighting" type="s:common"/>
+  <xs:element name="feDisplacementMap" type="s:common"/><xs:element name="feDropShadow" type="s:common"/>
+  <xs:element name="feFlood" type="s:common"/><xs:element name="feGaussianBlur" type="s:common"/>
+  <xs:element name="feImage" type="s:reference"/><xs:element name="feMerge" type="s:common"/>
+  <xs:element name="feMergeNode" type="s:common"/><xs:element name="feMorphology" type="s:common"/>
+  <xs:element name="feOffset" type="s:common"/><xs:element name="feSpecularLighting" type="s:common"/>
+  <xs:element name="feTile" type="s:common"/><xs:element name="feTurbulence" type="s:common"/>
+  <xs:element name="animate" type="s:common"/><xs:element name="animateTransform" type="s:common"/><xs:element name="set" type="s:common"/>
+  <xs:element name="foreignObject" type="s:viewport"/><xs:element name="view" type="s:viewport"/>
+  <xs:element name="title" type="s:common"/><xs:element name="desc" type="s:common"/><xs:element name="metadata" type="s:common"/>
+</xs:schema>

@@ -28,6 +28,12 @@ impl State {
                 .ok_or_else(|| {
                     Failure::new(ErrorCode::InvalidRequest, "Request ID must be nonzero")
                 })?;
+            if self.language_pure {
+                return Err(Failure::new(
+                    ErrorCode::PermissionDenied,
+                    "Pure language workers cannot call host operations",
+                ));
+            }
             let method = value
                 .get("operation")
                 .and_then(|op| op.get("method"))
@@ -373,6 +379,27 @@ impl Instance {
         let completion: api::Completion = serde_json::from_str(payload)?;
         anyhow::ensure!(completion.id == id, "Plugin completion ID mismatch");
         let output = completion.result?;
+        // Pure preparation cannot publish resources; the single typed callback is the only allowed result.
+        anyhow::ensure!(
+            !self.store.data().language_pure
+                || (output.views.is_empty()
+                    && output.snapshot.is_none()
+                    && output.configuration.is_none()
+                    && output.language_service.is_none()
+                    && output.service_reply.is_none()),
+            "Pure language workers can return only snapshot language data"
+        );
+        anyhow::ensure!(
+            output.language_completion.is_none()
+                || (self.store.data().language_completion_call
+                    && self
+                        .store
+                        .data()
+                        .api
+                        .capabilities
+                        .contains_key("language.completion")),
+            "Completion results require a negotiated pure language invocation"
+        );
         anyhow::ensure!(
             !self.store.data().migrating
                 || (output.views.is_empty()

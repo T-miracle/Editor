@@ -1,5 +1,9 @@
 # Exercise the SVG component and native GPU painting in an isolated editor window.
-param([string]$HostExe = "$PSScriptRoot/../target/debug/editor-app.exe")
+param(
+    [string]$HostExe = "$PSScriptRoot/../target/debug/editor-app.exe",
+    # Optional current packages exercise independent language/display composition in the real window.
+    [string[]]$CompanionPackages = @()
+)
 $ErrorActionPreference = 'Stop'
 $projectRoot = (Resolve-Path "$PSScriptRoot/..").Path
 $hostPath = (Resolve-Path -LiteralPath $HostExe).Path
@@ -75,6 +79,11 @@ Push-Location $projectRoot
 try {
     cargo run -p plugin-runtime --example svg_preview_smoke -- 'dist/plugins/svg.zip' $pluginRoot $workspace
     if ($LASTEXITCODE -ne 0) { throw 'SVG component fixture verification failed' }
+    if ($CompanionPackages.Count -gt 0) {
+        # The public installer grants only the supplied packages in this owned target/ fixture.
+        cargo run -p plugin-runtime --example prepare_fixture -- $pluginRoot $workspace @CompanionPackages
+        if ($LASTEXITCODE -ne 0) { throw 'Companion package fixture installation failed' }
+    }
     $previousPluginHome = $env:ME_EDITOR_PLUGIN_HOME
     $env:ME_EDITOR_PLUGIN_HOME = $pluginRoot
     try {

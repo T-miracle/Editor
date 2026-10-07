@@ -348,6 +348,8 @@ pub enum Notification {
     },
     /// Prepare one host-managed LSP; the reply supplies data, never a process handle.
     LanguageService(crate::language::Context),
+    /// language.completion: a pure worker receives readonly versioned text, never editor authority.
+    LanguageCompletion(crate::language::CompletionRequest),
     Process {
         handle: ResourceHandle,
         update: crate::process::Update,
@@ -647,6 +649,9 @@ pub struct View {
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Output {
+    /// Returned only by the negotiated pure completion callback, with its source and request identity.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub language_completion: Option<crate::language::CompletionProposal>,
     /// Only a service invocation may return this contract-validated result.
     #[serde(default)]
     pub service_reply: Option<Result<serde_json::Value, Failure>>,

@@ -14,6 +14,7 @@ Me Editor 是一个 Rust + GPUI Kit 编写的原生桌面代码编辑器初版�
 - Rust 项目内的 TOML 文件使用 Rust 配置文件图标。
 - JavaScript 插件为 `.js`、`.mjs`、`.cjs`、`.jsx` 提供 WASM 语法高亮、语法错误提示和深浅色图标，无需 Node.js；详见 [JavaScript 插件说明](plugins/javascript/README.md)。
 - HTML 插件为 `.html`、`.htm` 提供 WASM 解析、标签与属性高亮和深浅色文件图标；安装方式及范围见 [HTML 插件说明](plugins/html/README.md)。
+- XML 插件为 `.xml`、`.svg`、`.xsd`、`.xsl`、`.xslt` 提供动态高亮、补全、语法与 Schema 诊断、悬浮说明和定义跳转；支持用户扩展名关联。语言服务与 Image 预览独立启停，详见 [XML 插件说明](plugins/xml/README.md)。
 - 行号、缩进参考线、代码折叠和软换行切换。
 - 选中文本后按住鼠标左键拖动，松开后移动到落点；支持边缘自动滚动、`Esc` 取消和一次撤销恢复。
 - 插件 WASM 语法诊断：Rust、TOML、HTML、JavaScript 解析器报告的语法错误显示红色波浪线，悬浮查看说明；状态栏显示当前文件的错误数量，点击或按 `F8` 跳转到下一处，`Shift+F8` 返回上一处。编辑修正后自动清除错误。

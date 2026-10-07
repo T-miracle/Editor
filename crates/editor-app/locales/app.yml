@@ -1,4 +1,16 @@
 _version: 2
+settings.file_associations:
+  en: "File associations (user settings)"
+  zh-CN: "文件关联（用户设置）"
+settings.file_association_add:
+  en: "Associate a file extension"
+  zh-CN: "关联文件扩展名"
+settings.file_association_extension:
+  en: "Extension, for example cfg"
+  zh-CN: "扩展名，例如 cfg"
+settings.file_association_error:
+  en: "Could not save the file association"
+  zh-CN: "无法保存文件关联"
 plugins.command_menu:
   en: "Plugin commands"
   zh-CN: "插件命令"

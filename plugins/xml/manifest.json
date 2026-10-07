@@ -1,0 +1,70 @@
+{
+  "id": "xml",
+  "name": "XML",
+  "version": "0.1.0",
+  "protocol": 7,
+  "contributions": "plugin.toml",
+  "component": "xml.wasm",
+  "permissions": ["process.service.analysis", "dependencies.prepare", "editor.read"],
+  "storage_limit": 33554432,
+  "api": {
+    "base": "^1",
+    "required": {
+      "language.lsp": ">=1.3,<2",
+      "language.completion": "^1",
+      "process": "^1",
+      "configuration": "^1",
+      "dependencies": ">=1.1,<2"
+    }
+  },
+  "settings": {
+    "executable": {
+      "title": "本机 LemMinX 可执行文件 / Local LemMinX executable",
+      "value_type": { "kind": "string", "max_length": 4096 },
+      "default": "", "scope": "project"
+    },
+    "download_schemas": {
+      "title": "下载远程 Schema / Download remote schemas",
+      "value_type": { "kind": "boolean" },
+      "default": false, "scope": "project"
+    },
+    "schema_associations": {
+      "title": "Schema 关联 JSON / Schema associations JSON",
+      "value_type": { "kind": "string", "max_length": 4096 },
+      "default": "[]", "scope": "project"
+    },
+    "catalogs": {
+      "title": "XML Catalog 路径 JSON / XML catalog paths JSON",
+      "value_type": { "kind": "string", "max_length": 4096 },
+      "default": "[]", "scope": "project"
+    },
+    "svg_suggestions": {
+      "title": "SVG 元素和属性提示 / SVG element and attribute suggestions",
+      "value_type": { "kind": "boolean" },
+      "default": true, "scope": "project"
+    }
+  },
+  "services": {
+    "analysis": {
+      "program": "lemminx-win32.exe",
+      "args": [],
+      "installation": {
+        "artifacts": [{
+          "id": "lemminx", "version": "0.31.2-vscode-xml-0.29.3",
+          "platform": "windows-x86_64",
+          "sha256": "7eaefaac68253b0ec8e0ad1f1c0f2d0755423d4e99e52497428b52f80df28eb7",
+          "source": { "kind": "url", "url": "https://github.com/redhat-developer/vscode-xml/releases/download/0.29.3/lemminx-win32.zip" },
+          "format": { "kind": "zip" }
+        }],
+        "executable": "lemminx/lemminx-win32.exe"
+      }
+    }
+  },
+  "language_servers": [{
+    "id": "analysis", "language": "xml", "service": "analysis",
+    "hook": true, "executable_setting": "executable", "optional_installation": true, "completion_hook": true,
+    "diagnostic_snapshots": true,
+    "completion_triggers": ["<", "/", ":", "\"", "'"],
+    "completion_after_whitespace": [""]
+  }]
+}

@@ -58,8 +58,7 @@ impl DiagnosticsStore {
         {
             return;
         }
-        // Servers omitting version assign notifications to the currently synchronized
-        // snapshot. Queued notifications are drained before changing that snapshot.
+        // The transport has already proved a native version or an immutable wire identity.
         document.diagnostics = Some(params.diagnostics);
     }
 
@@ -121,12 +120,12 @@ impl LanguageServer {
                 .next_version(uri.as_str(), source)
                 .is_some()
             {
-                connection.sync_document(uri, source.to_owned())?
+                connection.sync_document(uri.clone(), source.to_owned())?
             } else {
-                uri.as_str().to_owned()
+                connection.wire_uri(&uri).as_str().to_owned()
             };
             connection.drain_messages()?;
-            let pushed = connection.diagnostics.snapshot(&uri_text, source);
+            let pushed = connection.diagnostics.snapshot(uri.as_str(), source);
             if connection.pull_diagnostics {
                 // Pull analyzes the live document even when a server defers its
                 // push-based semantic pass. Omit previousResultId to request a
@@ -224,10 +223,7 @@ impl LanguageServerConnection {
         {
             match serde_json::from_value::<PublishDiagnosticsParams>(message["params"].clone()) {
                 Ok(params) => {
-                    // Unversioned pushes cannot prove freshness; generic services use versioned push or pull.
-                    if params.version.is_some() {
-                        self.diagnostics.publish(params);
-                    }
+                    self.publish_diagnostics(params);
                 }
                 Err(error) => {
                     tracing::warn!(%error, "invalid language diagnostic notification");

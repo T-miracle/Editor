@@ -1,7 +1,9 @@
 //! Immutable provider snapshots separate recognition from grammar choice and stale task publication.
 use plugin_runtime::plugin_protocol::settings::Scope;
 use plugin_schema::{Highlighter, LanguageDefinition};
+mod associations;
 mod preferences;
+pub(crate) use associations::{associate_extension, file_associations};
 use preferences::Saved;
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -383,6 +385,10 @@ pub(crate) fn language_for_path(path: &Path) -> Option<String> {
         .and_then(|s| s.to_str())
         .unwrap_or("")
         .to_lowercase();
+    // An explicit association wins while its language exists; a missing provider stays plain.
+    if let Some(language) = registry.saved.associations.get(&extension) {
+        return registry.code_language(language);
+    }
     let key = if registry
         .recognizers
         .contains_key(&format!("file:{filename}"))
@@ -469,7 +475,8 @@ pub(crate) fn handles_path(path: &Path) -> bool {
         .and_then(|s| s.to_str())
         .unwrap_or("")
         .to_lowercase();
-    registry.recognizers.contains_key(&format!("file:{file}"))
+    registry.saved.associations.contains_key(&ext)
+        || registry.recognizers.contains_key(&format!("file:{file}"))
         || registry.recognizers.contains_key(&format!("ext:{ext}"))
 }
 
