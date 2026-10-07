@@ -44,8 +44,12 @@
       "id": 5742440718,
       "url": "https://github.com/T-miracle/Editor/issues/83",
       "labels": ["ready-for-agent"],
-      "state": "open",
-      "body_verified": true
+      "state": "closed",
+      "body_verified": true,
+      "delivery_commit": "9d91893",
+      "push_verified": true,
+      "closed_readback_verified": true,
+      "delivery_verified_on": "2026-10-07"
     }
   ],
   "dependencies": [
@@ -56,6 +60,8 @@
   "implementation_branch": "main",
   "implementation_workspace": "C:/Projects/RustProjects/Editor-shortcuts-main",
   "implementation_base_commit": "ae63225",
+  "implementation_status": "complete",
+  "implementation_delivered_on": "2026-10-07",
   "execution_authorization": {
     "confirmed_on": "2026-10-07",
     "scope": "发布并执行全部三张工单；遵守阻塞关系，在不阻塞任务的情况下允许子代理并行；完成测试与审查后按既有工单流程普通提交、推送并核对关闭对应实施议题，不改写或关闭父规格。",

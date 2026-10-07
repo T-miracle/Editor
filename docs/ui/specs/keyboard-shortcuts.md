@@ -4,7 +4,7 @@
 
 稳定标识：`ui-keyboard-shortcuts-panel`
 
-状态：产品交互、C 视觉方案及应用级测试接缝已确认（2026-10-07）。01、02 已交付；03 实现与行为验收已通过，提交、推送和关闭读回待执行。实际结果以[阶段验收记录](../verification/keyboard-shortcuts.md)为准。
+状态：产品交互、C 视觉方案及应用级测试接缝已确认（2026-10-07），全部三单已交付并推送主分支，#81–#83 关闭状态已读回。实际结果和验证限制见[阶段验收记录](../verification/keyboard-shortcuts.md)。
 
 议题：[设计规格 #77](https://github.com/T-miracle/Editor/issues/77)，标签 `ready-for-agent`；三张实施工单已获批准并发布为 #81–#83，用户已授权执行，按依赖关系实施与验收；父规格保持原样且不关闭。
 
@@ -280,5 +280,5 @@
 - 产品交互：已逐项确认；视觉原型：已选择 C。
 - 测试接缝：已确认复用现有 GPUI 应用入口，模拟按键、点击及重启验证行为。
 - GitHub 议题：[设计规格 #77](https://github.com/T-miracle/Editor/issues/77) 保持原样；三张实施工单已获批准并发布为 [#81](https://github.com/T-miracle/Editor/issues/81)、[#82](https://github.com/T-miracle/Editor/issues/82)、[#83](https://github.com/T-miracle/Editor/issues/83)，原生阻塞关系按此顺序建立并读回验证。
-- 实现与行为验收：01、02 已交付；03 最终串行应用测试 384 passed、相关 9 项真实 WASM 场景和必要原生组合通过，提交、推送与关闭读回待执行。T01–T22 证据及未全量执行范围见[验收记录](../verification/keyboard-shortcuts.md)。
+- 实现与行为验收：01、02、03 分别以 `495a1d0`、`66fb23a`、`9d91893` 交付并核对关闭；最终串行应用测试 384 passed、相关 9 项真实 WASM 场景和必要原生组合通过。T01–T22 证据及未全量执行范围见[验收记录](../verification/keyboard-shortcuts.md)。
 - [三单实施工单与测试归属](../tickets/keyboard-shortcuts/README.md)：粒度和阻塞关系已批准，共用测试入口并遵守仓库阶段检查。

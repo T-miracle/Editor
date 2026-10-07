@@ -2,7 +2,7 @@
 
 稳定标识：`ui-keyboard-shortcuts-panel-03`
 
-状态：实现、测试、两轴审查和必要原生组合验收已通过；普通提交、推送与 #83 关闭读回待执行。证据见[阶段验证记录](../../verification/keyboard-shortcuts.md)。
+状态：已交付；`9d91893` 已推送主分支，GitHub #83 的 `closed` / `completed` 已读回核对。实现、测试、两轴审查和必要原生组合验收通过，证据见[阶段验证记录](../../verification/keyboard-shortcuts.md)。
 
 ## Parent
 
