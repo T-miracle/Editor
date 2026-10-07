@@ -32,6 +32,10 @@ pub(crate) struct TransferState {
     resources: Arc<resources::Resources>,
     closing: bool,
     cleanup: Option<Shared<Task<()>>>,
+    // Normal shutdown awaits already-started backup deletion before the registry deletes remaining paths.
+    retired: Vec<Task<()>>,
+    // Late outcomes retain their Arc until the registry has cleaned its already-registered path.
+    closing_receipts: Vec<Receipt>,
 }
 
 struct Active {
@@ -98,11 +102,13 @@ impl EditorApp {
         }
         // Dropping the decision sender releases a worker awaiting a conflict answer before cancellation.
         self.file_transfers.prompt.take();
+        let retired = std::mem::take(&mut self.file_transfers.retired);
         let resources = self.file_transfers.resources.clone();
         let executor = cx.background_executor().clone();
         let cleanup = cx
             .background_executor()
             .spawn(async move {
+                futures::future::join_all(retired).await;
                 resources.cleanup(&executor).await;
             })
             .shared();
@@ -513,7 +519,7 @@ impl EditorApp {
             }
         }
         self.file_transfers.prompt = None;
-        self.record_file_outcome(direction, outcome.receipt, outcome.pending);
+        self.record_file_outcome(direction, outcome.receipt, outcome.pending, cx);
         // Deferred external rename pairs still apply; stale disk reads are replaced with a fresh scan.
         let renames = std::mem::take(&mut self.file_transfers.deferred_renames);
         self.apply_reconciliation(

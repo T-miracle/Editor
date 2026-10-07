@@ -91,6 +91,7 @@ impl EditorApp {
                         label: receipt.label.clone(),
                     },
                     Some(receipt),
+                    cx,
                 );
                 self.file_transfer_error(error, cx);
                 return;
@@ -117,11 +118,27 @@ impl EditorApp {
         direction: Option<Direction>,
         receipt: Receipt,
         pending: Option<Receipt>,
+        cx: &mut Context<Self>,
     ) {
+        if self.file_transfers.closing {
+            // Their paths were registered before shutdown. Keep ownership until registry cleanup finishes,
+            // avoiding a competing TempDir deletion while the last worker's result reaches the UI.
+            self.file_transfers.closing_receipts.push(receipt);
+            self.file_transfers.closing_receipts.extend(pending);
+            return;
+        }
+        let mut retired = Vec::new();
+        let receipt = if receipt.changes.is_empty() {
+            retired.push(receipt);
+            None
+        } else {
+            Some(receipt)
+        };
         match direction {
             None => {
-                if !receipt.changes.is_empty() {
-                    self.file_transfers.redo.clear();
+                retired.extend(pending);
+                if let Some(receipt) = receipt {
+                    retired.append(&mut self.file_transfers.redo);
                     self.file_transfers.undo.push(receipt);
                 }
             }
@@ -129,7 +146,7 @@ impl EditorApp {
                 if let Some(pending) = pending {
                     self.file_transfers.undo.push(pending);
                 }
-                if !receipt.changes.is_empty() {
+                if let Some(receipt) = receipt {
                     self.file_transfers.redo.push(receipt);
                 }
             }
@@ -137,10 +154,16 @@ impl EditorApp {
                 if let Some(pending) = pending {
                     self.file_transfers.redo.push(pending);
                 }
-                if !receipt.changes.is_empty() {
+                if let Some(receipt) = receipt {
                     self.file_transfers.undo.push(receipt);
                 }
             }
+        }
+        if !retired.is_empty() {
+            // The last backup Arc owns TempDir's recursive deletion, so release it off the UI executor.
+            self.file_transfers
+                .retired
+                .push(cx.background_executor().spawn(async move { drop(retired) }));
         }
     }
 
