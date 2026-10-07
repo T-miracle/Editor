@@ -83,7 +83,7 @@ $testExe = $artifacts | ForEach-Object { $_ | ConvertFrom-Json } |
 & $testExe --ignored --test-threads=1
 ```
 
-发行包为 terminal、example、svg、rust、toml、html、javascript、markdown、xml；每包包含 README。Rust 和 XML 包附带公开 LSP 钩子，XML 另使用只接收不可变文档的补全钩子；Markdown 包附带原生文件预览访客，纯语言资源包无需空生命周期组件。终端直接使用上游 term-wm-vt100，许可随包分发；基础主题内置。
+发行包为 terminal、example、svg、rust、toml、html、javascript、markdown、xml；每包包含 README。Rust 和 XML 包附带公开 LSP 钩子，XML 另使用只接收不可变文档的补全与结构钩子。HTML 通过声明式原生服务提供格式化和配对标签编辑，JavaScript 提供独立默认格式化器；两者不附带空生命周期组件。Markdown 包附带原生文件预览访客，纯语言资源包无需空生命周期组件。终端直接使用上游 term-wm-vt100，许可随包分发；基础主题内置。
 
 XML 的 grammar、原生语言服务、SVG 提示来源与平台限制见 [插件说明](../plugins/xml/README.md)，本批增量验收见 [XML 语言工单 01](plugins/verification/xml-language-tools/01-xml-language.md)。其服务准备失败保留资源高亮，更新失败保留旧版本；受限工作区仍不启动插件或服务。XML 和 Image 各自消费同一版本化内存文档，不相互依赖。
 

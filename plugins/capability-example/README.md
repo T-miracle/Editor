@@ -1,5 +1,11 @@
 # Capability Example
 
+0.17.0 adds an independently packaged `language.structure` provider probe with arbitrary
+definition types, UTF-8 source ranges, package artwork and separate folds. Actual SDK-built
+fixtures exercise stale metadata, malformed replies, denied IO, worker traps and retirement;
+an invalid proposal rejects only that reply, while a trapped pure worker loses its lease.
+默认包只声明可选结构能力；验收包单独声明提供者并申请 `editor.read`，不让示例面板成为宿主大纲。
+
 0.16.2 adds a real public `language.completion` snapshot probe. A separately packaged language
 provider attempts normally granted asset, workspace, private-data, editor and subscription calls;
 its pure worker must receive `PermissionDenied` for all of them. Host integration checks stale

@@ -1,7 +1,7 @@
 {
   "id": "xml",
   "name": "XML",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "protocol": 7,
   "contributions": "plugin.toml",
   "component": "xml.wasm",
@@ -12,6 +12,9 @@
     "required": {
       "language.lsp": ">=1.3,<2",
       "language.completion": "^1",
+      "language.formatting": "^1",
+      "language.editing": "^1",
+      "language.structure": "^1",
       "process": "^1",
       "configuration": "^1",
       "dependencies": ">=1.1,<2"
@@ -38,6 +41,16 @@
       "value_type": { "kind": "string", "max_length": 4096 },
       "default": "[]", "scope": "project"
     },
+    "format_attributes": {
+      "title": "格式化属性布局 / Formatted attribute layout",
+      "value_type": { "kind": "enum", "choices": ["preserve", "splitNewLine", "alignWithFirstAttr"] },
+      "default": "preserve", "scope": "project"
+    },
+    "format_empty_elements": {
+      "title": "格式化空元素 / Formatted empty elements",
+      "value_type": { "kind": "enum", "choices": ["ignore", "collapse", "expand"] },
+      "default": "ignore", "scope": "project"
+    },
     "svg_suggestions": {
       "title": "SVG 元素和属性提示 / SVG element and attribute suggestions",
       "value_type": { "kind": "boolean" },
@@ -60,8 +73,10 @@
       }
     }
   },
+  "structure_providers": [{ "id": "structure", "language": "xml" }],
   "language_servers": [{
     "id": "analysis", "language": "xml", "service": "analysis",
+    "formatting": true, "editing": true,
     "hook": true, "executable_setting": "executable", "optional_installation": true, "completion_hook": true,
     "diagnostic_snapshots": true,
     "completion_triggers": ["<", "/", ":", "\"", "'"],

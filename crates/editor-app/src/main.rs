@@ -3,6 +3,8 @@ mod editor;
 mod explorer;
 mod extensions;
 pub mod language;
+/// Host-owned outline presentation consumes versioned plugin structure data.
+mod outline;
 /// Run controls own saved configurations and the sessions launched from them.
 mod run;
 mod sdk_export;
@@ -56,7 +58,7 @@ use app::WindowsTimerResolution;
 use app::dialog as app_dialog;
 use app::plugins::{PluginPopupKind, PluginPopupSnapshot};
 use app::session as session_state;
-use app::{EditorDockPanel, EditorDockPanelKind};
+use app::{EditorDockPanel, EditorDockPanelKind, bind_editor_shell_keys};
 use assets::AppAssets;
 use explorer::menu::ExplorerMenu;
 use explorer::tree as explorer_tree;
@@ -81,6 +83,8 @@ actions!(
     me_editor,
     [
         SaveDocument,
+        FormatDocument,
+        RenameSymbol,
         RefreshWorkspace,
         ToggleTheme,
         NavigateToDefinition,
@@ -96,6 +100,8 @@ struct EditorApp {
     file_watch: FileWatch,
     workspace_snapshot: Option<WorkspaceSnapshot>,
     language_servers: HashMap<String, Arc<language_navigation::LanguageServer>>,
+    /// Formatting jobs and linked ranges retain identities; EditorState remains the sole text/undo owner.
+    language_edits: editor::language_edits::State,
     file_store: NativeFileStore,
     history: Option<LocalHistory>,
     editor: Entity<EditorState>,
@@ -122,6 +128,9 @@ struct EditorApp {
     /// Repaint the host when the upstream editor publishes a hover or completion.
     _editor_observer: Subscription,
     tree_state: Entity<TreeState>,
+    /// The active document's readonly structure and native tree interaction state.
+    outline: outline::OutlineState,
+    outline_panel: Entity<outline::OutlinePanel>,
     dock_area: Entity<DockArea>,
     /// Host panels keep their original identity when Base reloads a saved split tree.
     explorer_panel: Entity<EditorDockPanel>,
@@ -312,6 +321,8 @@ impl EditorApp {
             cx.notify();
         });
         let parent = cx.entity().downgrade();
+        let outline = outline::OutlineState::new(cx);
+        let outline_panel = cx.new(|cx| outline::OutlinePanel::new(parent.clone(), cx));
         let explorer_visibility = Rc::new(Cell::new(session_state.explorer_visible));
         let extension_visibility = Rc::new(Cell::new(false));
         let explorer_panel = cx.new(|cx| {
@@ -355,8 +366,18 @@ impl EditorApp {
             area.set_center(
                 DockLayout::h_split()
                     .child(
-                        DockLayout::tabs()
-                            .panel_view(dock::panel_handle(explorer_panel.clone()), cx),
+                        // Peer panels on the left start equally stacked within the same native DockArea.
+                        DockLayout::v_split()
+                            .child(
+                                DockLayout::tabs()
+                                    .panel_view(dock::panel_handle(explorer_panel.clone()), cx),
+                                None,
+                            )
+                            .child(
+                                DockLayout::tabs()
+                                    .panel_view(dock::panel_handle(outline_panel.clone()), cx),
+                                None,
+                            ),
                         Some(px(session_state.explorer_width)),
                     )
                     .child(
@@ -378,6 +399,7 @@ impl EditorApp {
             file_watch,
             workspace_snapshot: None,
             language_servers: HashMap::new(),
+            language_edits: Default::default(),
             file_store: NativeFileStore,
             history: LocalHistory::for_current_user().ok(),
             editor,
@@ -394,6 +416,8 @@ impl EditorApp {
             pointer_hover_suppressed: None,
             _editor_observer: editor_observer,
             tree_state,
+            outline,
+            outline_panel,
             dock_area,
             explorer_panel,
             pending_dock_restore: session_state.dock_layout.is_some(),
@@ -558,8 +582,9 @@ impl EditorApp {
         cx.notify();
     }
 
-    fn on_save_action(&mut self, _: &SaveDocument, _: &mut Window, cx: &mut Context<Self>) {
-        self.save_current(cx);
+    fn on_save_action(&mut self, _: &SaveDocument, window: &mut Window, cx: &mut Context<Self>) {
+        // The optional formatter must finish for this revision before the existing disk-save path runs.
+        self.save_document_with_formatting(window, cx);
     }
 
     /// Requests a fresh definition at the caret without depending on hover state.
@@ -763,36 +788,7 @@ fn main() -> anyhow::Result<()> {
             apply_theme(&theme::active_theme(false), cx);
             cx.activate(true);
             extensions::init(cx);
-            cx.bind_keys([
-                KeyBinding::new(
-                    "ctrl-s",
-                    SaveDocument,
-                    Some("EditorShell && !PluginSurface"),
-                ),
-                KeyBinding::new(
-                    "ctrl-shift-r",
-                    RefreshWorkspace,
-                    Some("EditorShell && !PluginSurface"),
-                ),
-                KeyBinding::new("ctrl-alt-t", ToggleTheme, Some("EditorShell")),
-                KeyBinding::new(
-                    "f12",
-                    NavigateToDefinition,
-                    Some("EditorShell && !PluginSurface"),
-                ),
-                KeyBinding::new(
-                    "ctrl-i",
-                    ShowDefinitionDetails,
-                    Some("EditorShell && !PluginSurface"),
-                ),
-                // Error navigation follows the active document and wraps at either end.
-                KeyBinding::new("f8", NextSyntaxError, Some("EditorShell && !PluginSurface")),
-                KeyBinding::new(
-                    "shift-f8",
-                    PreviousSyntaxError,
-                    Some("EditorShell && !PluginSurface"),
-                ),
-            ]);
+            bind_editor_shell_keys(cx);
 
             let bounds = Bounds::centered(
                 None,

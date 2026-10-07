@@ -275,7 +275,7 @@ fn composed_wasm_preview_follows_memory_and_reclaims_the_editor_split(cx: &mut T
 }
 
 /// Replay only production worker events; an old native callback is explicitly rejected, not a crash.
-pub(super) fn pump(
+pub(crate) fn pump(
     manager: &mut plugin_runtime::Manager,
     app: &Entity<EditorApp>,
     cx: &mut gpui_kit::VisualTestContext,
@@ -661,7 +661,7 @@ pub(super) fn pump_recording_all(
 }
 
 /// The existing worker publication seam also supplies the actual asynchronous vector renderer output.
-pub(super) fn publish(
+pub(crate) fn publish(
     manager: &mut plugin_runtime::Manager,
     renderer: &mut images::VectorRenderer,
     app: &Entity<EditorApp>,

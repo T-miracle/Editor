@@ -18,6 +18,22 @@ struct Association {
 /// Native services receive native paths only; the guest never gains a filesystem preopen.
 pub(super) fn prepare(context: language::Context) -> Result<language::Proposal, Failure> {
     let setting = |key: &str| context.settings.get(key).map(|value| &value.value);
+    // Formatting policy belongs to XML, while the host only supplies standard indentation options.
+    let attributes = setting("format_attributes")
+        .and_then(Value::as_str)
+        .unwrap_or("preserve");
+    let empty = setting("format_empty_elements")
+        .and_then(Value::as_str)
+        .unwrap_or("ignore");
+    if !["preserve", "splitNewLine", "alignWithFirstAttr"].contains(&attributes) {
+        return Err(invalid("format_attributes", "unknown attribute layout"));
+    }
+    if !["ignore", "collapse", "expand"].contains(&empty) {
+        return Err(invalid(
+            "format_empty_elements",
+            "unknown empty element layout",
+        ));
+    }
     let download = setting("download_schemas")
         .and_then(Value::as_bool)
         .unwrap_or(false);
@@ -69,6 +85,13 @@ pub(super) fn prepare(context: language::Context) -> Result<language::Proposal, 
         // Caches belong to this instance's private directory, never the project or global home.
         "server":{"workDir":format!("{}/schema-cache", native_path(&context.data_root).trim_end_matches('/'))},
         "completion":{"autoCloseTags":true},
+        // LemMinX's configuration constructor does not initialize its primitive defaults. Publish
+        // the pinned formatter defaults explicitly so changing one policy never resets others to zero.
+        "format":{"enabled":true,"splitAttributes":attributes,"splitAttributesIndentSize":2,"emptyElements":empty,
+            "joinContentLines":false,"preserveEmptyContent":true,"preserveAttributeLineBreaks":true,
+            "maxLineWidth":100,"formatComments":true,"spaceBeforeEmptyCloseTag":true,"preservedNewlines":2,
+            "grammarAwareFormatting":true,"preserveSpace":["xsl:text","xsl:comment","xsl:processing-instruction",
+                "literallayout","programlisting","screen","synopsis","pre","xd:pre","style","script"]},
         "telemetry":{"enabled":false}
     });
     let options = json!({"settings":{"xml":xml}});

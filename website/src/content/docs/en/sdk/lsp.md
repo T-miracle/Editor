@@ -31,6 +31,95 @@ package installation order. Recognition, highlighting and LSP use separate `reco
 candidate-removal rules. All services belong to a trusted workspace, and an application-level
 plugin cannot declare an LSP.
 
+## Independent formatting and linked editing
+
+`language.formatting: ^1` adds an independent `formatter:<language>` selection role.
+Declare `formatting: true` on a language provider and advertise standard
+`documentFormattingProvider` at initialization. Set `primary: false` for a formatter-only
+service; `primary` defaults to true. A provider must contribute analysis or formatting.
+Recognition, highlighting, completion and diagnostics keep their existing providers when a
+formatter changes. A single candidate is adopted automatically; a newly installed candidate
+does not take a valid choice. Explicit project choices precede user choices. Removing a choice
+adopts a sole replacement; multiple remaining candidates need an explicit choice.
+
+```json
+{
+  "api": {"base":"^1", "required":{"language.lsp":"^1", "language.formatting":"^1", "process":"^1"}},
+  "permissions":["process.service.format"],
+  "services":{"format":{"program":"formatter-server","args":["--stdio"]}},
+  "language_servers":[{"id":"format","language":"novel","service":"format", "primary":false,"formatting":true}]
+}
+```
+
+The native Format Document command calls only the selected provider's standard
+`textDocument/formatting`. Format on Save is user policy, disabled by default, with language
+overrides. It waits for that one formatter before saving; a failed or stale proposal is
+reported without saving a different active file. If analysis and formatting select the same
+provider, they share one controlled process and the same document synchronization.
+Restricted workspaces continue to save ordinary native edits without invoking a formatter.
+
+`language.editing: ^1` and `editing: true` expose standard `prepareRename`, `rename` and
+`linkedEditingRange` from the selected analysis provider. Rename opens the native name field;
+Enter submits and Escape cancels. Return ordinary LSP text edits for the same document.
+Cancellation also revokes pending prepare and rename replies, so they cannot reopen the field
+or commit after Escape. A `WorkspaceEdit` can use `changes` or ordinary single-document
+`TextDocumentEdit` entries in `documentChanges`. The host checks the URI and any non-null
+version against the synchronized wire snapshot, then rechecks the native document revision
+and source before one atomic transaction; a null version retains those native guards.
+Resource operations, cross-file changes, annotations and mixing the two representations are
+rejected as a complete proposal. The client advertises `workspaceEdit.documentChanges` and
+does not advertise resource operations or annotation support. Plugins own semantic
+pairing, including nesting, void elements, comments and malformed input; the host does not
+parse a language to discover pairs.
+
+Linked editing is enabled by default and can be disabled globally or overridden by language.
+Standard `textDocument/linkedEditingRange` requires identical initial text and length in every
+range, as specified by [LSP 3.17](https://raw.githubusercontent.com/microsoft/language-server-protocol/gh-pages/_specifications/lsp/3.17/language/linkedEditingRange.md).
+`language.editing` 1.1 also supports semantic pairs whose initial names differ. Require
+`language.editing: ">=1.1, <2"` to use that extension. For an `editing: true` provider with an
+actually negotiated version of at least 1.1, the host adds this reserved client capability:
+
+```json
+{"capabilities":{"experimental":{"meEditorSemanticLinkedEditing":{"version":1}}}}
+```
+
+Return the same marker in the server's initialization capabilities to opt in. The marker's
+strict shape is the public `language::SemanticLinkedEditingCapabilities` type; unknown fields,
+unsupported versions or a marker without the authorized client advertisement do not enable it.
+The host then selects the fixed `meEditor/semanticLinkedEditingRange` request, with the same
+`{textDocument:{uri},position}` UTF-16 parameters and `null` or `{ranges,wordPattern}` result
+shape as the standard method. The selected, negotiated method grants semantic pairing authority;
+an extra field in a standard response cannot grant it. `client_experimental` cannot override
+this reserved marker. Without the handshake, standard linked editing remains unchanged.
+
+The semantic provider guarantees that all returned ranges denote one renameable definition;
+their initial names may have different text or lengths. The host applies the edited endpoint's
+complete new name to every peer, without case conversion or language-specific matching.
+For either method it checks 2–32 nonempty, disjoint ranges containing the caret, every UTF-16
+boundary, at most 64 KiB per initial name, and every endpoint against the bounded
+`wordPattern` (4096 bytes) that its Unicode regex engine can compile. An absent or unsupported
+pattern, uncertain ranges or an unavailable provider leaves ordinary native input intact.
+The first fast input can wait asynchronously for its matching semantic reply, up to 500 ms;
+timeout falls back to ordinary input. Waiting for semantics is limited to 128 commands and
+64 KiB; crossing either limit cancels pairing and immediately hands the same FIFO to native
+input. An overflowing platform paste is preserved rather than truncated. If native history
+needs a deferred turn, the FIFO retains later input and drains at the end of that event;
+the semantic-wait limit is not a hard size limit on native platform payloads.
+Undo/Redo and later input keep their entered order while ranges are pending. Disabling or
+replacing a provider drains entered text into the same native entity before rebinding; it
+cancels pairing, not user input. Selection changes drain text before moving the caret.
+Save, Format and Rename wait for native Change effects before reading a new document revision.
+Edits inside any linked range update its peers; deleting a complete name ends the binding.
+Composition preedit stays in the native editor;
+peers update on commit, within the same Undo transaction. Paste and deletion use the same
+single transaction. Undo/Redo replay complete native history rather than recursively mirroring.
+
+All editing results retain the selected provider, open-document incarnation and revision.
+Changed, closed, reopened, untrusted or retired targets reject late results. Before changing
+text, the host checks every UTF-16 boundary, ordering, overlap and quota, then applies one
+atomic native edit. At most 10,000 edits and 16 MiB per replacement are accepted; the merged
+replacement is bounded to 32 MiB. No valid prefix of an invalid proposal is committed.
+
 ## Optional WASM hook
 
 With `hook: true` the host sends `Notification::LanguageService(language::Context)` to an

@@ -59,6 +59,11 @@ pub(crate) fn negotiate(manifest: &Manifest) -> anyhow::Result<api::Negotiated> 
         // 1.2 adds owned native roots; 1.3 adds opt-in immutable diagnostic URI snapshots.
         ("language.lsp".into(), Version::new(1, 3, 0)),
         ("language.completion".into(), Version::new(1, 0, 0)),
+        // Independent providers negotiate editing and structure without replacing primary LSP ownership.
+        ("language.formatting".into(), Version::new(1, 0, 0)),
+        // 1.1 permits explicitly negotiated semantic linked ranges with different initial names.
+        ("language.editing".into(), Version::new(1, 1, 0)),
+        ("language.structure".into(), Version::new(1, 0, 0)),
         ("dependencies".into(), Version::new(1, 1, 0)),
     ]
     .into();

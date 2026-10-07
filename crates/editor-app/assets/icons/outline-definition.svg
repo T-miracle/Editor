@@ -1,0 +1,2 @@
+<!-- Host fallback for an arbitrary definition kind; valid nodes remain navigable when plugin artwork is absent. -->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M5 5h14v14H5zM8 9h8M8 12h5M8 15h8" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>

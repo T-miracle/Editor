@@ -13,4 +13,4 @@ pub(crate) use settings::SettingsSection;
 
 #[cfg(target_os = "windows")]
 pub(crate) use shell::WindowsTimerResolution;
-pub(crate) use shell::{EditorDockPanel, EditorDockPanelKind};
+pub(crate) use shell::{EditorDockPanel, EditorDockPanelKind, bind_editor_shell_keys};

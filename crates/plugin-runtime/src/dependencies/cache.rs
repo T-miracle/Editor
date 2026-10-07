@@ -26,9 +26,62 @@ impl Prepared {
                     target.starts_with(root.canonicalize()?),
                     "Argument escaped dependency"
                 );
+                // Interpreter/module loaders can reject Windows device prefixes in argv. Boundary
+                // checks keep canonical paths; the child spelling must re-resolve to the same target.
+                #[cfg(windows)]
+                let target = crate::toolchains::child_path_spelling(target)?;
                 Ok(target.display().to_string())
             })
             .collect()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Child-friendly argument spelling preserves the managed target, literals and traversal boundary.
+    #[test]
+    fn dependency_arguments_keep_ownership_and_ordinary_literals() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path().join("server");
+        std::fs::create_dir(&root).unwrap();
+        let script = root.join("server.cjs");
+        std::fs::write(&script, "// controlled service module").unwrap();
+        let prepared = Prepared {
+            program: PathBuf::new(),
+            roots: BTreeMap::from([("server".into(), root)]),
+            locks: Vec::new(),
+        };
+        let literal = r"\\?\C:\user\literal\argument";
+        let args = prepared
+            .args(&["${dependency:server}/server.cjs".into(), literal.into()])
+            .unwrap();
+        assert_eq!(
+            Path::new(&args[0]).canonicalize().unwrap(),
+            script.canonicalize().unwrap()
+        );
+        assert_eq!(
+            args[1], literal,
+            "ordinary arguments cannot be interpreted as paths"
+        );
+        #[cfg(windows)]
+        assert!(
+            !args[0].starts_with(r"\\?\"),
+            "interpreters must receive the verified ordinary spelling"
+        );
+        for denied in [
+            "${dependency:server}/../outside.cjs",
+            "${dependency:unknown}/server.cjs",
+            "${dependency:server}/server.cjs:stream",
+        ] {
+            assert!(prepared.args(&[denied.into()]).is_err(), "{denied}");
+        }
+        #[cfg(windows)]
+        assert!(
+            crate::toolchains::child_path_spelling(script).is_err(),
+            "an unverified target spelling must be refused"
+        );
     }
 }
 

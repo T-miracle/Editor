@@ -203,6 +203,8 @@ impl Manager {
             program,
             args,
             self.host_resources.logs.clone(),
+            // Server extensions borrow only versions negotiated by this package, never its own flags.
+            crate::capabilities::negotiate(&entry.manifest)?.capabilities,
         );
         if language_service.provider.completion_hook {
             let assets = self
@@ -245,5 +247,7 @@ impl Manager {
     pub(super) fn retire_language_services(&mut self, id: &str) {
         self.language_services
             .retain(|key, _| !key.starts_with(&format!("{id}/")));
+        // Every pure language role loses authority at the same package retirement boundary.
+        self.retire_structure_providers(id);
     }
 }

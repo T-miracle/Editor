@@ -1,4 +1,5 @@
 //! Compose the existing native editor, popovers and input gestures without replacing its session.
+use super::language_for_path;
 use crate::*;
 use gpui_kit::component::WindowExt as _;
 
@@ -28,9 +29,22 @@ impl EditorApp {
             )
         };
         let app = cx.entity().downgrade();
+        let language = self
+            .active_path
+            .as_deref()
+            .map(language_for_path)
+            .unwrap_or_default();
+        let can_format = editable && self.language_edits.formatters.contains_key(&language);
+        let can_rename = editable
+            && self
+                .language_servers
+                .get(&language)
+                .is_some_and(|server| server.provides_editing());
         // Preserve the native editor and all its popovers while a plugin adds a sibling preview.
         div()
             .debug_selector(|| "editor-source-pane".into())
+            // Only the host-rendered native editor admits document shortcuts inside a guest layout.
+            .key_context("NativeEditorSource")
             .flex_1()
             .min_h_0()
             .flex()
@@ -43,8 +57,17 @@ impl EditorApp {
             // Capture selection presses before the base editor collapses them.
             .when(hover_enabled, |view| {
                 view.capture_any_mouse_down(cx.listener(Self::text_drag_press))
+                    .capture_any_mouse_down(cx.listener(Self::linked_pointer_down))
+                    .capture_key_down(cx.listener(Self::linked_navigation_key))
+                    .capture_action(cx.listener(Self::linked_history_undo))
+                    .capture_action(cx.listener(Self::linked_history_redo))
                     .capture_action(cx.listener(Self::text_drag_escape))
+                    .capture_action(cx.listener(Self::cancel_rename_action))
                     .capture_action(cx.listener(Self::paste_plugin_images))
+                    .capture_action(cx.listener(Self::linked_paste))
+                    .capture_action(cx.listener(Self::linked_cut))
+                    .capture_action(cx.listener(Self::linked_backspace))
+                    .capture_action(cx.listener(Self::linked_delete))
                     .on_drag_move(cx.listener(Self::image_drag_move))
             })
             // Register drag listeners before the editor's own selection listeners.
@@ -112,6 +135,17 @@ impl EditorApp {
                                 Box::new(gpui_base::input::ToggleCodeActions),
                             )
                             .separator()
+                            .menu_with_disabled(
+                                t!("editor.format_document").to_string(),
+                                !can_format,
+                                Box::new(FormatDocument),
+                            )
+                            .menu_with_disabled(
+                                t!("editor.rename_symbol").to_string(),
+                                !can_rename,
+                                Box::new(RenameSymbol),
+                            )
+                            .separator()
                             // Cut and Copy validate the live selection when their actions run.
                             .menu_with_disabled(
                                 t!("editor.cut").to_string(),
@@ -152,6 +186,8 @@ impl EditorApp {
             )
             // Paint the drop caret after the text, using the current editor layout.
             .child(self.render_text_drag_caret(cx))
+            .children(self.render_linked_input())
+            .children(self.render_rename_prompt(cx))
             .into_any_element()
     }
 }

@@ -8,7 +8,8 @@ use std::{cell::Cell, rc::Rc, sync::Arc};
 
 use crate::theme::component_styles;
 use gpui_base::dock::{
-    DockArea, DockAreaRenderer, DockContext, DockEvent, DockPlacement, InsertTarget, PanelView,
+    DockArea, DockAreaRenderer, DockContext, DockEvent, DockPlacement, DropPlaceholderBounds,
+    InsertTarget, NodeId, PanelView,
 };
 use gpui_base::{ElementExt as _, HandleEdge, Placement, resize_handle};
 use gpui_kit::prelude::FluentBuilder as _;
@@ -85,15 +86,77 @@ impl DockAreaRenderer for LocalDockRenderer {
     fn tab_group_renderer(&self) -> Rc<dyn TabGroupRenderer> {
         Rc::new(LocalTabGroupRenderer {
             title_height: self.title_height,
+            area: self.area.clone(),
+            node: Cell::new(None),
+            bounds: Rc::new(Cell::new(Bounds::default())),
         })
     }
 }
 
 struct LocalTabGroupRenderer {
     title_height: f32,
+    /// Only hit geometry is local; all lasting panel positions and sizes remain in DockArea.
+    area: WeakEntity<DockArea>,
+    node: Cell<Option<NodeId>>,
+    bounds: Rc<Cell<Bounds<Pixels>>>,
 }
 
 impl LocalTabGroupRenderer {
+    /// A separate hit child consumes a panel drop once; registering another drop on Base's same Div would consume it twice.
+    fn split_target(&self, group: &TabGroupContext, cx: &App) -> Option<Stateful<Div>> {
+        if !cx.has_active_drag() || !group.is_droppable() {
+            return None;
+        }
+        let node = group.node();
+        let area = self.area.clone();
+        let hit_bounds = self.bounds.clone();
+        let release_bounds = hit_bounds.clone();
+        Some(
+            div()
+                .id("local-dock-split-target")
+                .absolute()
+                .inset_0()
+                .can_drop(move |value, window, _| {
+                    value.is::<DragPanel>()
+                        && placement::edge_at(hit_bounds.get(), window.mouse_position()).is_some()
+                })
+                .on_drop(move |drag: &DragPanel, window, cx| {
+                    cx.stop_propagation();
+                    if drag.source() == node {
+                        return;
+                    }
+                    let rect = release_bounds.get();
+                    let Some(requested) = placement::edge_at(rect, window.mouse_position()) else {
+                        return;
+                    };
+                    let _ = area.update(cx, |area, cx| {
+                        // Preserve Base's lock authority at release, even if it changed since the preview.
+                        if area.is_locked() {
+                            return;
+                        }
+                        let placement = placement::resolve(
+                            area,
+                            node,
+                            requested,
+                            rect,
+                            window.mouse_position(),
+                            cx,
+                        );
+                        area.move_panel(
+                            drag.panel(),
+                            InsertTarget::Split {
+                                node,
+                                placement,
+                                size: None,
+                            },
+                            window,
+                            cx,
+                        );
+                    });
+                }),
+        )
+    }
+
     fn panel_title(
         panel: &Arc<dyn gpui_kit::component::dock::BasePanelView>,
         window: &mut Window,
@@ -117,8 +180,10 @@ impl TabGroupRenderer for LocalTabGroupRenderer {
     /// Keep native drag events, rejecting only the central tab-merge zone.
     fn content_frame(&self, group: &TabGroupContext, _: &mut Window, _: &mut App) -> Stateful<Div> {
         let node = group.node();
-        let bounds = Rc::new(Cell::new(Bounds::default()));
+        self.node.set(Some(node));
+        let bounds = self.bounds.clone();
         let measured = bounds.clone();
+        let droppable = group.is_droppable();
         div()
             .id("local-dock-content-frame")
             .debug_selector(move || format!("local-dock-content-{}", node.as_u64()))
@@ -126,10 +191,11 @@ impl TabGroupRenderer for LocalTabGroupRenderer {
             .can_drop(move |value, window, _| {
                 // GPUI Base 0.7 uses the middle 30% on each axis for tab merging.
                 // Filter that zone against the live pointer, not a previous frame's hint.
-                // Base still resolves the edge, moves panels and normalizes split trees.
+                // Base owns the drag payload and normalized tree; local policy rejects tab merges.
                 let rect = bounds.get();
                 let pointer = window.mouse_position();
-                value.is::<DragPanel>()
+                droppable
+                    && value.is::<DragPanel>()
                     && rect.contains(&pointer)
                     && (pointer.x < rect.left() + rect.size.width * 0.35
                         || pointer.x > rect.left() + rect.size.width * 0.65
@@ -170,7 +236,9 @@ impl TabGroupRenderer for LocalTabGroupRenderer {
             .text_color(style.foreground.unwrap_or(cx.theme().foreground))
             .child(Self::panel_title(&panel, window, cx))
             .when_some(drag.filter(|_| !group.is_locked()), |bar, drag| {
-                // Base owns drag identity, hit testing, split edits, and activation.
+                // The project permits moving a region's sole panel into another region; Base's local "last panel" guard
+                // would pin that leaf even when Editor and other docks remain visible. Preserve its lock/zoom authority.
+                // Base still owns the public payload, normalized split edits, and activation.
                 bar.on_drag(drag, move |drag, offset, _, cx| {
                     drag.set_drag_offset(offset);
                     drag.set_preview_size(size(px(120.), px(28.)));
@@ -187,28 +255,41 @@ impl TabGroupRenderer for LocalTabGroupRenderer {
         panel: AnyView,
         group: &TabGroupContext,
         _: &mut Window,
-        _: &mut App,
+        cx: &mut App,
     ) -> AnyElement {
         if group.is_collapsed() {
             return Empty.into_any_element();
         }
         div()
             .id("local-dock-panel-content")
+            .relative()
             .overflow_y_scroll()
             .overflow_x_hidden()
             .flex_1()
             .child(panel.cached(StyleRefinement::default().absolute().size_full()))
+            // The temporary hit surface exists only during a drag and never owns persistent layout or panel state.
+            .children(self.split_target(group, cx))
             .into_any_element()
     }
-    /// Draw the half-pane resolved by Base; the center tab-merge target is omitted.
+    /// Project the same regional split policy used by drop handling, including a native top band.
     fn render_drop_indicator(
         &self,
         indicator: DropIndicator,
-        _: &mut Window,
+        window: &mut Window,
         cx: &mut App,
     ) -> Option<AnyElement> {
-        indicator.placement()?;
-        let target = indicator.to();
+        let requested = indicator.placement()?;
+        let node = self.node.get()?;
+        let area = self.area.upgrade()?;
+        let resolved = placement::resolve(
+            area.read(cx),
+            node,
+            requested,
+            indicator.bounds(),
+            window.mouse_position(),
+            cx,
+        );
+        let target = DropPlaceholderBounds::for_placement(indicator.bounds(), Some(resolved));
         Some(
             div()
                 .debug_selector(|| "local-dock-drop-indicator".into())
@@ -284,7 +365,9 @@ pub(crate) fn add_panel_view(
     }
 }
 
+mod placement;
 mod resize;
+pub(crate) use placement::stack_axis;
 
 #[cfg(test)]
 mod tests;

@@ -5,9 +5,8 @@
 //! to plugin projects through this export. Moving that directory therefore breaks this
 //! build on purpose.
 //!
-//! The exported names stay as they were before the move, so plugin projects and the
-//! distribution checks see an unchanged file set; only the sources changed location and
-//! became lower-case for readable URLs.
+//! Existing export names stay stable; new public modules are added explicitly to this inventory.
+//! Reader documents retain lower-case site paths while plugin projects receive standalone SDK files.
 use anyhow::Context;
 use sha2::{Digest, Sha256};
 use std::path::{Path, PathBuf};
@@ -141,6 +140,15 @@ const SDK_FILES: &[(&str, &[u8])] = &[
     (
         "src/language.rs",
         include_bytes!("../../plugin-protocol/src/language.rs"),
+    ),
+    // Pure structure providers build independently against the same versioned data types as the host.
+    (
+        "src/structure.rs",
+        include_bytes!("../../plugin-protocol/src/structure.rs"),
+    ),
+    (
+        "STRUCTURE.md",
+        include_bytes!("../../../website/src/content/docs/en/sdk/structure.md"),
     ),
     (
         "src/process.rs",
@@ -337,6 +345,7 @@ fn exported_bytes<'a>(relative: &str, bytes: &'a [u8]) -> Cow<'a, [u8]> {
         ("services", "SERVICES.md"),
         ("dependencies", "DEPENDENCIES.md"),
         ("lsp", "LSP.md"),
+        ("structure", "STRUCTURE.md"),
         ("ui", "UI.md"),
         ("processes", "PROCESSES.md"),
         ("languages", "LANGUAGES.md"),

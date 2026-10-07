@@ -350,6 +350,8 @@ pub enum Notification {
     LanguageService(crate::language::Context),
     /// language.completion: a pure worker receives readonly versioned text, never editor authority.
     LanguageCompletion(crate::language::CompletionRequest),
+    /// language.structure: describe a readonly snapshot; the host owns outline UI and navigation.
+    LanguageStructure(crate::structure::Request),
     Process {
         handle: ResourceHandle,
         update: crate::process::Update,
@@ -652,6 +654,9 @@ pub struct Output {
     /// Returned only by the negotiated pure completion callback, with its source and request identity.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub language_completion: Option<crate::language::CompletionProposal>,
+    /// Accepted only from the corresponding negotiated pure structure callback.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub language_structure: Option<crate::structure::Proposal>,
     /// Only a service invocation may return this contract-validated result.
     #[serde(default)]
     pub service_reply: Option<Result<serde_json::Value, Failure>>,

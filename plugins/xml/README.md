@@ -1,7 +1,7 @@
 # XML 插件 / XML plugin
 
-版本 0.1.0，为 `.xml`、`.svg`、`.xsd`、`.xsl`、`.xslt` 提供动态 Tree-sitter XML
-高亮及 LemMinX 补全、语法/Schema 诊断、悬浮说明和定义跳转。文件扩展名关联通过宿主
+版本 0.2.0，为 `.xml`、`.svg`、`.xsd`、`.xsl`、`.xslt` 提供动态 Tree-sitter XML
+高亮及 LemMinX 补全、语法/Schema 诊断、悬浮说明、定义跳转、格式化和标签编辑。文件扩展名关联通过宿主
 通用语言设置配置。SVG 预览由独立 Image 插件提供，两者没有依赖或相互调用。
 
 Windows x86_64 安装授权后下载固定版本 LemMinX 0.31.2 原生程序，来源为
@@ -21,6 +21,19 @@ ZIP SHA-256 为 `7eaefaac68253b0ec8e0ad1f1c0f2d0755423d4e99e52497428b52f80df28eb
 - `catalogs` 是 JSON 路径数组，例如 `["schemas/catalog.xml"]`，用于离线解析外部标识符。
 - `svg_suggestions` 默认开启，使用随包的宽松 SVG 常用元素/属性辅助 Schema。
   其范围是常用源码编辑提示，不宣称实现完整 SVG 标准约束；用户 Schema 关联优先。
+- `format_attributes` 默认 `preserve`，还可选 `splitNewLine` 或 `alignWithFirstAttr`。
+- `format_empty_elements` 默认 `ignore`，还可选 `collapse` 或 `expand`。
+
+手动格式化使用 `Shift+Alt+F`；保存时格式化由宿主语言设置开启，默认关闭。
+格式化提供者与高亮、主语言服务分开选择，可以由其他插件替换。
+`F2` 使用常规名称输入框重命名配对标签；直接编辑标签名默认同步明确配对的另一端，
+支持用户默认值和单个语言覆盖。自闭合元素和无法确定配对的标签只编辑当前端。
+格式化及配对修改使用原生编辑区的事务和 Undo/Redo，不建立第二份文本或撤销栈。
+
+插件还通过 `language.structure` 提供独立于语言服务的元素树、定义位置、图标和结构折叠。
+宿主内置大纲以元素为节点，用 `id`/`name` 辅助区分；点击跳到开始标签名。
+注释可折叠，但不单独出现在元素大纲中。大纲与资源管理器同时显示，使用宿主 DockArea
+拖动、调整比例和恢复本机工作区布局；左右侧上下排列，顶部和底部左右排列。
 
 无 Schema 的普通 XML 不显示缺少 Schema 的告警；基础标签/属性提示及语法诊断继续可用。
 历史属性建议只依据当前文档；有效 Schema/DTD 的约束优先。当前文档明确报告规则加载失败
@@ -32,3 +45,5 @@ XSD/DTD 可提供合法子元素、属性、枚举值与文档说明；没有定
 Build with the host's public `--plugin-cargo` SDK and package using
 `scripts/build-plugins.ps1 -Packages xml -HostExe <editor-app.exe>`.
 The ZIP includes the guest, grammar, queries, icons and bundled SVG assistance schema.
+The readonly structure callback needs only `editor.read`; formatting and paired editing use
+the independently selected, controlled language service and its approved process permission.

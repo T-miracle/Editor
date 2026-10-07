@@ -8,6 +8,26 @@ use std::collections::BTreeMap;
 /// Native plugins with absolute path globs may add a second pattern containing these dot directories.
 pub const SNAPSHOT_URI_SEGMENTS: usize = 64;
 
+/// language.editing 1.1 reserves this client/server experimental capability key for semantic pairing.
+/// Only the host's negotiated grant can advertise it; provider client_experimental cannot override it.
+pub const SEMANTIC_LINKED_EDITING_CAPABILITY: &str = "meEditorSemanticLinkedEditing";
+
+/// This fixed request uses LinkedEditingRangeParams and LinkedEditingRanges over the owned LSP transport.
+/// Unlike the standard method, its provider guarantees semantic pairing of initially different names.
+pub const SEMANTIC_LINKED_EDITING_METHOD: &str = "meEditor/semanticLinkedEditingRange";
+
+/// Version one permits different initial text/lengths while retaining UTF-16 boundaries and name patterns.
+pub const SEMANTIC_LINKED_EDITING_VERSION: u32 = 1;
+
+/// Strict initialization marker for the generic semantic linked-editing extension.
+/// Both sides must advertise the supported version before the host selects the extension method.
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct SemanticLinkedEditingCapabilities {
+    /// Semantic request version; currently only SEMANTIC_LINKED_EDITING_VERSION is supported.
+    pub version: u32,
+}
+
 /// Recognition, highlighting, and this LSP provider may be contributed by different packages.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
@@ -15,6 +35,17 @@ pub struct Provider {
     pub id: String,
     pub language: String,
     pub service: String,
+    /// Main analysis participates in lsp selection; a formatting-only service sets this to false.
+    #[serde(default = "default_primary")]
+    pub primary: bool,
+    /// language.formatting 1.0: contribute to the independently selected formatter candidates.
+    #[serde(default)]
+    pub formatting: bool,
+    /// language.editing: expose standard prepareRename/rename/linkedEditingRange to native input.
+    /// Version 1.1 also allows the separately negotiated generic semantic linked-editing method.
+    /// Pairing remains provider policy; this declaration grants neither file IO nor additional processes.
+    #[serde(default)]
+    pub editing: bool,
     /// A hook may select another approved startup plan, not invent an executable or argument vector.
     #[serde(default)]
     pub alternatives: Vec<String>,
@@ -39,7 +70,7 @@ pub struct Provider {
     /// Section names are opaque protocol data; the host never prefixes a concrete server name.
     #[serde(default)]
     pub configuration: BTreeMap<String, Value>,
-    /// Experimental protocol flags are plugin data; standard transport capabilities stay host-owned.
+    /// Experimental protocol flags are plugin data; standard and reserved transport capabilities stay host-owned.
     #[serde(default)]
     pub client_experimental: BTreeMap<String, Value>,
     #[serde(default)]
@@ -48,6 +79,11 @@ pub struct Provider {
     pub completion_triggers: Vec<String>,
     #[serde(default)]
     pub completion_after_whitespace: Vec<String>,
+}
+
+/// Existing current-protocol declarations retain their ordinary analysis role.
+fn default_primary() -> bool {
+    true
 }
 
 /// Without this optional condition, a successful initialize response plus initialized means ready.

@@ -3,13 +3,14 @@
 use super::*;
 use crate::{EditorApp, typography};
 use editor_core::Workspace;
-use gpui_base::dock::{DockAreaState, DockLayout};
+use gpui_base::dock::{DockAreaState, DockLayout, PanelInfo, PanelState};
 use gpui_base::{
     Placement,
     dock::{DockPlacement, InsertTarget, PanelId},
 };
 use gpui_kit::{
-    AppContext as _, Entity, TestAppContext, VisualTestContext, component::Root, gpui, px, size,
+    AppContext as _, Axis, Entity, TestAppContext, VisualTestContext, component::Root, gpui, px,
+    size,
 };
 use plugin_runtime::{Installed, plugin_protocol::Manifest};
 use std::{cell::RefCell, rc::Rc};
@@ -76,6 +77,35 @@ fn assert_layout_eq(actual: DockAreaState, expected: DockAreaState) {
         actual, expected,
         "restart must preserve the current split tree and sizes"
     );
+}
+
+/// This legacy fixture gains only an equal-height Outline beside Explorer; every previously saved field stays exact.
+fn expected_legacy_outline_migration(mut layout: DockAreaState) -> DockAreaState {
+    let explorer = layout.center.children[0].clone();
+    assert_eq!(explorer.children[0].panel_name, "Explorer");
+    // Both columns span the same center height. Derive the new halves from the independently saved Editor/tasks column,
+    // rather than copying recovered measurements or dropping old size assertions from the comparison.
+    let height = layout.center.children[1]
+        .info
+        .sizes()
+        .unwrap()
+        .iter()
+        .copied()
+        .fold(px(0.), |total, extent| total + extent);
+    assert!(height > px(0.));
+    layout.center.children[0] = PanelState {
+        panel_name: "StackPanel".into(),
+        children: vec![
+            explorer,
+            PanelState {
+                panel_name: "TabPanel".into(),
+                children: vec![PanelState::new("Outline")],
+                info: PanelInfo::tabs(0),
+            },
+        ],
+        info: PanelInfo::stack(vec![height / 2.; 2], Axis::Vertical),
+    };
+    layout
 }
 
 /// Publish two distinct contributions of the same panel type through the host's regular sync.
@@ -162,7 +192,7 @@ fn dock_layout_survives_editor_restart(cx: &mut TestAppContext) {
     });
 }
 
-/// Async plugin startup must retain nested splits, moved panels, closed docks and stable identities.
+/// Async startup preserves legacy plugin layout and sizes while adding the new host Outline only inside Explorer's region.
 #[gpui::test]
 fn plugin_dock_layout_survives_delayed_startup(cx: &mut TestAppContext) {
     cx.update(|cx| {
@@ -287,7 +317,10 @@ fn plugin_dock_layout_survives_delayed_startup(cx: &mut TestAppContext) {
         window.draw(cx).clear(cx);
         let app = restored.read(cx);
         assert!(!app.pending_dock_restore);
-        assert_layout_eq(app.dock_area.read(cx).dump(cx), expected);
+        assert_layout_eq(
+            app.dock_area.read(cx).dump(cx),
+            expected_legacy_outline_migration(expected),
+        );
         for key in ["terminal/terminal", "terminal/tasks"] {
             let id = PanelId::from(app.plugin_panels[key].entity_id());
             assert!(

@@ -28,6 +28,80 @@ alternate: /en/sdk/lsp/
 的 `recognition:`、`highlight:`、`lsp:` 选择键，共用用户/项目优先级与候选移除规则。
 所有服务属于受信任工作区，应用级插件不能声明 LSP。
 
+## 独立格式化与关联编辑
+
+`language.formatting: ^1` 增加独立的 `formatter:<language>` 选择角色。语言提供者声明
+`formatting: true`，并在初始化时声明标准 `documentFormattingProvider`。只提供格式化的
+服务设置 `primary: false`；`primary` 默认为 true。提供者必须贡献分析或格式化。
+替换格式化器后，识别、高亮、补全和诊断仍使用原提供者。单一候选自动采用；新安装候选
+不抢占有效选择。显式项目选择优先于用户选择。移除已选项后，自动采用唯一替代者；
+剩余多个候选时需要显式选择。
+
+```json
+{
+  "api": {"base":"^1", "required":{"language.lsp":"^1", "language.formatting":"^1", "process":"^1"}},
+  "permissions":["process.service.format"],
+  "services":{"format":{"program":"formatter-server","args":["--stdio"]}},
+  "language_servers":[{"id":"format","language":"novel","service":"format", "primary":false,"formatting":true}]
+}
+```
+
+原生“格式化文档”命令只调用选中提供者的标准 `textDocument/formatting`。保存时格式化
+是用户策略，默认关闭，允许按语言覆盖。保存等待这一个格式化器；失败或过期方案会
+报告错误，不保存另一个当前文件。分析与格式化选中同一提供者时，共享一个受控进程
+及相同文档同步。
+受限工作区继续保存普通原生修改，不启动格式化工具。
+
+`language.editing: ^1` 配合 `editing: true`，开放选中分析提供者的标准 `prepareRename`、
+`rename` 和 `linkedEditingRange`。重命名显示原生名称输入框，Enter 提交，Escape 取消。
+取消同时撤销等待中的 prepare 与 rename 回复，避免迟到结果重新打开输入框或提交修改。
+`WorkspaceEdit` 可使用 `changes`，或在 `documentChanges` 中返回同一文档的普通
+`TextDocumentEdit`。宿主检查 URI 与非 null 的版本是否匹配已同步的 wire 快照，再在一次
+原子事务前检查原生文档 revision 和源码；版本为 null 时仍保留这些原生守卫。
+资源操作、跨文件修改、注释及混用两种表示均整案拒绝。客户端声明
+`workspaceEdit.documentChanges`，不声明资源操作或注释支持。插件负责语义
+配对，包括嵌套、空元素、注释与不完整输入；宿主不解析语言来寻找配对。
+
+关联编辑默认开启，允许全局关闭或按语言覆盖。标准 `textDocument/linkedEditingRange`
+要求所有范围的初始文本与长度相同，遵循 [LSP 3.17](https://raw.githubusercontent.com/microsoft/language-server-protocol/gh-pages/_specifications/lsp/3.17/language/linkedEditingRange.md)。
+`language.editing` 1.1 还支持初始名称不同的语义配对。使用该扩展时要求
+`language.editing: ">=1.1, <2"`。对声明 `editing: true` 且实际协商版本至少为 1.1
+的提供者，宿主添加以下保留客户端能力：
+
+```json
+{"capabilities":{"experimental":{"meEditorSemanticLinkedEditing":{"version":1}}}}
+```
+
+服务在初始化能力中返回同一个标记以启用扩展。标记的严格结构由公开
+`language::SemanticLinkedEditingCapabilities` 类型定义；未知字段、不支持的版本，
+或没有获授权的客户端声明时，均不启用扩展。宿主随后选择固定方法
+`meEditor/semanticLinkedEditingRange`，沿用标准方法的 UTF-16
+`{textDocument:{uri},position}` 参数与 `null` 或 `{ranges,wordPattern}` 返回结构。
+语义配对权限来自选中的已协商方法，标准响应中的附加字段不能授予该权限。
+`client_experimental` 不得覆盖此保留标记；未完成握手时标准关联编辑保持原行为。
+
+语义提供者保证所有返回范围表示同一个可重命名定义，初始名称允许文本或长度不同。
+宿主将用户编辑端的完整新名称应用到所有对应端，不做大小写转换或语言专属匹配。
+两种方法均检查包含光标、非空且互不重叠的 2–32 个范围、全部 UTF-16 边界、每个初始
+名称最多 64 KiB，以及每端符合最多 4096 字节、可由宿主 Unicode 正则引擎编译的
+`wordPattern`。缺少或不支持模式、配对不明或提供者不可用时保留普通原生输入。
+首次快速输入可异步
+等待对应语义结果，最多 500 毫秒；超时退回普通输入。等待语义的预算为 128 项、64 KiB，
+超过任一上限便取消配对，将同一个 FIFO 立即交还原生输入；超过上限的平台粘贴不会被截断。
+原生历史需要延迟一轮时，后续输入仍留在该 FIFO，并在本次事件结束时排空。
+语义等待预算不代表原生平台输入载荷的硬大小限制。
+等待范围时 Undo/Redo 与后续输入保持进入顺序。关闭或替换提供者时，先将已输入字符
+交还同一原生实体再重绑；取消配对不取消用户输入。选区改变前先提交待输入字符。
+保存、格式化和重命名等待原生 Change 落入文档会话，再读取新的 revision。
+编辑任一关联范围会同步其他端；完整删除名称后结束绑定。组合输入预编辑留在原生编辑区；
+提交时在同一 Undo 事务中更新其他端。
+粘贴和删除沿用同一事务。Undo/Redo 重放完整原生历史，不递归同步。
+
+编辑结果保留选中提供者、已打开文档的 incarnation 及 revision。目标已变更、关闭、
+重开、不再受信任或提供者已撤销时拒绝迟到结果。写入前检查全部 UTF-16 边界、排序、
+重叠及配额，再应用一次原生原子编辑。最多接受 10000 项，每项替换不超过 16 MiB，
+合并后的替换不超过 32 MiB；无效方案不会部分提交有效前缀。
+
 ## 可选 WASM 钩子
 
 设置 `hook: true` 后，宿主向该包的活动实例发送

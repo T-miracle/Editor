@@ -1,6 +1,7 @@
 //! XML analysis configuration is independent plugin policy; the host owns transport and documents.
 mod completion;
 mod configuration;
+mod structure;
 use plugin_protocol::{
     api,
     bindings::{Guest, export},
@@ -27,6 +28,13 @@ impl Guest for XmlLanguage {
             }),
             api::Input::Snapshot => Ok(api::Output {
                 snapshot: Some(Default::default()),
+                ..Default::default()
+            }),
+            api::Input::Event {
+                event: api::Notification::LanguageStructure(request),
+                ..
+            } => Ok(api::Output {
+                language_structure: Some(structure::describe(request)),
                 ..Default::default()
             }),
             _ => Ok(Default::default()),

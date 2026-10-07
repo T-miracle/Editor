@@ -732,6 +732,30 @@ impl EditorApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        // Platform input may still be awaiting semantic ranges; enter it into its original editor
+        // before changing the active entity. Its Change subscription retains that document's revision.
+        self.finish_linked_input(window, cx);
+        if self
+            .language_edits
+            .bridge
+            .as_ref()
+            .is_some_and(|bridge| bridge.read(cx).has_pending())
+        {
+            let Some(path) = self.tabs.get(index).map(|tab| tab.path().to_path_buf()) else {
+                return;
+            };
+            // Native history dispatch is deferred outside the input borrow. Keep its source mounted
+            // until it drains, then find the destination again because tab indices may have changed.
+            let owner = cx.entity().downgrade();
+            window.defer(cx, move |window, cx| {
+                let _ = owner.update(cx, |app, cx| {
+                    if let Some(index) = app.tabs.iter().position(|tab| tab.path() == path) {
+                        app.activate_tab_with_navigation(index, reveal, focus_editor, window, cx);
+                    }
+                });
+            });
+            return;
+        }
         // A selection gesture belongs to one uninterrupted visit to its document.
         self.cancel_text_drag(cx);
         let Some(tab) = self.tabs.get(index) else {
@@ -763,6 +787,8 @@ impl EditorApp {
         }
         // A completion index belongs to one document and must not cross tabs.
         self.completion_popup.reset();
+        // Input interception follows the new editor entity; ranges from another tab never carry over.
+        self.sync_linked_input(cx);
         // Session restoration preserves saved directory states instead of revealing each tab.
         if reveal && !self.restoring_documents && path.starts_with(self.workspace.root()) {
             self.select_file_in_tree(&path, cx);
@@ -812,6 +838,22 @@ impl EditorApp {
     }
 
     pub(crate) fn close_tab(&mut self, path: PathBuf, window: &mut Window, cx: &mut Context<Self>) {
+        if self.active_path.as_ref() == Some(&path)
+            && self
+                .language_edits
+                .bridge
+                .as_ref()
+                .is_some_and(|bridge| bridge.read(cx).has_pending())
+        {
+            // Base emits Change while replaying platform commands. Check dirty state only after
+            // that event reaches DocumentSession, otherwise a newly typed clean tab could be lost.
+            self.finish_linked_input(window, cx);
+            let owner = cx.entity().downgrade();
+            window.defer(cx, move |window, cx| {
+                let _ = owner.update(cx, |app, cx| app.close_tab(path, window, cx));
+            });
+            return;
+        }
         let Some(index) = self.tabs.iter().position(|tab| tab.path() == path) else {
             return;
         };

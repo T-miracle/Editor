@@ -4,6 +4,7 @@ mod completion;
 pub(crate) use completion::CompletionHook;
 use plugin_protocol::language::Provider;
 use std::{
+    collections::BTreeMap,
     path::PathBuf,
     process::{ChildStdin, ChildStdout},
     sync::{Arc, Condvar, Mutex, Weak},
@@ -15,6 +16,8 @@ pub struct LanguageService {
     pub owner: String,
     pub provider: Provider,
     pub root: PathBuf,
+    /// The package's negotiated versions remain immutable for this service incarnation.
+    capabilities: BTreeMap<String, semver::Version>,
     pub(crate) program: PathBuf,
     pub(crate) args: Vec<String>,
     state: Mutex<Lease>,
@@ -135,11 +138,13 @@ impl LanguageService {
         program: PathBuf,
         args: Vec<String>,
         runtime_logs: crate::RuntimeLogs,
+        capabilities: BTreeMap<String, semver::Version>,
     ) -> Self {
         Self {
             owner,
             provider,
             root,
+            capabilities,
             program,
             args,
             state: Mutex::new(Lease::default()),
@@ -147,6 +152,12 @@ impl LanguageService {
             dependencies: vec![],
             completion: None,
         }
+    }
+    /// Return a negotiated public capability version for this plan, or `None` when unavailable.
+    /// This read-only lookup grants neither execution nor additional file access; consumers still
+    /// validate their provider declaration, current lease and operation-specific permissions.
+    pub fn capability(&self, name: &str) -> Option<&semver::Version> {
+        self.capabilities.get(name)
     }
     /// Borrow the shared run history without transferring authority to launch or modify this plan.
     pub fn runtime_logs(&self) -> crate::RuntimeLogs {
@@ -246,6 +257,7 @@ impl LanguageService {
             && self.root == other.root
             && self.program == other.program
             && self.args == other.args
+            && self.capabilities == other.capabilities
             && self.completion.as_ref().map(|hook| &hook.settings)
                 == other.completion.as_ref().map(|hook| &hook.settings)
     }
@@ -403,6 +415,7 @@ mod tests {
             PathBuf::new(),
             vec![],
             logs.clone(),
+            BTreeMap::new(),
         );
         let retired = std::sync::atomic::AtomicBool::new(false);
         let id = plan

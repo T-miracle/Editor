@@ -25,6 +25,8 @@ pub use request_state::Completion;
 mod instance;
 mod language_service;
 pub use language_service::{LanguageService, ServiceProcess};
+mod structure;
+pub use structure::{StructureProvider, StructureSnapshot};
 mod manager;
 mod migration;
 mod package;

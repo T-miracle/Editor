@@ -47,6 +47,13 @@ impl DiagnosticsStore {
         self.documents.contains_key(&document_key(uri))
     }
 
+    /// Editing replies compare against the actual didOpen/didChange version, not a UI revision.
+    pub(super) fn document_version(&self, uri: &str) -> Option<i32> {
+        self.documents
+            .get(&document_key(uri))
+            .map(|document| document.version)
+    }
+
     /// Reject a delayed push for a prior version; an empty publication is meaningful.
     pub(super) fn publish(&mut self, params: PublishDiagnosticsParams) {
         let Some(document) = self.documents.get_mut(&document_key(params.uri.as_str())) else {

@@ -36,6 +36,9 @@ tempfile.workspace = true
 # Discover nested plugin manifests without traversing ignored build output.
 ignore.workspace = true
 notify.workspace = true
+# Validate provider name patterns and preserve native grapheme deletion in linked ranges.
+regex = "1"
+unicode-segmentation = "1"
 
 [dev-dependencies]
 gpui-kit = { workspace = true, features = ["test-support"] }

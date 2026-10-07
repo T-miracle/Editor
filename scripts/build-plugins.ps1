@@ -105,7 +105,7 @@ try {
     }
     foreach ($name in @('rust', 'run-target-example', 'toml', 'html', 'javascript', 'markdown', 'xml')) {
         if ($Packages -notcontains $name) { continue }
-        # Rust, Markdown and XML include guest components; the remaining language packages are resource-only.
+        # Declarative native language services share this package path with resource and WASM providers.
         $destination = [IO.Path]::GetFullPath((Join-Path $Output "$name.zip"))
         $stream = [IO.File]::Create($destination)
         $archive = [IO.Compression.ZipArchive]::new($stream, [IO.Compression.ZipArchiveMode]::Create)
@@ -119,7 +119,7 @@ try {
             if (Test-Path -LiteralPath (Join-Path $pluginRoot 'icons.json')) {
                 $packageFiles += ,@('icons.json', (Join-Path $pluginRoot 'icons.json'))
             }
-            foreach ($directory in @('grammar', 'queries', 'icons', 'run-targets', 'schemas', 'licenses')) {
+            foreach ($directory in @('grammar', 'queries', 'icons', 'run-targets', 'schemas', 'licenses', 'native')) {
                 # Resource-only examples and dynamic providers may legitimately omit these roots.
                 if (-not (Test-Path -LiteralPath (Join-Path $pluginRoot $directory))) { continue }
                 foreach ($file in Get-ChildItem -LiteralPath (Join-Path $pluginRoot $directory) -Recurse -File | Sort-Object FullName) {

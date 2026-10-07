@@ -4,6 +4,7 @@ mod completion_hooks;
 mod definitions;
 mod diagnostics;
 mod documents;
+pub(crate) mod editing;
 pub(crate) use documents::DocumentLease;
 mod recovery;
 pub(crate) use recovery::RecoveryState;
@@ -268,6 +269,12 @@ struct LanguageServerConnection {
     /// Standard navigation capabilities remain independent of the concrete language or server.
     definition_provider: bool,
     type_definition_provider: bool,
+    formatting_provider: bool,
+    rename_provider: bool,
+    prepare_rename_provider: bool,
+    linked_editing_provider: bool,
+    /// Set only after the authorized editing 1.1 client marker and matching server handshake.
+    semantic_linked_editing_provider: bool,
     /// Keep host-injected options available for subsequent workspace/configuration requests.
     configuration: Value,
     /// Fault teardown permits a bounded stderr EOF drain; ordinary retirement cuts off alerts first.
@@ -439,7 +446,7 @@ pub(crate) fn file_uri(path: &Path) -> Option<Uri> {
 }
 
 /// Converts a UTF-8 byte offset into the UTF-16 line and column required by LSP.
-pub(super) fn position_at_byte(source: &str, byte_offset: usize) -> Position {
+pub(crate) fn position_at_byte(source: &str, byte_offset: usize) -> Position {
     let prefix = &source[..byte_offset.min(source.len())];
     let line = prefix.bytes().filter(|byte| *byte == b'\n').count() as u32;
     let column = prefix

@@ -23,6 +23,7 @@ mod resource_roots;
 mod service_replies;
 mod settings;
 mod stdio;
+mod structure;
 mod tools;
 use resource_roots::ResourceRoots;
 wasmtime::component::bindgen!({path:"../plugin-protocol/wit",world:"plugin",require_store_data_send:true});
@@ -68,6 +69,8 @@ struct State {
     language_pure: bool,
     /// Typed outputs are accepted only while the matching pure callback is running.
     language_completion_call: bool,
+    /// Only this callback may publish a structure proposal; it cannot impersonate completion data.
+    language_structure_call: bool,
     /// Read-only discovery can release only the file roots allocated by its own hook.
     language_hook_checkpoint: Option<u64>,
     /// Migration grants access exclusively to a transaction's isolated private-data copy.
@@ -354,6 +357,7 @@ impl Instance {
             language_hook: false,
             language_pure: pure,
             language_completion_call: false,
+            language_structure_call: false,
             language_hook_checkpoint: None,
             migrating: false,
             staged_writes: Some(Default::default()),

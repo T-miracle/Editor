@@ -34,6 +34,28 @@ fn validate_language_services(manifest: &Manifest) -> anyhow::Result<()> {
             !provider.hook || manifest.component.is_some(),
             "LSP hooks require WASM"
         );
+        // Independent roles negotiate before installation, so an older host cannot silently
+        // treat a formatting-only contribution as the document's primary analysis service.
+        for (enabled, capability) in [
+            (
+                !provider.primary || provider.formatting,
+                "language.formatting",
+            ),
+            (provider.editing, "language.editing"),
+        ] {
+            anyhow::ensure!(
+                !enabled
+                    || manifest
+                        .api
+                        .as_ref()
+                        .is_some_and(|api| api.required.contains_key(capability)),
+                "Language editing role requires {capability}"
+            );
+        }
+        anyhow::ensure!(
+            provider.primary || provider.formatting,
+            "A language service must provide analysis or formatting"
+        );
         if provider.optional_installation {
             anyhow::ensure!(
                 manifest
@@ -166,6 +188,7 @@ impl Package {
         semver::Version::parse(&manifest.version)?;
         super::capabilities::require_current(&manifest)?;
         validate_language_services(&manifest)?;
+        crate::structure::validate_manifest(&manifest)?;
         manifest
             .plugin_services
             .validate()

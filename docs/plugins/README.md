@@ -4,6 +4,9 @@
 
 - [XML 插件与通用语言编辑能力方案](specs/xml-language-tools.md) / [#72](https://github.com/T-miracle/Editor/issues/72)，[三个实施工单 #73–#75](tickets/xml-language-tools/README.md)：已批准并发布，按依赖执行；包含可替换格式化、XML/HTML 标签编辑及宿主大纲与停靠。
 - [XML 语言工单 01 验收记录](verification/xml-language-tools/01-xml-language.md)：记录实际包、原生输入与服务结果，当前状态以记录为准。
+- [格式化与标签编辑工单 02 验收记录](verification/xml-language-tools/02-format-and-tags.md)：独立提供者、XML/HTML 配对编辑及原生输入顺序。
+- [宿主大纲工单 03 验收记录](verification/xml-language-tools/03-outline-and-docking.md)：结构与图标契约、原生树、折叠及四向停靠恢复。
+- [02/03 共同交付记录](verification/xml-language-tools/02-03-delivery.md)：一次共同检查、SVG/XML 短组合、双轴审查及准确议题交付状态。
 
 - [插件 UI 解耦与文件显示布局总方案](specs/plugin-ui-decoupling.md)、[五个实施工单（#62–#66）](tickets/plugin-ui-decoupling/README.md)。已在 `codex/plugin-ui-decoupling` 完成实现、验收及双轴审查，五张工单均已推送并核对关闭。
 - [工单 01：Image 与文件显示验收](verification/plugin-ui-decoupling/01-image-file-views.md)。

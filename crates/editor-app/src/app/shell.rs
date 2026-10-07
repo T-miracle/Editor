@@ -2,6 +2,27 @@
 
 use crate::*;
 
+/// Register shell commands in the current app after Base initialization.
+/// Startup and native shell fixtures share this table, including the plugin-surface scope boundary.
+pub(crate) fn bind_editor_shell_keys(cx: &mut App) {
+    // A plugin layout can embed the host's native source pane. Its descendant context admits
+    // document commands without granting the surrounding guest controls those same shortcuts.
+    let document_context =
+        Some("EditorShell && !PluginSurface || EditorShell > NativeEditorSource");
+    cx.bind_keys([
+        KeyBinding::new("shift-alt-f", FormatDocument, document_context),
+        KeyBinding::new("f2", RenameSymbol, document_context),
+        KeyBinding::new("ctrl-s", SaveDocument, document_context),
+        KeyBinding::new("ctrl-shift-r", RefreshWorkspace, document_context),
+        KeyBinding::new("ctrl-alt-t", ToggleTheme, Some("EditorShell")),
+        KeyBinding::new("f12", NavigateToDefinition, document_context),
+        KeyBinding::new("ctrl-i", ShowDefinitionDetails, document_context),
+        // Error navigation follows the active document and wraps at either end.
+        KeyBinding::new("f8", NextSyntaxError, document_context),
+        KeyBinding::new("shift-f8", PreviousSyntaxError, document_context),
+    ]);
+}
+
 #[cfg(target_os = "windows")]
 const WINDOWS_TIMER_RESOLUTION_MS: u32 = 1;
 
@@ -309,6 +330,7 @@ impl Render for EditorApp {
         self.sync_plugin_documents(cx);
         self.sync_run_controls(window, cx);
         self.dispatch_editor_requests(window, cx);
+        self.sync_outline(window, cx);
         if let Some(path) = self.pending_plugin_file.take() {
             self.open_file(path, window, cx);
         }
@@ -367,6 +389,9 @@ impl Render for EditorApp {
             .on_action(cx.listener(Self::on_toggle_theme_action))
             .on_action(cx.listener(Self::on_navigate_to_definition))
             .on_action(cx.listener(Self::on_show_definition_details))
+            .on_action(cx.listener(Self::format_document_action))
+            .on_action(cx.listener(Self::rename_symbol_action))
+            .on_action(cx.listener(Self::toggle_outline))
             .on_action(cx.listener(|app, _: &NextSyntaxError, window, cx| {
                 app.navigate_syntax_error(false, window, cx);
             }))
@@ -456,6 +481,7 @@ impl Render for EditorApp {
                     .child(
                         StatusBar::new()
                             .left(self.render_plugin_toolbar(explorer_panel_icon(cx), window, cx))
+                            .left(self.render_outline_toggle(cx))
                             .left(
                                 div()
                                     .flex_1()

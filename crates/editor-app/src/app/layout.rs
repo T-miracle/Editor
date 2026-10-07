@@ -55,13 +55,25 @@ impl EditorApp {
             return;
         };
         // Construction happens before plugin viewers exist, even when cached startup is fast.
-        if !self.extensions.read(cx).entries.is_empty() && self.plugin_panels.is_empty() {
+        if self
+            .extensions
+            .read(cx)
+            .entries
+            .iter()
+            .any(|entry| entry.enabled && !entry.manifest.panels.is_empty())
+            && self.plugin_panels.is_empty()
+        {
             return;
         }
-        let mut names = HashSet::from(["Explorer".to_owned(), "Editor".to_owned()]);
+        let mut names = HashSet::from([
+            "Explorer".to_owned(),
+            "Editor".to_owned(),
+            "Outline".to_owned(),
+        ]);
         // Explorer can have moved outside the center, so retain its entity independently.
         bind_panel("Explorer", &self.explorer_panel, cx);
         bind_panel("Editor", &self.editor_panel, cx);
+        bind_panel("Outline", &self.outline_panel, cx);
         for (key, panel) in &self.plugin_panels {
             // File-scoped previews belong to the editor's inner split, never to the outer layout.
             if panel.read(cx).is_editor_preview() {
@@ -80,6 +92,55 @@ impl EditorApp {
         {
             tracing::warn!(%error, "saved dock layout could not be restored");
         }
+        // An older saved layout has no outline. Add one beside its surviving Explorer without
+        // replacing the user's other split sizes or keeping a second persisted layout tree.
+        let outline = dock::panel_handle(self.outline_panel.clone());
+        let outline_id = gpui_base::dock::PanelId::from(self.outline_panel.entity_id());
+        let explorer_id = gpui_base::dock::PanelId::from(self.explorer_panel.entity_id());
+        self.dock_area.update(cx, |area, cx| {
+            if area.panel(outline_id).is_some() {
+                return;
+            }
+            let neighbor = [
+                gpui_base::dock::DockPlacement::Center,
+                gpui_base::dock::DockPlacement::Left,
+                gpui_base::dock::DockPlacement::Right,
+                gpui_base::dock::DockPlacement::Bottom,
+            ]
+            .into_iter()
+            .find_map(|placement| {
+                area.layout(placement)?
+                    .find_panel_node(explorer_id)
+                    .map(|node| (placement, node))
+            });
+            if let Some((placement, node)) = neighbor {
+                let stacking = crate::ui::controls::dock::stack_axis(area, node, cx);
+                area.add_panel_view(outline, placement, None, window, cx);
+                area.move_panel(
+                    outline_id,
+                    gpui_base::dock::InsertTarget::Split {
+                        node,
+                        placement: if stacking == Some(gpui_kit::Axis::Horizontal) {
+                            gpui_base::Placement::Right
+                        } else {
+                            gpui_base::Placement::Bottom
+                        },
+                        size: None,
+                    },
+                    window,
+                    cx,
+                );
+            } else {
+                crate::ui::controls::dock::add_panel_view(
+                    area,
+                    outline,
+                    gpui_base::dock::DockPlacement::Left,
+                    None,
+                    window,
+                    cx,
+                );
+            }
+        });
     }
 }
 

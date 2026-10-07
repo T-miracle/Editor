@@ -11,6 +11,8 @@ pub(crate) mod file_watch;
 mod file_watch_tests;
 #[cfg(test)]
 mod hover_hit_test;
+pub(crate) mod language_edits;
+pub(crate) mod linked_input;
 mod pointer_hover;
 mod source;
 pub(crate) mod tabs;

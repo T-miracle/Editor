@@ -1797,6 +1797,7 @@ dependencies = [
  "platform-windows",
  "plugin-runtime",
  "plugin-schema",
+ "regex",
  "resvg 0.45.1",
  "rust-i18n",
  "semver",
@@ -1808,6 +1809,7 @@ dependencies = [
  "toml 0.9.12+spec-1.1.0",
  "tracing",
  "tree-sitter",
+ "unicode-segmentation",
  "url",
  "zip",
 ]

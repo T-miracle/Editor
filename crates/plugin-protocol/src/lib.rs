@@ -14,6 +14,8 @@ pub mod language;
 pub mod process;
 pub mod service;
 pub mod settings;
+/// Readonly document trees and fold ranges supplied by isolated, versioned plugin workers.
+pub mod structure;
 /// Dynamic target discovery and build preparation are provider policy, independent of execution.
 pub mod targets;
 pub mod ui;
@@ -42,6 +44,9 @@ pub struct Manifest {
     /// Standard LSP bindings consume native service declarations without requiring a lifecycle component.
     #[serde(default)]
     pub language_servers: Vec<language::Provider>,
+    /// Pure structure contributors are independent of the selected native language service.
+    #[serde(default)]
+    pub structure_providers: Vec<structure::Provider>,
     /// Fixed native service definitions; each key requires its own installation grant.
     #[serde(default)]
     pub services: std::collections::BTreeMap<String, process::Service>,

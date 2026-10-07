@@ -11,6 +11,7 @@ mod discovery;
 mod execution_demo;
 mod scope_probe;
 mod service_demo;
+mod structure;
 
 #[derive(Default)]
 struct State {
@@ -56,6 +57,12 @@ impl State {
     /// Preparation is side-effect free; missing optional functionality selects a visible fallback.
     fn handle(&mut self, input: api::Input) -> Result<api::Output, Failure> {
         match input {
+            api::Input::Event {
+                event: api::Notification::LanguageStructure(request),
+                ..
+            } => {
+                return structure::describe(request);
+            }
             api::Input::Event {
                 event: api::Notification::LanguageCompletion(request),
                 ..

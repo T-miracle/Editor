@@ -6,15 +6,15 @@ Me Editor 是一个 Rust + GPUI Kit 编写的原生桌面代码编辑器初版�
 
 ## 当前可用功能
 
-- 原生可调布局：文件区与代码编辑区。
+- 原生可调布局：资源管理器、大纲与代码编辑区；大纲和资源管理器默认并排显示，支持停靠方向、分割尺寸和工作区布局恢复。
 - 递归文件树，并遵循 `.gitignore`。
 - JetBrains 2023 风格深浅色主题，以及按文件类型显示的彩色 SVG 图标。
 - 打开 UTF-8 文件并按扩展名启用语法高亮。
 - Rust 插件提供 WASM 语法高亮和定义跳转；在符号处按 `F12` 或点击鼠标中键可打开项目文件、Cargo 依赖及已安装的标准库源码。中键点击的位置没有定义时，会短暂显示“暂无定义”。
 - Rust 项目内的 TOML 文件使用 Rust 配置文件图标。
-- JavaScript 插件为 `.js`、`.mjs`、`.cjs`、`.jsx` 提供 WASM 语法高亮、语法错误提示和深浅色图标，无需 Node.js；详见 [JavaScript 插件说明](plugins/javascript/README.md)。
-- HTML 插件为 `.html`、`.htm` 提供 WASM 解析、标签与属性高亮和深浅色文件图标；安装方式及范围见 [HTML 插件说明](plugins/html/README.md)。
-- XML 插件为 `.xml`、`.svg`、`.xsd`、`.xsl`、`.xslt` 提供动态高亮、补全、语法与 Schema 诊断、悬浮说明和定义跳转；支持用户扩展名关联。语言服务与 Image 预览独立启停，详见 [XML 插件说明](plugins/xml/README.md)。
+- JavaScript 插件为 `.js`、`.mjs`、`.cjs`、`.jsx` 提供 WASM 语法高亮、语法错误提示、深浅色图标和可替换的 TypeScript 标准格式化。高亮无需 Node.js，格式化使用受管私有运行时；详见 [JavaScript 插件说明](plugins/javascript/README.md)。
+- HTML 插件为 `.html`、`.htm` 提供 WASM 解析、标签与属性高亮、深浅色文件图标，以及原生语言服务的格式化、标签重命名与自动配对编辑；安装方式及范围见 [HTML 插件说明](plugins/html/README.md)。
+- XML 插件为 `.xml`、`.svg`、`.xsd`、`.xsl`、`.xslt` 提供动态高亮、补全、语法与 Schema 诊断、悬浮说明、定义跳转、可替换格式化、配对标签编辑，以及宿主大纲和结构折叠；支持用户扩展名关联。语言服务与 Image 预览独立启停，详见 [XML 插件说明](plugins/xml/README.md)。
 - 行号、缩进参考线、代码折叠和软换行切换。
 - 选中文本后按住鼠标左键拖动，松开后移动到落点；支持边缘自动滚动、`Esc` 取消和一次撤销恢复。
 - 插件 WASM 语法诊断：Rust、TOML、HTML、JavaScript 解析器报告的语法错误显示红色波浪线，悬浮查看说明；状态栏显示当前文件的错误数量，点击或按 `F8` 跳转到下一处，`Shift+F8` 返回上一处。编辑修正后自动清除错误。

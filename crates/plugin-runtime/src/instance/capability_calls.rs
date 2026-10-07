@@ -376,7 +376,12 @@ impl Instance {
 
     /// Validate every capability and source revision before publishing any document.
     pub(super) fn decode_completion(&self, payload: &str, id: u64) -> anyhow::Result<api::Output> {
-        let completion: api::Completion = serde_json::from_str(payload)?;
+        // A structure level has both an object and a children array; only this typed callback uses its prechecked budget.
+        let completion: api::Completion = if self.store.data().language_structure_call {
+            super::structure::decode_completion(payload)?
+        } else {
+            serde_json::from_str(payload)?
+        };
         anyhow::ensure!(completion.id == id, "Plugin completion ID mismatch");
         let output = completion.result?;
         // Pure preparation cannot publish resources; the single typed callback is the only allowed result.
@@ -392,6 +397,7 @@ impl Instance {
         anyhow::ensure!(
             output.language_completion.is_none()
                 || (self.store.data().language_completion_call
+                    && !self.store.data().language_structure_call
                     && self
                         .store
                         .data()
@@ -399,6 +405,18 @@ impl Instance {
                         .capabilities
                         .contains_key("language.completion")),
             "Completion results require a negotiated pure language invocation"
+        );
+        anyhow::ensure!(
+            output.language_structure.is_none()
+                || (self.store.data().language_structure_call
+                    && !self.store.data().language_completion_call
+                    && self
+                        .store
+                        .data()
+                        .api
+                        .capabilities
+                        .contains_key("language.structure")),
+            "Structure results require a negotiated pure language invocation"
         );
         anyhow::ensure!(
             !self.store.data().migrating

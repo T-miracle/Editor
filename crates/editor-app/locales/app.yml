@@ -359,6 +359,75 @@ notification.close:
 panel.explorer:
   en: "Explorer"
   zh-CN: "资源管理器"
+panel.outline:
+  en: "Outline"
+  zh-CN: "大纲"
+outline.empty:
+  en: "No outline for this file"
+  zh-CN: "此文件暂无大纲"
+outline.follow_cursor:
+  en: "Follow cursor"
+  zh-CN: "跟随光标"
+outline.loading:
+  en: "Loading outline…"
+  zh-CN: "正在加载大纲…"
+outline.failed:
+  en: "Cannot load outline"
+  zh-CN: "无法加载大纲"
+outline.hide:
+  en: "Hide Outline"
+  zh-CN: "隐藏大纲"
+outline.show:
+  en: "Show Outline"
+  zh-CN: "显示大纲"
+editor.format_document:
+  en: "Format document"
+  zh-CN: "格式化文档"
+editor.rename_symbol:
+  en: "Rename symbol"
+  zh-CN: "重命名符号"
+editor.rename_confirm:
+  en: "Rename"
+  zh-CN: "重命名"
+editor.rename_cancel:
+  en: "Cancel"
+  zh-CN: "取消"
+editor.rename_unavailable:
+  en: "No rename is available at this position"
+  zh-CN: "此位置没有可重命名的符号"
+editor.format_unavailable:
+  en: "No formatter is available for this document"
+  zh-CN: "此文档没有可用的格式化程序"
+editor.editing_failed:
+  en: "Language edit failed: %{error}"
+  zh-CN: "语言编辑失败：%{error}"
+editor.editing_stale:
+  en: "The document changed; the language edit was discarded"
+  zh-CN: "文档已变化，语言编辑结果已丢弃"
+editor.formatted:
+  en: "Document formatted"
+  zh-CN: "文档已格式化"
+editor.renamed:
+  en: "Symbol renamed"
+  zh-CN: "符号已重命名"
+settings.provider_formatter:
+  en: "Formatter"
+  zh-CN: "格式化程序"
+settings.format_on_save:
+  en: "Format on save"
+  zh-CN: "保存时格式化"
+settings.linked_editing:
+  en: "Synchronize paired tag names"
+  zh-CN: "同步配对标签名"
+settings.editing_default:
+  en: "Use user default"
+  zh-CN: "使用用户默认值"
+settings.editing_override:
+  en: "Override for this language"
+  zh-CN: "覆盖此语言的设置"
+settings.editing_reset:
+  en: "Restore user defaults"
+  zh-CN: "恢复用户默认值"
 panel.minimize_explorer:
   en: "Minimize Explorer"
   zh-CN: "最小化资源管理器"
@@ -674,6 +743,9 @@ settings.provider_missing:
 settings.provider_choose:
   en: "Multiple providers available; choose one to enable this capability."
   zh-CN: "有多个候选，请选择一个以启用此能力。"
+settings.provider_invalid:
+  en: "Invalid provider setting %{provider} (%{source}); choose a provider or reset this scope."
+  zh-CN: "提供者配置 %{provider} 无效（%{source}）；请选择提供者或重置此作用域。"
 settings.provider_source_automatic:
   en: "Automatically selected; kept until unavailable."
   zh-CN: "自动选择，持续保留至该提供者不可用。"

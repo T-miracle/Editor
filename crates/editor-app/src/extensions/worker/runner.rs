@@ -765,6 +765,7 @@ impl Worker {
                     })
                     .collect::<BTreeMap<_, _>>();
                 let language_services = manager.language_services();
+                let structure_providers = manager.structure_providers();
                 for service in language_services
                     .values()
                     .filter_map(|service| service.as_ref().ok())
@@ -827,6 +828,32 @@ impl Worker {
                 }
                 if published.configurations != configurations {
                     published.configurations = configurations;
+                    published.configuration_revision += 1;
+                }
+                // Incarnation changes invalidate outline work even when the provider's key is unchanged.
+                let structures_changed = structure_providers.len()
+                    != published.structure_providers.len()
+                    || structure_providers.iter().any(|(key, value)| {
+                        match (value, published.structure_providers.get(key)) {
+                            (Ok(current), Some(Ok(old))) => !Arc::ptr_eq(current, old),
+                            (Err(current), Some(Err(old))) => current != old,
+                            _ => true,
+                        }
+                    });
+                if structures_changed {
+                    for (key, result) in &structure_providers {
+                        if let Err(error) = result {
+                            let plugin =
+                                key.split_once('/').map_or(key.as_str(), |(owner, _)| owner);
+                            published.logs.append(
+                                plugin,
+                                plugin_runtime::logs::LogLevel::Error,
+                                &format!("language.structure.prepare:{key}"),
+                                error.clone(),
+                            );
+                        }
+                    }
+                    published.structure_providers = structure_providers;
                     published.configuration_revision += 1;
                 }
                 // Host executions are published as views; the launch identity joins each answer to
