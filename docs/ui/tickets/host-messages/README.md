@@ -2,7 +2,7 @@
 
 日期：2026-10-07
 
-状态：用户已批准两单并授权全部执行；已发布为 [#85](https://github.com/T-miracle/Editor/issues/85)、[#86](https://github.com/T-miracle/Editor/issues/86)，原生阻塞关系为 #85 → #86。待实际实现与验收。
+状态：用户已批准两单并授权全部执行；[#85](https://github.com/T-miracle/Editor/issues/85) 已交付并核对关闭；[#86](https://github.com/T-miracle/Editor/issues/86) 的实现、自动回归与 Windows 原生组合验收已完成，待最终审查和推送关闭。原生阻塞关系为 #85 → #86，证据见 [实施验收](../../verification/host-messages.md)。
 
 来源：[宿主消息窗口规格](../../specs/host-messages.md)。产品行为与应用级测试接缝已确认，父规格已发布为 [GitHub #84](https://github.com/T-miracle/Editor/issues/84)，标签 `ready-for-agent`。本目录保留逐单正文，实际跟踪器是 GitHub Issues。
 

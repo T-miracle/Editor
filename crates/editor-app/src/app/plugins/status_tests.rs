@@ -1,4 +1,6 @@
 //! Declarative packages and native status-bar input exercise the shared runtime-log viewing boundary.
+mod host_messages;
+
 use super::*;
 use gpui_kit::{TestAppContext, VisualTestContext, gpui};
 use plugin_runtime::{HostResources, Manager, Package, plugin_protocol::Environment};

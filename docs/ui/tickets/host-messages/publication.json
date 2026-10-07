@@ -24,7 +24,12 @@
       "number": 85,
       "id": 5742586349,
       "url": "https://github.com/T-miracle/Editor/issues/85",
-      "readback_verified": true
+      "readback_verified": true,
+      "state": "closed",
+      "implementation_status": "delivered",
+      "implementation_commit": "d1828361cb6d1745cbc6a0497c6b94489439961d",
+      "push_commit": "7f7097c4aec24629eae6623cc6428b02b40be31c",
+      "close_readback_verified": true
     },
     {
       "sequence": "02",
@@ -37,7 +42,9 @@
       "number": 86,
       "id": 5742586717,
       "url": "https://github.com/T-miracle/Editor/issues/86",
-      "readback_verified": true
+      "readback_verified": true,
+      "state": "open",
+      "implementation_status": "in_progress"
     }
   ],
   "worktree": "C:/Users/Tmiracle/.codex/worktrees/host-messages/Editor",

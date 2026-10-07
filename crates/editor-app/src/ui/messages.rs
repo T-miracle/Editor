@@ -27,6 +27,8 @@ pub(crate) struct MessagePanel {
     visible: bool,
     focus: FocusHandle,
     records: VecDeque<Message>,
+    /// A receipt raises this flag; only an explicit open or clear acknowledges it, never painting or eviction.
+    pending_alert: bool,
     next_id: u64,
     display_limit: usize,
     scroll: ScrollHandle,
@@ -41,6 +43,7 @@ impl MessagePanel {
             visible,
             focus: cx.focus_handle(),
             records: VecDeque::new(),
+            pending_alert: false,
             next_id: 0,
             display_limit: DISPLAY_BATCH,
             scroll: ScrollHandle::new(),
@@ -50,6 +53,9 @@ impl MessagePanel {
 
     /// Append a user-facing host result, evicting only the oldest receipt above the global cap.
     pub(crate) fn push(&mut self, level: MessageLevel, text: String, cx: &mut Context<Self>) {
+        if matches!(level, MessageLevel::Warning | MessageLevel::Error) {
+            self.pending_alert = true;
+        }
         self.next_id = self
             .next_id
             .checked_add(1)
@@ -68,6 +74,27 @@ impl MessagePanel {
     /// Expose host-panel visibility to the dock and session, without exposing the mutable history.
     pub(crate) fn is_visible(&self) -> bool {
         self.visible
+    }
+
+    /// The status button reads only reminder state, independently of how many rows are disclosed.
+    pub(crate) fn has_pending_alert(&self) -> bool {
+        self.pending_alert
+    }
+
+    /// Synchronous acknowledgement cannot later erase a warning arriving after this user action.
+    pub(crate) fn acknowledge(&mut self, cx: &mut Context<Self>) {
+        self.pending_alert = false;
+        cx.notify();
+    }
+
+    /// Clear this window's receipts and reminder synchronously; identities remain monotonic for later results.
+    /// Plugin log storage is never accessed, and only current history participates in this action.
+    fn clear(&mut self, cx: &mut Context<Self>) {
+        self.records.clear();
+        self.display_limit = DISPLAY_BATCH;
+        self.scroll.set_offset(Default::default());
+        self.pending_alert = false;
+        cx.notify();
     }
 
     /// Visibility changes publish a layout event so the shell persists and reclaims occupied space.
@@ -134,21 +161,42 @@ impl DockPanel for MessagePanel {
                     .child(t!("messages.title").to_string()),
             )
             .child(
-                div()
-                    .id("host-messages-hide")
-                    .debug_selector(|| "host-messages-hide".into())
+                h_flex()
+                    .gap_1()
                     .child(
-                        Button::new("hide-host-messages")
-                            .icon(IconName::WindowMinimize)
-                            .small()
-                            .compact()
-                            .ghost()
-                            .tooltip(t!("messages.hide").to_string())
-                            .accessibility_label(t!("messages.hide").to_string())
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                cx.stop_propagation();
-                                this.toggle(cx);
-                            })),
+                        div()
+                            .id("host-messages-clear")
+                            .debug_selector(|| "host-messages-clear".into())
+                            .child(
+                                Button::new("clear-host-messages")
+                                    .label(t!("messages.clear").to_string())
+                                    .accessibility_label(t!("messages.clear").to_string())
+                                    .small()
+                                    .ghost()
+                                    .disabled(self.records.is_empty())
+                                    .on_click(cx.listener(|this, _, _, cx| {
+                                        cx.stop_propagation();
+                                        this.clear(cx);
+                                    })),
+                            ),
+                    )
+                    .child(
+                        div()
+                            .id("host-messages-hide")
+                            .debug_selector(|| "host-messages-hide".into())
+                            .child(
+                                Button::new("hide-host-messages")
+                                    .icon(IconName::WindowMinimize)
+                                    .small()
+                                    .compact()
+                                    .ghost()
+                                    .tooltip(t!("messages.hide").to_string())
+                                    .accessibility_label(t!("messages.hide").to_string())
+                                    .on_click(cx.listener(|this, _, _, cx| {
+                                        cx.stop_propagation();
+                                        this.toggle(cx);
+                                    })),
+                            ),
                     ),
             )
     }
@@ -260,18 +308,45 @@ impl Render for MessagePanel {
 impl EditorApp {
     /// Local button behavior follows the same Base-backed focus and activation path as other controls.
     pub(crate) fn render_messages_button(&self, cx: &Context<Self>) -> impl IntoElement {
+        let pending = self.messages.read(cx).has_pending_alert();
+        let label = if pending {
+            t!("messages.unread")
+        } else {
+            t!("messages.title")
+        }
+        .to_string();
         div()
             .id("host-messages-toggle")
             .debug_selector(|| "host-messages-toggle".into())
             .child(
                 Button::new("toggle-host-messages")
-                    .icon(notification_icon())
+                    .child(
+                        div()
+                            .relative()
+                            .size(px(14.))
+                            .flex_shrink_0()
+                            .child(notification_icon())
+                            // The circle is decoration inside the Base button, not a separate hit target or count.
+                            .when(pending, |icon| {
+                                icon.child(
+                                    div()
+                                        .id("host-messages-dot")
+                                        .debug_selector(|| "host-messages-dot".into())
+                                        .absolute()
+                                        .top(px(-1.))
+                                        .right(px(-1.))
+                                        .size(px(6.))
+                                        .rounded_full()
+                                        .bg(cx.theme().danger),
+                                )
+                            }),
+                    )
                     .small()
                     .compact()
                     .ghost()
                     .expanded(self.messages_visible(cx))
-                    .tooltip(t!("messages.title").to_string())
-                    .accessibility_label(t!("messages.title").to_string())
+                    .tooltip(label.clone())
+                    .accessibility_label(label)
                     .on_click(cx.listener(|this, _, window, cx| {
                         cx.stop_propagation();
                         this.toggle_messages(window, cx);

@@ -79,6 +79,188 @@ fn publish(form: &mut VisualTestContext, app: &Entity<EditorApp>, start: u64, en
     draw(form);
 }
 
+/// Real host results leave editing focus alone; opening acknowledges only receipts already delivered.
+#[gpui::test]
+fn host_messages_reminders_acknowledge_only_received_alerts(cx: &mut TestAppContext) {
+    with_messages(cx, |form, app, root| {
+        let path = root.join("document.txt");
+        std::fs::write(&path, "editing").unwrap();
+        form.update(|window, cx| app.update(cx, |app, cx| app.open_file(path, window, cx)));
+        draw(form);
+        assert!(form.debug_bounds("host-message-info").is_some());
+        assert!(form.debug_bounds("host-messages-dot").is_none());
+        click(form, "host-messages-hide");
+        form.update(|window, cx| {
+            app.read(cx).editor.focus_handle(cx).focus(window, cx);
+            app.update(cx, |app, cx| app.save_current(cx));
+        });
+        draw(form);
+        assert!(form.debug_bounds("host-messages-panel").is_none());
+        assert!(form.debug_bounds("host-messages-dot").is_none());
+        assert!(form.update(|window, cx| app.read(cx).editor.focus_handle(cx).is_focused(window)));
+        form.update(|window, cx| {
+            app.update(cx, |app, cx| {
+                app.open_file(root.join("missing.txt"), window, cx)
+            });
+        });
+        draw(form);
+        assert!(
+            form.debug_bounds("host-messages-dot").is_some(),
+            "a real host failure raises the dot"
+        );
+        assert!(form.debug_bounds("host-messages-panel").is_none());
+        assert!(form.update(|window, cx| app.read(cx).editor.focus_handle(cx).is_focused(window)));
+        form.update(|_, cx| app.update(cx, |app, cx| app.save_current(cx)));
+        draw(form);
+        assert!(
+            form.debug_bounds("host-messages-dot").is_some(),
+            "information does not acknowledge an error"
+        );
+        let button = form.debug_bounds("host-messages-toggle").unwrap();
+        // Deliver a new warning after activation but before the opened panel's deferred repaint.
+        form.simulate_click(button.center(), Default::default());
+        form.update(|_, cx| {
+            app.update(cx, |app, cx| {
+                app.record_host_message(
+                    app::messages::MessageLevel::Warning,
+                    "Late host warning",
+                    cx,
+                );
+            })
+        });
+        draw(form);
+        assert!(form.debug_bounds("host-messages-panel").is_some());
+        assert!(
+            form.debug_bounds(row(3)).is_some(),
+            "opening retains the actual error"
+        );
+        assert!(form.debug_bounds("host-message-warning").is_some());
+        assert!(
+            form.debug_bounds("host-messages-dot").is_some(),
+            "an earlier open cannot acknowledge a late warning"
+        );
+        draw(form);
+        assert!(
+            form.debug_bounds("host-messages-dot").is_some(),
+            "repainting does not acknowledge"
+        );
+        click(form, "host-messages-hide");
+        assert!(form.debug_bounds("host-messages-dot").is_some());
+        click(form, "host-messages-toggle");
+        assert!(form.debug_bounds("host-messages-dot").is_none());
+        assert!(form.debug_bounds(row(3)).is_some());
+        form.update(|window, cx| {
+            app.read(cx).editor.focus_handle(cx).focus(window, cx);
+            app.update(cx, |app, cx| {
+                app.record_host_message(
+                    app::messages::MessageLevel::Warning,
+                    "Visible host warning",
+                    cx,
+                )
+            });
+        });
+        draw(form);
+        assert!(
+            form.debug_bounds("host-messages-dot").is_some(),
+            "later warnings remind while visible"
+        );
+        assert!(form.update(|window, cx| app.read(cx).editor.focus_handle(cx).is_focused(window)));
+    });
+}
+
+/// Clearing disclosed and undisclosed records resets browsing without erasing a later receipt or its reminder.
+#[gpui::test]
+fn host_messages_clear_resets_disclosure_and_keeps_later_receipts(cx: &mut TestAppContext) {
+    with_messages(cx, |form, app, _| {
+        form.simulate_resize(size(px(1100.), px(40000.)));
+        draw(form);
+        publish(form, &app, 1, 41);
+        click(form, "host-messages-more");
+        click(form, "host-messages-more");
+        assert!(form.debug_bounds(row(1)).is_some());
+        assert!(
+            form.debug_bounds("host-messages-dot").is_some(),
+            "expansion does not acknowledge"
+        );
+        form.update(|_, cx| {
+            app.update(cx, |app, cx| {
+                // Evict every alert using information alone; capacity changes must not act as user acknowledgement.
+                for _ in 0..500 {
+                    app.record_host_message(
+                        app::messages::MessageLevel::Info,
+                        "Routine host result",
+                        cx,
+                    );
+                }
+            })
+        });
+        draw(form);
+        assert!(form.debug_bounds("host-message-warning").is_none());
+        assert!(form.debug_bounds("host-message-error").is_none());
+        assert!(form.debug_bounds("host-messages-dot").is_some());
+        assert!(form.debug_bounds("host-messages-more").is_some());
+        click(form, "host-messages-clear");
+        assert!(form.debug_bounds("host-messages-empty").is_some());
+        assert!(form.debug_bounds(row(541)).is_none());
+        assert!(form.debug_bounds("host-messages-more").is_none());
+        assert!(form.debug_bounds("host-messages-dot").is_none());
+        form.update(|_, cx| {
+            app.update(cx, |app, cx| {
+                for _ in 0..21 {
+                    app.record_host_message(
+                        app::messages::MessageLevel::Info,
+                        "Fresh host result",
+                        cx,
+                    );
+                }
+            })
+        });
+        draw(form);
+        assert!(
+            form.debug_bounds(row(542)).is_none(),
+            "clear resets the initial twenty-row disclosure"
+        );
+        assert!(form.debug_bounds(row(543)).is_some());
+        assert!(form.debug_bounds("host-messages-more").is_some());
+        assert!(form.debug_bounds("host-messages-dot").is_none());
+        let clear = form.debug_bounds("host-messages-clear").unwrap();
+        form.simulate_click(clear.center(), Default::default());
+        form.update(|_, cx| {
+            app.update(cx, |app, cx| {
+                app.record_host_message(
+                    app::messages::MessageLevel::Warning,
+                    "Warning after clear",
+                    cx,
+                );
+            })
+        });
+        draw(form);
+        assert!(form.debug_bounds(row(563)).is_some());
+        assert!(form.debug_bounds(row(562)).is_none());
+        assert!(form.debug_bounds("host-messages-more").is_none());
+        assert!(form.debug_bounds("host-messages-dot").is_some());
+        activate(form, "enter");
+        assert!(form.debug_bounds("host-messages-empty").is_some());
+        assert!(form.debug_bounds("host-messages-dot").is_none());
+        let previous_locale = rust_i18n::locale().to_string();
+        rust_i18n::set_locale("en");
+        form.update(|window, cx| {
+            apply_theme(builtin_theme(true), cx);
+            window.refresh();
+            app.update(cx, |app, cx| {
+                app.record_host_message(app::messages::MessageLevel::Error, "New host error", cx)
+            });
+        });
+        form.simulate_scale_factor_change(1.5);
+        draw(form);
+        assert!(form.debug_bounds("host-messages-dot").is_some());
+        activate(form, "space");
+        assert!(form.debug_bounds("host-messages-empty").is_some());
+        assert!(form.debug_bounds("host-messages-dot").is_none());
+        rust_i18n::set_locale(&previous_locale);
+    });
+}
+
 /// One list grows by twenty, caps all severities together, and preserves deterministic newest-first order.
 #[gpui::test]
 fn host_messages_progressive_history_keeps_the_latest_five_hundred(cx: &mut TestAppContext) {
@@ -190,6 +372,17 @@ fn host_messages_restore_hidden_width_without_restoring_history(cx: &mut TestApp
             width > panel.size.width + px(50.),
             "the actual dock edge resizes messages"
         );
+        form.update(|_, cx| {
+            app.update(cx, |app, cx| {
+                app.record_host_message(
+                    app::messages::MessageLevel::Warning,
+                    "Previous run warning",
+                    cx,
+                );
+            })
+        });
+        draw(form);
+        assert!(form.debug_bounds("host-messages-dot").is_some());
         click(form, "host-messages-hide");
         let workspace = Workspace::open(&root).unwrap();
         let slot = Rc::new(RefCell::new(None));
@@ -203,6 +396,10 @@ fn host_messages_restore_hidden_width_without_restoring_history(cx: &mut TestApp
         restored.simulate_resize(size(px(1100.), px(800.)));
         draw(restored);
         assert!(restored.debug_bounds("host-messages-panel").is_none());
+        assert!(
+            restored.debug_bounds("host-messages-dot").is_none(),
+            "old reminders are not restored"
+        );
         click(restored, "host-messages-toggle");
         let panel = restored.debug_bounds("host-messages-panel").unwrap();
         assert!((panel.size.width - width).abs() < px(2.));

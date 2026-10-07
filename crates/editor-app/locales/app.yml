@@ -2,9 +2,15 @@ _version: 2
 messages.title:
   en: "Messages"
   zh-CN: "消息"
+messages.unread:
+  en: "Messages: new warning or error"
+  zh-CN: "消息：有新的警告或错误"
 messages.hide:
   en: "Hide messages"
   zh-CN: "收起消息窗口"
+messages.clear:
+  en: "Clear messages"
+  zh-CN: "清空消息"
 messages.empty:
   en: "No host messages"
   zh-CN: "暂无宿主消息"

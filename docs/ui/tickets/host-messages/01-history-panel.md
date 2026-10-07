@@ -2,7 +2,7 @@
 
 稳定标识：`ui-host-messages-window:ticket:01`
 
-状态：实现、针对性回归、Windows 原生验收与双轴审查已完成，待推送与议题关闭；记录见 [实施验收](../../verification/host-messages.md)。
+状态：实现、针对性回归、Windows 原生验收与双轴审查已完成；分支已推送，GitHub #85 已核对关闭。记录见 [实施验收](../../verification/host-messages.md)。
 
 ## Parent
 
