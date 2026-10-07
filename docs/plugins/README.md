@@ -2,6 +2,8 @@
 
 本目录索引实际维护的插件资料。跨插件平台方案放在本目录的 specs、tickets 与 verification；插件自身的历史专题资料保留在对应包内，不复制正文或继承其他任务的完成状态。
 
+- [XML 插件与通用语言编辑能力方案](specs/xml-language-tools.md) / [#72](https://github.com/T-miracle/Editor/issues/72)，[三个实施工单 #73–#75](tickets/xml-language-tools/README.md)：已批准并发布，按依赖执行；包含可替换格式化、XML/HTML 标签编辑及宿主大纲与停靠。
+
 - [插件 UI 解耦与文件显示布局总方案](specs/plugin-ui-decoupling.md)、[五个实施工单（#62–#66）](tickets/plugin-ui-decoupling/README.md)。已在 `codex/plugin-ui-decoupling` 完成实现、验收及双轴审查，五张工单均已推送并核对关闭。
 - [工单 01：Image 与文件显示验收](verification/plugin-ui-decoupling/01-image-file-views.md)。
 - [工单 02：可组合布局与提供者选择验收](verification/plugin-ui-decoupling/02-composable-layouts.md)。

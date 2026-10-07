@@ -1,0 +1,49 @@
+{
+  "repository": "T-miracle/Editor",
+  "stable_id": "xml-language-tools",
+  "parent": {
+    "number": 72,
+    "id": 5741225770,
+    "url": "https://github.com/T-miracle/Editor/issues/72"
+  },
+  "tickets": [
+    {
+      "ordinal": "01",
+      "number": 73,
+      "id": 5741227101,
+      "url": "https://github.com/T-miracle/Editor/issues/73",
+      "state": "open"
+    },
+    {
+      "ordinal": "02",
+      "number": 74,
+      "id": 5741227354,
+      "url": "https://github.com/T-miracle/Editor/issues/74",
+      "state": "open"
+    },
+    {
+      "ordinal": "03",
+      "number": 75,
+      "id": 5741227526,
+      "url": "https://github.com/T-miracle/Editor/issues/75",
+      "state": "open"
+    }
+  ],
+  "dependencies": [
+    {
+      "blocked": 74,
+      "blocked_by": 73,
+      "blocked_by_id": 5741227101,
+      "verified": true
+    },
+    {
+      "blocked": 75,
+      "blocked_by": 73,
+      "blocked_by_id": 5741227101,
+      "verified": true
+    }
+  ],
+  "implementation_branch": "codex/xml-language-tools",
+  "implementation_base": "ae63225",
+  "published_on": "2026-10-07"
+}
