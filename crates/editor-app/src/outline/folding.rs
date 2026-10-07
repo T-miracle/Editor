@@ -20,6 +20,7 @@ impl Controller {
                     Some(Box::new(Adapter {
                         language: language.to_owned().into(),
                         syntax: Rc::new(RefCell::new(plugin_syntax(language))),
+                        parser_cancelled: Rc::new(Cell::new(false)),
                         folds: folds.clone(),
                         generation: Rc::new(Cell::new(0)),
                         pending: None,
@@ -61,6 +62,8 @@ impl Controller {
 struct Adapter {
     language: SharedString,
     syntax: Rc<RefCell<SyntaxHighlighter>>,
+    /// Cancellation leaves resumable parser state; read its cached styles but never parse another input with it.
+    parser_cancelled: Rc<Cell<bool>>,
     folds: Rc<RefCell<Option<Vec<FoldRange>>>>,
     generation: Rc<Cell<u64>>,
     pending: Option<gpui_kit::Task<()>>,
@@ -107,15 +110,20 @@ impl InputHighlighter for Adapter {
                 edit.new_end_position.column,
             ),
         });
-        if self
-            .syntax
-            .borrow_mut()
-            .update(edit, text, Some(Duration::from_millis(2)))
+        if !self.parser_cancelled.get()
+            && self
+                .syntax
+                .borrow_mut()
+                .update(edit, text, Some(Duration::from_millis(2)))
         {
             return;
         }
+        // SyntaxHighlighter exposes no Parser::reset. A fresh background parser replaces the cancelled reader,
+        // keeping subsequent native edits bounded instead of rebuilding a WASM parser on the UI thread.
+        self.parser_cancelled.set(true);
         let language = self.language.clone();
         let syntax = self.syntax.clone();
+        let parser_cancelled = self.parser_cancelled.clone();
         let folds = self.folds.clone();
         let generation = self.generation.clone();
         let requested = generation.get();
@@ -130,10 +138,15 @@ impl InputHighlighter for Adapter {
                 .background_executor()
                 .spawn(async move {
                     let mut parsed = plugin_syntax(&language);
-                    parsed.update(None, &source, Some(Duration::from_millis(100)));
+                    // A timed-out candidate owns the same resumable state and must never become the live parser.
                     parsed
+                        .update(None, &source, Some(Duration::from_millis(100)))
+                        .then_some(parsed)
                 })
                 .await;
+            let Some(parsed) = parsed else {
+                return;
+            };
             // Editor incarnation, source, adapter generation and grammar selection all guard background completion.
             if generation.get() != requested
                 || grammar_epoch != crate::language::code_highlighting::epoch()
@@ -145,6 +158,7 @@ impl InputHighlighter for Adapter {
                     return;
                 }
                 *syntax.borrow_mut() = parsed;
+                parser_cancelled.set(false);
                 if folds.borrow().is_none() {
                     editor.apply_highlighter_fold_candidates(grammar_folds(&syntax.borrow()), cx);
                 } else {
@@ -212,6 +226,9 @@ fn grammar_folds(syntax: &SyntaxHighlighter) -> Vec<FoldRange> {
     ranges.dedup_by_key(|range| range.start_line);
     ranges
 }
+
+#[cfg(test)]
+mod cancellation;
 
 #[cfg(test)]
 mod tests {

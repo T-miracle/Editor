@@ -8,6 +8,7 @@
 - [宿主大纲工单 03 验收记录](verification/xml-language-tools/03-outline-and-docking.md)：结构与图标契约、原生树、折叠及四向停靠恢复。
 - [02/03 共同交付记录](verification/xml-language-tools/02-03-delivery.md)：一次共同检查、SVG/XML 短组合、双轴审查及准确议题交付状态。
 - [大纲点击崩溃修复](verification/xml-language-tools/04-outline-click-crash.md)：2026-10-08 用户窗口回归、标题栏实体借用修复及真实点击验证。
+- [解析取消后的原生撤销回归](verification/xml-language-tools/05-parser-cancellation.md)：实际 XML 组合复验捕获的独立解析器生命周期缺陷与恢复验证。
 
 - [插件 UI 解耦与文件显示布局总方案](specs/plugin-ui-decoupling.md)、[五个实施工单（#62–#66）](tickets/plugin-ui-decoupling/README.md)。已在 `codex/plugin-ui-decoupling` 完成实现、验收及双轴审查，五张工单均已推送并核对关闭。
 - [工单 01：Image 与文件显示验收](verification/plugin-ui-decoupling/01-image-file-views.md)。

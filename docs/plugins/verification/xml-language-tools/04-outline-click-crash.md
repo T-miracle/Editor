@@ -2,7 +2,7 @@
 
 日期：2026-10-08（Asia/Shanghai）。范围为用户实际查看示例时报告的“大纲定位点击闪退”，来源为[工单 03](../../tickets/xml-language-tools/03-outline-and-docking.md)及[方案](../../specs/xml-language-tools.md)的原生大纲交互。首次交付记录保留，不能用旧验收代替本次回归。
 
-状态：标题栏崩溃已通过稳定 RED → GREEN、共同门禁及独立两轴审查。实际 XML 导航验证另捕获解析取消后撤销的独立异常，正在处理；不能把该失败记为导航验收通过。修复宿主在后续异常处理完成后重新启动。
+状态：标题栏崩溃已通过稳定 RED → GREEN、共同门禁及独立两轴审查。复验捕获的解析取消异常已另行修复，[最终记录](05-parser-cancellation.md)包含完整 XML 场景 GREEN 及可见宿主重新启动；下面保留当时失败的真实证据。
 
 ## 现场与反馈循环
 
@@ -48,3 +48,5 @@ cargo test -p editor-app --no-default-features native_outline_header_buttons_kee
 实际 XML 原生回归 `native_outline_package_navigation_follow_and_revocation` 两次失败（42.35 s、47.36 s）：大纲行跳转已完成，但第二次原生 `Ctrl+Z` 在 `SyntaxHighlighter::update_edits` 空解析的 `unwrap` 抛错。第二次日志带调用栈，位于 `target/xml-language-tools/outline-crash-xml-native-navigation-backtrace.log`；其实体、错误和触发步骤与标题栏重复借用不同。后续修复另行提交和记录，不吞掉此失败，不据此撤销已通过的标题栏回归证据。
 
 Windows x86_64 为本次实际平台；macOS/Linux 未验收。
+
+后续收口：两项修复均纳入最终 377 passed、0 failed 的应用测试；真实 XML 包导航、输入与撤销回归 1 passed、0 failed。修复版已重新打开原示例并恢复大纲显示，具体宿主 SHA、窗口及日志见[解析取消修复的最终交付](05-parser-cancellation.md)。
