@@ -58,10 +58,22 @@ impl EditorApp {
         if !self.extensions.read(cx).entries.is_empty() && self.plugin_panels.is_empty() {
             return;
         }
-        let mut names = HashSet::from(["Explorer".to_owned(), "Editor".to_owned()]);
+        let has_messages = contains_panel(&layout.center, "HostMessages")
+            || [&layout.left_dock, &layout.right_dock, &layout.bottom_dock]
+                .iter()
+                .any(|dock| {
+                    dock.as_ref()
+                        .is_some_and(|dock| contains_panel(dock.panel(), "HostMessages"))
+                });
+        let mut names = HashSet::from([
+            "Explorer".to_owned(),
+            "Editor".to_owned(),
+            "HostMessages".to_owned(),
+        ]);
         // Explorer can have moved outside the center, so retain its entity independently.
         bind_panel("Explorer", &self.explorer_panel, cx);
         bind_panel("Editor", &self.editor_panel, cx);
+        bind_panel("HostMessages", &self.messages, cx);
         for (key, panel) in &self.plugin_panels {
             // File-scoped previews belong to the editor's inner split, never to the outer layout.
             if panel.read(cx).is_editor_preview() {
@@ -79,8 +91,36 @@ impl EditorApp {
             .update(cx, |area, cx| area.load(layout, window, cx))
         {
             tracing::warn!(%error, "saved dock layout could not be restored");
+        } else if !has_messages {
+            // Extend an older saved tree after loading it; replacing the right dock would lose its peers.
+            let panel = dock::panel_handle(self.messages.clone());
+            let width = px(self
+                .session_state
+                .plugin_dock_sizes
+                .get("right")
+                .copied()
+                .unwrap_or(320.));
+            self.dock_area.update(cx, |area, cx| {
+                local_dock::add_panel_view(
+                    area,
+                    panel,
+                    gpui_base::dock::DockPlacement::Right,
+                    Some(width),
+                    window,
+                    cx,
+                )
+            });
         }
     }
+}
+
+/// A host panel may have moved into any saved split; only truly absent leaves need migration.
+fn contains_panel(state: &PanelState, name: &str) -> bool {
+    state.panel_name == name
+        || state
+            .children
+            .iter()
+            .any(|child| contains_panel(child, name))
 }
 
 /// Filter absent leaves while keeping each surviving split size aligned with its child.

@@ -475,6 +475,7 @@ impl Render for EditorApp {
                                 |bar| bar.right(self.render_syntax_error_indicator(cx)),
                             )
                             // Keep plugin indicators immediately before the cursor position.
+                            .right(self.render_messages_button(cx))
                             .when_some(plugin_indicator, |bar, kind| {
                                 bar.right(self.render_plugin_indicator(kind, cx))
                             })

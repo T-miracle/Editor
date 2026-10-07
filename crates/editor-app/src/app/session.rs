@@ -34,6 +34,9 @@ pub struct SessionState {
     pub explorer_width: f32,
     #[serde(default = "default_true")]
     pub explorer_visible: bool,
+    /// Host messages themselves are transient; only panel visibility is restored across runs.
+    #[serde(default = "default_true")]
+    pub messages_visible: bool,
     /// Newly introduced project roots start expanded for previously saved workspaces too.
     #[serde(default = "default_true")]
     pub explorer_root_expanded: bool,
@@ -123,6 +126,7 @@ impl SessionState {
             window_height: 820.,
             explorer_width: 280.,
             explorer_visible: true,
+            messages_visible: true,
             explorer_root_expanded: true,
             explorer_reveal_on_tab_switch: false,
             extension_height: default_extension_height(),

@@ -1,5 +1,6 @@
 //! Navigation, copy and explicit delete decisions preserve unsaved input and storage rollback.
 use super::*;
+use crate::app::messages::MessageLevel;
 impl EditorApp {
     /// Selecting defaults is reversible; changed native fields require an explicit navigation decision.
     pub(in crate::run::ui) fn select_run_form(
@@ -38,6 +39,9 @@ impl EditorApp {
         cx: &mut Context<Self>,
     ) {
         let key = self.workspace_key();
+        // Only an explicit confirmed deletion persists here; selecting or copying remains a draft.
+        let deleted_name = matches!(&selection, FormSelection::Delete)
+            .then(|| self.run_form.as_ref().unwrap().read(cx).draft.name.clone());
         let result = match selection {
             FormSelection::Configuration(id) => self
                 .run_controls
@@ -76,6 +80,13 @@ impl EditorApp {
         };
         match result {
             Ok(draft) => {
+                if let Some(name) = deleted_name {
+                    self.record_host_message(
+                        MessageLevel::Info,
+                        t!("run.deleted_named", name = name).to_string(),
+                        cx,
+                    );
+                }
                 let form = cx.new(|cx| {
                     let mut form = RunConfigForm::from_draft(draft, window, cx);
                     form.manual_target = form.draft.provided.is_none();
@@ -94,6 +105,16 @@ impl EditorApp {
                 focus.focus(window, cx);
             }
             Err(message) => {
+                // Preserve the inline refusal while retaining the result after the form is dismissed.
+                self.record_host_message(
+                    if deleted_name.is_some() {
+                        MessageLevel::Error
+                    } else {
+                        MessageLevel::Warning
+                    },
+                    message.clone(),
+                    cx,
+                );
                 if let Some(form) = &self.run_form {
                     form.update(cx, |form, cx| {
                         form.pending_selection = None;

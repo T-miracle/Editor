@@ -1,0 +1,47 @@
+{
+  "repository": "T-miracle/Editor",
+  "feature": "ui-host-messages-window",
+  "updated_at": "2026-10-07",
+  "label": "ready-for-agent",
+  "spec": {
+    "number": 84,
+    "id": 5742505697,
+    "node_id": "I_kwDOUnHq-M8AAAABVkeu4Q",
+    "url": "https://github.com/T-miracle/Editor/issues/84",
+    "state": "open",
+    "publication_status": "published",
+    "readback_verified": true
+  },
+  "split_status": "approved",
+  "implementation_authorized": true,
+  "tickets": [
+    {
+      "sequence": "01",
+      "key": "ui-host-messages-window:ticket:01",
+      "title": "宿主消息历史窗口与布局恢复",
+      "blocked_by": [],
+      "publication_status": "published",
+      "number": 85,
+      "id": 5742586349,
+      "url": "https://github.com/T-miracle/Editor/issues/85",
+      "readback_verified": true
+    },
+    {
+      "sequence": "02",
+      "key": "ui-host-messages-window:ticket:02",
+      "title": "宿主消息红点提醒与一键清空",
+      "blocked_by": [
+        "01"
+      ],
+      "publication_status": "published",
+      "number": 86,
+      "id": 5742586717,
+      "url": "https://github.com/T-miracle/Editor/issues/86",
+      "readback_verified": true
+    }
+  ],
+  "worktree": "C:/Users/Tmiracle/.codex/worktrees/host-messages/Editor",
+  "branch": "codex/host-messages",
+  "base_commit": "ae63225afd6e8a362c6f186d7374323e97405469",
+  "native_dependency_verified": true
+}

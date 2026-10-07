@@ -165,6 +165,10 @@ fn status_popover_confirms_the_round_and_preserves_older_unread_errors(cx: &mut 
             })
         });
         draw(form);
+        // Even host-reported plugin failures retain their package log destination.
+        // Publishing the shared runtime sink must not create a host message receipt.
+        assert!(form.debug_bounds("host-messages-empty").is_some());
+        assert!(form.debug_bounds("host-message-1").is_none());
         assert!(form.debug_bounds("plugin-error-indicator").is_some());
         assert!(form.debug_bounds("plugin-warning-indicator").is_none());
         assert!(form.debug_bounds("plugin-loading-indicator").is_none());

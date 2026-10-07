@@ -8,6 +8,7 @@ use super::{
     LaunchPlan, MAX_PREPARED_STEPS, RunConfigDraft, RunControls, RunMenuEntry, SequenceAction,
     StepKind, add_step, join_step_lines, move_step, remove_step, step_lines,
 };
+use crate::app::messages::MessageLevel;
 use crate::extensions::HostWork as Work;
 use crate::ui::controls::menu::MenuStyle;
 use crate::ui::controls::{Button, DialogContent};
@@ -354,11 +355,18 @@ impl EditorApp {
                                 let workspace = app.workspace_key();
                                 match app.run_controls.confirm_target(id, &workspace) {
                                     Ok(stored) => {
-                                        app.status =
-                                            t!("run.target_added", name = label.clone()).into();
+                                        // This explicit confirmation persists the host configuration, not a provider log.
+                                        app.report_host_message(
+                                            MessageLevel::Info,
+                                            t!("run.target_added", name = label.clone())
+                                                .to_string(),
+                                            cx,
+                                        );
                                         app.open_run_config_dialog(window, cx, Some(stored));
                                     }
-                                    Err(message) => app.status = message,
+                                    Err(message) => {
+                                        app.report_host_message(MessageLevel::Error, message, cx);
+                                    }
                                 }
                             }
                             RunMenuEntry::Session { id, .. } => {
@@ -403,22 +411,38 @@ impl EditorApp {
                                             serde_json::from_str::<(String, String)>(binding)
                                         {
                                             let workspace = app.workspace_key();
-                                            app.status = match app
+                                            // Rebinding only records the host's completed local save or refusal.
+                                            match app
                                                 .run_controls
                                                 .repair_target_with(&config, &target, &workspace)
                                             {
-                                                Ok(()) => t!("run.target_repaired").into(),
-                                                Err(error) => error,
-                                            };
+                                                Ok(()) => app.report_host_message(
+                                                    MessageLevel::Info,
+                                                    t!("run.target_repaired").to_string(),
+                                                    cx,
+                                                ),
+                                                Err(error) => app.report_host_message(
+                                                    MessageLevel::Error,
+                                                    error,
+                                                    cx,
+                                                ),
+                                            }
                                         }
                                     } else if let Some(id) = other.strip_prefix("run-apply-repair-")
                                     {
                                         let workspace = app.workspace_key();
-                                        app.status =
-                                            match app.run_controls.repair_target(id, &workspace) {
-                                                Ok(()) => t!("run.target_repaired").into(),
-                                                Err(message) => message,
-                                            };
+                                        match app.run_controls.repair_target(id, &workspace) {
+                                            Ok(()) => app.report_host_message(
+                                                MessageLevel::Info,
+                                                t!("run.target_repaired").to_string(),
+                                                cx,
+                                            ),
+                                            Err(message) => app.report_host_message(
+                                                MessageLevel::Error,
+                                                message,
+                                                cx,
+                                            ),
+                                        }
                                     } else if let Some(id) = other.strip_prefix("run-repair-") {
                                         app.discover_run_targets(cx);
                                         app.status = if app.run_controls.target_missing(id) {
@@ -949,12 +973,17 @@ impl EditorApp {
             .find(|config| config.id == config_id)
             .cloned()
         else {
-            self.status = t!("run.missing_configuration").to_string().into();
+            // Native admission checks precede any provider call and have their own host destination.
+            self.report_host_message(
+                MessageLevel::Warning,
+                t!("run.missing_configuration").to_string(),
+                cx,
+            );
             cx.notify();
             return;
         };
         if !self.run_permitted(cx) {
-            self.status = t!("run.restricted").to_string().into();
+            self.report_host_message(MessageLevel::Warning, t!("run.restricted").to_string(), cx);
             cx.notify();
             return;
         }
@@ -965,7 +994,8 @@ impl EditorApp {
                 self.reveal_run_session(session, &config.id, window, cx);
             }
             LaunchPlan::Invalid { message } => {
-                self.status = message;
+                // plan_launch reports only native configuration read/validation failures.
+                self.report_host_message(MessageLevel::Warning, message, cx);
                 cx.notify();
             }
             LaunchPlan::Start { .. } => {
@@ -1016,7 +1046,8 @@ impl EditorApp {
             self.run_controls
                 .choose_provider(&id, provider.as_deref(), &workspace)
         {
-            self.status = message;
+            // Choosing a provider here writes the host's configuration; no provider is executing yet.
+            self.report_host_message(MessageLevel::Error, message, cx);
             cx.notify();
             return;
         }
@@ -1038,7 +1069,12 @@ impl EditorApp {
             "pause" => &controls.pause,
             "stop" => &controls.stop,
             other => {
-                self.status = t!("run.debug_unknown_action", action = other).to_string();
+                // Reject malformed host actions without reclassifying provider capability failures.
+                self.report_host_message(
+                    MessageLevel::Warning,
+                    t!("run.debug_unknown_action", action = other).to_string(),
+                    cx,
+                );
                 cx.notify();
                 return;
             }
@@ -1058,7 +1094,11 @@ impl EditorApp {
             .debug_session()
             .map(|(_, session)| session.state().clone())
         else {
-            self.status = t!("run.no_debug_session").to_string().into();
+            self.report_host_message(
+                MessageLevel::Warning,
+                t!("run.no_debug_session").to_string(),
+                cx,
+            );
             cx.notify();
             return;
         };
@@ -1316,7 +1356,12 @@ impl EditorApp {
     pub(crate) fn debug_selected(&mut self, cx: &mut Context<Self>) {
         let Some(configuration) = self.run_controls.selected().map(|config| config.id.clone())
         else {
-            self.status = t!("run.no_configuration").into();
+            // An empty native selection is a host refusal, distinct from the debugger's result.
+            self.report_host_message(
+                MessageLevel::Warning,
+                t!("run.no_configuration").to_string(),
+                cx,
+            );
             cx.notify();
             return;
         };
@@ -1329,12 +1374,16 @@ impl EditorApp {
             return;
         }
         let Some(configuration) = self.run_controls.configuration(id).cloned() else {
-            self.status = t!("run.no_configuration").into();
+            self.report_host_message(
+                MessageLevel::Warning,
+                t!("run.no_configuration").to_string(),
+                cx,
+            );
             cx.notify();
             return;
         };
         if !self.run_permitted(cx) {
-            self.status = t!("run.restricted").into();
+            self.report_host_message(MessageLevel::Warning, t!("run.restricted").to_string(), cx);
             cx.notify();
             return;
         }
@@ -1363,7 +1412,11 @@ impl EditorApp {
             return;
         }
         if self.run_controls.running_for(&configuration.id).is_some() {
-            self.status = t!("run.stop_before_debug").into();
+            self.report_host_message(
+                MessageLevel::Warning,
+                t!("run.stop_before_debug").to_string(),
+                cx,
+            );
             cx.notify();
             return;
         }
@@ -1395,7 +1448,8 @@ impl EditorApp {
                 self.drive_preparation(cx);
             }
             Err(reason) => {
-                self.status = reason;
+                // Freezing an already accepted debug plan is a local host state operation.
+                self.report_host_message(MessageLevel::Error, reason, cx);
                 cx.notify();
             }
         }
@@ -1453,7 +1507,8 @@ impl EditorApp {
     /// A target nobody claimed stays unclaimed until the user confirms it.
     pub(crate) fn discover_run_targets(&mut self, cx: &mut Context<Self>) {
         if !self.run_permitted(cx) {
-            self.status = t!("run.restricted").to_string().into();
+            // The host's trust guard is recorded before asking any plugin to discover targets.
+            self.report_host_message(MessageLevel::Warning, t!("run.restricted").to_string(), cx);
             cx.notify();
             return;
         }
@@ -1470,7 +1525,7 @@ impl EditorApp {
                     t!("run.debug_unavailable").into()
                 };
             }
-            Err(error) => self.status = error,
+            Err(error) => self.report_host_message(MessageLevel::Error, error, cx),
         }
         cx.notify();
     }
@@ -1488,7 +1543,8 @@ impl EditorApp {
             return;
         }
         if !self.run_permitted(cx) {
-            self.status = t!("run.restricted").to_string().into();
+            // Trust remains a host check even when the selected target came from a plugin.
+            self.report_host_message(MessageLevel::Warning, t!("run.restricted").to_string(), cx);
             cx.notify();
             return;
         }
@@ -1936,7 +1992,12 @@ impl EditorApp {
                 // Saving never starts the program; the target merely becomes the selected one.
                 self.run_controls.select(&configuration.id, &key);
                 self.apply_provider_choice(cx);
-                self.status = t!("run.saved_named", name = configuration.name).to_string();
+                // Persisting the host's native form is a result, independent from provider runtime logs.
+                self.report_host_message(
+                    MessageLevel::Info,
+                    t!("run.saved_named", name = configuration.name).to_string(),
+                    cx,
+                );
                 let next = form.update(cx, |form, _| form.pending_selection.take());
                 if let Some(next) = next {
                     self.apply_run_form_selection(next, window, cx);
@@ -1953,7 +2014,7 @@ impl EditorApp {
                     form.error = Some(message.clone());
                     cx.notify();
                 });
-                self.status = message;
+                self.report_host_message(MessageLevel::Error, message, cx);
             }
         }
         cx.notify();
@@ -1978,7 +2039,11 @@ impl EditorApp {
             };
             if tab.disk_state != crate::DiskState::Synced && !tab.overwrite_confirmed {
                 // The ordinary save path asks for confirmation; the launch waits for that answer.
-                self.status = t!("status.confirm_disk_overwrite").to_string();
+                self.report_host_message(
+                    MessageLevel::Warning,
+                    t!("status.confirm_disk_overwrite").to_string(),
+                    cx,
+                );
                 cx.notify();
                 return false;
             }
@@ -1988,6 +2053,7 @@ impl EditorApp {
                 tab.session.is_dirty() || tab.disk_state != crate::DiskState::Synced
             }) {
                 // A save that did not take effect must not be treated as a successful preparation.
+                // The detailed disk failure was already retained by save_document_at; do not duplicate it.
                 self.status = t!("run.save_failed_named", path = path.display()).to_string();
                 cx.notify();
                 return false;
@@ -2016,10 +2082,20 @@ impl EditorApp {
                 tab.disk_state = crate::DiskState::Synced;
                 tab.overwrite_confirmed = false;
                 let path = tab.session.path().to_path_buf();
+                // Background documents use the same history destination as the active native save.
+                self.record_host_message(
+                    MessageLevel::Info,
+                    t!("status.saved", path = path.display()).to_string(),
+                    cx,
+                );
                 self.notify_language_document_saved(&path, value, cx);
             }
             Err(error) => {
-                self.status = t!("status.save_failed", error = error.to_string()).to_string();
+                self.report_host_message(
+                    MessageLevel::Error,
+                    t!("status.save_failed", error = error.to_string()).to_string(),
+                    cx,
+                );
             }
         }
     }

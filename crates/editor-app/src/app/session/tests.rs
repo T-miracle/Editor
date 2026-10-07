@@ -287,7 +287,25 @@ fn plugin_dock_layout_survives_delayed_startup(cx: &mut TestAppContext) {
         window.draw(cx).clear(cx);
         let app = restored.read(cx);
         assert!(!app.pending_dock_restore);
-        assert_layout_eq(app.dock_area.read(cx).dump(cx), expected);
+        let actual = app.dock_area.read(cx).dump(cx);
+        // This fixture predates HostMessages. Migration adds one independent right leaf,
+        // while retaining the old plugin subtree, closed state and every other region.
+        let actual_right = actual.right_dock.as_ref().unwrap();
+        let mut original_regions = actual.clone();
+        original_regions.right_dock = Some(gpui_base::dock::DockState::new(
+            actual_right.panel().children[0].clone(),
+            actual_right.placement(),
+            actual_right.size(),
+            actual_right.open(),
+        ));
+        assert_layout_eq(original_regions, expected.clone());
+        let right = app.dock_area.read(cx).layout(DockPlacement::Right).unwrap();
+        assert_eq!(right.panels().count(), 2);
+        assert!(
+            right
+                .panels()
+                .any(|id| id == PanelId::from(app.messages.entity_id()))
+        );
         for key in ["terminal/terminal", "terminal/tasks"] {
             let id = PanelId::from(app.plugin_panels[key].entity_id());
             assert!(

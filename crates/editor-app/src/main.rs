@@ -125,6 +125,11 @@ struct EditorApp {
     dock_area: Entity<DockArea>,
     /// Host panels keep their original identity when Base reloads a saved split tree.
     explorer_panel: Entity<EditorDockPanel>,
+    /// Host-owned message history is independent from plugin resources and runtime logs.
+    messages: Entity<ui::messages::MessagePanel>,
+    _messages_subscription: Subscription,
+    /// Only explicit refresh requests produce completion messages; automatic scans remain quiet.
+    host_refresh_pending: bool,
     /// Saved plugin leaves are restored after the startup registry becomes available.
     pending_dock_restore: bool,
     /// Generic runtime plugin dock; packages own all feature behavior.
@@ -350,6 +355,8 @@ impl EditorApp {
                 cx,
             )
         });
+        let messages =
+            cx.new(|cx| ui::messages::MessagePanel::new(session_state.messages_visible, cx));
         dock_area.update(cx, |area, cx| {
             // Explorer and the editor share the center; plugin management has its own window.
             area.set_center(
@@ -366,6 +373,25 @@ impl EditorApp {
                 window,
                 cx,
             );
+            local_dock::add_panel_view(
+                area,
+                dock::panel_handle(messages.clone()),
+                gpui_base::dock::DockPlacement::Right,
+                Some(px(session_state
+                    .plugin_dock_sizes
+                    .get("right")
+                    .copied()
+                    .unwrap_or(320.))),
+                window,
+                cx,
+            );
+        });
+        let messages_subscription = cx.subscribe(&messages, |this, _, _: &PanelEvent, cx| {
+            this.session_state.messages_visible = this.messages.read(cx).is_visible();
+            this.dock_area.update(cx, |_, cx| cx.notify());
+            this.capture_dock_layout(cx);
+            this.persist_session();
+            cx.notify();
         });
         let dock_subscription = cx.subscribe(&dock_area, |this, _, event, cx| {
             if matches!(event, DockEvent::LayoutChanged) {
@@ -396,6 +422,9 @@ impl EditorApp {
             tree_state,
             dock_area,
             explorer_panel,
+            messages,
+            _messages_subscription: messages_subscription,
+            host_refresh_pending: false,
             pending_dock_restore: session_state.dock_layout.is_some(),
             extensions,
             plugin_panels: HashMap::new(),
@@ -553,6 +582,8 @@ impl EditorApp {
             "JetBrains 2023 Light"
         }
         .into();
+        // Explicit theme changes are host operation results, distinct from per-frame theme resolution.
+        self.record_host_message(app::messages::MessageLevel::Info, self.status.clone(), cx);
         window.refresh();
         self.refresh_dialog(cx);
         cx.notify();
@@ -712,6 +743,7 @@ impl EditorApp {
     }
 
     fn on_refresh_action(&mut self, _: &RefreshWorkspace, _: &mut Window, cx: &mut Context<Self>) {
+        self.host_refresh_pending = true;
         self.file_watch.reconcile();
         self.status = t!("status.refreshing_workspace").to_string();
         cx.notify();

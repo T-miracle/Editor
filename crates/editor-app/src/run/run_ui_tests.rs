@@ -4,6 +4,7 @@
 //! separating rule, available controls, and selector focus. Plugin-owned configuration forms have
 //! their own real-package acceptance; the retired simplified form is no longer a product entry.
 #![cfg(windows)]
+mod host_messages;
 mod selector;
 // Plugin-owned forms replace the retired B3 modal assertions; actual-package coverage lives in
 // extensions::native_configuration_tests and ui::plugin_form::{tree,fault,rollout}_tests.

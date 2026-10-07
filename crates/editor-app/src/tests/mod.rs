@@ -1,5 +1,6 @@
 //! Exercises editor shell interactions through GPUI's test context.
 
+mod host_messages;
 mod language_fixture;
 mod run_file_tabs;
 pub(crate) use language_fixture::declared_language_service;
