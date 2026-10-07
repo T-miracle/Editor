@@ -2,7 +2,7 @@
 
 稳定标识：`ui-host-messages-window:ticket:02`
 
-状态：实现、自动回归与 Windows 原生组合验收已完成；待最终双轴审查、推送并核对关闭 GitHub #86。记录见 [实施验收](../../verification/host-messages.md)。
+状态：实现、自动回归、Windows 原生组合验收与双轴审查已完成；待推送并核对关闭 GitHub #86。记录见 [实施验收](../../verification/host-messages.md)。
 
 ## Parent
 

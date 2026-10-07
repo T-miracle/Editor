@@ -48,7 +48,7 @@ TDD 红阶段先在真实窗口缺少消息或无法恢复的可见断言失败�
 
 ## 工单 02 / #86
 
-状态：#85 已交付；本单实现、自动回归和 Windows 原生组合验收已完成，待最终双轴审查与推送关闭。最终全量 editor-app 测试集中在此阶段执行一次，未受影响的手工场景引用工单 01 的记录。
+状态：#85 已交付；本单实现、自动回归、Windows 原生组合验收及 [最终双轴审查](host-messages-02-review.md) 已完成，Standards 0 项，Spec 0 项。实现提交 `4ac35d9`，待推送关闭。最终全量 editor-app 测试集中在此阶段执行一次，未受影响的手工场景引用工单 01 的记录。
 
 红点由新警告或错误设置，只由用户打开或清空同步确认；普通消息、重绘、展开与淘汰均不能确认提醒。清空重置当前历史、提醒、展开数量及滚动位置，保留单调消息身份供后续记录使用。插件日志和提醒没有共享读写路径。
 
@@ -66,6 +66,8 @@ TDD 红阶段先在真实窗口缺少消息或无法恢复的可见断言失败�
 | `cargo build -p editor-app` | 通过；既有未使用代码和链接器警告仍存在 |
 
 原始日志：工作区父目录下 `reminder-red.log`、`reminder-green.log`、`clear-red.log`、`clear-green.log`、`stage-two-host-tests.log`、`final-ui-tests.log`、`stage-two-workspace-test.log`、`stage-two-check.log` 和 `stage-two-build.log`。未修改插件协议、WASM 包或 SDK 分发，没有把夹具缺失解释为对应测试通过。
+
+附图源文复核：仓库两份 SVG 与原附件的 XML 全文一致，只增加了文件末尾换行。初次逐字节 SHA256 校验因这一格式差异失败，去掉末尾换行后按 ordinal 比较通过；图形路径与属性没有改变。
 
 ### Windows 原生组合验收
 
