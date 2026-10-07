@@ -144,6 +144,12 @@ struct EditorApp {
     tabs_hovered: bool,
     titlebar_should_move: bool,
     dialog: Option<Entity<app_dialog::AppDialog>>,
+    /// The shortcut lookup stays inside this window and captures its original focus target.
+    shortcut_panel: Option<Entity<app::shortcuts::ShortcutPanel>>,
+    /// Snapshot the panel before Base focuses the pointer-activated toolbar entry.
+    shortcut_pointer_origin: Option<app::shortcuts::ShortcutOrigin>,
+    /// The application menu keeps a shortcut entry independently of user key bindings.
+    shortcut_menu: app::shortcuts::menu::MenuState,
     /// Native settings window handle used to activate an already open window.
     dialog_window: Option<WindowHandle<Root>>,
     /// Removes the settings view when its native window closes.
@@ -248,6 +254,7 @@ impl EditorApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
+        app::shortcuts::init(cx);
         let (file_watch, mut watch_updates) = FileWatch::start(workspace.clone());
         let closing = cx.entity().downgrade();
         window.on_window_should_close(cx, move |window, cx| {
@@ -409,6 +416,9 @@ impl EditorApp {
             tabs_hovered: false,
             titlebar_should_move: false,
             dialog: None,
+            shortcut_panel: None,
+            shortcut_pointer_origin: None,
+            shortcut_menu: Default::default(),
             dialog_window: None,
             _dialog_closed_subscription: None,
             settings_section: app::SettingsSection::AppearanceAndBehavior,
@@ -763,36 +773,6 @@ fn main() -> anyhow::Result<()> {
             apply_theme(&theme::active_theme(false), cx);
             cx.activate(true);
             extensions::init(cx);
-            cx.bind_keys([
-                KeyBinding::new(
-                    "ctrl-s",
-                    SaveDocument,
-                    Some("EditorShell && !PluginSurface"),
-                ),
-                KeyBinding::new(
-                    "ctrl-shift-r",
-                    RefreshWorkspace,
-                    Some("EditorShell && !PluginSurface"),
-                ),
-                KeyBinding::new("ctrl-alt-t", ToggleTheme, Some("EditorShell")),
-                KeyBinding::new(
-                    "f12",
-                    NavigateToDefinition,
-                    Some("EditorShell && !PluginSurface"),
-                ),
-                KeyBinding::new(
-                    "ctrl-i",
-                    ShowDefinitionDetails,
-                    Some("EditorShell && !PluginSurface"),
-                ),
-                // Error navigation follows the active document and wraps at either end.
-                KeyBinding::new("f8", NextSyntaxError, Some("EditorShell && !PluginSurface")),
-                KeyBinding::new(
-                    "shift-f8",
-                    PreviousSyntaxError,
-                    Some("EditorShell && !PluginSurface"),
-                ),
-            ]);
 
             let bounds = Bounds::centered(
                 None,

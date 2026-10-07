@@ -14,6 +14,7 @@ pub(crate) mod menu;
 mod notification;
 mod scrollbar;
 mod segmented_tabs;
+mod shortcut_panel;
 pub(crate) mod side_tabs;
 mod spinner;
 mod split;
@@ -39,6 +40,10 @@ pub(crate) use scrollbar::{
     install_scrollbar_theme, vertical_scrollbar, vertical_viewport_scrollbar,
 };
 pub(crate) use segmented_tabs::SegmentedTabs;
+pub(crate) use shortcut_panel::{
+    shortcut_footer, shortcut_keycaps, shortcut_list, shortcut_modal, shortcut_row,
+    shortcut_search, shortcut_tabs,
+};
 pub(crate) use spinner::Spinner;
 pub(crate) use split::split_container;
 pub(crate) use status_bar::StatusBar;

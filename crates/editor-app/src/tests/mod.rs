@@ -2,7 +2,9 @@
 
 mod language_fixture;
 mod run_file_tabs;
+mod shortcuts;
 pub(crate) use language_fixture::declared_language_service;
+pub(crate) use shortcuts::with_editor as with_shortcut_editor;
 
 #[cfg(test)]
 mod settings_dialog_tests {

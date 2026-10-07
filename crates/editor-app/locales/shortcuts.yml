@@ -1,0 +1,194 @@
+# Localized descriptions are keyed by real operation names; they do not define bindings.
+_version: 2
+shortcuts.operation.Tab:
+  en: "Focus next control"
+  zh-CN: "聚焦下一个控件"
+shortcuts.operation.TabPrev:
+  en: "Focus previous control"
+  zh-CN: "聚焦上一个控件"
+shortcuts.operation.ToggleInspector:
+  en: "Toggle UI inspector"
+  zh-CN: "切换界面检查器"
+shortcuts.operation.SaveDocument:
+  en: "Save document"
+  zh-CN: "保存文档"
+shortcuts.operation.RefreshWorkspace:
+  en: "Refresh workspace"
+  zh-CN: "刷新工作区"
+shortcuts.operation.ToggleTheme:
+  en: "Switch theme"
+  zh-CN: "切换主题"
+shortcuts.operation.NavigateToDefinition:
+  en: "Go to definition"
+  zh-CN: "跳转到定义"
+shortcuts.operation.ShowDefinitionDetails:
+  en: "Show definition details"
+  zh-CN: "显示定义详情"
+shortcuts.operation.NextSyntaxError:
+  en: "Next syntax error"
+  zh-CN: "下一个语法错误"
+shortcuts.operation.PreviousSyntaxError:
+  en: "Previous syntax error"
+  zh-CN: "上一个语法错误"
+shortcuts.operation.ToggleExtensions:
+  en: "Manage plugins"
+  zh-CN: "管理插件"
+shortcuts.operation.QuitEditor:
+  en: "Quit editor"
+  zh-CN: "退出编辑器"
+shortcuts.operation.OpenShortcuts:
+  en: "Keyboard shortcuts"
+  zh-CN: "快捷键"
+shortcuts.operation.ActivateToken:
+  en: "Activate text token"
+  zh-CN: "激活文本标记"
+shortcuts.operation.Backspace:
+  en: "Delete backward"
+  zh-CN: "向前删除"
+shortcuts.operation.Delete:
+  en: "Delete forward"
+  zh-CN: "向后删除"
+shortcuts.operation.DeleteToBeginningOfLine:
+  en: "Delete to beginning of line"
+  zh-CN: "删除至行首"
+shortcuts.operation.DeleteToEndOfLine:
+  en: "Delete to end of line"
+  zh-CN: "删除至行尾"
+shortcuts.operation.DeleteToPreviousWordStart:
+  en: "Delete previous word"
+  zh-CN: "删除前一个词"
+shortcuts.operation.DeleteToNextWordEnd:
+  en: "Delete next word"
+  zh-CN: "删除后一个词"
+shortcuts.operation.Indent:
+  en: "Increase indentation"
+  zh-CN: "增加缩进"
+shortcuts.operation.Outdent:
+  en: "Decrease indentation"
+  zh-CN: "减少缩进"
+shortcuts.operation.IndentInline:
+  en: "Indent selection"
+  zh-CN: "缩进选中内容"
+shortcuts.operation.OutdentInline:
+  en: "Outdent selection"
+  zh-CN: "减少选中内容缩进"
+shortcuts.operation.MoveUp:
+  en: "Move up"
+  zh-CN: "向上移动"
+shortcuts.operation.MoveDown:
+  en: "Move down"
+  zh-CN: "向下移动"
+shortcuts.operation.MoveLeft:
+  en: "Move left"
+  zh-CN: "向左移动"
+shortcuts.operation.MoveRight:
+  en: "Move right"
+  zh-CN: "向右移动"
+shortcuts.operation.MoveHome:
+  en: "Move to line start"
+  zh-CN: "移至行首"
+shortcuts.operation.MoveEnd:
+  en: "Move to line end"
+  zh-CN: "移至行尾"
+shortcuts.operation.MovePageUp:
+  en: "Move one page up"
+  zh-CN: "向上翻页"
+shortcuts.operation.MovePageDown:
+  en: "Move one page down"
+  zh-CN: "向下翻页"
+shortcuts.operation.AddCursorAbove:
+  en: "Add cursor above"
+  zh-CN: "在上方添加光标"
+shortcuts.operation.AddCursorBelow:
+  en: "Add cursor below"
+  zh-CN: "在下方添加光标"
+shortcuts.operation.SelectAll:
+  en: "Select all"
+  zh-CN: "全选"
+shortcuts.operation.SelectUp:
+  en: "Extend selection upward"
+  zh-CN: "向上扩展选择"
+shortcuts.operation.SelectDown:
+  en: "Extend selection downward"
+  zh-CN: "向下扩展选择"
+shortcuts.operation.SelectLeft:
+  en: "Extend selection left"
+  zh-CN: "向左扩展选择"
+shortcuts.operation.SelectRight:
+  en: "Extend selection right"
+  zh-CN: "向右扩展选择"
+shortcuts.operation.SelectToStartOfLine:
+  en: "Select to line start"
+  zh-CN: "选择至行首"
+shortcuts.operation.SelectToEndOfLine:
+  en: "Select to line end"
+  zh-CN: "选择至行尾"
+shortcuts.operation.SelectToStart:
+  en: "Select to document start"
+  zh-CN: "选择至文档开头"
+shortcuts.operation.SelectToEnd:
+  en: "Select to document end"
+  zh-CN: "选择至文档末尾"
+shortcuts.operation.SelectToPreviousWordStart:
+  en: "Select previous word"
+  zh-CN: "选择前一个词"
+shortcuts.operation.SelectToNextWordEnd:
+  en: "Select next word"
+  zh-CN: "选择后一个词"
+shortcuts.operation.ShowCharacterPalette:
+  en: "Show character palette"
+  zh-CN: "显示字符面板"
+shortcuts.operation.Copy:
+  en: "Copy"
+  zh-CN: "复制"
+shortcuts.operation.Cut:
+  en: "Cut"
+  zh-CN: "剪切"
+shortcuts.operation.Paste:
+  en: "Paste"
+  zh-CN: "粘贴"
+shortcuts.operation.Undo:
+  en: "Undo"
+  zh-CN: "撤销"
+shortcuts.operation.Redo:
+  en: "Redo"
+  zh-CN: "重做"
+shortcuts.operation.MoveToStart:
+  en: "Move to document start"
+  zh-CN: "移至文档开头"
+shortcuts.operation.MoveToEnd:
+  en: "Move to document end"
+  zh-CN: "移至文档末尾"
+shortcuts.operation.MoveToPreviousWord:
+  en: "Move to previous word"
+  zh-CN: "移至前一个词"
+shortcuts.operation.MoveToNextWord:
+  en: "Move to next word"
+  zh-CN: "移至后一个词"
+shortcuts.operation.Escape:
+  en: "Cancel current input"
+  zh-CN: "取消当前输入"
+shortcuts.operation.ToggleCodeActions:
+  en: "Show code actions"
+  zh-CN: "显示代码操作"
+shortcuts.operation.Search:
+  en: "Search in document"
+  zh-CN: "文档内搜索"
+shortcuts.operation.Replace:
+  en: "Replace in document"
+  zh-CN: "文档内替换"
+shortcuts.operation.GoToDefinition:
+  en: "Go to definition"
+  zh-CN: "跳转到定义"
+shortcuts.operation.enter_primary:
+  en: "Enter"
+  zh-CN: "回车"
+shortcuts.operation.enter_shift:
+  en: "Enter with Shift"
+  zh-CN: "Shift 回车"
+shortcuts.operation.enter_secondary:
+  en: "Secondary Enter"
+  zh-CN: "辅助回车"
+shortcuts.operation.enter_secondary_shift:
+  en: "Secondary Enter with Shift"
+  zh-CN: "Shift 辅助回车"

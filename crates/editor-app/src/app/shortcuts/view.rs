@@ -1,0 +1,180 @@
+//! Composes shortcut state with local Base-backed controls and localized descriptions.
+
+use super::*;
+use crate::ui::controls::{
+    Input, shortcut_footer, shortcut_keycaps, shortcut_list, shortcut_modal, shortcut_row,
+    shortcut_search, shortcut_tabs,
+};
+
+impl Render for ShortcutPanel {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let query = self.search.read(cx).value().to_lowercase();
+        let operations = self.operations.iter().filter(|operation| {
+            operation.scope
+                == if self.tab == 0 {
+                    Scope::Panel
+                } else {
+                    Scope::Global
+                }
+                && if self.key_search {
+                    self.capture.strokes.is_empty()
+                        || operation
+                            .defaults
+                            .iter()
+                            .any(|binding| binding.starts_with(&self.capture.strokes))
+                } else {
+                    operation.title.to_lowercase().contains(&query)
+                }
+        });
+        let mut rows = Vec::new();
+        for operation in operations {
+            let selector = match &operation.target {
+                catalog::Target::Native { action, .. } => {
+                    format!("shortcut-operation-{}", action.name())
+                }
+                catalog::Target::Plugin { plugin, command } => {
+                    format!("shortcut-operation-{plugin}/{command}")
+                }
+            };
+            let description = div()
+                .debug_selector(move || selector.clone())
+                .child(operation.title.clone())
+                .into_any_element();
+            let binding = if operation.defaults.is_empty() {
+                div()
+                    .text_color(cx.theme().muted_foreground)
+                    .child(t!("shortcuts.unbound").to_string())
+                    .into_any_element()
+            } else {
+                div()
+                    .flex()
+                    .items_center()
+                    .gap_2()
+                    .children(
+                        operation
+                            .defaults
+                            .iter()
+                            .map(|binding| shortcut_keycaps(&capture::display(binding), cx)),
+                    )
+                    .into_any_element()
+            };
+            rows.push(shortcut_row(
+                operation.id.clone(),
+                description,
+                binding,
+                None,
+                cx,
+            ));
+        }
+        if rows.is_empty() {
+            rows.push(
+                div()
+                    .debug_selector(|| "shortcuts-empty".into())
+                    .p_4()
+                    .text_sm()
+                    .text_color(cx.theme().muted_foreground)
+                    .child(t!("shortcuts.empty").to_string())
+                    .into_any_element(),
+            );
+        }
+        let panel = cx.entity().downgrade();
+        let tabs = shortcut_tabs(
+            self.tab,
+            [
+                t!("shortcuts.panel_tab").to_string().into(),
+                t!("shortcuts.global_tab").to_string().into(),
+            ],
+            &self.tabs_focus,
+            move |tab, _, cx| {
+                let _ = panel.update(cx, |panel, cx| panel.select_tab(tab, cx));
+            },
+            cx,
+        );
+        let field = div()
+            .debug_selector(|| "shortcuts-search".into())
+            .h(px(28.))
+            .when(self.key_search, |field| {
+                field
+                    .flex()
+                    .items_center()
+                    .px_2()
+                    .child(if self.capture.strokes.is_empty() {
+                        div()
+                            .text_sm()
+                            .text_color(cx.theme().muted_foreground)
+                            .child(t!("shortcuts.press_keys").to_string())
+                            .into_any_element()
+                    } else {
+                        shortcut_keycaps(&capture::display(&self.capture.strokes), cx)
+                    })
+            })
+            .when(!self.key_search, |field| {
+                field.child(Input::new(&self.search).bordered(false))
+            })
+            .into_any_element();
+        let toggle = Button::new("shortcuts-capture")
+            .debug_selector(|| "shortcuts-capture".into())
+            .small()
+            .ghost()
+            .label("⌨")
+            .accessibility_label(t!("shortcuts.capture").to_string())
+            .tooltip(t!("shortcuts.capture").to_string())
+            .on_click(cx.listener(Self::toggle_capture_click))
+            .into_any_element();
+        let navigation = div()
+            .flex()
+            .items_center()
+            .gap_2()
+            .when(self.key_search, |row| row.opacity(0.5))
+            .child(t!("shortcuts.switch_tabs").to_string())
+            .child(shortcut_keycaps(&["Alt+←".into()], cx))
+            .child("/")
+            .child(shortcut_keycaps(&["Alt+→".into()], cx))
+            .into_any_element();
+        let footer = shortcut_footer(
+            div()
+                .child(if self.key_search {
+                    t!("shortcuts.capture_help").to_string()
+                } else {
+                    t!("shortcuts.close_help").to_string()
+                })
+                .into_any_element(),
+            navigation,
+            cx,
+        );
+        let content = div()
+            .key_context("ShortcutPanel")
+            .flex()
+            .flex_col()
+            .size_full()
+            .min_h_0()
+            .child(tabs)
+            .child(shortcut_search(field, toggle, self.key_search, cx))
+            .child(shortcut_list(rows, &self.scroll, cx))
+            .child(footer)
+            .into_any_element();
+        let panel = cx.entity().downgrade();
+        shortcut_modal(
+            self.focus.clone(),
+            content,
+            move |window, cx| {
+                let _ = panel.update(cx, |panel, cx| panel.request_close(window, cx));
+                false
+            },
+            window,
+            cx,
+        )
+    }
+}
+
+impl ShortcutPanel {
+    /// Forward Base's pointer/keyboard activation to the recording state.
+    fn toggle_capture_click(
+        &mut self,
+        _: &ClickEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.toggle_capture(window, cx);
+    }
+}

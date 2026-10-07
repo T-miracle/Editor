@@ -1,0 +1,18 @@
+# 项目文档
+
+本目录供 AI 与维护者使用，不发布为读者站点。面向读者的使用说明与插件协议文档在 `website/` 维护。
+
+## 项目基线与协作
+
+- [已确认需求基线](需求整理.md)
+- [开发计划](开发计划.md)
+- [领域文档使用约定](agents/domain.md)
+- [议题跟踪器与执行授权](agents/issue-tracker.md)
+- [分诊标签](agents/triage-labels.md)
+- [插件平台公开能力规格](specs/plugin-api-platform.md)
+
+## 当前快捷键任务
+
+- [原生 UI 文档](ui/README.md)：快捷键面板规格、三张实施工单与实际验收记录。
+
+新 UI 方案归入 `ui/specs/`，工单归入 `ui/tickets/`，验证记录归入 `ui/verification/`。本次仅新增快捷键任务入口，已有基线与其他主题继续沿用原位置；不执行无关文档搬迁。

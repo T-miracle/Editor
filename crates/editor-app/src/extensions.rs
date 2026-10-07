@@ -66,6 +66,8 @@ mod service_tests;
 mod settings;
 #[cfg(test)]
 mod settings_tests;
+#[cfg(test)]
+mod shortcut_query_tests;
 mod surface;
 #[cfg(test)]
 mod ui_package_tests;
