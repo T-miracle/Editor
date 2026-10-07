@@ -821,9 +821,32 @@ impl EditorApp {
             return;
         }
 
+        self.remove_tab(index, path, window, cx);
+    }
+
+    /// Discard a replaced tab only after the caller validates explicit consent against its current revision.
+    pub(crate) fn discard_tab(
+        &mut self,
+        path: PathBuf,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if let Some(index) = self.tabs.iter().position(|tab| tab.path() == path) {
+            self.remove_tab(index, path, window, cx);
+        }
+    }
+
+    /// Saved close and approved discard share document ownership, language and focus cleanup.
+    fn remove_tab(
+        &mut self,
+        index: usize,
+        path: PathBuf,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let was_active = self.active_path.as_ref() == Some(&path);
         if was_active {
-            // Closing a clean active tab cancels its ownership before any background cutover can race it.
+            // Retire the active tab's ownership before any background cutover can race its removal.
             self.withdraw_bundled_request(cx);
         }
         self.close_language_document(&path, cx);

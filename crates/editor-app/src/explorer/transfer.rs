@@ -342,7 +342,11 @@ impl EditorApp {
                     && let Some((old, new)) = &plan.movement
                 {
                     // Commit and path migration share one UI turn, so a newly dirty target cannot appear between them.
-                    self.retarget_transferred_documents(old, new, window, cx);
+                    let discard_target = matches!(
+                        plan.protection,
+                        publication::Protection::Recovery { discard: true, .. }
+                    );
+                    self.retarget_transferred_documents(old, new, discard_target, window, cx);
                 }
                 let approvals =
                     if let publication::Protection::Recovery { approvals, .. } = &plan.protection {
@@ -436,20 +440,27 @@ impl EditorApp {
         &mut self,
         old: &Path,
         new: &Path,
+        discard_target: bool,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         if self.tabs.iter().any(|tab| tab.path() == old)
             && self.tabs.iter().any(|tab| {
                 tab.path() == new
-                    && tab
-                        .text
-                        .as_ref()
-                        .is_none_or(|text| !text.session.is_dirty())
+                    && (discard_target
+                        || tab
+                            .text
+                            .as_ref()
+                            .is_none_or(|text| !text.session.is_dirty()))
             })
         {
-            // The overwritten clean target no longer represents its old file; keep the source editor's identity.
-            self.close_tab(new.to_path_buf(), window, cx);
+            // Final recovery authorization includes double-confirmed discard of the occupied target.
+            // Remove that session before migrating the source, which keeps its editor and text history.
+            if discard_target {
+                self.discard_tab(new.to_path_buf(), window, cx);
+            } else {
+                self.close_tab(new.to_path_buf(), window, cx);
+            }
         }
         self.apply_reconciliation(
             Reconciliation {

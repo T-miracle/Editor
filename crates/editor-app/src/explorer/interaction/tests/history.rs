@@ -206,6 +206,49 @@ fn explorer_transfer_recovery_occupied_move_source_skip_keeps_both_endpoints(
     assert_eq!(std::fs::read_to_string(target).unwrap(), "source");
 }
 
+/// Double-confirmed force may discard an occupied tab, but the moved document keeps its identity.
+#[gpui::test]
+fn explorer_transfer_force_undo_move_retargets_over_dirty_occupied_tab(cx: &mut TestAppContext) {
+    let project = tempfile::tempdir().unwrap();
+    std::fs::create_dir(project.path().join("destination")).unwrap();
+    std::fs::write(project.path().join("source.txt"), "source").unwrap();
+    let workspace = Workspace::open(project.path()).unwrap();
+    let source = workspace.root().join("source.txt");
+    let target = workspace.root().join("destination/source.txt");
+    let (app, ui) = mount(cx, workspace, source.clone());
+    let (editor_id, file_id) = ui.update(|_, cx| {
+        let app = app.read(cx);
+        (app.editor.entity_id(), app.tabs[0].file_id)
+    });
+    let uri = url::Url::from_file_path(&source).unwrap();
+    transfer::paste_item(
+        ui,
+        gpui_kit::ClipboardItem::new_string(format!("cut\n{uri}")),
+        1,
+    );
+    std::fs::write(&source, "occupied").unwrap();
+    ui.update(|window, cx| app.update(cx, |app, cx| app.open_file(source.clone(), window, cx)));
+    ui.simulate_keystrokes("end");
+    ui.simulate_input("draft");
+    redraw(ui);
+    history_key(ui, "ctrl-z");
+    for _ in 0..2 {
+        click_choice(ui, "transfer-force");
+        redraw(ui);
+    }
+    assert_eq!(std::fs::read_to_string(&source).unwrap(), "source");
+    assert!(!target.exists());
+    ui.update(|_, cx| {
+        let app = app.read(cx);
+        assert_eq!(app.tabs.len(), 1, "the approved occupied tab was discarded");
+        assert_eq!(app.tabs[0].file_id, file_id);
+        assert_eq!(app.tabs[0].path(), source);
+        assert_eq!(app.active_path.as_ref(), Some(&source));
+        assert_eq!(app.editor.entity_id(), editor_id);
+        assert_eq!(app.editor.read(cx).value().to_string(), "source");
+    });
+}
+
 #[gpui::test]
 fn explorer_transfer_menu_undo_records_partial_success(cx: &mut TestAppContext) {
     let project = tempfile::tempdir().unwrap();
