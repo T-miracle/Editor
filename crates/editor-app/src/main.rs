@@ -810,9 +810,11 @@ fn main() -> anyhow::Result<()> {
             window_options.inactive_frame_interval = None;
             // Kit supplies the shared Root and its automatic overlay hosting.
             gpui_kit::open_window(window_options, cx, move |window, cx| {
+                // Native task switching and accessibility use a separate title from the custom chrome.
+                window.set_window_title(app::APP_NAME);
                 cx.new(|cx| EditorApp::new(workspace, initial_file, window, cx))
             })
-            .expect("failed to open Me Editor window");
+            .expect("failed to open Nanobug window");
         });
     Ok(())
 }

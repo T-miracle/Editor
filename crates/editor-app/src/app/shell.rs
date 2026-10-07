@@ -315,18 +315,9 @@ impl Render for EditorApp {
         // Discovery waits for healthy runtime restoration, then reuses native permission consent for this file.
         self.sync_bundled_first_use(window, cx);
         let cursor = self.editor.read(cx).cursor_position();
-        let project_initial = self
-            .workspace
-            .root()
-            .file_name()
-            .map(|name| name.to_string_lossy())
-            .and_then(|name| name.chars().next())
-            .map(|initial| initial.to_uppercase().collect::<String>())
-            .unwrap_or_else(|| "M".to_string());
 
         let shell_style = component_styles(cx, ThemeComponent::AppShell).base;
         let title_bar_style = component_styles(cx, ThemeComponent::WindowTitleBar).base;
-        let badge_style = component_styles(cx, ThemeComponent::ProjectBadge).base;
         let status_style = component_styles(cx, ThemeComponent::StatusBar).base;
         // Observe the exact entry chosen for this frame before confirmation can rebuild the same severity later.
         let plugin_indicator = self.plugin_indicator(cx);
@@ -392,22 +383,12 @@ impl Render for EditorApp {
                             .gap_2()
                             .px_3()
                             .child(
-                                h_flex()
-                                    .size(px(20.))
-                                    .rounded(px(badge_style.radius_px.unwrap_or(5.)))
-                                    .bg(badge_style.background.unwrap_or(cx.theme().primary))
-                                    .text_color(
-                                        badge_style
-                                            .foreground
-                                            .unwrap_or(cx.theme().primary_foreground),
-                                    )
-                                    .text_size(px(badge_style.font_size_px.unwrap_or(12.)))
-                                    .font_semibold()
-                                    .justify_center()
-                                    .items_center()
-                                    .child(project_initial),
+                                // Preserve the supplied mark's color in both editor themes.
+                                gpui_kit::img(assets::APP_ICON_PATH)
+                                    .size(px(24.))
+                                    .flex_shrink_0(),
                             )
-                            .child(div().text_sm().font_semibold().child("Me Editor")),
+                            .child(div().text_sm().font_semibold().child(app::APP_NAME)),
                     )
                     .child(
                         div()

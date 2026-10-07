@@ -54,13 +54,18 @@ const groups = await Promise.all(
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>{title} · Me Editor</title>
+    <title>{title} · Nanobug</title>
     <meta name="description" content={description} />
+    <!-- Carry the project prefix on branding assets just like documentation links. -->
+    <link rel="icon" href={`${basePrefix}favicon.ico`} sizes="any" />
     <link rel="alternate" hreflang={otherLocale} href={alternateHref(basePrefix, alternate)} />
   </head>
   <body>
     <header class="site-header">
-      <a class="site-title" href={localeBase(basePrefix, locale)}>Me Editor</a>
+      <a class="site-title" href={localeBase(basePrefix, locale)}>
+        <img src={`${basePrefix}nanobug.png`} alt="" width="28" height="28" />
+        Nanobug
+      </a>
       <nav>
         <a class="header-link" href={`${basePrefix}${locale}/search/`}>
           {locale === 'en' ? 'Search' : '搜索'}
@@ -121,8 +126,8 @@ const groups = await Promise.all(
       <p>
         {
           locale === 'en'
-            ? 'Me Editor is a native desktop editor. This site documents editor usage and the plugin contract.'
-            : 'Me Editor 是原生桌面编辑器。本站记录编辑器使用方式与插件契约。'
+            ? 'Nanobug is a native desktop editor. This site documents editor usage and the plugin contract.'
+            : 'Nanobug 是原生桌面编辑器。本站记录编辑器使用方式与插件契约。'
         }
       </p>
     </footer>

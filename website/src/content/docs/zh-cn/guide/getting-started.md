@@ -8,7 +8,7 @@ alternate: /en/guide/getting-started/
 
 # 快速开始
 
-Me Editor 是原生桌面程序：没有安装向导，也不需要账号。运行可执行文件即会打开窗口。
+Nanobug 是原生桌面程序：没有安装向导，也不需要账号。运行可执行文件即会打开窗口。
 
 ## 打开文件
 

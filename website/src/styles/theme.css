@@ -76,6 +76,10 @@ a:hover {
 }
 
 .site-title {
+  /* Keep the supplied mark and product name together at every viewport width. */
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
   font-weight: 600;
   color: var(--text);
 }

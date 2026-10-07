@@ -76,7 +76,7 @@ impl LanguageServerConnection {
                     },
                     "experimental": experimental
                 },
-                "clientInfo": { "name": "Me Editor", "version": env!("CARGO_PKG_VERSION") }
+                "clientInfo": { "name": crate::app::APP_NAME, "version": env!("CARGO_PKG_VERSION") }
             }),
         )?;
         // Only send optional save notifications when the server requests them.

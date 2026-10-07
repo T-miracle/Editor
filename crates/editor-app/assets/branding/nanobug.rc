@@ -1,0 +1,36 @@
+// Resource ID 1 is the icon loaded by GPUI's Windows platform.
+#include <winver.h>
+
+// Resource readers require a text version as well as the numeric Cargo version.
+#define NANOBUG_STRINGIFY_VALUE(value) #value
+#define NANOBUG_STRINGIFY(value) NANOBUG_STRINGIFY_VALUE(value)
+#define NANOBUG_VERSION_STRING NANOBUG_STRINGIFY(APP_VERSION_MAJOR) "." NANOBUG_STRINGIFY(APP_VERSION_MINOR) "." NANOBUG_STRINGIFY(APP_VERSION_PATCH)
+
+1 ICON "assets/branding/nanobug.ico"
+
+// Keep the product name visible in Explorer even though the development binary retains its Cargo name.
+1 VERSIONINFO
+FILEVERSION APP_VERSION_MAJOR, APP_VERSION_MINOR, APP_VERSION_PATCH, 0
+PRODUCTVERSION APP_VERSION_MAJOR, APP_VERSION_MINOR, APP_VERSION_PATCH, 0
+FILEFLAGSMASK VS_FFI_FILEFLAGSMASK
+FILEFLAGS 0
+FILEOS VOS_NT_WINDOWS32
+FILETYPE VFT_APP
+FILESUBTYPE 0
+BEGIN
+    BLOCK "StringFileInfo"
+    BEGIN
+        BLOCK "040904b0"
+        BEGIN
+            VALUE "FileDescription", "Nanobug\0"
+            VALUE "FileVersion", NANOBUG_VERSION_STRING "\0"
+            VALUE "ProductName", "Nanobug\0"
+            VALUE "ProductVersion", NANOBUG_VERSION_STRING "\0"
+            VALUE "OriginalFilename", "Nanobug.exe\0"
+        END
+    END
+    BLOCK "VarFileInfo"
+    BEGIN
+        VALUE "Translation", 0x0409, 1200
+    END
+END

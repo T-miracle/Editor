@@ -1,14 +1,14 @@
 ---
-title: Me Editor documentation
+title: Nanobug documentation
 description: How to use the editor and how to build plugins for it.
 section: guide
 order: 0
 alternate: /zh-cn/
 ---
 
-# Me Editor documentation
+# Nanobug documentation
 
-Me Editor is a native desktop code editor written in Rust with GPUI. It is not a web
+Nanobug is a native desktop code editor written in Rust with GPUI. It is not a web
 application: the window, the editor surface and the plugin panels are all drawn natively.
 
 This site has two audiences. Pick the journey that matches what you are doing.

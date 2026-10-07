@@ -1,4 +1,4 @@
-# 项目文档
+# Nanobug 文档目录
 
 本目录供 AI 与维护者使用，不发布为读者站点。面向读者的使用说明与插件协议文档在 `website/` 维护。
 
@@ -16,3 +16,8 @@
 - [原生 UI 文档](ui/README.md)：资源管理器文件转移与快捷键面板的规格、工单和实际验收记录。
 
 新 UI 方案归入 `ui/specs/`，工单归入 `ui/tickets/`，验证记录归入 `ui/verification/`。已有基线与其他主题继续沿用原位置；不执行无关文档搬迁。
+
+## 产品品牌
+
+- [Nanobug 名称、图标与兼容标识](project/branding.md)。
+- 仓库入口：[English](../README.md) · [简体中文](../README.zh-CN.md)。

@@ -1785,6 +1785,7 @@ dependencies = [
  "anyhow",
  "dirs 6.0.0",
  "editor-core",
+ "embed-resource",
  "futures",
  "glob",
  "gpui-base",

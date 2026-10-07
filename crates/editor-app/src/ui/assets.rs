@@ -1,7 +1,10 @@
-//! Embeds file icons and exposes them to GPUI's asset loader.
+//! Embeds the product mark and file icons for GPUI's asset loader.
 
 use gpui_kit::{AssetSource, Result, SharedString, assets::Assets};
 use std::borrow::Cow;
+
+/// Asset path of the supplied product mark, rendered in full color in the native title bar.
+pub(crate) const APP_ICON_PATH: &str = "branding/nanobug.png";
 
 // The default bundle omits these configuration and shortcut actions; embed their catalog SVGs.
 gpui_kit::assets::icon_assets!(ConfigurationIcons, [Lock, SquarePen, Keyboard, RotateCcw]);
@@ -21,6 +24,8 @@ macro_rules! file_icons {
 }
 
 file_icons! {
+    // The title bar, repository READMEs, and Windows ICO share the same supplied artwork.
+    "branding/nanobug.png" => "../../assets/branding/nanobug.png",
     // Run actions use editor-owned monochrome geometry, including filled Play/Stop treatment.
     "icons/run-build.svg" => "../../assets/icons/run-build.svg",
     "icons/run-start.svg" => "../../assets/icons/run-start.svg",
@@ -43,7 +48,7 @@ file_icons! {
     "file-icons/text_dark.svg" => "../../assets/file-icons/text_dark.svg",
 }
 
-/// Combines GPUI Kit's monochrome UI icons with the editor's file icons.
+/// Combines the product mark, editor file icons, and GPUI Kit's monochrome UI icons.
 pub struct AppAssets;
 
 impl AssetSource for AppAssets {

@@ -1,9 +1,9 @@
 {
-  "name": "me-editor-docs-site",
+  "name": "nanobug-docs-site",
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "Reader-facing documentation site for Me Editor: editor usage and the plugin capability contract.",
+  "description": "Reader-facing documentation site for Nanobug: editor usage and the plugin capability contract.",
   "engines": {
     "node": ">=24.19.0"
   },

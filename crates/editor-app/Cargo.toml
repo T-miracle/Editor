@@ -37,6 +37,10 @@ tempfile.workspace = true
 ignore.workspace = true
 notify.workspace = true
 
+[build-dependencies]
+# Reuse the locked Windows resource compiler for the product icon and file metadata.
+embed-resource = "=3.0.11"
+
 [dev-dependencies]
 gpui-kit = { workspace = true, features = ["test-support"] }
 # Reidentified hybrid fixtures retain their declarative resources through a parsed TOML manifest.

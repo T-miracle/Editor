@@ -217,10 +217,11 @@ component exports, without generating WIT bindings itself. Compile an independen
 invoking the packaged editor:
 
 ```powershell
-editor-app.exe --plugin-cargo capability-example/Cargo.toml build --target wasm32-wasip2 --release
+# Invoke Nanobug from its distribution directory.
+.\Nanobug.exe --plugin-cargo capability-example/Cargo.toml build --target wasm32-wasip2 --release
 # The same entry point supports native unit tests and compile checks.
-editor-app.exe --plugin-cargo capability-example/Cargo.toml test --lib
-editor-app.exe --plugin-cargo capability-example/Cargo.toml check --target wasm32-wasip2
+.\Nanobug.exe --plugin-cargo capability-example/Cargo.toml test --lib
+.\Nanobug.exe --plugin-cargo capability-example/Cargo.toml check --target wasm32-wasip2
 ```
 
 The editor caches its embedded interface by content digest under the system user cache

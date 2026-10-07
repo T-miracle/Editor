@@ -8,7 +8,7 @@ alternate: /zh-cn/guide/
 
 # Editor guide
 
-This section covers using Me Editor as an installed product. It assumes you already have
+This section covers using Nanobug as an installed product. It assumes you already have
 the editor; building it from source is a repository README topic, not a user topic.
 
 The pages here grow with the editor. Each one is written from the reader's point of view

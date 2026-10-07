@@ -8,7 +8,7 @@ alternate: /zh-cn/guide/getting-started/
 
 # Getting started
 
-Me Editor is a native desktop application. There is no installer wizard and no account: you
+Nanobug is a native desktop application. There is no installer wizard and no account: you
 run the executable and it opens a window.
 
 ## Opening a file

@@ -1,5 +1,8 @@
 //! Window shell, layout, settings, dialogs, and persisted app state.
 
+/// Product name shared by native window titles, the application shell, and LSP identification.
+pub(crate) const APP_NAME: &str = "Nanobug";
+
 pub(crate) mod dialog;
 pub(crate) mod language_servers;
 pub(crate) mod languages;

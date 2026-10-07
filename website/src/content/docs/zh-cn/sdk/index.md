@@ -69,10 +69,11 @@ alternate: /en/sdk/
 插件在 `Cargo.toml` 声明 `plugin-protocol = { version = "=0.2.0", features = ["guest"] }`，通过 `plugin_protocol::bindings::{Guest, editor, export}` 使用宿主调用和组件导出，无需自行生成 WIT 绑定。独立编译时直接调用已打包的编辑器：
 
 ```powershell
-editor-app.exe --plugin-cargo capability-example/Cargo.toml build --target wasm32-wasip2 --release
+# 在 Nanobug 发行目录中调用主程序。
+.\Nanobug.exe --plugin-cargo capability-example/Cargo.toml build --target wasm32-wasip2 --release
 # 同一入口也支持原生单元测试和编译检查。
-editor-app.exe --plugin-cargo capability-example/Cargo.toml test --lib
-editor-app.exe --plugin-cargo capability-example/Cargo.toml check --target wasm32-wasip2
+.\Nanobug.exe --plugin-cargo capability-example/Cargo.toml test --lib
+.\Nanobug.exe --plugin-cargo capability-example/Cargo.toml check --target wasm32-wasip2
 ```
 
 编辑器将内嵌接口按内容摘要缓存到系统用户缓存目录的 `MeEditor/plugin-sdk/<摘要>/`（Windows 为 `%LOCALAPPDATA%/MeEditor/plugin-sdk/<摘要>/`），通过本次 Cargo 命令的依赖覆盖选择该缓存。不同接口版本不会互相覆盖；缓存缺失或损坏会自动恢复。插件项目不需要 `sdk/`，也不引用主程序源码；发行目录只需主程序与插件包。接口变更时仍需核对 WIT 包版本和插件清单的 `protocol` 版本。

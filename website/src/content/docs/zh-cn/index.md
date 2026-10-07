@@ -1,14 +1,14 @@
 ---
-title: Me Editor 文档
+title: Nanobug 文档
 description: 编辑器的使用方式，以及为它编写插件的方法。
 section: guide
 order: 0
 alternate: /en/
 ---
 
-# Me Editor 文档
+# Nanobug 文档
 
-Me Editor 是用 Rust 与 GPUI 编写的原生桌面代码编辑器。它不是网页应用：窗口、编辑区
+Nanobug 是用 Rust 与 GPUI 编写的原生桌面代码编辑器。它不是网页应用：窗口、编辑区
 与插件面板全部原生绘制。
 
 本站面向两类读者，请按你手头的事选择入口。
