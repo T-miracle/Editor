@@ -3,6 +3,7 @@ use plugin_runtime::{Installed, Manager, Package, plugin_protocol::*};
 mod admission;
 #[cfg(test)]
 mod bundled_tests;
+mod command_epochs;
 pub(super) mod configurations;
 mod preparation;
 mod runner;
@@ -187,6 +188,8 @@ pub enum Work {
         plugin: String,
         command: String,
         arguments: serde_json::Value,
+        /// Capture once when the host accepts this command; never retarget it after a restart.
+        expected_epoch: u64,
     },
     /// The editor's run controls start a program through the public execution contract.
     ///
@@ -406,6 +409,8 @@ pub(super) struct Published {
     pub generation: u64,
     /// Changes when a plugin instance is replaced, even by the same package digest.
     pub instance_epochs: BTreeMap<String, u64>,
+    /// Real runtime identities stay private; consumers receive only published epochs.
+    instance_ids: BTreeMap<String, String>,
     pub processes: BTreeMap<String, usize>,
 }
 /// The worker's receipt carries no guest document/resource authority and is consumed once by its UI.

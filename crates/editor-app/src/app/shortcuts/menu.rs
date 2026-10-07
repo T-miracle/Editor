@@ -43,10 +43,13 @@ impl EditorApp {
             .child(
                 Button::new("shortcuts-menu-trigger")
                     .debug_selector(|| "shortcuts-menu-trigger".into())
-                    .label(t!("shortcut_menu.application").to_string())
+                    // A compact menu leaves the existing drag surface usable in small windows.
+                    .label("⋯")
                     .accessibility_label(t!("shortcut_menu.application").to_string())
+                    .tooltip(t!("shortcut_menu.application").to_string())
                     .expanded(self.shortcut_menu.popup.is_some())
                     .small()
+                    .compact()
                     .ghost()
                     .on_click(cx.listener(|app, event: &ClickEvent, window, cx| {
                         let origin = if matches!(event, ClickEvent::Mouse(_)) {

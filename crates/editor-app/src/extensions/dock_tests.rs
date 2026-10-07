@@ -138,14 +138,14 @@ fn native_dock_drag_preserves_canvas_viewport_and_saved_size(cx: &mut TestAppCon
     );
     cx.update(|window, cx| {
         app.update(cx, |app, cx| {
-            app.invoke_plugin_command(
-                "terminal",
-                "terminal.new",
-                serde_json::Value::Null,
-                window,
-                cx,
-            )
-            .unwrap();
+            // This layout fixture restores dock geometry, not a fabricated plugin command.
+            // Real command admission and guest execution have separate package-driven coverage.
+            app.plugin_panels["terminal/terminal"].update(cx, |panel, cx| {
+                panel.show(window, cx);
+                cx.notify();
+            });
+            app.dock_area.update(cx, |_, cx| cx.notify());
+            cx.notify();
         })
     });
     cx.run_until_parked();

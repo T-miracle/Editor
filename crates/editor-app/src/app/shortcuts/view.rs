@@ -43,9 +43,33 @@ impl Render for ShortcutPanel {
                     format!("shortcut-operation-{plugin}/{command}")
                 }
             };
+            let suspended = cx
+                .try_global::<engine::BindingEngine>()
+                .is_some_and(|engine| !engine.suspended_conflicts(&operation.id).is_empty());
+            let conflict_selector = match &operation.target {
+                catalog::Target::Plugin { plugin, command } => {
+                    format!("shortcut-conflict-{plugin}/{command}")
+                }
+                catalog::Target::Native { action, .. } => {
+                    format!("shortcut-conflict-{}", action.name())
+                }
+            };
             let description = div()
                 .debug_selector(move || selector.clone())
+                .flex()
+                .flex_col()
+                .gap_1()
                 .child(operation.title.clone())
+                .when(suspended, |description| {
+                    // The retained keycaps describe configuration, not an active conflicting key.
+                    description.child(
+                        div()
+                            .debug_selector(move || conflict_selector.clone())
+                            .text_xs()
+                            .text_color(cx.theme().danger)
+                            .child(t!("shortcuts.restored_conflict").to_string()),
+                    )
+                })
                 .into_any_element();
             let binding = self.binding_controls(&operation, cx);
             let draft = self.render_draft(&operation.id, cx);

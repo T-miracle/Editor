@@ -4,7 +4,7 @@
 
 - [快捷键面板与用户绑定规格](specs/keyboard-shortcuts.md)：交互、C 视觉方案及应用级测试接缝已确认。
 - [三张实施工单 #81–#83](tickets/keyboard-shortcuts/README.md)：拆分、依赖和全部执行已获授权；按 #81 → #82 → #83 实施。
-- [快捷键验收记录](verification/keyboard-shortcuts.md)：记录实际执行证据、失败和未验证部分，当前尚未完成整体验收。
+- [快捷键验收记录](verification/keyboard-shortcuts.md)：记录 T01–T22 实际证据、失败修复与验证限制；最终应用测试和必要原生组合已通过，03 提交、推送与关闭读回待执行。
 
 方案放入 `specs/`，工单放入 `tickets/`，验收记录放入 `verification/`。不得用生成式原型图替代真实按键、点击、配置重载与插件生命周期验收。
 

@@ -60,3 +60,9 @@ shortcuts.edit.storage:
 shortcuts.edit.help:
   en: "Esc cancels editing"
   zh-CN: "Esc 取消编辑"
+shortcuts.edit.resolve:
+  en: "Resolve conflict"
+  zh-CN: "处理冲突"
+shortcuts.edit.plugin_unavailable:
+  en: "The plugin command is no longer available. Editing was cancelled; saved bindings are retained."
+  zh-CN: "插件命令已不可用。本次编辑已取消，已保存绑定仍保留。"

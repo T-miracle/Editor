@@ -24,6 +24,25 @@ impl ShortcutPanel {
             Target::Native { action, .. } => action.name().to_owned(),
             Target::Plugin { plugin, command } => format!("{plugin}/{command}"),
         };
+        if cx
+            .try_global::<BindingEngine>()
+            .is_some_and(|engine| !engine.suspended_conflicts(&operation.id).is_empty())
+        {
+            let id = operation.id.clone();
+            let debug = format!("shortcut-resolve-{stem}");
+            row = row.child(
+                // Resolve reuses the exact retained custom groups and the normal review dialog.
+                Button::new(format!("resolve-{}", operation.id))
+                    .debug_selector(move || debug.clone())
+                    .disabled(disabled)
+                    .small()
+                    .outline()
+                    .label(t!("shortcuts.edit.resolve").to_string())
+                    .on_click(cx.listener(move |panel, _, window, cx| {
+                        panel.request_edit_intent(Intent::Resolve(id.clone()), window, cx);
+                    })),
+            );
+        }
         for (index, binding) in operation.defaults.iter().enumerate() {
             let id = operation.id.clone();
             let debug = format!("shortcut-binding-{stem}-{index}");

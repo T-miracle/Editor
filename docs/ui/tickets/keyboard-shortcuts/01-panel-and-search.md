@@ -2,7 +2,7 @@
 
 稳定标识：`ui-keyboard-shortcuts-panel-01`
 
-状态：实现与验收完成；交付后核对 GitHub #81 的关闭状态。证据见[阶段验证记录](../../verification/keyboard-shortcuts.md)。
+状态：已交付；`495a1d0` 已推送主分支，GitHub #81 的 `closed` / `completed` 已读回核对。证据见[阶段验证记录](../../verification/keyboard-shortcuts.md)。
 
 ## Parent
 

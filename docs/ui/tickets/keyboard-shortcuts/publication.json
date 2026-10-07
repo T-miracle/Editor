@@ -30,8 +30,12 @@
       "id": 5742437777,
       "url": "https://github.com/T-miracle/Editor/issues/82",
       "labels": ["ready-for-agent"],
-      "state": "open",
-      "body_verified": true
+      "state": "closed",
+      "body_verified": true,
+      "delivery_commit": "66fb23a",
+      "push_verified": true,
+      "closed_readback_verified": true,
+      "delivery_verified_on": "2026-10-07"
     },
     {
       "ticket": "03",

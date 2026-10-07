@@ -6,3 +6,6 @@ shortcuts.pending:
 shortcuts.edit.reserved_escape:
   en: "Escape is reserved for cancelling shortcut recording."
   zh-CN: "Esc 保留用于取消快捷键录入。"
+shortcuts.restored_conflict:
+  en: "Retained binding is inactive until its conflict is resolved."
+  zh-CN: "绑定已保留，处理冲突后才能生效。"

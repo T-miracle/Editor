@@ -7,6 +7,8 @@ use std::{
     time::Duration,
 };
 
+mod lifecycle;
+
 /// Reuse the current independently built component under an identity unknown to the host.
 /// Commands belong in the protocol manifest: resource-only TOML packages cannot declare them.
 fn shortcut_package() -> Package {

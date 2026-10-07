@@ -123,6 +123,14 @@ impl ShortcutOrigin {
 }
 
 impl EditorApp {
+    /// Reconcile lifecycle publications without opening the panel or executing a command.
+    /// The registered owner window keeps a restricted workspace separate from trusted peers.
+    pub(crate) fn sync_shortcut_plugins(&self, cx: &mut Context<Self>) {
+        if let Some(handle) = runtime::owner_window(cx.entity_id(), cx) {
+            runtime::sync_window_plugins(self, handle, cx);
+        }
+    }
+
     /// Capture original focus and available actions before the overlay takes focus.
     pub(crate) fn open_shortcuts(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let origin = ShortcutOrigin::capture(self, window, cx);
@@ -161,16 +169,25 @@ impl EditorApp {
                 available.push(binding.action().boxed_clone());
             }
         }
-        let entries = self.extensions.read(cx).entries.clone();
-        let operations = catalog::all_operations(&bindings, &entries, cx);
+        let mut operations = catalog::all_operations(&bindings, &[], cx);
+        operations.extend(runtime::window_operations(window.window_handle(), cx));
         let mut operations = catalog::visible(&operations, &available, &contexts);
         if cx.has_global::<engine::BindingEngine>() {
             let engine = cx.global::<engine::BindingEngine>();
             operations.retain(|operation| engine.operation(&operation.id).is_some());
             for operation in &mut operations {
-                operation.defaults = engine.effective(&operation.id);
+                operation.defaults = if engine.suspended_conflicts(&operation.id).is_empty() {
+                    engine.effective(&operation.id)
+                } else {
+                    engine.configured(&operation.id)
+                };
             }
         }
+        operations.sort_by(|left, right| {
+            left.title
+                .cmp(&right.title)
+                .then_with(|| left.id.cmp(&right.id))
+        });
         let owner = cx.entity().downgrade();
         let panel =
             cx.new(|cx| ShortcutPanel::new(owner, return_focus, contexts, operations, window, cx));
@@ -205,8 +222,13 @@ impl EditorApp {
             .child(
                 Button::new("shortcuts-trigger")
                     .debug_selector(|| "shortcuts-trigger".into())
-                    .label(t!("shortcuts.title").to_string())
+                    // Long translated labels would consume the narrow title bar's drag region.
+                    // Keep the full name in native semantics and the pointer tooltip instead.
+                    .label("⌨")
+                    .accessibility_label(t!("shortcuts.title").to_string())
+                    .tooltip(t!("shortcuts.title").to_string())
                     .small()
+                    .compact()
                     .ghost()
                     .on_click(cx.listener(|app, _, window, cx| {
                         let origin = app
@@ -391,9 +413,34 @@ impl ShortcutPanel {
     fn sync_effective(&mut self, cx: &mut Context<Self>) {
         if let Some(engine) = cx.try_global::<engine::BindingEngine>() {
             for operation in &mut self.operations {
-                operation.defaults = engine.effective(&operation.id);
+                // Suspended settings remain inspectable/editable without claiming they execute.
+                operation.defaults = if engine.suspended_conflicts(&operation.id).is_empty() {
+                    engine.effective(&operation.id)
+                } else {
+                    engine.configured(&operation.id)
+                };
             }
         }
         cx.notify();
+    }
+
+    /// Refresh only this window's plugin rows, retaining the original native context and filters.
+    fn sync_plugin_operations(
+        &mut self,
+        operations: Vec<Operation>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.operations
+            .retain(|operation| matches!(operation.target, catalog::Target::Native { .. }));
+        self.operations
+            .extend(catalog::visible(&operations, &[], &self.contexts));
+        self.operations.sort_by(|left, right| {
+            left.title
+                .cmp(&right.title)
+                .then_with(|| left.id.cmp(&right.id))
+        });
+        self.cancel_unavailable_edit(window, cx);
+        self.sync_effective(cx);
     }
 }

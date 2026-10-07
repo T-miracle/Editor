@@ -341,11 +341,15 @@ fn shortcut_engine_inherited_text_defaults_reload_but_new_text_is_rejected(
         ];
         let mut first = engine(cx, &path, defaults.clone());
         let id = operation(&first, &SelectDown);
+        // Digits are text on both steps too; a valid modified prefix cannot exempt its continuation.
         for draft in [
             bindings(&["k"]),
             bindings(&["j", "shift-k"]),
+            bindings(&["8"]),
+            bindings(&["shift-8"]),
             bindings(&["ctrl-k a"]),
             bindings(&["ctrl-k j"]),
+            bindings(&["ctrl-k 8"]),
             bindings(&["f5 f6 f7"]),
         ] {
             assert!(matches!(

@@ -28,9 +28,17 @@ pub(super) enum Intent {
     Close,
     Tab(usize),
     ToggleCapture,
-    Edit { id: String, index: Option<usize> },
-    Remove { id: String, index: usize },
+    Edit {
+        id: String,
+        index: Option<usize>,
+    },
+    Remove {
+        id: String,
+        index: usize,
+    },
     Restore(String),
+    /// Re-apply retained custom bindings after lifecycle suspension, never reset to defaults.
+    Resolve(String),
 }
 
 /// The reviewed candidate is retained until an explicit replacement decision.
@@ -58,6 +66,36 @@ impl ShortcutPanel {
     /// Keep the current draft visible even when its description no longer matches the query.
     pub(super) fn is_editing(&self, id: &str) -> bool {
         self.draft.as_ref().is_some_and(|draft| draft.id == id)
+    }
+
+    /// An unavailable plugin can no longer own an editable row or a replacement decision.
+    /// Keep the user's stored override intact and explain why the transient draft disappeared.
+    pub(super) fn cancel_unavailable_edit(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let missing = |id: &str| !self.operations.iter().any(|operation| operation.id == id);
+        let unavailable = self.draft.as_ref().is_some_and(|draft| missing(&draft.id))
+            || self
+                .confirm
+                .as_ref()
+                .is_some_and(|confirmation| match confirmation {
+                    Confirmation::Replace {
+                        mutation: Mutation::Save { id, .. } | Mutation::Restore(id),
+                        ..
+                    } => missing(id),
+                    _ => false,
+                });
+        if unavailable {
+            self.draft = None;
+            self.confirm = None;
+            // Lifecycle cancellation retains the user's lookup mode instead of resetting it.
+            if self.key_search {
+                self.focus.focus(window, cx);
+            } else {
+                self.search
+                    .update(cx, |search, cx| search.focus(window, cx));
+            }
+            self.edit_error = Some(t!("shortcuts.edit.plugin_unavailable").to_string());
+            cx.notify();
+        }
     }
 
     /// Recording owns Alt/navigation keys only while the capture surface itself has focus.
@@ -98,6 +136,20 @@ impl ShortcutPanel {
 
     /// Execute only after the owner has settled any pending draft.
     fn perform_edit_intent(&mut self, intent: Intent, window: &mut Window, cx: &mut Context<Self>) {
+        let target = match &intent {
+            Intent::Edit { id, .. }
+            | Intent::Remove { id, .. }
+            | Intent::Restore(id)
+            | Intent::Resolve(id) => Some(id),
+            _ => None,
+        };
+        if target.is_some_and(|id| !self.operations.iter().any(|operation| operation.id == *id)) {
+            // A leave decision can outlive its destination row in this workspace, even while
+            // another trusted window keeps the same operation in the shared engine.
+            self.edit_error = Some(t!("shortcuts.edit.plugin_unavailable").to_string());
+            cx.notify();
+            return;
+        }
         // Preserve startup/load diagnostics while the panel is restricted to read-only lookup.
         if cx.has_global::<BindingEngine>() {
             self.edit_error = None;
@@ -131,6 +183,21 @@ impl ShortcutPanel {
                 self.finish_edit(result, window, cx);
             }
             Intent::Restore(id) => self.preview_mutation(Mutation::Restore(id), window, cx),
+            Intent::Resolve(id) => {
+                if !self.editing_available(cx) {
+                    return;
+                }
+                let bindings = cx.global::<BindingEngine>().configured(&id);
+                self.preview_mutation(
+                    Mutation::Save {
+                        id,
+                        original: bindings.clone(),
+                        bindings,
+                    },
+                    window,
+                    cx,
+                );
+            }
         }
     }
 

@@ -665,6 +665,15 @@ impl ExtensionPanel {
             });
         }
         self.refresh_tool_icons();
+        if self.surface_id.is_none() {
+            // The shortcut registry compares a stable same-lock lifecycle snapshot, including
+            // instance epochs. Polling itself never changes bindings or redraws an unchanged UI.
+            // Defer until this ExtensionPanel borrow ends before reading the shared publication.
+            let parent = self.parent.clone();
+            cx.defer(move |cx| {
+                let _ = parent.update(cx, |app, cx| app.sync_shortcut_plugins(cx));
+            });
+        }
         if changed {
             cx.notify();
             if self.surface_id.is_none() || self.editor_preview {
@@ -1231,6 +1240,8 @@ impl EditorApp {
     /// Register and remove native panels directly from installed manifest contributions.
     pub(crate) fn sync_plugin_panels(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.finish_preference_imports(cx);
+        // Explicit manager publication and normal rendering share the same live shortcut path.
+        self.sync_shortcut_plugins(cx);
         let contributions: Vec<_> = self
             .extensions
             .read(cx)

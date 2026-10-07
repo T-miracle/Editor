@@ -2,14 +2,14 @@
 
 日期：2026-10-07
 
-状态：工单 01 已交付，提交 `495a1d0` 已推送且 #81 关闭状态已读回核对。工单 02 实现、自动验证及必要原生行为验收已完成，普通提交、推送及关闭核对待执行；工单 03 尚未完成，整项功能尚未完成。
+状态：工单 01、02 已交付，提交 `495a1d0`、`66fb23a` 已推送且 #81、#82 关闭状态已读回核对。工单 03 实现、最终自动验证、两轴审查及必要原生组合验收已通过，普通提交、推送和 #83 关闭核对待执行。尚不预填最终交付状态。
 
 规格：[快捷键面板与用户绑定](../specs/keyboard-shortcuts.md)。工单：[01 → 02 → 03](../tickets/keyboard-shortcuts/README.md)，对应 [#81](https://github.com/T-miracle/Editor/issues/81) → [#82](https://github.com/T-miracle/Editor/issues/82) → [#83](https://github.com/T-miracle/Editor/issues/83)。父规格 #77 保持原样且不关闭。
 
 ## 工作树与证据范围
 
 - 工作区：`C:/Projects/RustProjects/Editor-shortcuts-main`；用户要求使用 `main`，基线提交为 `ae63225afd6e8a362c6f186d7374323e97405469`。
-- 工单 01 对应交付提交 `495a1d0`；工单 02 的结果来自该提交之上的实现工作树，最终两轴审查以 `git diff --cached 495a1d0` 为范围，尚未填写 02 交付提交。各阶段结果只证明当时执行的场景，不代表随后继续修改的全部工作树已经复验。
+- 工单 01、02 分别对应交付提交 `495a1d0`、`66fb23a`；工单 03 在 `66fb23a` 上实施，两轴审查以该提交为固定点。各阶段结果只证明当时执行的场景；03 最终全量应用测试另行记录，不将历史记录冒充当前完整重跑。
 - 构建复用 `CARGO_TARGET_DIR=C:/Projects/RustProjects/Editor/target`。复用产物不表示把原工作区未提交源代码迁入新工作区。
 - 沿已确认的 GPUI 应用入口，通过按键、点击、可见布局、焦点和真实文件内容验证行为。没有以目录模型的内部单元测试代替应用级行为。
 - 本记录依据主执行任务运行后保留的日志核对；整理记录时没有重新执行 Rust 构建或测试。
@@ -109,7 +109,84 @@
 
 实际截图：[重启后的绑定](assets/keyboard-shortcuts-binding-reloaded.png)、[行内编辑](assets/keyboard-shortcuts-inline-edit.png)。原生编辑使用中文、浅色主题；英文及深色冲突提示由 GPUI 应用场景覆盖，沿用 01 的深浅主题、真实 IME、滚动和缩放证据，没有声称再次手动穷举全部组合。
 
-工单 02 行为验收已满足，普通提交、推送与 #82 关闭读回核对尚待执行；不预填交付提交或关闭状态。
+工单 02 已以 `66fb23a3e1a18749ce99f9ce9824bba65e076e5b` 普通提交并推送 `origin/main`，推送后核对远端提交，并读回 #82 为 `closed` / `completed`。
+
+## 阶段 03 最终自动验证与审查
+
+本阶段沿真实 Manager 的实例身份维护命令 epoch，撤销旧的待完成序列、延迟 UI 调用及工作队列调用。插件退役会刷新已打开的目录并取消失效草稿，保存文件不变；命令恢复冲突时展示保留的自定义绑定和“处理冲突”，继续沿原有显式替换流程。未修改公开协议、SDK 或发行插件包，不引入专用宿主 API。
+
+| 执行 | 结果 | 日志 |
+| --- | --- | --- |
+| 生命周期新增场景首次运行（红） | 0 passed、1 failed；禁用后已打开的行仍可见，确实观察到待修行为 | `shortcut-03-lifecycle-red.log` |
+| `cargo test -p editor-app -- shortcuts status_popup_blocks_title_bar_until_dismissed clicking_outside_an_open_submenu_does_not_press_the_panel_beneath --test-threads=1 --nocapture` | 22 passed、0 failed、5 ignored、505 filtered out | `shortcut-03-targeted-final.log` |
+| `cargo test -p editor-app shortcuts_real_plugin -- --ignored --nocapture` | 5 passed、0 failed、0 ignored、527 filtered out | `shortcut-03-real-plugin.log` |
+| `cargo test -p editor-app extensions::worker::worker_tests -- --ignored --nocapture` | 3 passed、0 failed、0 ignored、529 filtered out | `shortcut-03-worker.log` |
+| `cargo test -p editor-app host_command_reveals_real_panel_and_preserves_arguments -- --ignored --nocapture` | 1 passed、0 failed、0 ignored、531 filtered out | `shortcut-03-host-command.log` |
+| `cargo test --workspace --exclude editor-app` | 196 passed、0 failed、167 ignored；50 个结果块 | `shortcut-03-workspace.log` |
+| `cargo fmt --check` | 成功，退出码 0 | `shortcut-03-fmt.log` |
+| `cargo check --workspace` | 成功，退出码 0 | `shortcut-03-check.log` |
+| `cargo build -p editor-app` | 成功，退出码 0；用于下节原生窗口 | `shortcut-03-build.log` |
+| **`cargo test -p editor-app -- --test-threads=1`（最终）** | **384 passed、0 failed、148 ignored、0 filtered out** | `shortcut-03-app-full-final.log` |
+| `cd website; npm test` | 15 passed、0 failed、2 skipped；跳过项为尚无站点构建索引的搜索测试 | `shortcut-03-website.log` |
+
+本阶段显式执行了 9 个不同的真实 WASM ignored 场景，不能与常规测试中被跳过的项重复计数。非 UI 的 167 个 ignored 与应用的其余 ignored 未全量运行。真实包继续复用上文已构建的 SHA-256 `F7B365…C1` 夹具；这 9 项通过后仅收紧标题栏按钮的外观并补充数字校验断言，没有再改变插件实例、传输或分发逻辑。最终全量应用测试包含该数字断言。
+
+### 全量测试失败的处理
+
+- 最初默认并行执行得到 366 passed、18 failed。应用测试共用 i18n 和语言注册状态，已有 `docs/specs/plugin-api-lsp-verification.md` 记录了串行执行要求；保留 `shortcut-03-app-full.log`，不将该失败记录删掉或写成通过。
+- 改为串行后得到 382 passed、2 failed，失败项为上表的两个现有标题栏交互测试。新增入口的完整英文文字挤掉了 800 像素窗口的拖动区，属于本次回归。将键盘和应用菜单入口改为紧凑符号，保留中英文 tooltip、无障碍名称与原焦点逻辑；两个针对性回归随后通过，再执行最终串行全量得到 384 passed、0 failed。修复前记录为 `shortcut-03-app-full-serial.log`。
+- Standards 与 Spec 分别以 `66fb23a` 审查，均无遗留 P0/P1/P2；紧凑入口的后续增量也分别复核通过。未把编译警告或其他未执行的 ignored 场景报告为消失或通过。
+
+### 插件生命周期的实际效果
+
+三个新增 GPUI 场景位于 `crates/editor-app/src/extensions/shortcut_query_tests/lifecycle.rs`，使用此前未知的 `shortcut-query-fixture` 包 ID、真实组件、独立存储和正常用户配置：
+
+- `shortcuts_real_plugin_lifecycle_disable_removes_open_rows`：行内改绑后，公开 Manager 禁用即刷新已打开的列表、取消失效录入并显示错误，文件字节保持；重新启用后新键执行。卸载后安装移除原命令的版本时旧键保持惰性，再安装恢复该命令的版本才恢复绑定。
+- `shortcuts_real_plugin_lifecycle_restoration_conflicts_require_decision`：深色、英文场景分别验证相同单步和连续前缀冲突。恢复后原保存操作仍写入文件，插件绑定只显示保留警告；取消不写配置，明确替换后插件执行，另一组保存键仍有效。
+- `shortcuts_real_plugin_lifecycle_epochs_and_restricted_workspace`：实际 guest 文本 `Typed errors and request IDs verified.` 为命令运行正对照。相同包 digest 的实例重启会取消前缀；旧第二步、旧队列调用，以及实际 KeyDown 解析后、UI 延迟回调前发生的重启都不能进入新实例。新按键仍执行；插件焦点打开面板再关闭后恢复。通过既有应用和 Manager 信任接口转为受限工作区后，查询及宿主改绑不启动插件、不变更信任，保存仍可用且插件绑定保留。
+
+工作线程的三个公开管理器场景和真实宿主调用场景进一步验证有效实例、声明命令、参数、焦点及退役边界。共享 harness 改为发布真实 Manager 状态，不再用模拟 epoch 冒充实例切换。
+
+## Windows 原生组合验收（03）
+
+使用最终构建的 debug 程序与 `target/shortcut-native-03` 专用 workspace、插件目录、快捷键 profile。通过现有 `plugin-runtime/examples/prepare_fixture.rs` 的公开 Manager 准备包，退出码 0；保留原 component 和资源，只修改夹具清单。原生夹具 ZIP SHA-256 为 `993DDBAFAF6381AE3F306A6BA741DF2B6348A63F9B443768A0F96EFF33A1D0F0`。没有手写注册表、操作用户的 release 或其他工作树进程，也没有通过 Windows UI 改变安全/权限设置。
+
+- 启动加载正确的 SaveDocument 稳定标识及保存的插件自定义 Ctrl+Alt+V，中文、浅色界面显示“绑定已保留，处理冲突后才能生效”。点击“处理冲突”后实际列出保存操作 Ctrl+Alt+V，点击“替换冲突绑定”才解除它；配置保留同操作的 Ctrl+Alt+U。
+- 关闭弹层后 Ctrl+Alt+V 运行真实插件，面板文本变为 guest 的 `Completed … PanelVisibility … visible: true`。通过正常插件管理器全局禁用后面板消失，同键无效、查询为空，但文件仍保留自定义键；全局启动完成后同键重新执行，没有再次授予权限。
+- 在文档中输入 `native lifecycle persisted`，Ctrl+Alt+U 确实写入专用 workspace 的 `native.txt`，证明冲突替换没有损坏另一组保存绑定。
+- 同一 profile 重启后，尚未打开快捷键面板便按 Ctrl+Alt+V，guest 再次返回完成结果。随后从插件焦点 Ctrl+K 打开，全局 tab 展示持久绑定和空的聚焦搜索框；Esc 关闭后按 `z` 未进入背景文档，文档内容与磁盘仍一致。验收后正常关闭本任务进程。
+- 原生逐步录入的单次尝试因每次截图耗时超过两秒而按单步结束，已取消且未保存；不把它当作两步录入成功。两步实际录入、执行及可控两秒等待由 02/03 GPUI 按键场景证明。01 的真实中文 IME、深浅主题、滚动与小窗口/缩放证据继续复用，没有声称手工重演全部组合。
+
+实际截图：[恢复冲突](assets/keyboard-shortcuts-restored-conflict.png)、[停用后查询](assets/keyboard-shortcuts-disabled-plugin.png)、[重启后插件执行](assets/keyboard-shortcuts-plugin-reloaded.png)。`ME_EDITOR_PROFILE_HOME` 仍只隔离快捷键配置，其他会话按专用 workspace 保存。
+
+## T01–T22 证据对应
+
+下表引用已执行场景，不创建重复测试。01/02 历史证据对应上述交付提交；03 最终 384 项全量重新执行常规应用场景，真实插件生命周期则按上表显式执行。原生部分注明实际阶段。
+
+| 验收项 | 主要应用行为证据与补充 |
+| --- | --- |
+| T01 | `shortcuts_open_and_restore_focus`、`shortcuts_controls_opener_and_enter_variants`；01 默认入口，02 自定义、删除后菜单兜底与恢复。 |
+| T02 | `shortcuts_open_and_restore_focus`、`shortcuts_search_and_capture_without_running_commands`；01 原生 mask 与主窗口。 |
+| T03 | `shortcuts_capture_deadline_unbound_and_original_tree_context`、`shortcuts_real_plugin_lifecycle_epochs_and_restricted_workspace`；03 原生插件关闭后的焦点。 |
+| T04 | `shortcuts_open_and_restore_focus`、真实插件查询场景；03 原生从插件打开选全局、搜索清空并聚焦。 |
+| T05 | `shortcuts_two_stroke_query_and_fixed_layout`、`shortcuts_editing_add_edit_delete_restore_dispatch`；01 原生滚动，最终两个 800px 标题栏回归。 |
+| T06 | `shortcuts_search_and_capture_without_running_commands`、`shortcuts_two_stroke_query_and_fixed_layout`；01 原生 Alt+Right 保留查询。 |
+| T07 | `shortcuts_search_and_capture_without_running_commands`、真实插件查询和编辑场景；实际保存、剪贴板与插件执行均有正反对照。 |
+| T08 | `shortcuts_two_stroke_query_and_fixed_layout`；第一步、完整序列与精确修饰匹配。 |
+| T09 | `shortcuts_capture_deadline_unbound_and_original_tree_context`、`shortcuts_editing_unsaved_navigation_and_escape_do_not_persist`；01/02 原生 Esc 优先级。 |
+| T10 | `shortcuts_controls_copy_and_document_edits_across_native_roots`、两个真实插件查询/编辑场景；未绑定命令及 Enter 参数行。 |
+| T11 | `shortcuts_editing_add_edit_delete_restore_dispatch`、`shortcuts_editing_conflict_requires_replace_and_preserves_siblings`；03 原生保留 Ctrl+Alt+U。 |
+| T12 | `shortcuts_editing_add_edit_delete_restore_dispatch`、基础控件实际 KeyDown/KeyUp；02 原生 Return 提交及真实文件。 |
+| T13 | `shortcuts_editing_two_step_timeout_typing_and_shared_profile`、跨原生 Root 输入测试；02/03 原生重启前未打开面板就执行新键。 |
+| T14 | `shortcuts_editing_conflict_requires_replace_and_preserves_siblings`、03 恢复冲突；原生明确替换及配置文件。 |
+| T15 | `shortcut_engine_conflicts_follow_reachable_input_tree_and_plugin_scopes`、03 生命周期恢复的单步/前缀应用场景；不重叠作用域保留。 |
+| T16 | `shortcuts_editing_two_step_timeout_typing_and_shared_profile`、真实插件编辑及重启 epoch 场景；等待提示、超时、正常第二步输入。 |
+| T17 | `shortcuts_two_stroke_query_and_fixed_layout`、`shortcuts_capture_deadline_unbound_and_original_tree_context`、两步行内保存场景；最多两步校验。 |
+| T18 | `shortcut_engine_inherited_text_defaults_reload_but_new_text_is_rejected`；单独/Shift 字母数字、无修饰第二步、三步拒绝，Ctrl 组合及 F9 允许；旧文字默认值仍保留。 |
+| T19 | `shortcuts_editing_unsaved_navigation_and_escape_do_not_persist`；遮罩、切换 tab、另一项、继续/放弃与 Esc。 |
+| T20 | `shortcuts_real_plugin_lifecycle_disable_removes_open_rows`、受限工作区场景；03 原生禁用后无执行且配置保留。 |
+| T21 | `shortcuts_real_plugin_lifecycle_restoration_conflicts_require_decision`、移除命令/恢复版本场景；03 原生恢复警告与显式处理。 |
+| T22 | 01 原生中文 IME、深浅主题和滚动，GPUI 小窗口/1.5 倍缩放；02 英文控件与编辑，03 英文深色生命周期冲突及中文浅色原生提示、焦点。 |
 
 ## 日志身份
 
@@ -136,15 +213,32 @@
 | `shortcut-02-build.log` | `DF5B63F4C011FAA8F510F2A2B1EAD139D50F4E938E555A07304471AD775E969A` |
 | `assets/keyboard-shortcuts-binding-reloaded.png` | `23CDF598AD5F3A5AECC7C392E180E1BD8AE1EAE5DB850DC037E77B1CF9633C10` |
 | `assets/keyboard-shortcuts-inline-edit.png` | `0ABB51B7A50B575AA787288BD12CA37DFBB9EA4E44CC45D82A7E9D0803A84586` |
+| `shortcut-03-lifecycle-red.log` | `69B54696CE03948894C2C7385BDBB9F8A9B73965CE0C2EE5145044C732EF8704` |
+| `shortcut-03-targeted-final.log` | `BBE82519E126FF4E8D0937B74E9CEC66A5B8E00EA8F6A40ECB98C9DD88B5ECE8` |
+| `shortcut-03-real-plugin.log` | `A9A376D35061D205938B8764D28EA1A0351DE9D3F29C9EA0FB417C4E2F113DD7` |
+| `shortcut-03-worker.log` | `A48715D144FF2A7ECF3525631BBCDF33747014191A64F4057C7AF2342DEF2B36` |
+| `shortcut-03-host-command.log` | `E57F1C496AE3A27AF617E0D100D0A6DA2EA34814D85146E05D3E82AD7C4ACEF8` |
+| `shortcut-03-workspace.log` | `99D0DBE3BA5C10BE74E79CBE1C7C8FFFEB6DDDD013C83DAA858A2628F377D45F` |
+| `shortcut-03-check.log` | `E5E642DBC1F5F67ADE7265B99C2C767B13C395160AB7EFEAD91305D3D02520F1` |
+| `shortcut-03-fmt.log` | `E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855` |
+| `shortcut-03-build.log` | `81A6D11D889198C83AF5F00FE132F8CFA9893591041049F676A2F29F592FF8C0` |
+| `shortcut-03-app-full.log` | `D529986BCC47A918AF4CB0B73CED829145229CEC1025150BBFC8F8AFA904339E` |
+| `shortcut-03-app-full-serial.log` | `C66656EBACD354E45A60BF397E6B55ECAE021553F8AE6FA7E1F687809457775F` |
+| `shortcut-03-app-full-final.log` | `BBC7D27EBA33A4FEBED96F3E7B71E5BAF448B84C214CFAFC579DD728231A4B16` |
+| `shortcut-03-native-preparation.log` | `113ED277BFC1B49FB21D77F0460330D9CF1855FF8F02CF4FB0031BFACF1EF3B4` |
+| `shortcut-03-website.log` | `9CF208720153EA4AED6417874E56F85B1B6642B9DC13E302EDEE41AEE7BE8E31` |
+| `assets/keyboard-shortcuts-restored-conflict.png` | `2AE0294393107CD4970082B09A9A91E640859745FFF90D20D3C89B05A7E4D717` |
+| `assets/keyboard-shortcuts-disabled-plugin.png` | `A75C86BC9759CE80CDBC520F43EFAA84D481396308BED03D8019309130A3D58B` |
+| `assets/keyboard-shortcuts-plugin-reloaded.png` | `123A3366240384E8015E51EC854C7BE54C7FBC0CFCF0D906ED73D8A88959EE0A` |
 
 日志存在编译与链接警告，包括 Wasmtime/Tree-sitter 链接警告；针对性测试通过不表示构建无警告。
 
-## 尚未完成的验证
+## 未全量执行的范围与交付核对
 
-- 工单 03 的插件停用/卸载/恢复、过期连续按键撤销、恢复冲突、受限工作区与最终组合验收。
-- 后续改动须按影响复验；当前构建成功不代替原生交互验收。
-- 真实 WASM 查询与静态有效插件编辑测试已单独通过；它们不覆盖插件生命周期、全部 ignored 测试或 SDK 分发验证。
-- 工单 01 已提交、推送并核对 #81 关闭；工单 02、03 的普通提交、推送核对与实施议题关闭尚未完成。本记录不自行改变跟踪器状态。
+- 本任务相关 9 项真实 WASM 测试已显式执行；其他 ignored 场景没有全量执行，也不将其报告为通过。本次未修改 SDK 分发契约，不重复运行 SDK 分发矩阵。
+- 原生没有修改 Windows 显示缩放设置，1.5 倍缩放与小窗口由 GPUI 应用测试验证；两步录入的原生超时尝试没有算作成功。
+- 站点为纯中英文内容修改，`npm test` 的两个搜索测试因没有构建索引跳过；没有发布站点或执行搜索索引变更。
+- 工单 01、02 已提交、推送并核对关闭；03 行为验收已通过，普通提交、推送核对与关闭读回尚待执行。本记录只填入已核对的真实状态。
 
 ## 文档迁入新工作区
 

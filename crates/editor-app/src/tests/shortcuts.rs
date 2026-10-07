@@ -26,7 +26,7 @@ pub(crate) fn with_editor(
 }
 
 /// Use the production loader with an explicit user profile to verify different workspaces.
-pub(super) fn with_editor_profile(
+pub(crate) fn with_editor_profile(
     cx: &mut TestAppContext,
     dark: bool,
     bindings: Vec<KeyBinding>,

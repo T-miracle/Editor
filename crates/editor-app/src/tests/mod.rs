@@ -7,6 +7,7 @@ mod shortcuts_controls;
 mod shortcuts_editing;
 pub(crate) use language_fixture::declared_language_service;
 pub(crate) use shortcuts::with_editor as with_shortcut_editor;
+pub(crate) use shortcuts::with_editor_profile as with_shortcut_editor_profile;
 
 #[cfg(test)]
 mod settings_dialog_tests {
