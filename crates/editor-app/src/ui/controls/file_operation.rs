@@ -10,6 +10,27 @@ use gpui_kit::{
 };
 use rust_i18n::t;
 
+/// Intent preview uses the project's local colors, and remains visible for native path offers too.
+pub(crate) fn drag_preview(label: String, copy: bool, cx: &App) -> impl IntoElement {
+    div()
+        .px_2()
+        .py_1()
+        .rounded(px(4.))
+        .border_1()
+        .border_color(cx.theme().primary)
+        .bg(cx.theme().popover)
+        .text_color(cx.theme().popover_foreground)
+        .text_sm()
+        .child(format!(
+            "{} · {label}",
+            if copy {
+                t!("transfer.copy")
+            } else {
+                t!("transfer.move")
+            }
+        ))
+}
+
 /// A reviewed choice's identity, label and enabled state; activation is owned by its caller.
 pub(crate) struct FileChoice {
     pub id: &'static str,

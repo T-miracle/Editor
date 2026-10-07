@@ -159,6 +159,8 @@ struct EditorApp {
     explorer_menu: Option<ExplorerMenu>,
     /// Background disk batches and their session-only recovery records.
     file_transfers: explorer::transfer::TransferState,
+    /// Temporary navigation belongs to one pointer gesture, rather than the persisted session.
+    explorer_drag: explorer::drag::DragState,
     tabs: Vec<OpenTab>,
     active_path: Option<PathBuf>,
     /// Restoring saved tabs must not reveal files inside directories the user left collapsed.
@@ -420,6 +422,7 @@ impl EditorApp {
             explorer_delete: None,
             explorer_menu: None,
             file_transfers: Default::default(),
+            explorer_drag: Default::default(),
             tabs: Vec::new(),
             active_path: None,
             restoring_documents: true,

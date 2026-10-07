@@ -1,6 +1,7 @@
 //! Workspace file discovery, ordering, and tree construction.
 
 // sort.rs remains unregistered until its collation rules replace the live tree ordering.
+pub(crate) mod drag;
 mod files;
 mod interaction;
 pub(crate) mod menu;

@@ -16,6 +16,8 @@
 - 第一阶段 `cargo test -p editor-app explorer_transfer`：10 项通过，覆盖剪切保留未保存会话、快捷键焦点、同名选择、合并、脏目标保护、失败与取消、Windows 联接跳过及删除失败清理。
 - 第一阶段 `cargo fmt --check`、`cargo check --workspace`、`cargo test --workspace --exclude editor-app` 均通过。
 - Windows 原生验收：在系统文件资源管理器中对本任务临时样例执行 Ctrl+C / Ctrl+X，再在资源树执行 Ctrl+V。复制保留源文件，剪切移除源文件，目录原有内容保留，树更新正常。验收仅涉及 `target/explorer-native/` 下的临时样例。
+- 第二阶段 `cargo test -p editor-app explorer_transfer_`：13 项通过，新增树内移动与 Ctrl 复制、外部多项拖到文件父目录、599/600ms 悬停展开、边缘滚动和 Escape 恢复临时展开。首个拖动测试在实现前失败。
+- 第二阶段格式、非 UI workspace 测试和 workspace 编译检查通过；真实原生拖入与主题检查留到第三阶段合并验收。
 
 ## 待执行
 

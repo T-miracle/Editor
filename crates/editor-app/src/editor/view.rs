@@ -57,6 +57,8 @@ impl EditorApp {
                         row_style.border
                     };
                     let is_folder = Path::new(item.id.as_str()).is_dir();
+                    let row_path = PathBuf::from(item.id.as_str());
+                    let drop_target = app.explorer_drag.target() == Some(row_path.as_path());
                     let icon = file_icon(
                         Path::new(item.id.as_str()),
                         is_folder,
@@ -84,6 +86,9 @@ impl EditorApp {
                         .flex()
                         .items_center()
                         .bg(row_background)
+                        .when(drop_target, |row| {
+                            row.border_1().border_color(cx.theme().primary)
+                        })
                         .when(selected, |this| {
                             this.rounded(px(row_style.radius_px.unwrap_or(5.)))
                         })
@@ -118,6 +123,44 @@ impl EditorApp {
                                 }
                             }),
                         )
+                        .when(row_path != app.workspace.root(), |row| {
+                            row.on_drag(
+                                explorer::drag::TreeDrag {
+                                    path: row_path.clone(),
+                                },
+                                |drag, _, _, cx| cx.new(|_| drag.clone()),
+                            )
+                        })
+                        .on_drag_move(cx.listener({
+                            let path = row_path.clone();
+                            move |app,
+                                  event: &gpui_kit::DragMoveEvent<explorer::drag::TreeDrag>,
+                                  window,
+                                  cx| {
+                                app.tree_drag_row(
+                                    &path,
+                                    event.bounds,
+                                    event.event.position,
+                                    window,
+                                    cx,
+                                );
+                            }
+                        }))
+                        .on_drag_move(cx.listener({
+                            let path = row_path;
+                            move |app,
+                                  event: &gpui_kit::DragMoveEvent<gpui_kit::ExternalPaths>,
+                                  window,
+                                  cx| {
+                                app.tree_drag_row(
+                                    &path,
+                                    event.bounds,
+                                    event.event.position,
+                                    window,
+                                    cx,
+                                );
+                            }
+                        }))
                         .child(
                             h_flex()
                                 .w_full()
@@ -220,6 +263,9 @@ impl EditorApp {
             .min_h_0()
             .bg(tree_style.background.unwrap_or(cx.theme().background))
             .relative()
+            .on_drag_move(cx.listener(Self::tree_drag_move))
+            .on_drag_move(cx.listener(Self::external_tree_drag_move))
+            .capture_key_down(cx.listener(Self::cancel_explorer_drag))
             .on_action(cx.listener(
                 |app, _: &explorer::transfer::shortcuts::PasteFiles, window, cx| {
                     let selected = app
@@ -231,6 +277,12 @@ impl EditorApp {
                 },
             ))
             .child(tree)
+            .child(self.render_tree_drag_events(cx))
+            .when_some(self.explorer_drag.intent(), |root, copy| {
+                root.child(div().absolute().bottom_0().left_0().child(
+                    ui::controls::file_operation::drag_preview(String::new(), copy, cx),
+                ))
+            })
             .child(
                 div()
                     .absolute()
