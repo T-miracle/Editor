@@ -1,8 +1,15 @@
 //! Owns shortcut lookup, its captured panel context, and modal keyboard isolation.
 
+pub(crate) mod bootstrap;
 mod capture;
 mod catalog;
+mod config;
+mod conflicts;
+mod editing;
+mod engine;
 pub(crate) mod menu;
+mod resolver;
+mod runtime;
 mod view;
 
 use crate::*;
@@ -52,7 +59,26 @@ pub(crate) fn init(cx: &mut App) {
             Some("EditorShell && !PluginSurface"),
         ),
     ]);
+    runtime::register(cx);
     cx.set_global(Initialized);
+}
+
+/// Associate an editor with its Base Root without requiring a second command dispatcher.
+pub(crate) fn attach_window(window: &Window, owner: WeakEntity<EditorApp>, cx: &mut App) {
+    // The executable/controlled fixture selects the profile before creating windows.
+    // Reconcile late controls here without reading user files in unrelated application tests.
+    if cx.has_global::<engine::BindingEngine>() {
+        let _ = bootstrap::ensure(cx);
+    }
+    runtime::attach(window.window_handle(), owner, cx);
+}
+
+/// Ordinary modal input retains native text and focus actions while background commands stay out.
+fn modal_action(name: &str) -> bool {
+    name.starts_with("input::")
+        || name.starts_with("ui::")
+        || name.starts_with("dialog::")
+        || matches!(name, "root::Tab" | "root::TabPrev")
 }
 
 /// Search state never replaces document text or undo in the existing editor session.
@@ -68,6 +94,10 @@ pub(crate) struct ShortcutPanel {
     tab: usize,
     key_search: bool,
     capture: Capture,
+    /// A staged binding remains separate from the shared, persisted effective keymap.
+    draft: Option<editing::Draft>,
+    confirm: Option<editing::Confirmation>,
+    edit_error: Option<String>,
     scroll: ScrollHandle,
     _subscriptions: Vec<Subscription>,
 }
@@ -110,9 +140,16 @@ impl EditorApp {
             return;
         }
         self.shortcut_menu.clear();
+        runtime::cancel(window.window_handle(), cx);
+        let load_error = bootstrap::ensure(cx).err();
+        runtime::sync_window_plugins(self, window.window_handle(), cx);
         let return_focus = origin.focus;
         let contexts = origin.contexts;
-        let bindings: Vec<_> = cx.key_bindings().borrow().bindings().cloned().collect();
+        let bindings: Vec<_> = if cx.has_global::<engine::BindingEngine>() {
+            cx.global::<engine::BindingEngine>().defaults().to_vec()
+        } else {
+            cx.key_bindings().borrow().bindings().cloned().collect()
+        };
         let mut available = origin.available;
         // Parameterized actions can have no default constructor while their handler is available.
         for binding in &bindings {
@@ -124,17 +161,22 @@ impl EditorApp {
                 available.push(binding.action().boxed_clone());
             }
         }
-        let operations = catalog::operations(
-            &bindings,
-            &available,
-            &contexts,
-            &self.extensions.read(cx).entries,
-            cx,
-        );
+        let entries = self.extensions.read(cx).entries.clone();
+        let operations = catalog::all_operations(&bindings, &entries, cx);
+        let mut operations = catalog::visible(&operations, &available, &contexts);
+        if cx.has_global::<engine::BindingEngine>() {
+            let engine = cx.global::<engine::BindingEngine>();
+            operations.retain(|operation| engine.operation(&operation.id).is_some());
+            for operation in &mut operations {
+                operation.defaults = engine.effective(&operation.id);
+            }
+        }
         let owner = cx.entity().downgrade();
         let panel =
             cx.new(|cx| ShortcutPanel::new(owner, return_focus, contexts, operations, window, cx));
         panel.update(cx, |panel, cx| {
+            panel.edit_error =
+                load_error.map(|detail| t!("shortcuts.edit.storage", detail = detail).to_string());
             panel
                 .search
                 .update(cx, |search, cx| search.focus(window, cx))
@@ -218,6 +260,9 @@ impl ShortcutPanel {
             tabs_focus: cx.focus_handle(),
             key_search: false,
             capture: Capture::default(),
+            draft: None,
+            confirm: None,
+            edit_error: None,
             scroll: ScrollHandle::new(),
             _subscriptions: vec![changed, interceptor],
         }
@@ -259,6 +304,10 @@ impl ShortcutPanel {
         cx: &mut Context<Self>,
     ) {
         let key = &event.keystroke;
+        if self.edit_keystroke(key, window, cx) {
+            cx.stop_propagation();
+            return;
+        }
         if key.key == "escape" && key.modifiers == Modifiers::default() {
             cx.stop_propagation();
             if self.key_search {
@@ -272,7 +321,9 @@ impl ShortcutPanel {
             }
             return;
         }
-        if self.key_search {
+        // While a draft is open, its original key query stays visible but does not record keys.
+        // Save/cancel buttons must retain Base activation after the capture deadline.
+        if self.key_search && self.draft.is_none() {
             cx.stop_propagation();
             self.record(key, cx);
             return;
@@ -284,7 +335,11 @@ impl ShortcutPanel {
             && matches!(key.key.as_str(), "left" | "right")
         {
             cx.stop_propagation();
-            self.select_tab(usize::from(key.key == "right"), cx);
+            self.request_edit_intent(
+                editing::Intent::Tab(usize::from(key.key == "right")),
+                window,
+                cx,
+            );
             return;
         }
         // The overlay blocks host/plugin bindings while text-editing keys stay with Base Input.
@@ -293,7 +348,11 @@ impl ShortcutPanel {
             .borrow()
             .bindings()
             .filter(|binding| {
-                binding.keystrokes().len() == 1
+                // These keymap markers block ancestor actions; they are not background commands.
+                // Preserve the focused Base button's own Enter activation behind NoAction.
+                !gpui_kit::is_no_action(binding.action())
+                    && !gpui_kit::is_unbind(binding.action())
+                    && binding.keystrokes().len() == 1
                     && binding.keystrokes()[0].unparse() == key.unparse()
                     && binding
                         .predicate()
@@ -301,14 +360,7 @@ impl ShortcutPanel {
             })
             .map(|binding| binding.action().name().to_owned())
             .collect::<Vec<_>>();
-        if !bound.is_empty()
-            && !bound.iter().any(|name| {
-                name.starts_with("input::")
-                    || name.starts_with("ui::")
-                    || name.starts_with("dialog::")
-                    || matches!(name.as_str(), "root::Tab" | "root::TabPrev")
-            })
-        {
+        if !bound.is_empty() && !bound.iter().any(|name| modal_action(name)) {
             cx.stop_propagation();
         }
     }
@@ -331,6 +383,16 @@ impl ShortcutPanel {
                 });
             })
             .detach();
+        }
+        cx.notify();
+    }
+
+    /// Update only displayed bindings after the engine has persisted a successful mutation.
+    fn sync_effective(&mut self, cx: &mut Context<Self>) {
+        if let Some(engine) = cx.try_global::<engine::BindingEngine>() {
+            for operation in &mut self.operations {
+                operation.defaults = engine.effective(&operation.id);
+            }
         }
         cx.notify();
     }

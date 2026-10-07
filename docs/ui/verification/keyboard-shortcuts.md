@@ -2,14 +2,14 @@
 
 日期：2026-10-07
 
-状态：工单 01 查询能力已通过应用测试、真实插件测试和原生验收；工单 02、03 仍在实施，整项功能尚未完成。
+状态：工单 01 已交付，提交 `495a1d0` 已推送且 #81 关闭状态已读回核对。工单 02 实现、自动验证及必要原生行为验收已完成，普通提交、推送及关闭核对待执行；工单 03 尚未完成，整项功能尚未完成。
 
 规格：[快捷键面板与用户绑定](../specs/keyboard-shortcuts.md)。工单：[01 → 02 → 03](../tickets/keyboard-shortcuts/README.md)，对应 [#81](https://github.com/T-miracle/Editor/issues/81) → [#82](https://github.com/T-miracle/Editor/issues/82) → [#83](https://github.com/T-miracle/Editor/issues/83)。父规格 #77 保持原样且不关闭。
 
 ## 工作树与证据范围
 
 - 工作区：`C:/Projects/RustProjects/Editor-shortcuts-main`；用户要求使用 `main`，基线提交为 `ae63225afd6e8a362c6f186d7374323e97405469`。
-- 下列结果来自该基线之上的快捷键实现中间工作树，尚无独立交付提交。各阶段结果只证明当时执行的场景，不代表随后继续修改的全部工作树已经复验。
+- 工单 01 对应交付提交 `495a1d0`；工单 02 的结果来自该提交之上的实现工作树，最终两轴审查以 `git diff --cached 495a1d0` 为范围，尚未填写 02 交付提交。各阶段结果只证明当时执行的场景，不代表随后继续修改的全部工作树已经复验。
 - 构建复用 `CARGO_TARGET_DIR=C:/Projects/RustProjects/Editor/target`。复用产物不表示把原工作区未提交源代码迁入新工作区。
 - 沿已确认的 GPUI 应用入口，通过按键、点击、可见布局、焦点和真实文件内容验证行为。没有以目录模型的内部单元测试代替应用级行为。
 - 本记录依据主执行任务运行后保留的日志核对；整理记录时没有重新执行 Rust 构建或测试。
@@ -67,6 +67,50 @@
 
 显式 ignored 测试保留真实 component 和资源，仅改清单为宿主未知的插件 ID，声明一个有绑定命令和一个无绑定命令，并将面板初始设为隐藏。包经公开 `Manager::install`、发布和宿主应用进入清单：两条命令均可文字查询；普通搜索和按键录入中按插件快捷键，实际 pump/publish 后隐藏面板仍不存在；关闭弹层后按同键，真实组件显示面板作为正对照。测试没有以私有工作队列或新增测试专用宿主 API 代替执行结果。
 
+## 阶段 02 最终自动验证
+
+以下结果来自完成绑定修改、统一分发与审查修复后的工作树。两轴最终审查（Standards / Spec）以 `495a1d0` 为固定点，未留下 P0、P1 或 P2 问题。自动验证与下节原生重启验收分别记录，不代表工单 03 已验收。
+
+| 执行 | 结果 | 日志 |
+| --- | --- | --- |
+| `cargo test -p editor-app shortcuts -- --nocapture` | 20 passed、0 failed、2 ignored、507 filtered out；包含应用场景与配置/解析器边界测试 | `shortcut-02-targeted-final.log` |
+| `cargo test -p editor-app shortcuts_real_plugin -- --ignored --nocapture` | 2 passed、0 failed、0 ignored、527 filtered out | `shortcut-02-plugin.log` |
+| `cargo test --workspace --exclude editor-app` | 196 passed、0 failed、167 ignored；汇总 50 个结果块 | `shortcut-02-workspace.log` |
+| `cargo check --workspace` | 成功，退出码 0 | `shortcut-02-check.log` |
+| `cargo fmt --check` | 成功，退出码 0；正常无输出 | `shortcut-02-fmt.log` |
+| `cargo build -p editor-app` | 成功，退出码 0 | `shortcut-02-build.log` |
+
+20 个通过项包含 10 个配置/解析器边界测试和 10 个 GPUI 应用测试。常规组的 2 个 ignored 为随后显式执行的真实插件查询及编辑场景；workspace 的其他 167 个 ignored 仍未全量执行。编译与链接警告仍存在，未将通过写成无警告。
+
+### 应用行为与存储证据
+
+- 行内新增、修改、删除、多绑定和恢复默认通过面板实际按钮完成；用磁盘文件观察保存动作，验证新键立即生效、旧键失效、未修改的同操作其他绑定保留。Ctrl+K 的打开绑定自身可修改、删除，真实应用菜单在删除后仍可打开面板并恢复默认。
+- 在改绑前创建两个不同工作区的真实 `EditorApp` 窗口及一个独立 `Base Root` 输入窗口。面板内修改 `input::Copy` 后，单步与两步绑定均立即作用于三个窗口；普通快捷键搜索输入框也使用新绑定。原 `Ctrl+C` 在 Input 选择文本时保持剪贴板哨兵值，证明没有通过祖先 Root 的同名 Copy 动作误走旧输入复制路径；Root 的 UI 文本复制能力仍保留原作用域。
+- 编辑器与独立输入控件保留既有复制、粘贴和撤销行为。`DeleteToPreviousWordStart` 从 Ctrl+Backspace 改绑后，旧键不改文档，新键真实删除单词，Undo 恢复文本，再删除并保存后磁盘内容一致；编辑仍走原有 EditorState / DocumentSession。
+- 通过按键搜索准确定位普通 Enter 参数行，只修改该行；独立 Base Input 的真实 `InputEvent::PressEnter` 验证新键传入普通参数，原 Shift+Enter、Ctrl+Enter 分别保留原参数，旧普通 Enter 不再触发。按键查询进入行内编辑时保留筛选，避免编辑行被完整列表挤出可见区。
+- 录入与查询捕获期间不执行已保存的单步或两步业务动作；两步首键显示下一步提示，匹配后仅执行一次。超时、未匹配第二步的正常输入、焦点及配置 revision 变化导致的待完成序列取消均有针对性验证。
+- 冲突不会在保存时静默覆盖，必须点击“替换冲突绑定”；只撤销冲突组，保留对方其他绑定。恢复默认同样先做冲突预览。未保存草稿在遮罩关闭、tab 切换及其他编辑意图前显示继续/放弃确认；录入态 Esc 先取消草稿，再按 Esc 才关闭。
+- 保存按钮在录入结束后获得焦点。应用测试禁用祖先 Dialog 的 Enter 动作，再发送实际 KeyDown 和 KeyUp，确认 Base 按钮仍能键盘提交。早期仅发送 KeyDown 的测试缺少按钮所需释放事件，不能据此宣称生产程序无法通过 Return 保存。
+- 用户配置经既有 `NativeFileStore::write_utf8` 原子写入；写入成功后才发布有效绑定。存储失败保留运行中的配置，损坏文件重载报错并保留原文件；默认文本键与新录入文字键校验分别处理。真实临时用户 profile 的重载和另一工作区验证覆盖持久配置共用，没有通过私有 Engine 映射断言替代应用执行。
+
+对应应用测试位于 `crates/editor-app/src/tests/shortcuts_editing.rs`、`shortcuts_controls.rs`；配置及解析器边界测试位于 `crates/editor-app/src/app/shortcuts/engine/tests.rs` 及其子模块。
+
+### 真实插件增量
+
+继续复用阶段 01 的真实 WASM 夹具 `capability-example.zip`，SHA-256 仍为 `F7B36538954C71CD430019F434901B3B57E86C6A1DE9D3A8B86807DDEB8FE2C1`；本阶段未改公开 SDK 或协议，不重复构建该包。两项显式 ignored 测试均通过。
+
+新增编辑场景经公开 Manager 安装与宿主发布，用真实组件显示面板观察命令执行：插件单步改绑后旧键失效；两步首键仅显示等待提示，第二步后面板出现；与宿主 Ctrl+S 冲突时必须显式替换，替换后插件键不再保存文档，宿主另一绑定仍保存。录入中 pump/publish 后插件面板保持隐藏。未引入专用宿主调用路径，也未把这一静态有效插件场景扩大为停用/卸载/恢复的生命周期证据。
+
+### Windows 原生验收（02）
+
+已在实际窗口将保存操作由 Ctrl+S 行内改为 Ctrl+Alt+S，等待录入完成后通过 Return 提交；旧 Ctrl+S 不写入文件，新键写入成功。
+
+最后一次构建后，在同一 `target/shortcut-native-02/profile` 配置位置重启程序，尚未打开快捷键面板前，旧 Ctrl+S 仍不保存，Ctrl+Alt+S 将 `native startup persisted` 写入真实文件。随后打开面板可见持久保存的新绑定，再行内录入相同按键，等待 2 秒并通过 Return 保存成功，焦点回到可见搜索框。`ME_EDITOR_PROFILE_HOME` 在本任务中只指定快捷键配置文件位置，不能视为完整应用 profile 隔离；插件目录独立使用 `ME_EDITOR_PLUGIN_HOME`。
+
+实际截图：[重启后的绑定](assets/keyboard-shortcuts-binding-reloaded.png)、[行内编辑](assets/keyboard-shortcuts-inline-edit.png)。原生编辑使用中文、浅色主题；英文及深色冲突提示由 GPUI 应用场景覆盖，沿用 01 的深浅主题、真实 IME、滚动和缩放证据，没有声称再次手动穷举全部组合。
+
+工单 02 行为验收已满足，普通提交、推送与 #82 关闭读回核对尚待执行；不预填交付提交或关闭状态。
+
 ## 日志身份
 
 原始日志位于本次实现工作区根目录，属于开发过程证据；以下散列标识本记录读取的版本，后续重跑应新增对应阶段而不是把旧结果当作新结果。
@@ -84,18 +128,23 @@
 | `shortcuts-stage1-build.log` | `C9CE92E4A3CD8D44A5ECBB58D2625E29484DE2B97D019137E5EF48B5CF3F4F20` |
 | `assets/keyboard-shortcuts-light.png` | `6F93EC41A50D151FF8646899565C4CD9CD1F30CBF58D91DC6E01C742D32B2608` |
 | `assets/keyboard-shortcuts-dark.png` | `A1D4DBB7EC660B04F7D1A82D5A187A428A46CEC5469EAC25A4CEF0665FF5BC2C` |
+| `shortcut-02-targeted-final.log` | `9A0F60783806E7341D08666C1016C423F6F43F134313EE9225343F8A4CFF43FA` |
+| `shortcut-02-plugin.log` | `79078AF81333A7893C2BC5F8E8F37746EFE2F9130254CB753F2F198FA868BCF1` |
+| `shortcut-02-workspace.log` | `FDECEB30AC0C878772ACB3C976BE525277A60BAB16326B20A00E354DFC4E8E4E` |
+| `shortcut-02-check.log` | `1157AAC24DEC7A36BE0FFAE7928A593B515871FC0CE6DC68CFABC391FD55F07B` |
+| `shortcut-02-fmt.log` | `E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855` |
+| `shortcut-02-build.log` | `DF5B63F4C011FAA8F510F2A2B1EAD139D50F4E938E555A07304471AD775E969A` |
+| `assets/keyboard-shortcuts-binding-reloaded.png` | `23CDF598AD5F3A5AECC7C392E180E1BD8AE1EAE5DB850DC037E77B1CF9633C10` |
+| `assets/keyboard-shortcuts-inline-edit.png` | `0ABB51B7A50B575AA787288BD12CA37DFBB9EA4E44CC45D82A7E9D0803A84586` |
 
 日志存在编译与链接警告，包括 Wasmtime/Tree-sitter 链接警告；针对性测试通过不表示构建无警告。
 
 ## 尚未完成的验证
 
-- 原生已验收工单 01 的查询交互；行内编辑、持久化和生命周期的原生组合验收留待后续实现。
-- Ctrl+Backspace 的改绑与旧路径撤销由工单 02 补可观察的文档行为，不以目录去重替代执行结果。
-- 工单 02 的行内修改、多绑定、恢复默认、冲突、实际分发、用户配置保存及重载和未保存保护。
 - 工单 03 的插件停用/卸载/恢复、过期连续按键撤销、恢复冲突、受限工作区与最终组合验收。
 - 后续改动须按影响复验；当前构建成功不代替原生交互验收。
-- 本阶段真实 WASM 查询测试已单独通过；它不覆盖插件生命周期、全部 ignored 测试或 SDK 分发验证。
-- 最终交付审查汇总、普通提交、推送核对与实施议题关闭尚未完成；本记录不改变任何工单状态。
+- 真实 WASM 查询与静态有效插件编辑测试已单独通过；它们不覆盖插件生命周期、全部 ignored 测试或 SDK 分发验证。
+- 工单 01 已提交、推送并核对 #81 关闭；工单 02、03 的普通提交、推送核对与实施议题关闭尚未完成。本记录不自行改变跟踪器状态。
 
 ## 文档迁入新工作区
 

@@ -1,0 +1,8 @@
+# The same two-second chord deadline drives this noninteractive, per-window prompt.
+_version: 2
+shortcuts.pending:
+  en: "Waiting for the next shortcut key"
+  zh-CN: "等待下一步快捷键"
+shortcuts.edit.reserved_escape:
+  en: "Escape is reserved for cancelling shortcut recording."
+  zh-CN: "Esc 保留用于取消快捷键录入。"

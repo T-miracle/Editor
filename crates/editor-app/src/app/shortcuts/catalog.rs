@@ -2,6 +2,7 @@
 
 use gpui_kit::{
     Action, App, KeyBinding, KeyBindingContextPredicate, KeyContext, Keystroke, SharedString,
+    is_no_action, is_unbind,
 };
 use plugin_runtime::Installed;
 use std::rc::Rc;
@@ -67,16 +68,11 @@ impl Clone for Operation {
     }
 }
 
-/// Build a read-only snapshot from defaults, captured handlers, contexts and valid packages.
-///
-/// `available` must be captured before opening the modal. Include binding action clones
-/// accepted by `Window::is_action_available_in`, because `available_actions` alone omits
-/// actions that cannot be default-constructed, such as parameterized input Enter actions.
-/// No package is started and no permission is granted while reading this catalog.
-pub(super) fn operations(
+/// Build the complete default catalog before applying user overrides, independent of focus.
+/// The engine needs every Input binding at startup, even if no editor has been opened yet.
+/// Internal blocking bindings stay in the engine's baseline but are not editable operations.
+pub(super) fn all_operations(
     bindings: &[KeyBinding],
-    available: &[Box<dyn Action>],
-    contexts: &[KeyContext],
     plugins: &[Installed],
     cx: &App,
 ) -> Vec<Operation> {
@@ -90,10 +86,7 @@ pub(super) fn operations(
             continue;
         }
         let action = binding.action();
-        if !available
-            .iter()
-            .any(|candidate| candidate.name() == action.name())
-        {
+        if is_no_action(action) || is_unbind(action) {
             continue;
         }
         let predicate = binding.predicate();
@@ -109,13 +102,6 @@ pub(super) fn operations(
         } else {
             Scope::Panel
         };
-        if scope == Scope::Panel
-            && !predicate
-                .as_ref()
-                .is_some_and(|value| value.depth_of(contexts).is_some())
-        {
-            continue;
-        }
         let Some(id) = native_id(
             action,
             binding.action_input().as_ref(),
@@ -148,7 +134,7 @@ pub(super) fn operations(
             defaults: vec![keys],
         });
     }
-    append_unbound(&mut result, available, contexts, cx);
+    append_unbound(&mut result, cx);
     append_plugins(&mut result, plugins);
     result.sort_by(|left, right| {
         left.title
@@ -156,6 +142,36 @@ pub(super) fn operations(
             .then_with(|| left.id.cmp(&right.id))
     });
     result
+}
+
+/// Filter against the original handler path captured before the modal changes focus.
+/// Captured action types establish handler availability, including parameterized actions
+/// supplied through is_action_available_in. Exact payloads remain on the operation itself.
+pub(super) fn visible(
+    operations: &[Operation],
+    available: &[Box<dyn Action>],
+    contexts: &[KeyContext],
+) -> Vec<Operation> {
+    operations
+        .iter()
+        .filter(|operation| match &operation.target {
+            Target::Native {
+                action, predicate, ..
+            } => {
+                available
+                    .iter()
+                    .any(|candidate| candidate.name() == action.name())
+                    && (operation.scope == Scope::Global
+                        || predicate
+                            .as_ref()
+                            .is_some_and(|predicate| predicate.depth_of(contexts).is_some()))
+            }
+            Target::Plugin { .. } => contexts
+                .iter()
+                .any(|context| context.contains("EditorShell")),
+        })
+        .cloned()
+        .collect()
 }
 
 /// Only handlers registered on the application's EditorShell count as application commands.
@@ -176,40 +192,62 @@ fn shell_action(name: &str) -> bool {
 }
 
 /// Use verified handler metadata for unbound operations, never a transient captured stack.
-fn append_unbound(
-    result: &mut Vec<Operation>,
-    available: &[Box<dyn Action>],
-    contexts: &[KeyContext],
-    cx: &App,
-) {
-    for action in available {
+fn append_unbound(result: &mut Vec<Operation>, cx: &App) {
+    // These are verified registrations in EditorShell and InputBaseState/EditorMode.
+    // Merely appearing in all_action_names does not make an action available or give it a scope.
+    const HANDLERS: &[(&str, &str, Scope)] = &[
+        (
+            "me_editor::SaveDocument",
+            "EditorShell && !PluginSurface",
+            Scope::Global,
+        ),
+        (
+            "me_editor::RefreshWorkspace",
+            "EditorShell && !PluginSurface",
+            Scope::Global,
+        ),
+        ("me_editor::ToggleTheme", "EditorShell", Scope::Global),
+        (
+            "me_editor::NavigateToDefinition",
+            "EditorShell && !PluginSurface",
+            Scope::Global,
+        ),
+        (
+            "me_editor::ShowDefinitionDetails",
+            "EditorShell && !PluginSurface",
+            Scope::Global,
+        ),
+        (
+            "me_editor::NextSyntaxError",
+            "EditorShell && !PluginSurface",
+            Scope::Global,
+        ),
+        (
+            "me_editor::PreviousSyntaxError",
+            "EditorShell && !PluginSurface",
+            Scope::Global,
+        ),
+        ("extensions::ToggleExtensions", "EditorShell", Scope::Global),
+        ("extensions::QuitEditor", "EditorShell", Scope::Global),
+        ("shortcuts::OpenShortcuts", "EditorShell", Scope::Global),
+        ("input::ActivateToken", "Input", Scope::Panel),
+        ("input::DeleteToBeginningOfLine", "Input", Scope::Panel),
+        ("input::DeleteToEndOfLine", "Input", Scope::Panel),
+        ("input::ShowCharacterPalette", "Input", Scope::Panel),
+        ("input::GoToDefinition", "Input", Scope::Panel),
+    ];
+    for &(name, context, scope) in HANDLERS {
+        let Ok(action) = cx.build_action(name, None) else {
+            continue;
+        };
         if result.iter().any(|operation| {
             matches!(&operation.target,
             Target::Native { action: existing, .. } if existing.partial_eq(action.as_ref()))
         }) {
             continue;
         }
-        let (scope, context) = if shell_action(action.name()) {
-            (Scope::Global, "EditorShell")
-        } else if matches!(
-            action.name(),
-            "input::ActivateToken"
-                | "input::DeleteToBeginningOfLine"
-                | "input::DeleteToEndOfLine"
-                | "input::ShowCharacterPalette"
-                | "input::GoToDefinition"
-        ) {
-            // Both EditorMode and ordinary InputMode use the public Input key context.
-            // Captured handler availability distinguishes editor-only GoToDefinition.
-            (Scope::Panel, "Input")
-        } else {
-            continue;
-        };
         let predicate =
             Rc::new(KeyBindingContextPredicate::parse(context).expect("static handler context"));
-        if scope == Scope::Panel && predicate.depth_of(contexts).is_none() {
-            continue;
-        }
         let Some(id) = native_id(action.as_ref(), None, Some(&predicate), cx) else {
             continue;
         };
@@ -228,7 +266,7 @@ fn append_unbound(
 }
 
 /// Identity includes parameters and original scope; equal labels never collapse distinct targets.
-fn native_id(
+pub(super) fn native_id(
     action: &dyn Action,
     input: Option<&SharedString>,
     predicate: Option<&KeyBindingContextPredicate>,
@@ -238,6 +276,12 @@ fn native_id(
     {
         // Enter is no_json upstream: KeyBinding::action_input cannot distinguish its variants.
         serde_json::json!({"secondary": enter.secondary, "shift": enter.shift})
+    } else if let Some(confirm) = action
+        .as_any()
+        .downcast_ref::<gpui_base::actions::Confirm>()
+    {
+        // Dialog, Tree and selection controls share a parameterized no_json confirmation action.
+        serde_json::json!({"secondary": confirm.secondary})
     } else if let Some(input) = input {
         serde_json::from_str(input.as_ref()).ok()?
     } else if cx

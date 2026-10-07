@@ -255,6 +255,7 @@ impl EditorApp {
         cx: &mut Context<Self>,
     ) -> Self {
         app::shortcuts::init(cx);
+        app::shortcuts::attach_window(window, cx.weak_entity(), cx);
         let (file_watch, mut watch_updates) = FileWatch::start(workspace.clone());
         let closing = cx.entity().downgrade();
         window.on_window_should_close(cx, move |window, cx| {
@@ -773,6 +774,10 @@ fn main() -> anyhow::Result<()> {
             apply_theme(&theme::active_theme(false), cx);
             cx.activate(true);
             extensions::init(cx);
+            // Load overrides before a native window accepts keys; damaged data remains intact.
+            if let Err(error) = app::shortcuts::bootstrap::ensure(cx) {
+                eprintln!("Could not load shortcut configuration: {error}");
+            }
 
             let bounds = Bounds::centered(
                 None,

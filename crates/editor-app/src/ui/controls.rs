@@ -41,8 +41,8 @@ pub(crate) use scrollbar::{
 };
 pub(crate) use segmented_tabs::SegmentedTabs;
 pub(crate) use shortcut_panel::{
-    shortcut_footer, shortcut_keycaps, shortcut_list, shortcut_modal, shortcut_row,
-    shortcut_search, shortcut_tabs,
+    shortcut_footer, shortcut_keycaps, shortcut_list, shortcut_modal, shortcut_pending_hint,
+    shortcut_row, shortcut_search, shortcut_tabs,
 };
 pub(crate) use spinner::Spinner;
 pub(crate) use split::split_container;

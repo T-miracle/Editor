@@ -78,7 +78,7 @@ mod worker;
 use crate::ui::controls::Input;
 use crate::*;
 use gpui_base::input::InputState;
-use gpui_kit::{AnyElement, ClipboardItem, KeyDownEvent, PathPromptOptions, SharedString};
+use gpui_kit::{AnyElement, ClipboardItem, PathPromptOptions, SharedString};
 use plugin_runtime::{
     Installed, Package,
     plugin_protocol::{self as protocol, api::Notification as PluginEvent},
@@ -789,48 +789,6 @@ impl ExtensionPanel {
                 .then(|| scene.clone())
         })
     }
-    /// Dispatch manifest shortcuts without registering terminal-specific native actions.
-    pub fn shortcut(
-        &mut self,
-        event: &KeyDownEvent,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) -> bool {
-        for entry in &self.entries {
-            if !entry.enabled {
-                continue;
-            }
-            for command in &entry.manifest.commands {
-                if command
-                    .shortcut
-                    .as_ref()
-                    .is_some_and(|s| key_matches(s, event))
-                {
-                    let id = entry.manifest.id.clone();
-                    let command = command.id.clone();
-                    let parent = self.parent.clone();
-                    window.defer(cx, move |window, cx| {
-                        let _ = parent.update(cx, |app, cx| {
-                            // Manifest shortcuts use the same checked API as future project actions.
-                            if let Err(error) = app.invoke_plugin_command(
-                                &id,
-                                &command,
-                                serde_json::Value::Null,
-                                window,
-                                cx,
-                            ) {
-                                app.status = error;
-                                cx.notify();
-                            }
-                        });
-                    });
-                    cx.stop_propagation();
-                    return true;
-                }
-            }
-        }
-        false
-    }
     /// Use the native file picker; unsigned packages show their requested capabilities before install.
     fn choose_package(&mut self, cx: &mut Context<Self>) {
         let receiver = cx.prompt_for_paths(PathPromptOptions {
@@ -898,14 +856,6 @@ pub(crate) fn environment(workspace: &Path, cx: &App) -> protocol::Environment {
             })
             .collect(),
     }
-}
-fn key_matches(shortcut: &str, event: &KeyDownEvent) -> bool {
-    let parts: Vec<_> = shortcut.split('-').collect();
-    let m = event.keystroke.modifiers;
-    parts.last().is_some_and(|key| *key == event.keystroke.key)
-        && parts.contains(&"ctrl") == m.control
-        && parts.contains(&"alt") == m.alt
-        && parts.contains(&"shift") == m.shift
 }
 
 impl EventEmitter<PanelEvent> for ExtensionPanel {}

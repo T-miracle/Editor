@@ -15,6 +15,24 @@ pub(crate) fn with_editor(
     bindings: Vec<KeyBinding>,
     scenario: impl FnOnce(&mut VisualTestContext, Entity<EditorApp>, &Path),
 ) {
+    let profile = tempfile::tempdir().unwrap();
+    with_editor_profile(
+        cx,
+        dark,
+        bindings,
+        &profile.path().join("shortcuts.json"),
+        scenario,
+    );
+}
+
+/// Use the production loader with an explicit user profile to verify different workspaces.
+pub(super) fn with_editor_profile(
+    cx: &mut TestAppContext,
+    dark: bool,
+    bindings: Vec<KeyBinding>,
+    profile: &Path,
+    scenario: impl FnOnce(&mut VisualTestContext, Entity<EditorApp>, &Path),
+) {
     cx.update(|cx| {
         gpui_kit::init(cx);
         typography::init(cx);
@@ -22,6 +40,7 @@ pub(crate) fn with_editor(
         cx.set_reduce_motion(true);
         crate::app::shortcuts::init(cx);
         cx.bind_keys(bindings);
+        crate::app::shortcuts::bootstrap::configure(cx, profile.to_path_buf()).unwrap();
     });
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("shortcuts.txt");
@@ -49,13 +68,13 @@ pub(crate) fn with_editor(
 }
 
 /// Refresh the rendered input tree after a user gesture.
-fn draw(visual: &mut VisualTestContext) {
+pub(super) fn draw(visual: &mut VisualTestContext) {
     visual.run_until_parked();
     visual.update(|window, cx| window.draw(cx).clear(cx));
 }
 
 /// Click the actual Base control hit region, including its focus and disabled behavior.
-fn click(visual: &mut VisualTestContext, selector: &'static str) {
+pub(super) fn click(visual: &mut VisualTestContext, selector: &'static str) {
     let bounds = visual
         .debug_bounds(selector)
         .unwrap_or_else(|| panic!("missing {selector}"));

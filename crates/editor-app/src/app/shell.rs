@@ -347,16 +347,6 @@ impl Render for EditorApp {
                     }
                 }),
             )
-            .on_key_down(
-                cx.listener(|this, event: &gpui_kit::KeyDownEvent, window, cx| {
-                    // A masked lookup also blocks legacy raw plugin shortcuts during text search.
-                    if this.shortcut_panel.is_none() {
-                        this.extensions.update(cx, |panel, cx| {
-                            panel.shortcut(event, window, cx);
-                        });
-                    }
-                }),
-            )
             .on_action(cx.listener(Self::on_save_action))
             .on_action(
                 cx.listener(|app, _: &app::shortcuts::OpenShortcuts, window, cx| {

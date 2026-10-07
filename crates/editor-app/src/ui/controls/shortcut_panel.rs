@@ -113,6 +113,44 @@ pub(crate) fn shortcut_keycaps(strokes: &[String], cx: &App) -> AnyElement {
     row.into_any_element()
 }
 
+/// Display a window-local next-step hint without adding a focusable command or click action.
+/// Each tuple contains an operation description and its already formatted display strokes.
+pub(crate) fn shortcut_pending_hint(
+    title: String,
+    steps: Vec<(String, Vec<String>)>,
+    cx: &App,
+) -> AnyElement {
+    let palette = cx.theme();
+    div()
+        .debug_selector(|| "shortcuts-pending".into())
+        .absolute()
+        .right(px(16.))
+        .bottom(px(36.))
+        .max_w(px(480.))
+        .p_3()
+        .rounded(palette.radius_lg)
+        .border_1()
+        .border_color(palette.border)
+        .shadow_lg()
+        .bg(palette.popover)
+        .text_color(palette.popover_foreground)
+        .flex()
+        .flex_col()
+        .gap_2()
+        .text_sm()
+        .child(title)
+        .children(steps.into_iter().map(|(description, strokes)| {
+            div()
+                .flex()
+                .items_center()
+                .justify_between()
+                .gap_4()
+                .child(description)
+                .child(shortcut_keycaps(&strokes, cx))
+        }))
+        .into_any_element()
+}
+
 /// Render the fixed, equal-width panel/global tabs using localized labels in that order.
 ///
 /// The owner supplies selection and a dedicated strip focus handle. Pointer and focused arrow

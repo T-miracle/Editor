@@ -9,23 +9,30 @@ use crate::ui::controls::{
 impl Render for ShortcutPanel {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let query = self.search.read(cx).value().to_lowercase();
-        let operations = self.operations.iter().filter(|operation| {
-            operation.scope
-                == if self.tab == 0 {
-                    Scope::Panel
-                } else {
-                    Scope::Global
-                }
-                && if self.key_search {
-                    self.capture.strokes.is_empty()
-                        || operation
-                            .defaults
-                            .iter()
-                            .any(|binding| binding.starts_with(&self.capture.strokes))
-                } else {
-                    operation.title.to_lowercase().contains(&query)
-                }
-        });
+        // A draft stays on screen while text filtering changes; discarding it remains explicit.
+        let operations = self
+            .operations
+            .iter()
+            .filter(|operation| {
+                self.is_editing(&operation.id)
+                    || (operation.scope
+                        == if self.tab == 0 {
+                            Scope::Panel
+                        } else {
+                            Scope::Global
+                        }
+                        && if self.key_search {
+                            self.capture.strokes.is_empty()
+                                || operation
+                                    .defaults
+                                    .iter()
+                                    .any(|binding| binding.starts_with(&self.capture.strokes))
+                        } else {
+                            operation.title.to_lowercase().contains(&query)
+                        })
+            })
+            .cloned()
+            .collect::<Vec<_>>();
         let mut rows = Vec::new();
         for operation in operations {
             let selector = match &operation.target {
@@ -40,29 +47,13 @@ impl Render for ShortcutPanel {
                 .debug_selector(move || selector.clone())
                 .child(operation.title.clone())
                 .into_any_element();
-            let binding = if operation.defaults.is_empty() {
-                div()
-                    .text_color(cx.theme().muted_foreground)
-                    .child(t!("shortcuts.unbound").to_string())
-                    .into_any_element()
-            } else {
-                div()
-                    .flex()
-                    .items_center()
-                    .gap_2()
-                    .children(
-                        operation
-                            .defaults
-                            .iter()
-                            .map(|binding| shortcut_keycaps(&capture::display(binding), cx)),
-                    )
-                    .into_any_element()
-            };
+            let binding = self.binding_controls(&operation, cx);
+            let draft = self.render_draft(&operation.id, cx);
             rows.push(shortcut_row(
                 operation.id.clone(),
                 description,
                 binding,
-                None,
+                draft,
                 cx,
             ));
         }
@@ -85,8 +76,10 @@ impl Render for ShortcutPanel {
                 t!("shortcuts.global_tab").to_string().into(),
             ],
             &self.tabs_focus,
-            move |tab, _, cx| {
-                let _ = panel.update(cx, |panel, cx| panel.select_tab(tab, cx));
+            move |tab, window, cx| {
+                let _ = panel.update(cx, |panel, cx| {
+                    panel.request_edit_intent(editing::Intent::Tab(tab), window, cx);
+                });
             },
             cx,
         );
@@ -116,16 +109,19 @@ impl Render for ShortcutPanel {
             .debug_selector(|| "shortcuts-capture".into())
             .small()
             .ghost()
+            .disabled(self.confirm.is_some())
             .label("⌨")
             .accessibility_label(t!("shortcuts.capture").to_string())
             .tooltip(t!("shortcuts.capture").to_string())
             .on_click(cx.listener(Self::toggle_capture_click))
             .into_any_element();
+        let recording =
+            (self.key_search && self.draft.is_none()) || self.is_recording_binding(window);
         let navigation = div()
             .flex()
             .items_center()
             .gap_2()
-            .when(self.key_search, |row| row.opacity(0.5))
+            .when(recording, |row| row.opacity(0.5))
             .child(t!("shortcuts.switch_tabs").to_string())
             .child(shortcut_keycaps(&["Alt+←".into()], cx))
             .child("/")
@@ -133,8 +129,10 @@ impl Render for ShortcutPanel {
             .into_any_element();
         let footer = shortcut_footer(
             div()
-                .child(if self.key_search {
+                .child(if recording {
                     t!("shortcuts.capture_help").to_string()
+                } else if self.draft.is_some() {
+                    t!("shortcuts.edit.help").to_string()
                 } else {
                     t!("shortcuts.close_help").to_string()
                 })
@@ -151,6 +149,7 @@ impl Render for ShortcutPanel {
             .child(tabs)
             .child(shortcut_search(field, toggle, self.key_search, cx))
             .child(shortcut_list(rows, &self.scroll, cx))
+            .children(self.render_edit_confirmation(cx))
             .child(footer)
             .into_any_element();
         let panel = cx.entity().downgrade();
@@ -158,7 +157,9 @@ impl Render for ShortcutPanel {
             self.focus.clone(),
             content,
             move |window, cx| {
-                let _ = panel.update(cx, |panel, cx| panel.request_close(window, cx));
+                let _ = panel.update(cx, |panel, cx| {
+                    panel.request_edit_intent(editing::Intent::Close, window, cx);
+                });
                 false
             },
             window,
@@ -175,6 +176,6 @@ impl ShortcutPanel {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.toggle_capture(window, cx);
+        self.request_edit_intent(editing::Intent::ToggleCapture, window, cx);
     }
 }

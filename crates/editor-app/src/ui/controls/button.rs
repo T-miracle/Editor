@@ -83,6 +83,16 @@ pub(crate) struct Button {
 }
 
 impl Button {
+    /// Register the native Enter boundary before taking the application default-keymap snapshot.
+    /// Render keeps this idempotent call for standalone controls and independent test apps.
+    pub(crate) fn init_keys(cx: &mut App) {
+        if !cx.has_global::<ButtonKeymap>() {
+            // A focused button receives its own keyboard click instead of confirming its parent.
+            cx.bind_keys([KeyBinding::new("enter", NoAction, Some("EditorActivate"))]);
+            cx.set_global(ButtonKeymap);
+        }
+    }
+
     pub(crate) fn new(id: impl Into<ElementId>) -> Self {
         Self {
             base: BaseButton::new(id),
@@ -214,12 +224,7 @@ impl ParentElement for Button {
 
 impl RenderOnce for Button {
     fn render(self, _: &mut Window, cx: &mut App) -> impl IntoElement {
-        // Dialog binds Enter to Confirm. A focused button must receive its own native Enter click
-        // instead of confirming its parent; NoAction leaves GPUI's keyboard-click behavior intact.
-        if !cx.has_global::<ButtonKeymap>() {
-            cx.bind_keys([KeyBinding::new("enter", NoAction, Some("EditorActivate"))]);
-            cx.set_global(ButtonKeymap);
-        }
+        Self::init_keys(cx);
         let palette = cx.theme();
         let (background, foreground, hover, active) = match self.variant {
             Variant::Default => (

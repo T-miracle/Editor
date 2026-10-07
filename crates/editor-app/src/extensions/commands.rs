@@ -2,6 +2,71 @@
 use super::*;
 
 impl ExtensionPanel {
+    /// Check a managed shortcut target against the latest effective worker publication.
+    /// Hidden panels remain eligible; trust, startup and declared commands still gate execution.
+    pub(crate) fn shortcut_available(&self, plugin: &str, command: &str) -> bool {
+        if !self
+            .worker
+            .trusted
+            .load(std::sync::atomic::Ordering::Acquire)
+        {
+            return false;
+        }
+        let state = self.worker.state.lock().unwrap();
+        !state.startup.contains_key(plugin)
+            && state.entries.iter().any(|entry| {
+                entry.manifest.id == plugin
+                    && entry.enabled
+                    && entry.error.is_none()
+                    && entry
+                        .manifest
+                        .commands
+                        .iter()
+                        .any(|item| item.id == command)
+            })
+    }
+
+    /// Accept a resolved plugin target through the existing checked command and panel route.
+    /// Returns false when unavailable; true schedules dispatch, not successful guest execution.
+    pub(crate) fn invoke_shortcut(
+        &mut self,
+        plugin: &str,
+        command: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        if !self.shortcut_available(plugin, command) {
+            return false;
+        }
+        let plugin = plugin.to_owned();
+        let command = command.to_owned();
+        let parent = self.parent.clone();
+        window.defer(cx, move |window, cx| {
+            let _ = parent.update(cx, |app, cx| {
+                // A publication or trust change can occur between key resolution and UI dispatch.
+                if !app.session_state.workspace_trusted
+                    || !app
+                        .extensions
+                        .read(cx)
+                        .shortcut_available(&plugin, &command)
+                {
+                    return;
+                }
+                if let Err(error) = app.invoke_plugin_command(
+                    &plugin,
+                    &command,
+                    serde_json::Value::Null,
+                    window,
+                    cx,
+                ) {
+                    app.status = error;
+                    cx.notify();
+                }
+            });
+        });
+        true
+    }
+
     /// Queue a declared command for an enabled plugin, including one with a hidden surface.
     /// Success means accepted by the worker; execution errors are published through plugin status.
     pub(crate) fn invoke_command(
