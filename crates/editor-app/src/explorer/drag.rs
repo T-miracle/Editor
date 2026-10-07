@@ -35,6 +35,9 @@ fn copy_modifier(modifiers: Modifiers) -> bool {
 pub(crate) struct DragState {
     gesture: Option<Gesture>,
     generation: u64,
+    // Geometry belongs to the last painted tree, including virtualized rows after automatic scrolling.
+    rows: Vec<(PathBuf, Bounds<Pixels>)>,
+    tree_bounds: Option<Bounds<Pixels>>,
 }
 struct Gesture {
     sources: Vec<PathBuf>,
@@ -62,6 +65,59 @@ impl DragState {
 }
 
 impl EditorApp {
+    /// Begin a fresh layout inventory before the virtual tree prepaints its visible rows.
+    pub(crate) fn render_tree_geometry_start(&self, cx: &Context<Self>) -> impl IntoElement {
+        let owner = cx.entity().downgrade();
+        gpui_kit::canvas(
+            move |bounds, _, cx| {
+                let _ = owner.update(cx, |app, _| {
+                    app.explorer_drag.rows.clear();
+                    app.explorer_drag.tree_bounds = Some(bounds);
+                });
+            },
+            |_, (), _, _| {},
+        )
+        .absolute()
+        .inset_0()
+    }
+
+    /// Cache actual clipped row boxes instead of deriving hit positions from a fixed row height.
+    pub(crate) fn render_tree_row_geometry(
+        &self,
+        path: &Path,
+        folder: bool,
+        cx: &Context<Self>,
+    ) -> impl IntoElement {
+        let target = if folder {
+            path.to_path_buf()
+        } else {
+            path.parent().unwrap_or(self.workspace.root()).to_path_buf()
+        };
+        let owner = cx.entity().downgrade();
+        gpui_kit::canvas(
+            move |bounds, window, cx| {
+                let visible = bounds.intersect(&window.content_mask().bounds);
+                let _ = owner.update(cx, |app, _| app.explorer_drag.rows.push((target, visible)));
+            },
+            |_, (), _, _| {},
+        )
+        .absolute()
+        .inset_0()
+    }
+
+    /// Release and stationary-pointer scrolling both resolve the destination from the current rendered inventory.
+    fn tree_drag_destination_at(&self, position: Point<Pixels>) -> Option<PathBuf> {
+        let bounds = self.explorer_drag.tree_bounds?;
+        if !bounds.contains(&position) {
+            return None;
+        }
+        self.explorer_drag
+            .rows
+            .iter()
+            .find(|(_, bounds)| bounds.contains(&position))
+            .map(|(target, _)| target.clone())
+            .or_else(|| Some(self.workspace.root().to_path_buf()))
+    }
     /// Root capture observes typed movement underneath opaque row hitboxes.
     pub(crate) fn tree_drag_move(
         &mut self,
@@ -160,11 +216,11 @@ impl EditorApp {
             })
             .detach();
         }
+        let target = self.tree_drag_destination_at(position);
         let gesture = self.explorer_drag.gesture.as_mut().unwrap();
         gesture.bounds = bounds;
         gesture.copy = !internal || copy_modifier(window.modifiers());
         let inside = bounds.contains(&position);
-        gesture.target = inside.then(|| self.workspace.root().to_path_buf());
         gesture.edge = if !inside {
             0
         } else if position.y < bounds.top() + px(24.) {
@@ -174,6 +230,7 @@ impl EditorApp {
         } else {
             0
         };
+        self.set_tree_drag_target(if inside { target } else { None }, window, cx);
         cx.notify();
     }
 
@@ -190,15 +247,35 @@ impl EditorApp {
             return;
         }
         let target = self.explorer_destination(Some(path));
+        self.set_tree_drag_target(Some(target), window, cx);
+    }
+
+    /// Every departure invalidates the old timer; returning to the same folder starts a new full interval.
+    fn set_tree_drag_target(
+        &mut self,
+        target: Option<PathBuf>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let Some(gesture) = &mut self.explorer_drag.gesture else {
             return;
         };
-        gesture.target = Some(target.clone());
-        if gesture.hover.as_ref() == Some(&target) {
+        let changed = gesture.target != target;
+        gesture.target = target.clone();
+        if gesture.hover == target {
+            if changed {
+                cx.notify();
+            }
             return;
         }
-        gesture.hover = Some(target.clone());
+        gesture.hover = target.clone();
         gesture.hover_generation += 1;
+        if changed {
+            cx.notify();
+        }
+        let Some(target) = target else {
+            return;
+        };
         let hover_generation = gesture.hover_generation;
         let generation = self.explorer_drag.generation;
         cx.spawn_in(window, async move |app, cx| {
@@ -270,7 +347,17 @@ impl EditorApp {
     pub(crate) fn render_tree_drag_events(&self, cx: &Context<Self>) -> impl IntoElement {
         let owner = cx.entity().downgrade();
         gpui_kit::canvas(
-            |_, _, _| (),
+            {
+                let owner = owner.clone();
+                move |_, window, cx| {
+                    let _ = owner.update(cx, |app, cx| {
+                        if cx.has_active_drag() {
+                            let target = app.tree_drag_destination_at(window.mouse_position());
+                            app.set_tree_drag_target(target, window, cx);
+                        }
+                    });
+                }
+            },
             move |_, (), window, _| {
                 let releasing = owner.clone();
                 window.on_mouse_event(move |event: &MouseUpEvent, phase, window, cx| {
@@ -281,10 +368,7 @@ impl EditorApp {
                         let Some(gesture) = &app.explorer_drag.gesture else {
                             return;
                         };
-                        let target = gesture
-                            .target
-                            .clone()
-                            .filter(|_| gesture.bounds.contains(&event.position));
+                        let target = app.tree_drag_destination_at(event.position);
                         let sources = gesture.sources.clone();
                         let kind = if !gesture.internal || copy_modifier(event.modifiers) {
                             Kind::Copy

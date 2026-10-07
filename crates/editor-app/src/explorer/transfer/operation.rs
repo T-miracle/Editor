@@ -1,6 +1,9 @@
 //! One background transfer policy shared by clipboard, tree drag and native file drops.
 
+use super::fingerprint::Tree;
+use super::publication::{Entry, Plan, Protection, ResultWithPlan};
 use super::snapshot::{self, Snapshot, Stamp};
+mod copy;
 use crate::editor::file_watch::{Reconciliation, WatchedFile, read_documents};
 use editor_core::Workspace;
 use futures::{
@@ -11,7 +14,6 @@ use futures::{
 use rust_i18n::t;
 use std::{
     fs,
-    io::{Read, Write},
     path::{Path, PathBuf},
     sync::{
         Arc,
@@ -39,6 +41,16 @@ pub(super) struct Decision {
     pub choice: Choice,
     pub subsequent: bool,
     pub discard: bool,
+    pub approvals: Vec<Approval>,
+}
+
+/// Consent names a particular live session and revision; reopening or new input revokes it.
+#[derive(Clone)]
+pub(super) struct Approval {
+    pub path: PathBuf,
+    pub file_id: u64,
+    pub revision: u64,
+    pub capability_revision: u64,
 }
 
 /// A completed atomic disk change, with its preimage and expected postimage for later undo.
@@ -81,6 +93,7 @@ pub(super) enum Event {
     },
     Discard {
         update: Reconciliation,
+        approvals: Vec<Approval>,
         reply: oneshot::Sender<()>,
     },
     Conflict {
@@ -94,15 +107,14 @@ pub(super) enum Event {
         target: PathBuf,
         reply: oneshot::Sender<bool>,
     },
+    Publish {
+        plan: Plan,
+        reply: oneshot::Sender<ResultWithPlan>,
+    },
     Progress {
         path: PathBuf,
         completed: usize,
         bytes: u64,
-    },
-    Moved {
-        old: PathBuf,
-        new: PathBuf,
-        reply: oneshot::Sender<()>,
     },
 }
 
@@ -118,6 +130,9 @@ pub(super) struct Worker {
     bytes: u64,
     pub(super) workspace: Workspace,
     pub(super) watched: Vec<WatchedFile>,
+    pub(super) cleanup_error: Option<String>,
+    expected: Tree,
+    _lifetime: super::resources::Lifetime,
 }
 
 impl Worker {
@@ -129,6 +144,7 @@ impl Worker {
         events: mpsc::UnboundedSender<Event>,
         cancelled: Arc<AtomicBool>,
         label: String,
+        resources: Arc<super::resources::Resources>,
     ) -> Result<Self, String> {
         let backup = Arc::new(
             tempfile::Builder::new()
@@ -136,6 +152,7 @@ impl Worker {
                 .tempdir()
                 .map_err(|error| error.to_string())?,
         );
+        let lifetime = resources.register(backup.path().to_path_buf(), &cancelled);
         Ok(Self {
             root: workspace.root().to_path_buf(),
             workspace,
@@ -153,6 +170,9 @@ impl Worker {
             skipped: Vec::new(),
             policy: None,
             bytes: 0,
+            cleanup_error: None,
+            expected: Tree::default(),
+            _lifetime: lifetime,
         })
     }
 
@@ -197,10 +217,15 @@ impl Worker {
                 remaining = sources.len() - index - 1;
                 break;
             }
+            if let Some(failure) = self.cleanup_error.take() {
+                error = Some(failure);
+                remaining = sources.len() - index - 1;
+                break;
+            }
         }
         // Directory stamps are finalized after child operations, so new descendants are detectable during undo.
         for change in &mut self.receipt.changes {
-            if let Ok(stamp) = snapshot::stamp(&change.path) {
+            if let Ok(stamp) = self.expected.stamp(&change.path) {
                 change.after = stamp;
             }
         }
@@ -289,6 +314,36 @@ impl Worker {
             .map_err(|_| t!("transfer.window_closed").to_string())
     }
 
+    /// The UI owns final session authorization and a short rename transaction; cleanup returns to this executor.
+    pub(super) async fn publish(&mut self, plan: Plan) -> Result<Vec<Approval>, String> {
+        let (reply, answer) = oneshot::channel();
+        self.events
+            .unbounded_send(Event::Publish { plan, reply })
+            .map_err(|_| t!("transfer.window_closed").to_string())?;
+        let result = answer
+            .await
+            .map_err(|_| t!("transfer.window_closed").to_string())?;
+        if result.result.is_ok() {
+            for entry in &result.plan.entries {
+                self.expected.put(&entry.path, entry.after.clone())?;
+            }
+        }
+        if result.result.is_err() {
+            // A rollback failure is still an actual disk change and must remain recoverable in session history.
+            for entry in result.plan.entries.iter().filter(|entry| entry.changed()) {
+                self.receipt.changes.push(Change {
+                    path: entry.path.clone(),
+                    before: entry.before.clone(),
+                    after: snapshot::stamp(&entry.path).unwrap_or(Stamp::Missing),
+                });
+            }
+        }
+        if let Err(error) = result.plan.cleanup(result.result.is_ok()) {
+            self.cleanup_error = Some(error);
+        }
+        result.result.map(|_| result.approvals)
+    }
+
     /// Recursive directories contribute leaf records; skipped links keep their source directory alive.
     fn transfer(
         &mut self,
@@ -351,17 +406,24 @@ impl Worker {
         let first_change = self.receipt.changes.len();
         if !target.is_dir() {
             let before = snapshot::capture(target, self.receipt.backup.path())?;
-            if original != &Stamp::Missing {
-                fs::remove_file(target).map_err(|error| error.to_string())?;
+            let entry =
+                Entry::restore(target, &Snapshot::Directory { asset: None }, before.clone())?;
+            if snapshot::stamp(target)? != *original {
+                return Err(t!("transfer.changed").to_string());
             }
-            if let Err(error) = fs::create_dir(target) {
-                snapshot::restore(&before, target)?;
-                return Err(error.to_string());
-            }
+            self.publish(Plan {
+                entries: vec![entry],
+                root: Some(self.root.clone()),
+                movement: None,
+                protection: Protection::Ordinary {
+                    targets: vec![target.to_path_buf()],
+                },
+            })
+            .await?;
             self.receipt.changes.push(Change {
                 path: target.to_path_buf(),
                 before,
-                after: snapshot::stamp(target)?,
+                after: self.expected.stamp(target)?,
             });
         }
         let mut entries = fs::read_dir(source)
@@ -372,6 +434,9 @@ impl Worker {
         let empty = entries.is_empty();
         let mut all_moved = true;
         for entry in entries {
+            if let Some(error) = self.cleanup_error.take() {
+                return Err(error);
+            }
             match self
                 .transfer(entry.path(), target.join(entry.file_name()))
                 .await
@@ -404,126 +469,6 @@ impl Worker {
             self.completed += 1;
         }
         Ok(all_moved)
-    }
-
-    /// Write into a temporary sibling and publish only after a complete, verified copy.
-    async fn file(&mut self, source: &Path, target: &Path, original: &Stamp) -> Result<(), String> {
-        self.check_cancel()?;
-        let source_stamp = snapshot::stamp(source)?;
-        let before = snapshot::capture(target, self.receipt.backup.path())?;
-        let source_before = if self.kind == Kind::Move {
-            Some(snapshot::capture(source, self.receipt.backup.path())?)
-        } else {
-            None
-        };
-        let mut input =
-            fs::File::open(source).map_err(|error| format!("{}: {error}", source.display()))?;
-        let mut temporary = tempfile::Builder::new()
-            .prefix(".me-transfer-")
-            .tempfile_in(target.parent().unwrap())
-            .map_err(|error| error.to_string())?;
-        let mut buffer = vec![0; 256 * 1024];
-        loop {
-            self.check_cancel()?;
-            let count = input
-                .read(&mut buffer)
-                .map_err(|error| format!("{}: {error}", source.display()))?;
-            if count == 0 {
-                break;
-            }
-            temporary
-                .write_all(&buffer[..count])
-                .map_err(|error| format!("{}: {error}", target.display()))?;
-            self.bytes += count as u64;
-            if self.bytes % (4 * 1024 * 1024) < count as u64 {
-                let _ = self.events.unbounded_send(Event::Progress {
-                    path: source.to_path_buf(),
-                    completed: self.completed,
-                    bytes: self.bytes,
-                });
-            }
-        }
-        temporary.flush().map_err(|error| error.to_string())?;
-        temporary
-            .as_file()
-            .sync_all()
-            .map_err(|error| error.to_string())?;
-        temporary
-            .as_file()
-            .set_permissions(
-                fs::metadata(source)
-                    .map_err(|error| error.to_string())?
-                    .permissions(),
-            )
-            .map_err(|error| error.to_string())?;
-        self.check_cancel()?;
-        snapshot::check_target(&self.root, target)?;
-        if snapshot::stamp(source)? != source_stamp || snapshot::stamp(target)? != *original {
-            return Err(format!("{}: {}", target.display(), t!("transfer.changed")));
-        }
-        if !self.authorize(target).await? {
-            return Err(format!(
-                "{}: {}",
-                target.display(),
-                t!("transfer.dirty_target")
-            ));
-        }
-        // Consent may take time; repeat disk checks before publishing or deleting anything.
-        self.check_cancel()?;
-        snapshot::check_target(&self.root, target)?;
-        if snapshot::stamp(source)? != source_stamp || snapshot::stamp(target)? != *original {
-            return Err(format!("{}: {}", target.display(), t!("transfer.changed")));
-        }
-        if target.is_dir() {
-            fs::remove_dir_all(target).map_err(|error| error.to_string())?;
-        }
-        if let Err(error) = temporary.persist(target) {
-            snapshot::restore(&before, target)?;
-            return Err(format!("{}: {error}", target.display()));
-        }
-        let after = snapshot::stamp(target)?;
-        if self.kind == Kind::Move {
-            if let Err(error) = fs::remove_file(source) {
-                snapshot::restore(&before, target)?;
-                return Err(format!("{}: {error}", source.display()));
-            }
-        }
-        self.receipt.changes.push(Change {
-            path: target.to_path_buf(),
-            before,
-            after,
-        });
-        if let Some(before) = source_before {
-            self.receipt.changes.push(Change {
-                path: source.to_path_buf(),
-                before,
-                after: Stamp::Missing,
-            });
-            self.receipt
-                .moves
-                .push((source.to_path_buf(), target.to_path_buf()));
-            for file in &mut self.watched {
-                if file.path == source {
-                    file.path = target.to_path_buf();
-                }
-            }
-            let (reply, applied) = oneshot::channel();
-            self.events
-                .unbounded_send(Event::Moved {
-                    old: source.to_path_buf(),
-                    new: target.to_path_buf(),
-                    reply,
-                })
-                .map_err(|_| t!("transfer.window_closed").to_string())?;
-            let _ = applied.await;
-        }
-        self.completed += 1;
-        let _ = self.events.unbounded_send(Event::Progress {
-            path: target.to_path_buf(),
-            completed: self.completed,
-            bytes: self.bytes,
-        });
-        Ok(())
     }
 }
 

@@ -1,5 +1,6 @@
 //! Disk undo is exercised through tree shortcuts, with session identity and disk bytes as the oracle.
 use super::*;
+use gpui_kit::InputEvent as _;
 
 /// Explicitly focus a visible tree row, leaving text undo to the editor's own key context.
 fn history_key(ui: &mut VisualTestContext, key: &str) {
@@ -241,4 +242,117 @@ fn explorer_transfer_menu_undo_records_partial_success(cx: &mut TestAppContext) 
         "good"
     );
     assert!(!project.path().join("missing.txt").exists());
+}
+
+/// A complete directory replacement must replay even when the restored directory is nonempty.
+#[gpui::test]
+fn explorer_transfer_redo_file_replaces_restored_directory(cx: &mut TestAppContext) {
+    let project = tempfile::tempdir().unwrap();
+    let external = tempfile::tempdir().unwrap();
+    std::fs::create_dir(project.path().join("item")).unwrap();
+    std::fs::write(project.path().join("item/old.txt"), "old").unwrap();
+    let source = external.path().join("item");
+    std::fs::write(&source, "new file").unwrap();
+    let (_, ui) = mount(cx, Workspace::open(project.path()).unwrap(), None);
+    transfer::paste(ui, vec![source], 0);
+    click_choice(ui, "transfer-replace");
+    redraw(ui);
+    let target = project.path().join("item");
+    assert_eq!(std::fs::read_to_string(&target).unwrap(), "new file");
+    history_key(ui, "ctrl-z");
+    assert_eq!(
+        std::fs::read_to_string(target.join("old.txt")).unwrap(),
+        "old"
+    );
+    history_key(ui, "ctrl-shift-z");
+    assert_eq!(std::fs::read_to_string(target).unwrap(), "new file");
+}
+
+/// Input entered after the second confirmation is newer than its discard consent.
+#[gpui::test]
+fn explorer_transfer_recovery_preserves_input_after_confirmation(cx: &mut TestAppContext) {
+    let project = tempfile::tempdir().unwrap();
+    let external = tempfile::tempdir().unwrap();
+    let source = external.path().join("file.txt");
+    std::fs::write(&source, "disk").unwrap();
+    let workspace = Workspace::open(project.path()).unwrap();
+    let target = workspace.root().join("file.txt");
+    let (app, ui) = mount(cx, workspace, None);
+    transfer::paste(ui, vec![source], 0);
+    ui.update(|window, cx| app.update(cx, |app, cx| app.open_file(target.clone(), window, cx)));
+    ui.simulate_input("draft");
+    redraw(ui);
+    history_key(ui, "ctrl-z");
+    click_choice(ui, "transfer-force");
+    redraw(ui);
+    let confirm = ui.debug_bounds("transfer-force").unwrap().center();
+    ui.update(|window, cx| {
+        // Dispatch without yielding to the worker, then type into the real editor before its reply returns.
+        for event in [
+            MouseDownEvent {
+                position: confirm,
+                button: MouseButton::Left,
+                modifiers: Modifiers::default(),
+                click_count: 1,
+                first_mouse: false,
+            }
+            .to_platform_input(),
+            MouseUpEvent {
+                position: confirm,
+                button: MouseButton::Left,
+                modifiers: Modifiers::default(),
+                click_count: 1,
+            }
+            .to_platform_input(),
+        ] {
+            window.dispatch_event(event, cx);
+        }
+        app.read(cx).editor.focus_handle(cx).focus(window, cx);
+        window.dispatch_keystroke(
+            gpui_kit::Keystroke {
+                key: "x".into(),
+                key_char: Some("x".into()),
+                modifiers: Modifiers::default(),
+            },
+            cx,
+        );
+        assert!(
+            app.read(cx)
+                .editor
+                .read(cx)
+                .value()
+                .to_string()
+                .contains('x')
+        );
+    });
+    redraw(ui);
+    ui.update(|_, cx| {
+        let app = app.read(cx);
+        assert!(app.editor.read(cx).value().to_string().contains('x'));
+        assert!(app.tabs[0].is_dirty());
+    });
+}
+
+/// Force consent covers the inspected directory, not files added while its dialog waits.
+#[gpui::test]
+fn explorer_transfer_recovery_rejects_directory_changes_after_review(cx: &mut TestAppContext) {
+    let project = tempfile::tempdir().unwrap();
+    let external = tempfile::tempdir().unwrap();
+    std::fs::create_dir(external.path().join("folder")).unwrap();
+    std::fs::write(external.path().join("folder/import.txt"), "import").unwrap();
+    let (_, ui) = mount(cx, Workspace::open(project.path()).unwrap(), None);
+    transfer::paste(ui, vec![external.path().join("folder")], 0);
+    let target = project.path().join("folder");
+    std::fs::write(target.join("reviewed.txt"), "already changed").unwrap();
+    history_key(ui, "ctrl-z");
+    assert!(ui.debug_bounds("transfer-force").is_some());
+    std::fs::write(target.join("new.txt"), "after review").unwrap();
+    click_choice(ui, "transfer-force");
+    redraw(ui);
+    assert_eq!(
+        std::fs::read_to_string(target.join("new.txt")).unwrap(),
+        "after review"
+    );
+    assert!(target.join("reviewed.txt").exists());
+    assert!(ui.debug_bounds("local-notification").is_some());
 }

@@ -49,7 +49,7 @@ impl EditorApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.file_transfers.is_running() {
+        if self.file_transfers.is_running() || self.file_transfers.closing {
             self.file_transfer_error(t!("transfer.busy").to_string(), cx);
             return;
         }
@@ -77,6 +77,7 @@ impl EditorApp {
             events,
             cancel.clone(),
             receipt.label.clone(),
+            self.file_transfers.resources.clone(),
         ) {
             Ok(worker) => worker,
             Err(error) => {
@@ -160,6 +161,7 @@ impl EditorApp {
                 choice: Choice::Force,
                 subsequent: false,
                 discard: false,
+                approvals: self.file_recovery_approvals(&paths),
             });
             return;
         }
@@ -185,16 +187,28 @@ impl EditorApp {
     pub(super) fn discard_recovered_documents(
         &mut self,
         update: Reconciliation,
+        approvals: Vec<Approval>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        for (path, contents, _) in &update.documents {
-            if let Some(text) = self
-                .tabs
-                .iter_mut()
-                .find(|tab| tab.path() == path)
-                .and_then(|tab| tab.text.as_mut())
-            {
+        let mut preserved = false;
+        for (path, contents, read_at) in &update.documents {
+            if let Some(tab) = self.tabs.iter_mut().find(|tab| tab.path() == path) {
+                let Some(text) = tab.text.as_mut() else {
+                    continue;
+                };
+                if !approvals.iter().any(|approval| {
+                    approval.path == *path
+                        && approval.file_id == tab.file_id
+                        && approval.revision == text.session.revision()
+                        && approval.capability_revision == text.capability_revision
+                }) || *read_at < tab.opened_at
+                    || *read_at < text.last_saved_at
+                {
+                    // The disk operation may have completed, but later input never inherits older discard consent.
+                    preserved = true;
+                    continue;
+                }
                 let value = match contents {
                     Ok(DiskContent::Text(value)) => value.clone(),
                     Err(error) if error.kind() == std::io::ErrorKind::NotFound => String::new(),
@@ -212,5 +226,27 @@ impl EditorApp {
         self.apply_reconciliation(update, window, cx);
         self.invalidate_editor_previews(cx);
         self.sync_editor_previews(cx);
+        if preserved {
+            self.file_transfer_error(t!("transfer.new_edits_preserved").to_string(), cx);
+        }
+    }
+
+    /// Capture only identities and revisions; editable text and its undo stack stay on the UI thread.
+    pub(super) fn file_recovery_approvals(&self, paths: &[PathBuf]) -> Vec<Approval> {
+        self.tabs
+            .iter()
+            .filter_map(|tab| {
+                if !paths.iter().any(|path| tab.path().starts_with(path)) {
+                    return None;
+                }
+                let text = tab.text.as_ref()?;
+                Some(Approval {
+                    path: tab.path().to_path_buf(),
+                    file_id: tab.file_id,
+                    revision: text.session.revision(),
+                    capability_revision: text.capability_revision,
+                })
+            })
+            .collect()
     }
 }

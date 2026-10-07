@@ -392,3 +392,36 @@ fn explorer_transfer_failed_move_preserves_source_and_cleans_current_target(
     assert!(!project.path().join("locked.txt").exists());
     assert!(visual.debug_bounds("local-notification").is_some());
 }
+
+/// The originally canonical workspace cannot be redirected by replacing one of its parent directories.
+#[cfg(windows)]
+#[gpui::test]
+fn explorer_transfer_rejects_replaced_workspace_ancestor(cx: &mut TestAppContext) {
+    let fixture = tempfile::tempdir().unwrap();
+    let external = tempfile::tempdir().unwrap();
+    let parent = fixture.path().join("parent");
+    let parked = fixture.path().join("parked");
+    let redirected = fixture.path().join("redirected");
+    std::fs::create_dir_all(parent.join("project")).unwrap();
+    std::fs::create_dir_all(redirected.join("project")).unwrap();
+    let source = external.path().join("import.txt");
+    std::fs::write(&source, "must stay outside redirected tree").unwrap();
+    let (_, ui) = mount(cx, Workspace::open(parent.join("project")).unwrap(), None);
+    std::fs::rename(&parent, &parked).unwrap();
+    // This command only prepares an explicitly named temporary filesystem fixture.
+    let result = std::process::Command::new("powershell.exe")
+        .args(["-NoProfile", "-NonInteractive", "-Command", "New-Item -ItemType Junction -Path $env:ME_TRANSFER_TEST_LINK -Target $env:ME_TRANSFER_TEST_TARGET -ErrorAction Stop | Out-Null"])
+        .env("ME_TRANSFER_TEST_LINK", &parent).env("ME_TRANSFER_TEST_TARGET", &redirected)
+        .output().unwrap();
+    assert!(
+        result.status.success(),
+        "{}",
+        String::from_utf8_lossy(&result.stderr)
+    );
+    transfer::paste(ui, vec![source], 0);
+    let wrote_outside = redirected.join("project/import.txt").exists();
+    std::fs::remove_dir(&parent).unwrap();
+    std::fs::rename(&parked, &parent).unwrap();
+    assert!(!wrote_outside);
+    assert!(ui.debug_bounds("local-notification").is_some());
+}

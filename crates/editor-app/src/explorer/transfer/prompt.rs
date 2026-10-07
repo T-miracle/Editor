@@ -35,6 +35,7 @@ impl EditorApp {
             choice,
             subsequent: prompt.subsequent,
             discard: choice == Choice::Force && prompt.discard,
+            approvals: self.file_recovery_approvals(&prompt.affected),
         });
         if let Some(previous) = prompt.previous_focus {
             previous.focus(window, cx);

@@ -1,5 +1,7 @@
 //! Restore verified preimages and journal actual inverse changes; move endpoints recover together.
+use super::fingerprint::Tree;
 use super::operation::{Change, Choice, Decision, Event, Outcome, Receipt, Worker};
+use super::publication::{Entry, Plan, Protection};
 use super::snapshot::{self, Stamp};
 use crate::editor::file_watch::{Reconciliation, read_documents};
 use futures::channel::oneshot;
@@ -13,15 +15,27 @@ use std::{
 impl Worker {
     /// Undo and redo both restore a receipt's preimages after inspecting today's filesystem state.
     pub(super) async fn recover(mut self, mut original: Receipt) -> Outcome {
+        let mut expected = Tree::read(original.changes.iter().map(|change| change.path.clone()));
         let initial: HashMap<_, _> = original
             .changes
             .iter()
-            .map(|change| (change.path.clone(), snapshot::stamp(&change.path)))
+            .map(|change| {
+                (
+                    change.path.clone(),
+                    expected
+                        .as_ref()
+                        .map_err(Clone::clone)
+                        .and_then(|tree| tree.stamp(&change.path)),
+                )
+            })
             .collect();
         let mut handled = HashSet::new();
         let mut applied = HashSet::new();
-        let mut error = None;
+        let mut error = expected.as_ref().err().cloned();
         for index in (0..original.changes.len()).rev() {
+            if error.is_some() {
+                break;
+            }
             if !handled.insert(index) {
                 continue;
             }
@@ -41,11 +55,22 @@ impl Worker {
                 group.sort_by(|a, b| b.cmp(a));
             }
             let result = self
-                .recover_group(&original, &group, movement, &initial)
+                .recover_group(
+                    &original,
+                    &group,
+                    movement,
+                    &initial,
+                    expected.as_mut().unwrap(),
+                    &applied,
+                )
                 .await;
             match result {
                 Ok(true) => {
                     applied.extend(group);
+                    if let Some(failure) = self.cleanup_error.take() {
+                        error = Some(failure);
+                        break;
+                    }
                 }
                 Ok(false) => {}
                 Err(failure) => {
@@ -68,7 +93,11 @@ impl Worker {
         });
         // Inverse directory identities describe the complete result, not an intermediate empty container.
         for change in &mut self.receipt.changes {
-            if let Ok(stamp) = snapshot::stamp(&change.path) {
+            if let Ok(stamp) = expected
+                .as_ref()
+                .map_err(Clone::clone)
+                .and_then(|tree| tree.stamp(&change.path))
+            {
                 change.after = stamp;
             }
         }
@@ -92,6 +121,8 @@ impl Worker {
         group: &[usize],
         movement: Option<(PathBuf, PathBuf)>,
         initial: &HashMap<PathBuf, Result<Stamp, String>>,
+        expected: &mut Tree,
+        applied: &HashSet<usize>,
     ) -> Result<bool, String> {
         self.check_cancel()?;
         let paths: Vec<_> = group
@@ -114,13 +145,16 @@ impl Worker {
         self.events
             .unbounded_send(Event::ReviewRecovery {
                 paths: paths.clone(),
-                preserve,
+                preserve: preserve.clone(),
                 changed,
                 reply,
             })
             .map_err(|_| t!("transfer.window_closed").to_string())?;
         let Decision {
-            choice, discard, ..
+            choice,
+            discard,
+            approvals,
+            ..
         } = answer
             .await
             .map_err(|_| t!("transfer.cancelled").to_string())?;
@@ -142,12 +176,7 @@ impl Worker {
             let change = &original.changes[*index];
             check_recovery_path(&change.path)?;
             let current = snapshot::stamp(&change.path)?;
-            if !matches!(change.after, Stamp::Directory(_))
-                && initial
-                    .get(&change.path)
-                    .and_then(|stamp| stamp.as_ref().ok())
-                    != Some(&current)
-            {
+            if expected.stamp(&change.path)? != current {
                 // A change after the review's inspection is new information, not covered by force consent.
                 return Err(format!(
                     "{}: {}",
@@ -157,7 +186,11 @@ impl Worker {
             }
             // A parent container cannot remove a leaf the user just skipped, or a new unreviewed child.
             if matches!(change.after, Stamp::Directory(_))
-                && !changed
+                && original.changes.iter().enumerate().any(|(other, child)| {
+                    child.path != change.path
+                        && child.path.starts_with(&change.path)
+                        && !applied.contains(&other)
+                })
                 && std::fs::read_dir(&change.path)
                     .ok()
                     .is_some_and(|mut entries| entries.next().is_some())
@@ -171,65 +204,68 @@ impl Worker {
                 snapshot::stamp(&change.path)?,
             ));
         }
-        let mut restored = 0;
+        let mut entries = Vec::new();
         for (position, index) in group.iter().enumerate() {
             let change = &original.changes[*index];
-            let result = (|| {
-                check_recovery_path(&change.path)?;
-                if snapshot::stamp(&change.path)? != before[position].2 {
-                    return Err(t!("transfer.changed").to_string());
-                }
-                snapshot::restore(&change.before, &change.path)
-            })();
-            if let Err(failure) = result {
-                let mut failures = vec![format!("{}: {failure}", change.path.display())];
-                // Restore every attempted endpoint, including a directory restoration that failed midway.
-                for (path, saved, _) in before.iter().take(restored + 1).rev() {
-                    if let Err(rollback) = snapshot::restore(saved, path) {
-                        failures.push(format!("{}: {rollback}", path.display()));
-                    }
-                }
-                return Err(failures.join("\n"));
+            let entry = Entry::restore(&change.path, &change.before, before[position].1.clone())?;
+            if snapshot::stamp(&change.path)? != before[position].2 {
+                return Err(t!("transfer.changed").to_string());
             }
-            restored += 1;
+            entries.push(entry);
+        }
+        let after: Vec<_> = entries
+            .iter()
+            .map(|entry| (entry.path.clone(), entry.after.clone()))
+            .collect();
+        let approvals = self
+            .publish(Plan {
+                entries,
+                root: None,
+                movement: movement
+                    .as_ref()
+                    .map(|(old, new)| (new.clone(), old.clone())),
+                protection: Protection::Recovery {
+                    paths: paths.clone(),
+                    preserve,
+                    approvals,
+                    discard,
+                },
+            })
+            .await?;
+        for (path, node) in after {
+            expected.replace(&path, node)?;
         }
         for (path, before, _) in before {
             self.receipt.changes.push(Change {
-                after: snapshot::stamp(&path)?,
+                after: expected.stamp(&path)?,
                 path,
                 before,
             });
+        }
+        if let Some((old, new)) = &movement {
+            self.receipt.moves.push((new.clone(), old.clone()));
+            for file in &mut self.watched {
+                if file.path == *new {
+                    file.path = old.clone();
+                }
+            }
         }
         if discard {
             let documents = self
                 .watched
                 .iter()
-                .filter(|file| paths.iter().any(|path| file.path.starts_with(path)))
+                .filter(|file| approvals.iter().any(|approval| file.path == approval.path))
                 .cloned()
                 .collect::<Vec<_>>();
             let (reply, applied) = oneshot::channel();
             let _ = self.events.unbounded_send(Event::Discard {
+                approvals,
                 update: Reconciliation {
                     snapshot: None,
                     documents: read_documents(&documents),
                     renames: Vec::new(),
                     native: true,
                 },
-                reply,
-            });
-            let _ = applied.await;
-        }
-        if let Some((old, new)) = movement {
-            self.receipt.moves.push((new.clone(), old.clone()));
-            for file in &mut self.watched {
-                if file.path == new {
-                    file.path = old.clone();
-                }
-            }
-            let (reply, applied) = oneshot::channel();
-            let _ = self.events.unbounded_send(Event::Moved {
-                old: new,
-                new: old,
                 reply,
             });
             let _ = applied.await;
@@ -246,25 +282,5 @@ impl Worker {
 
 /// Recovery may return to an explicitly recorded external source; every existing ancestor must remain a real directory.
 fn check_recovery_path(path: &Path) -> Result<(), String> {
-    snapshot::check_native_path(path)?;
-    let mut ancestor = path;
-    loop {
-        match std::fs::symlink_metadata(ancestor) {
-            Ok(metadata) if snapshot::is_link(&metadata) => {
-                return Err(format!(
-                    "{}: {}",
-                    ancestor.display(),
-                    t!("transfer.link_target")
-                ));
-            }
-            Ok(_) => {}
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-            Err(error) => return Err(format!("{}: {error}", ancestor.display())),
-        }
-        match ancestor.parent() {
-            Some(parent) => ancestor = parent,
-            None => break,
-        }
-    }
-    Ok(())
+    snapshot::check_ancestors(path)
 }

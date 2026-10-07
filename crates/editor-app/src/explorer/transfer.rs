@@ -1,18 +1,23 @@
 //! Application-facing transfer state; one worker serves paste, native drop and tree drag.
 
 pub(crate) mod clipboard;
+mod fingerprint;
 mod history;
 mod operation;
 mod prompt;
+mod publication;
 mod recovery;
+mod resources;
 pub(crate) mod shortcuts;
 mod snapshot;
+#[cfg(test)]
+mod tests;
 
 use crate::*;
 use futures::channel::{mpsc, oneshot};
 use gpui_kit::AnyElement;
 pub(crate) use operation::Kind;
-use operation::{Choice, Decision, Event, Outcome, Receipt, Worker};
+use operation::{Approval, Choice, Decision, Event, Outcome, Receipt, Worker};
 use std::sync::atomic::{AtomicBool, Ordering};
 
 /// Session disk history is separate from each document's text undo stack.
@@ -23,6 +28,8 @@ pub(crate) struct TransferState {
     undo: Vec<Receipt>,
     redo: Vec<Receipt>,
     deferred_renames: Vec<(PathBuf, PathBuf)>,
+    resources: Arc<resources::Resources>,
+    closing: bool,
 }
 
 struct Active {
@@ -58,6 +65,12 @@ impl Drop for TransferState {
 }
 
 impl TransferState {
+    /// The application quit observer owns this registry independently of the window/entity lifetime.
+    pub(crate) fn install_shutdown(&self, cx: &mut App) {
+        let resources = self.resources.clone();
+        cx.on_app_quit(move |cx| resources.cleanup(cx.background_executor()))
+            .detach();
+    }
     pub(crate) fn is_running(&self) -> bool {
         self.active.is_some()
     }
@@ -72,6 +85,32 @@ impl TransferState {
 }
 
 impl EditorApp {
+    /// Normal window close waits for cancellation and background cleanup instead of relying on GPUI's short quit timeout.
+    pub(crate) fn close_file_transfer_session(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        if self.file_transfers.closing {
+            return false;
+        }
+        if self.file_transfers.resources.is_empty() {
+            return true;
+        }
+        self.file_transfers.closing = true;
+        self.file_transfers.prompt.take();
+        let cleanup = self
+            .file_transfers
+            .resources
+            .cleanup(cx.background_executor());
+        cx.spawn_in(window, async move |_, cx| {
+            cleanup.await;
+            let _ = cx.update(|window, _| window.remove_window());
+        })
+        .detach();
+        cx.notify();
+        false
+    }
     /// Clipboard paste enters the shared policy and retains the exact cut offer for later cleanup.
     pub(crate) fn paste_file_offer(
         &mut self,
@@ -79,7 +118,7 @@ impl EditorApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.file_transfers.is_running() {
+        if self.file_transfers.is_running() || self.file_transfers.closing {
             self.file_transfer_error(t!("transfer.busy").to_string(), cx);
             return;
         }
@@ -129,7 +168,7 @@ impl EditorApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.file_transfers.is_running() {
+        if self.file_transfers.is_running() || self.file_transfers.closing {
             self.file_transfer_error(t!("transfer.busy").to_string(), cx);
             return;
         }
@@ -169,6 +208,7 @@ impl EditorApp {
             events,
             cancel.clone(),
             label,
+            self.file_transfers.resources.clone(),
         ) {
             Ok(worker) => worker,
             Err(error) => {
@@ -256,6 +296,87 @@ impl EditorApp {
             Event::Authorize { target, reply } => {
                 let _ = reply.send(!self.dirty_transfer_target(&target));
             }
+            Event::Publish { mut plan, reply } => {
+                let allowed = match &plan.protection {
+                    publication::Protection::Ordinary { targets } => {
+                        !targets.iter().any(|path| self.dirty_transfer_target(path))
+                    }
+                    publication::Protection::Recovery {
+                        paths,
+                        preserve,
+                        approvals,
+                        discard,
+                    } => self
+                        .tabs
+                        .iter()
+                        .filter(|tab| paths.iter().any(|path| tab.path().starts_with(path)))
+                        .all(|tab| {
+                            let Some(text) = &tab.text else {
+                                return true;
+                            };
+                            if !discard && preserve.iter().any(|path| tab.path().starts_with(path))
+                            {
+                                return true;
+                            }
+                            approvals.iter().any(|approval| {
+                                approval.path == tab.path()
+                                    && approval.file_id == tab.file_id
+                                    && approval.revision == text.session.revision()
+                                    && approval.capability_revision == text.capability_revision
+                            }) && (*discard || !text.session.is_dirty())
+                        }),
+                };
+                let result = if self
+                    .file_transfers
+                    .active
+                    .as_ref()
+                    .is_none_or(|active| active.cancel.load(Ordering::Relaxed))
+                {
+                    Err(t!("transfer.cancelled").to_string())
+                } else if allowed {
+                    plan.commit()
+                } else {
+                    Err(t!("transfer.new_edits_preserved").to_string())
+                };
+                if result.is_ok()
+                    && let Some((old, new)) = &plan.movement
+                {
+                    // Commit and path migration share one UI turn, so a newly dirty target cannot appear between them.
+                    self.retarget_transferred_documents(old, new, window, cx);
+                }
+                let approvals =
+                    if let publication::Protection::Recovery { approvals, .. } = &plan.protection {
+                        self.tabs
+                            .iter()
+                            .filter(|tab| {
+                                approvals
+                                    .iter()
+                                    .any(|approval| approval.file_id == tab.file_id)
+                            })
+                            .filter_map(|tab| {
+                                tab.text.as_ref().map(|text| Approval {
+                                    path: tab.path().to_path_buf(),
+                                    file_id: tab.file_id,
+                                    revision: text.session.revision(),
+                                    capability_revision: text.capability_revision,
+                                })
+                            })
+                            .collect()
+                    } else {
+                        Vec::new()
+                    };
+                if let Err(undelivered) = reply.send(publication::ResultWithPlan {
+                    plan,
+                    result,
+                    approvals,
+                }) {
+                    cx.background_executor()
+                        .spawn(async move {
+                            drop(undelivered);
+                        })
+                        .detach();
+                }
+            }
             Event::Conflict {
                 source,
                 target,
@@ -290,10 +411,6 @@ impl EditorApp {
                     active.bytes = bytes;
                 }
             }
-            Event::Moved { old, new, reply } => {
-                self.retarget_transferred_documents(&old, &new, window, cx);
-                let _ = reply.send(());
-            }
             Event::ReviewRecovery {
                 paths,
                 preserve,
@@ -302,8 +419,12 @@ impl EditorApp {
             } => {
                 self.review_file_recovery(paths, preserve, changed, reply, window, cx);
             }
-            Event::Discard { update, reply } => {
-                self.discard_recovered_documents(update, window, cx);
+            Event::Discard {
+                update,
+                approvals,
+                reply,
+            } => {
+                self.discard_recovered_documents(update, approvals, window, cx);
                 let _ = reply.send(());
             }
         }

@@ -560,7 +560,16 @@ impl EditorApp {
         cx.notify();
         // The close is attempted again now that the decision is recorded.
         if let Some(window) = self.main_window {
-            let _ = window.update(cx, |_, window, _| window.remove_window());
+            let app = cx.entity().downgrade();
+            cx.defer(move |cx| {
+                let _ = window.update(cx, |_, window, cx| {
+                    let _ = app.update(cx, |app, cx| {
+                        if app.close_file_transfer_session(window, cx) {
+                            window.remove_window();
+                        }
+                    });
+                });
+            });
         }
     }
 

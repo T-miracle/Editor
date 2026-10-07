@@ -1685,6 +1685,12 @@ transfer.unsupported:
 transfer.changed:
   en: "Disk content changed while the operation was being prepared; retry after reviewing it"
   zh-CN: "准备操作期间磁盘内容发生变化，请核对后重试"
+transfer.new_edits_preserved:
+  en: "The document changed after confirmation. New edits were preserved; review the file operation again."
+  zh-CN: "确认后文档又发生了修改，已保留新输入，请重新核对文件操作。"
+transfer.rollback_backup:
+  en: "Rollback could not restore this entry. Its parked original was retained here for recovery."
+  zh-CN: "回滚未能恢复此项，原始内容已保留在此位置，可用于恢复。"
 transfer.invalid_directory:
   en: "The destination is not a directory"
   zh-CN: "目标不是目录"

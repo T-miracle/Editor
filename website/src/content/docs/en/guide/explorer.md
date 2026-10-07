@@ -27,9 +27,9 @@ The tree follows the `.gitignore` and `.ignore` files inside the workspace, incl
 ones and negation rules, with `.ignore` taking precedence. Files that those rules exclude are
 not listed.
 
-Nothing outside the workspace root is read: parent directories, global ignore files and
-symbolic links are not followed. That keeps the tree predictable and keeps the editor from
-walking into a linked directory outside your project.
+Tree listing stays inside the workspace root: parent directories and global ignore files are
+not read, and symbolic links are not followed. Files you explicitly offer for import can be
+read from outside the project.
 
 ## Toolbar
 
@@ -85,6 +85,6 @@ edits. Redo also checks for new conflicts. New-file and delete commands are outs
 transfer history.
 
 Windows system file clipboard and drag input have dedicated support. macOS reuses native file
-paths and file-URI clipboard offers; Finder cut intent has not been verified. Linux file-URI
+paths and file-URI clipboard offers; native Finder cut intent is not implemented. Linux file-URI
 offers are supported, but native file clipboard support depends on the platform backend.
 macOS and Linux have not received the Windows native interaction acceptance run.

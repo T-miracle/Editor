@@ -4,7 +4,7 @@
 
 整理日期：2026-10-07。
 
-状态：产品交互与测试接缝均已确认；已发布为 GitHub [#76](https://github.com/T-miracle/Editor/issues/76)，待实施。实施工单拆分已批准并发布，不代表已通过行为验收。
+状态：产品交互与测试接缝均已确认；已发布为 GitHub [#76](https://github.com/T-miracle/Editor/issues/76)。三张实施工单已完成代码实现，正在核对最终原生验收与审查；实际通过范围见[验收记录](../verification/explorer-file-transfer.md)。
 
 ## Problem Statement
 

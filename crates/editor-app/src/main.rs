@@ -253,6 +253,8 @@ impl EditorApp {
         cx: &mut Context<Self>,
     ) -> Self {
         explorer::transfer::shortcuts::init(cx);
+        let file_transfers = explorer::transfer::TransferState::default();
+        file_transfers.install_shutdown(cx);
         let (file_watch, mut watch_updates) = FileWatch::start(workspace.clone());
         let closing = cx.entity().downgrade();
         window.on_window_should_close(cx, move |window, cx| {
@@ -262,7 +264,7 @@ impl EditorApp {
             closing
                 .update(cx, |app, cx| {
                     app.main_window = Some(handle);
-                    app.should_close_window(cx)
+                    app.should_close_window(cx) && app.close_file_transfer_session(window, cx)
                 })
                 .unwrap_or(true)
         });
@@ -421,7 +423,7 @@ impl EditorApp {
             explorer_edit: None,
             explorer_delete: None,
             explorer_menu: None,
-            file_transfers: Default::default(),
+            file_transfers,
             explorer_drag: Default::default(),
             tabs: Vec::new(),
             active_path: None,

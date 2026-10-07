@@ -47,7 +47,11 @@ pub(super) fn is_link(metadata: &fs::Metadata) -> bool {
 pub(super) fn check_target(root: &Path, path: &Path) -> Result<(), String> {
     check_native_path(path)?;
     let root_metadata = fs::symlink_metadata(root).map_err(|error| error.to_string())?;
-    if is_link(&root_metadata) || !root_metadata.is_dir() {
+    if is_link(&root_metadata)
+        || !root_metadata.is_dir()
+        || root.canonicalize().map_err(|error| error.to_string())? != root
+    {
+        // The workspace was canonical when opened; a replaced ancestor must not redirect later writes.
         return Err(t!("transfer.link_target").to_string());
     }
     let relative = path
@@ -119,6 +123,26 @@ pub(super) fn check_native_path(path: &Path) -> Result<(), String> {
                 }
             }
             _ => {}
+        }
+    }
+    Ok(())
+}
+
+/// Recovery and offered external move sources may leave the workspace; no existing ancestor may be a link.
+pub(super) fn check_ancestors(path: &Path) -> Result<(), String> {
+    check_native_path(path)?;
+    for ancestor in path.ancestors() {
+        match fs::symlink_metadata(ancestor) {
+            Ok(metadata) if is_link(&metadata) => {
+                return Err(format!(
+                    "{}: {}",
+                    ancestor.display(),
+                    t!("transfer.link_target")
+                ));
+            }
+            Ok(_) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(format!("{}: {error}", ancestor.display())),
         }
     }
     Ok(())

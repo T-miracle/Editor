@@ -82,6 +82,7 @@ impl EditorApp {
                         .debug_selector(move || format!("explorer-row-{index}").into())
                         .w_full()
                         .min_h(px(24.))
+                        .relative()
                         // Center the content within the whole row, including its minimum height.
                         .flex()
                         .items_center()
@@ -131,6 +132,7 @@ impl EditorApp {
                                 |drag, _, _, cx| cx.new(|_| drag.clone()),
                             )
                         })
+                        .child(app.render_tree_row_geometry(&row_path, is_folder, cx))
                         .on_drag_move(cx.listener({
                             let path = row_path.clone();
                             move |app,
@@ -286,6 +288,7 @@ impl EditorApp {
                     app.paste_file_offer(selected.as_deref(), window, cx);
                 },
             ))
+            .child(self.render_tree_geometry_start(cx))
             .child(tree)
             .child(self.render_tree_drag_events(cx))
             .when_some(self.explorer_drag.intent(), |root, copy| {
