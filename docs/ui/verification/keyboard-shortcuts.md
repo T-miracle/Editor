@@ -4,6 +4,8 @@
 
 状态：全部三单已交付。`495a1d0`、`66fb23a`、`9d91893` 已推送主分支，#81、#82、#83 均读回为 `closed` / `completed`。最终自动验证、两轴审查及必要原生组合验收通过；父规格 #77 读回仍为 `open`，本次未改写或关闭。
 
+后续用户要求的 C 原型还原、四按钮及顶部圆角修正，见[独立增量验收记录](keyboard-shortcuts-ui-correction.md)；以下各阶段仍保留当时的真实结果。
+
 规格：[快捷键面板与用户绑定](../specs/keyboard-shortcuts.md)。工单：[01 → 02 → 03](../tickets/keyboard-shortcuts/README.md)，对应 [#81](https://github.com/T-miracle/Editor/issues/81) → [#82](https://github.com/T-miracle/Editor/issues/82) → [#83](https://github.com/T-miracle/Editor/issues/83)。父规格 #77 保持原样且不关闭。
 
 ## 工作树与证据范围

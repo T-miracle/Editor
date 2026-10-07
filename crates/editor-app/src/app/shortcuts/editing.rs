@@ -32,10 +32,6 @@ pub(super) enum Intent {
         id: String,
         index: Option<usize>,
     },
-    Remove {
-        id: String,
-        index: usize,
-    },
     Restore(String),
     /// Re-apply retained custom bindings after lifecycle suspension, never reset to defaults.
     Resolve(String),
@@ -49,7 +45,11 @@ pub(super) enum Mutation {
         bindings: Vec<Sequence>,
         original: Vec<Sequence>,
     },
-    Restore(String),
+    Restore {
+        id: String,
+        // Re-previewing after another window saves must not replace its newer bindings.
+        original: Vec<Sequence>,
+    },
 }
 
 /// Leaving never implies saving; replacing authorizes only the displayed revision.
@@ -78,7 +78,7 @@ impl ShortcutPanel {
                 .as_ref()
                 .is_some_and(|confirmation| match confirmation {
                     Confirmation::Replace {
-                        mutation: Mutation::Save { id, .. } | Mutation::Restore(id),
+                        mutation: Mutation::Save { id, .. } | Mutation::Restore { id, .. },
                         ..
                     } => missing(id),
                     _ => false,
@@ -115,7 +115,7 @@ impl ShortcutPanel {
         false
     }
 
-    /// Guard a tab, row, restore, delete or backdrop action before discarding an inline draft.
+    /// Guard a tab, row, external restore or backdrop action before discarding an inline draft.
     pub(super) fn request_edit_intent(
         &mut self,
         intent: Intent,
@@ -137,10 +137,7 @@ impl ShortcutPanel {
     /// Execute only after the owner has settled any pending draft.
     fn perform_edit_intent(&mut self, intent: Intent, window: &mut Window, cx: &mut Context<Self>) {
         let target = match &intent {
-            Intent::Edit { id, .. }
-            | Intent::Remove { id, .. }
-            | Intent::Restore(id)
-            | Intent::Resolve(id) => Some(id),
+            Intent::Edit { id, .. } | Intent::Restore(id) | Intent::Resolve(id) => Some(id),
             _ => None,
         };
         if target.is_some_and(|id| !self.operations.iter().any(|operation| operation.id == *id)) {
@@ -174,15 +171,13 @@ impl ShortcutPanel {
                 });
                 self.focus.focus(window, cx);
             }
-            Intent::Remove { id, index } => {
+            Intent::Restore(id) => {
                 if !self.editing_available(cx) {
                     return;
                 }
-                let result = cx
-                    .update_global::<BindingEngine, _>(|engine, cx| engine.remove(&id, index, cx));
-                self.finish_edit(result, window, cx);
+                let original = cx.global::<BindingEngine>().configured(&id);
+                self.preview_mutation(Mutation::Restore { id, original }, window, cx);
             }
-            Intent::Restore(id) => self.preview_mutation(Mutation::Restore(id), window, cx),
             Intent::Resolve(id) => {
                 if !self.editing_available(cx) {
                     return;
@@ -217,6 +212,48 @@ impl ShortcutPanel {
                 .update(cx, |search, cx| search.focus(window, cx));
         }
         cx.notify();
+    }
+
+    /// An explicit in-row restore replaces this draft, retaining it if review or persistence fails.
+    /// Restoring the operation's defaults still uses the normal conflict preview and consent.
+    fn restore_draft(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.editing_available(cx) {
+            return;
+        }
+        let Some(draft) = self.draft.as_ref() else {
+            return;
+        };
+        self.preview_mutation(
+            Mutation::Restore {
+                id: draft.id.clone(),
+                original: draft.original.clone(),
+            },
+            window,
+            cx,
+        );
+    }
+
+    /// Delete only the stored sequence being edited, never a new unsaved capture or a sibling.
+    /// Compare the original list before using its index so another window cannot redirect deletion.
+    fn delete_draft_binding(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.editing_available(cx) {
+            return;
+        }
+        let Some(draft) = self.draft.as_ref() else {
+            return;
+        };
+        let Some(index) = draft.index else {
+            return;
+        };
+        let id = draft.id.clone();
+        let original = draft.original.clone();
+        let result = cx.update_global::<BindingEngine, _>(|engine, cx| {
+            if engine.configured(&id) != original {
+                return Err(BindingError::StaleRevision);
+            }
+            engine.remove(&id, index, cx)
+        });
+        self.finish_edit(result, window, cx);
     }
 
     /// Return true only for consumed draft input; focused buttons retain native activation.
@@ -341,7 +378,13 @@ impl ShortcutPanel {
                     engine.validate(id, bindings)
                 }
             }
-            Mutation::Restore(id) => engine.validate_restore(id),
+            Mutation::Restore { id, original } => {
+                if engine.configured(id) != *original {
+                    Err(BindingError::StaleRevision)
+                } else {
+                    engine.validate_restore(id)
+                }
+            }
         };
         match preview {
             Ok(conflicts) if !conflicts.is_empty() => {
@@ -374,7 +417,7 @@ impl ShortcutPanel {
             Mutation::Save { id, bindings, .. } => {
                 engine.save_at_revision(id, bindings, replace, revision, cx)
             }
-            Mutation::Restore(id) => engine.restore_at_revision(id, replace, revision, cx),
+            Mutation::Restore { id, .. } => engine.restore_at_revision(id, replace, revision, cx),
         });
         if matches!(result, Err(BindingError::StaleRevision)) {
             // Refresh the preview, requiring another click if the conflict set changed.

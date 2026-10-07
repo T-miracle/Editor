@@ -2,7 +2,7 @@
 
 use super::*;
 use crate::ui::controls::{
-    Input, shortcut_footer, shortcut_keycaps, shortcut_list, shortcut_modal, shortcut_row,
+    Icon, Input, shortcut_footer, shortcut_keycaps, shortcut_list, shortcut_modal, shortcut_row,
     shortcut_search, shortcut_tabs,
 };
 
@@ -59,7 +59,15 @@ impl Render for ShortcutPanel {
                 .flex()
                 .flex_col()
                 .gap_1()
-                .child(operation.title.clone())
+                .child(div().truncate().child(operation.title.clone()))
+                .when(self.is_editing(&operation.id), |description| {
+                    description.child(
+                        div()
+                            .text_sm()
+                            .text_color(cx.theme().muted_foreground)
+                            .child(t!("shortcuts.edit.press_new").to_string()),
+                    )
+                })
                 .when(suspended, |description| {
                     // The retained keycaps describe configuration, not an active conflicting key.
                     description.child(
@@ -108,13 +116,17 @@ impl Render for ShortcutPanel {
             cx,
         );
         let field = div()
+            .id("shortcuts-key-search")
             .debug_selector(|| "shortcuts-search".into())
-            .h(px(28.))
+            .h(px(36.))
             .when(self.key_search, |field| {
                 field
                     .flex()
                     .items_center()
                     .px_2()
+                    // Keep long recorded sequences inside the fixed search height, as text input
+                    // does. Horizontal scrolling exposes every cap without overlapping the list.
+                    .overflow_x_scroll()
                     .child(if self.capture.strokes.is_empty() {
                         div()
                             .text_sm()
@@ -123,18 +135,29 @@ impl Render for ShortcutPanel {
                             .into_any_element()
                     } else {
                         shortcut_keycaps(&capture::display(&self.capture.strokes), cx)
+                            .debug_selector(|| "shortcuts-search-keycaps".into())
+                            .flex_nowrap()
+                            .flex_shrink_0()
+                            .into_any_element()
                     })
             })
             .when(!self.key_search, |field| {
-                field.child(Input::new(&self.search).bordered(false))
+                field.child(
+                    Input::new(&self.search)
+                        .appearance(false)
+                        .h(px(36.))
+                        .text_base(),
+                )
             })
             .into_any_element();
         let toggle = Button::new("shortcuts-capture")
             .debug_selector(|| "shortcuts-capture".into())
-            .small()
-            .ghost()
+            .compact()
+            .outline()
+            .w(px(44.))
+            .h(px(40.))
             .disabled(self.confirm.is_some())
-            .label("⌨")
+            .icon(Icon::default().path("icons/keyboard.svg"))
             .accessibility_label(t!("shortcuts.capture").to_string())
             .tooltip(t!("shortcuts.capture").to_string())
             .on_click(cx.listener(Self::toggle_capture_click))
@@ -148,17 +171,20 @@ impl Render for ShortcutPanel {
             .when(recording, |row| row.opacity(0.5))
             .child(t!("shortcuts.switch_tabs").to_string())
             .child(shortcut_keycaps(&["Alt+←".into()], cx))
-            .child("/")
             .child(shortcut_keycaps(&["Alt+→".into()], cx))
             .into_any_element();
         let footer = shortcut_footer(
             div()
+                .flex()
+                .items_center()
+                .gap_2()
+                .child(shortcut_keycaps(&["Esc".into()], cx))
                 .child(if recording {
-                    t!("shortcuts.capture_help").to_string()
+                    t!("shortcuts.help.capture").to_string()
                 } else if self.draft.is_some() {
-                    t!("shortcuts.edit.help").to_string()
+                    t!("shortcuts.help.edit").to_string()
                 } else {
-                    t!("shortcuts.close_help").to_string()
+                    t!("shortcuts.help.close").to_string()
                 })
                 .into_any_element(),
             navigation,

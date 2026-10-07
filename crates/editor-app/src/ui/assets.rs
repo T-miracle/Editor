@@ -3,8 +3,8 @@
 use gpui_kit::{AssetSource, Result, SharedString, assets::Assets};
 use std::borrow::Cow;
 
-// Embed only these extra catalog icons; the default bundle intentionally omits them.
-gpui_kit::assets::icon_assets!(ConfigurationIcons, [Lock, SquarePen]);
+// The default bundle omits these configuration and shortcut actions; embed their catalog SVGs.
+gpui_kit::assets::icon_assets!(ConfigurationIcons, [Lock, SquarePen, Keyboard, RotateCcw]);
 
 macro_rules! file_icons {
     ($($path:literal => $file:literal),+ $(,)?) => {
@@ -121,12 +121,14 @@ mod tests {
         }
     }
 
-    /// Locked plugin actions and editable user steps resolve from the selected extra icon bundle.
+    /// Configuration and shortcut controls resolve from the selected extra icon bundle.
     #[test]
     fn exposes_configuration_action_icons() {
         for icon in [
             gpui_kit::assets::IconName::Lock,
             gpui_kit::assets::IconName::SquarePen,
+            gpui_kit::assets::IconName::Keyboard,
+            gpui_kit::assets::IconName::RotateCcw,
         ] {
             let path = icon.path();
             assert!(AppAssets.load(&path).unwrap().is_some());

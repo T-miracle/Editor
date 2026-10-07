@@ -67,6 +67,37 @@ pub(crate) fn with_editor_profile(
     scenario(visual, application, &path);
 }
 
+/// Create another real editor without reinitializing the app or replacing the shared profile.
+pub(super) fn second_editor_window(
+    visual: &mut VisualTestContext,
+    directory: &Path,
+) -> (Entity<EditorApp>, VisualTestContext) {
+    let path = directory.join("second.txt");
+    std::fs::write(&path, "second workspace").unwrap();
+    let workspace = Workspace::open(directory).unwrap();
+    let mut app = None;
+    let handle = visual.update(|_, cx| {
+        cx.open_window(Default::default(), |window, cx| {
+            let editor = cx.new(|cx| EditorApp::new(workspace, Some(path), window, cx));
+            app = Some(editor.clone());
+            cx.new(|cx| Root::new(editor, window, cx))
+        })
+        .unwrap()
+    });
+    let app = app.unwrap();
+    let mut other = VisualTestContext::from_window(handle.into(), &visual.cx);
+    other.simulate_resize(size(px(1100.), px(850.)));
+    other.update(|window, cx| {
+        app.read(cx)
+            .editor
+            .read(cx)
+            .focus_handle(cx)
+            .focus(window, cx);
+    });
+    draw(&mut other);
+    (app, other)
+}
+
 /// Refresh the rendered input tree after a user gesture.
 pub(super) fn draw(visual: &mut VisualTestContext) {
     visual.run_until_parked();

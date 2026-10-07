@@ -1,8 +1,7 @@
 //! Verifies edited bindings against real Base inputs, document sessions and native windows.
 
-use super::shortcuts::{click, draw, with_editor};
+use super::shortcuts::{click, draw, second_editor_window, with_editor};
 use crate::{EditorApp, ui::controls::Input};
-use editor_core::Workspace;
 use gpui_base::input::{InputEvent, InputState};
 use gpui_kit::{
     AppContext as _, ClipboardItem, Context, Entity, Focusable, IntoElement, ParentElement, Render,
@@ -57,37 +56,6 @@ fn native_input_window(
     native.update(|window, cx| input.read(cx).focus_handle(cx).focus(window, cx));
     draw(&mut native);
     (input, native, events)
-}
-
-/// Create another real editor without reinitializing the app or replacing the shared profile.
-fn second_editor_window(
-    visual: &mut VisualTestContext,
-    directory: &std::path::Path,
-) -> (Entity<EditorApp>, VisualTestContext) {
-    let path = directory.join("second.txt");
-    std::fs::write(&path, "second workspace").unwrap();
-    let workspace = Workspace::open(directory).unwrap();
-    let mut app = None;
-    let handle = visual.update(|_, cx| {
-        cx.open_window(Default::default(), |window, cx| {
-            let editor = cx.new(|cx| EditorApp::new(workspace, Some(path), window, cx));
-            app = Some(editor.clone());
-            cx.new(|cx| Root::new(editor, window, cx))
-        })
-        .unwrap()
-    });
-    let app = app.unwrap();
-    let mut other = VisualTestContext::from_window(handle.into(), &visual.cx);
-    other.simulate_resize(size(px(1100.), px(850.)));
-    other.update(|window, cx| {
-        app.read(cx)
-            .editor
-            .read(cx)
-            .focus_handle(cx)
-            .focus(window, cx);
-    });
-    draw(&mut other);
-    (app, other)
 }
 
 /// Search ordinary text so the selected operation stays tied to the original input scope.
@@ -206,6 +174,15 @@ fn shortcuts_controls_copy_and_document_edits_across_native_roots(cx: &mut TestA
         draw(visual);
         assert_eq!(clipboard(visual), "capture sentinel");
         assert!(visual.debug_bounds("shortcuts-pending").is_none());
+        // A long query stays on one line inside a small fixed-height search viewport.
+        visual.simulate_resize(size(px(500.), px(430.)));
+        draw(visual);
+        let field = visual.debug_bounds("shortcuts-search").unwrap();
+        let caps = visual.debug_bounds("shortcuts-search-keycaps").unwrap();
+        assert!(caps.top() >= field.top());
+        assert!(caps.bottom() <= field.bottom());
+        visual.simulate_resize(size(px(1100.), px(850.)));
+        draw(visual);
         visual.simulate_keystrokes("escape escape");
         draw(visual);
         copies_only_with_new_key(visual, "ctrl-alt-c ctrl-alt-v", "alpha beta");
@@ -255,7 +232,8 @@ fn shortcuts_controls_opener_and_enter_variants(cx: &mut TestAppContext) {
         visual.simulate_keystrokes("ctrl-alt-k alt-right");
         draw(visual);
         search(visual, &title);
-        click(visual, "shortcut-delete-shortcuts::OpenShortcuts-0");
+        click(visual, "shortcut-binding-shortcuts::OpenShortcuts-0");
+        click(visual, "shortcuts-edit-delete");
         visual.simulate_keystrokes("escape ctrl-alt-k ctrl-k");
         draw(visual);
         assert!(visual.debug_bounds("shortcuts-panel").is_none());
@@ -265,7 +243,8 @@ fn shortcuts_controls_opener_and_enter_variants(cx: &mut TestAppContext) {
         visual.simulate_keystrokes("alt-right");
         draw(visual);
         search(visual, &title);
-        click(visual, "shortcut-restore-shortcuts::OpenShortcuts");
+        click(visual, "shortcut-add-shortcuts::OpenShortcuts");
+        click(visual, "shortcuts-edit-restore");
         visual.simulate_keystrokes("escape ctrl-k");
         draw(visual);
         assert!(visual.debug_bounds("shortcuts-panel").is_some());

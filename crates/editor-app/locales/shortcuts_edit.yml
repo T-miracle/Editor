@@ -15,6 +15,21 @@ shortcuts.edit.restore:
 shortcuts.edit.record:
   en: "Record shortcut"
   zh-CN: "录入快捷键"
+shortcuts.edit.press_new:
+  en: "Press a new shortcut"
+  zh-CN: "按下新快捷键"
+shortcuts.edit.delete_binding:
+  en: "Delete binding"
+  zh-CN: "删除绑定"
+shortcuts.help.capture:
+  en: "Cancel capture"
+  zh-CN: "取消录入"
+shortcuts.help.edit:
+  en: "Cancel editing"
+  zh-CN: "取消编辑"
+shortcuts.help.close:
+  en: "Close"
+  zh-CN: "关闭"
 shortcuts.edit.cancel:
   en: "Cancel"
   zh-CN: "取消"

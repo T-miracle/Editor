@@ -68,9 +68,11 @@ combinations pressed in order; the second combination must arrive within two sec
 ends recording first; when editing a binding, it cancels the draft without saving. Another `Esc`
 closes the panel and restores the previous focus. Clicking the shaded background also closes it.
 
-Click a binding to edit it, or use a row's controls to add another binding, remove one, or restore
-the defaults. New letter and digit combinations require a modifier beyond `Shift`, such as `Ctrl`
-or `Alt`. Save applies the change
+Click a binding to edit it, or use the row's plus button to add another. The expanded row offers
+**Restore defaults**, **Delete binding**, **Cancel**, and **Save**. Delete removes the stored
+binding you selected and keeps its other bindings; it is unavailable for an unsaved addition.
+Restore resets the action's bindings after any conflicts are explicitly resolved. New letter and
+digit combinations require a modifier beyond `Shift`, such as `Ctrl` or `Alt`. Save applies the change
 immediately to all windows and keeps it across restarts and workspaces. Each action still uses
 its own focus context. If a binding conflicts, review the affected actions and explicitly replace
 the conflicting bindings; their other bindings stay available. Leaving an unsaved edit asks

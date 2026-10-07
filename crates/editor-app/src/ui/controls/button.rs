@@ -80,6 +80,7 @@ pub(crate) struct Button {
     loading: bool,
     disabled: bool,
     content_full_width: bool,
+    reveal_group: Option<SharedString>,
 }
 
 impl Button {
@@ -108,6 +109,7 @@ impl Button {
             loading: false,
             disabled: false,
             content_full_width: false,
+            reveal_group: None,
         }
     }
 
@@ -206,6 +208,13 @@ impl Button {
 
     pub(crate) fn compact(mut self) -> Self {
         self.compact = true;
+        self
+    }
+
+    /// Reveal secondary row actions on pointer hover or keyboard focus, retaining their tab order.
+    /// The named parent group owns hover; Base still owns this button's focus and activation.
+    pub(crate) fn reveal_on_hover(mut self, group: impl Into<SharedString>) -> Self {
+        self.reveal_group = Some(group.into());
         self
     }
 }
@@ -312,6 +321,12 @@ impl RenderOnce for Button {
             .styles(|styles| styles.disabled(|style| style.opacity(0.5)))
             .child(content)
             .refine_style(&self.style)
+            .when_some(self.reveal_group, |button, group| {
+                button
+                    .opacity(0.)
+                    .group_hover(group, |style| style.opacity(1.))
+                    .focus_visible(|style| style.opacity(1.))
+            })
             .when_some(self.tooltip, |this, tooltip| {
                 this.tooltip(move |window, cx| Tooltip::new(tooltip.clone()).build(window, cx))
             })

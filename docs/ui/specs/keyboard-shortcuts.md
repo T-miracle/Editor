@@ -6,6 +6,8 @@
 
 状态：产品交互、C 视觉方案及应用级测试接缝已确认（2026-10-07），全部三单已交付并推送主分支，#81–#83 关闭状态已读回。实际结果和验证限制见[阶段验收记录](../verification/keyboard-shortcuts.md)。
 
+2026-10-07 后续补充：按 C 图还原比例和行内结构，增加恢复默认、删除绑定按钮，修复顶部 tab 外侧圆角；实际增量见[UI 修正验收](../verification/keyboard-shortcuts-ui-correction.md)。
+
 议题：[设计规格 #77](https://github.com/T-miracle/Editor/issues/77)，标签 `ready-for-agent`；三张实施工单已获批准并发布为 #81–#83，用户已授权执行，按依赖关系实施与验收；父规格保持原样且不关闭。
 
 ## Problem Statement
@@ -51,7 +53,7 @@
 25. As an editor user, I want to edit host, basic editing and plugin shortcuts in one place, so that I do not need separate configuration workflows.
 26. As an editor user, I want multiple bindings for an operation, so that I can retain a familiar shortcut while adding another.
 27. As an editor user, I want to add, change and delete individual bindings and restore an operation's defaults, so that I can maintain my configuration.
-28. As an editor user, I want to edit a binding inline with Save and Cancel, so that I keep the surrounding list context.
+28. As an editor user, I want to edit a binding inline with Restore defaults, Delete binding, Cancel and Save, so that I keep the surrounding list context.
 29. As an editor user, I want the previous binding retained until I save, so that partial input cannot change the active configuration.
 30. As an editor user, I want a saved binding to take effect immediately and survive restart, so that no extra reload or repeated setup is needed.
 31. As an editor user, I want the same user configuration across workspaces while retaining command scopes, so that consistency does not make panel actions fire elsewhere.
@@ -101,11 +103,12 @@
 ### 3. C 方案布局与本地 UI
 
 - 采用 C 方案的紧凑层级、细边框、键帽、蓝色焦点强调和行内展开编辑形式。原型展示深色主题，不取消项目已有浅色主题要求。
-- 默认宽约 760、高约 560 个逻辑像素；小窗口下自适应缩小。结果数量变化时不跟随内容伸缩。
+- 默认宽约 760、高约 680 个逻辑像素；按 2026-10-07 用户要求严格遵循 C 图的比例，替代初版 560 高度。小窗口下自适应缩小，结果数量变化时不跟随内容伸缩。
 - 从上到下依次为：全宽固定双 tab、固定搜索区、可滚动列表、固定底部提示区。
-- tab 文本为“面板快捷键”“全局快捷键”。搜索区包含搜索输入框和独立键盘按钮。
-- 列表左侧为操作描述，右侧为快捷键显示；无绑定的操作显示“未绑定”并可添加。
-- 只有列表滚动。顶部和底部区域不随列表滚动，行内编辑不能挤掉固定区域。
+- tab 文本为“面板快捷键”“全局快捷键”，两个外侧顶部圆角与弹层一致，内部接缝保持直线。搜索区包含放大镜、搜索输入框和独立键盘图标按钮。
+- 列表左侧为操作描述，右侧快捷键列的起点对齐；无绑定的操作显示紧凑“未绑定”按钮、添加和恢复图标。已有绑定行的添加和恢复图标在悬停或键盘焦点时显示。
+- 行内展开时，左侧显示描述和“按下新快捷键”说明，右侧显示蓝色描边的录入框，下方显示恢复默认、删除绑定、取消、保存四个按钮；不重复显示旧绑定。选中行使用轻背景、细边框及左侧强调线。
+- 只有列表区域垂直滚动；长按键搜索内容可在固定单行内水平查看。顶部和底部区域不随列表滚动，行内编辑不能挤掉固定区域。
 - 底部右侧固定使用文字和按键图标提示 `Alt+← / Alt+→` 切换 tab；录入时该切换行为暂不可用，提示应体现当前状态。
 - 可见控件以 `gpui-base` 行为为基础，参考 `gpui-component` 对应实现，外观由项目本地 UI 层组合。不得直接交付上游成品外观或复制整套上游源码。
 - 文案使用现有 i18n 机制，保留简体中文和英文；颜色和尺寸接入项目主题与缩放契约。
@@ -131,7 +134,9 @@
 
 ### 6. 行内编辑与未保存修改
 
-- 点击右侧快捷键在当前行录入新绑定，显示“保存 / 取消”。
+- 点击右侧快捷键在当前行录入新绑定，显示“恢复默认 / 删除绑定 / 取消 / 保存”。
+- “删除绑定”删除进入编辑时选中的已保存绑定，保留该操作其他绑定；新增草稿没有对应的已保存绑定，该按钮禁用。未保存的录入不会改变删除目标。
+- “恢复默认”恢复当前操作的全部默认绑定，并沿用冲突预览与显式替换；取消冲突确认保留草稿和已保存配置。删除或恢复前如果原配置已被其他窗口修改，保留草稿并提示重新编辑。
 - 编辑期间保持旧的已保存配置。明确保存并通过校验后，新绑定立即生效且持久保存。
 - 无效输入、尚未处理的冲突不能直接保存。
 - 关闭弹层、切换 tab 或开始编辑另一项时，如有未保存修改，提示“放弃修改 / 继续编辑”；选择放弃后才完成原操作。
@@ -147,6 +152,8 @@
 | 存在未保存修改 | 点击遮罩、切换 tab、编辑另一项 | 先选择放弃修改或继续编辑 |
 | 绑定编辑 | 保存且校验通过 | 应用并持久保存绑定 |
 | 绑定编辑 | 取消 | 放弃草稿，保留原绑定 |
+| 绑定编辑 | 删除绑定 | 删除选中的原已保存绑定，保留同操作的其他绑定 |
+| 绑定编辑 | 恢复默认 | 预览恢复该操作默认值；存在冲突时先明确选择 |
 
 ### 7. 连续快捷键与输入限制
 

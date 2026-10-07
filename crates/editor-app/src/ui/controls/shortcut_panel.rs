@@ -4,9 +4,9 @@ use std::rc::Rc;
 
 use gpui_kit::component::ActiveTheme as _;
 use gpui_kit::{
-    AnyElement, App, ElementId, FocusHandle, InteractiveElement, IntoElement, ParentElement,
+    AnyElement, App, Div, ElementId, FocusHandle, InteractiveElement, IntoElement, ParentElement,
     ScrollHandle, SharedString, StatefulInteractiveElement, Styled, Window, div,
-    prelude::FluentBuilder as _, px,
+    prelude::FluentBuilder as _, px, relative,
 };
 
 /// Render a centered, titleless shortcut modal within the current window.
@@ -25,7 +25,8 @@ pub(crate) fn shortcut_modal(
     // Fixed dimensions prevent filtering from moving the search field or footer. Leave a margin
     // on small windows without imposing a minimum size larger than the available viewport.
     let width = px(760.).min((viewport.width - px(32.)).max(px(0.)));
-    let height = px(560.).min((viewport.height - px(32.)).max(px(0.)));
+    // C's taller proportion leaves space for the expanded row and its four explicit actions.
+    let height = px(680.).min((viewport.height - px(32.)).max(px(0.)));
     let palette = cx.theme();
     let background = palette.popover;
     let foreground = palette.popover_foreground;
@@ -73,13 +74,15 @@ pub(crate) fn shortcut_modal(
 /// Each slice item represents one step; steps are separated by an arrow, while plus-separated
 /// keys within a step receive individual caps. An empty slice produces an empty element so the
 /// caller can supply a localized unbound label. This display helper never parses bindings.
-pub(crate) fn shortcut_keycaps(strokes: &[String], cx: &App) -> AnyElement {
+/// The returned div wraps by default; a fixed-height search viewport can override it to nowrap.
+pub(crate) fn shortcut_keycaps(strokes: &[String], cx: &App) -> Div {
     let palette = cx.theme();
     let mut row = div()
         .flex()
         .items_center()
-        .flex_shrink_0()
-        .gap(px(4.))
+        .min_w_0()
+        .flex_wrap()
+        .gap(px(6.))
         .text_sm()
         .text_color(palette.muted_foreground);
     for (step, stroke) in strokes.iter().enumerate() {
@@ -96,21 +99,22 @@ pub(crate) fn shortcut_keycaps(strokes: &[String], cx: &App) -> AnyElement {
             row = row.child(
                 div()
                     .flex()
+                    .flex_shrink_0()
                     .items_center()
                     .justify_center()
-                    .h(px(24.))
-                    .min_w(px(24.))
-                    .px(px(6.))
+                    .h(px(28.))
+                    .min_w(px(if key.len() > 1 { 40. } else { 30. }))
+                    .px(px(8.))
                     .rounded(px(4.))
                     .border_1()
                     .border_color(palette.border)
-                    .bg(palette.secondary)
+                    .bg(palette.button)
                     .text_color(palette.foreground)
                     .child(key.to_owned()),
             );
         }
     }
-    row.into_any_element()
+    row
 }
 
 /// Display a window-local next-step hint without adding a focusable command or click action.
@@ -173,11 +177,14 @@ pub(crate) fn shortcut_tabs(
         .flex()
         .flex_shrink_0()
         .w_full()
-        .h(px(42.))
-        .text_sm()
+        .h(px(50.))
+        .text_base()
+        .rounded_tl(palette.radius_lg)
+        .rounded_tr(palette.radius_lg)
         .border_b_1()
         .border_color(palette.border)
-        .in_focus(|style| style.border_color(palette.ring))
+        // Only keyboard focus emphasizes the whole strip; browsing retains the active underline.
+        .focus_visible(|style| style.border_color(palette.ring))
         .on_key_down(move |event, window, cx| {
             if event.keystroke.modifiers != Default::default() {
                 return;
@@ -205,6 +212,10 @@ pub(crate) fn shortcut_tabs(
                 .min_w_0()
                 .h_full()
                 .px_2()
+                // GPUI overflow clips the rectangular bounds, not a child's painted background.
+                // Round the two outer tabs themselves; the middle seam and underline stay straight.
+                .when(index == 0, |tab| tab.rounded_tl(palette.radius_lg))
+                .when(index == 1, |tab| tab.rounded_tr(palette.radius_lg))
                 .border_b_2()
                 .border_color(if active {
                     palette.primary
@@ -249,12 +260,18 @@ pub(crate) fn shortcut_search(
         .items_center()
         .flex_shrink_0()
         .w_full()
-        .p(px(16.))
-        .gap(px(8.))
+        .px(px(20.))
+        .py(px(18.))
+        .gap(px(12.))
         .child(
             div()
+                .flex()
+                .items_center()
+                .gap(px(10.))
                 .flex_1()
                 .min_w_0()
+                .h(px(40.))
+                .px(px(12.))
                 .rounded(palette.radius)
                 .border_1()
                 .border_color(if recording {
@@ -262,9 +279,14 @@ pub(crate) fn shortcut_search(
                 } else {
                     palette.border
                 })
-                .bg(palette.background)
+                .bg(palette.button)
                 .in_focus(|style| style.border_color(palette.ring))
-                .child(field),
+                .child(
+                    super::Icon::default()
+                        .path("icons/search.svg")
+                        .text_color(palette.muted_foreground),
+                )
+                .child(div().flex_1().min_w_0().child(field)),
         )
         .child(div().flex().items_center().flex_shrink_0().child(toggle))
         .into_any_element()
@@ -280,11 +302,12 @@ pub(crate) fn shortcut_list(rows: Vec<AnyElement>, scroll: &ScrollHandle, cx: &A
         .flex_col()
         .flex_1()
         .min_h_0()
-        .mx(px(16.))
-        .mb(px(12.))
+        .mx(px(20.))
+        .mb(px(16.))
         .rounded(cx.theme().radius)
         .border_1()
-        .border_color(cx.theme().border)
+        .border_color(cx.theme().border.opacity(0.7))
+        .bg(cx.theme().popover)
         .overflow_hidden()
         .child(
             div()
@@ -305,8 +328,8 @@ pub(crate) fn shortcut_list(rows: Vec<AnyElement>, scroll: &ScrollHandle, cx: &A
 
 /// Lay out an operation description on the left and its binding controls on the right.
 ///
-/// `id` stays stable across filtering. Supplying `editing` expands caller-owned capture, errors,
-/// and save/cancel controls under this row, with a selected background and accent edge. The row
+/// `id` stays stable across filtering. In an expanded row, `binding` supplies the right-column
+/// capture and `editing` supplies errors and four actions below, with a selected background. The row
 /// itself does not execute commands; buttons and inputs retain their own interaction semantics.
 pub(crate) fn shortcut_row(
     id: impl Into<ElementId>,
@@ -319,27 +342,28 @@ pub(crate) fn shortcut_row(
     let active = editing.is_some();
     div()
         .id(id)
+        .group("shortcut-row")
         .relative()
         .flex()
         .flex_col()
         .flex_shrink_0()
         .w_full()
-        .text_sm()
-        .border_b_1()
+        .text_base()
+        .when(!active, |row| row.border_b_1())
         .border_color(palette.border)
         .bg(if active {
-            palette.list_active
+            palette.list_hover
         } else {
             palette.popover
         })
         .when(active, |row| {
             // A separate accent preserves the neutral separator and does not shift row content.
-            row.child(
+            row.rounded(palette.radius).border_1().child(
                 div()
                     .absolute()
                     .left_0()
-                    .top_0()
-                    .bottom_0()
+                    .top(px(10.))
+                    .bottom(px(10.))
                     .w(px(2.))
                     .bg(palette.primary),
             )
@@ -348,16 +372,22 @@ pub(crate) fn shortcut_row(
             div()
                 .flex()
                 .items_center()
-                .justify_between()
-                .min_h(px(38.))
-                .px(px(12.))
-                .py(px(5.))
-                .gap(px(12.))
+                .min_h(px(44.))
+                .px(px(16.))
+                .py(px(if active { 12. } else { 6. }))
+                .gap(px(16.))
                 .child(div().flex_1().min_w_0().child(description))
-                .child(div().flex().items_center().flex_shrink_0().child(binding)),
+                // A bounded column aligns every keycap origin and still shrinks in small windows.
+                .child(
+                    div()
+                        .w(px(288.))
+                        .max_w(relative(0.58))
+                        .min_w_0()
+                        .child(binding),
+                ),
         )
         .when_some(editing, |row, editing| {
-            row.child(div().px(px(12.)).pb(px(10.)).child(editing))
+            row.child(div().px(px(16.)).pb(px(12.)).child(editing))
         })
         .into_any_element()
 }
@@ -374,15 +404,22 @@ pub(crate) fn shortcut_footer(leading: AnyElement, navigation: AnyElement, cx: &
         .justify_between()
         .flex_shrink_0()
         .w_full()
-        .min_h(px(44.))
-        .px(px(16.))
-        .py(px(8.))
+        .min_h(px(54.))
+        .px(px(20.))
+        .py(px(12.))
         .gap(px(12.))
         .border_t_1()
         .border_color(cx.theme().border)
         .text_sm()
         .text_color(cx.theme().muted_foreground)
         .child(div().min_w_0().child(leading))
-        .child(div().flex().items_center().justify_end().child(navigation))
+        .child(
+            div()
+                .flex()
+                .items_center()
+                .justify_end()
+                .min_w_0()
+                .child(navigation),
+        )
         .into_any_element()
 }
