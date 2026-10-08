@@ -31,12 +31,7 @@ fn roots(workspace: &Path) -> Vec<PathBuf> {
     #[cfg(not(test))]
     {
         let _ = workspace;
-        std::env::current_exe()
-            .ok()
-            .and_then(|path| path.parent().map(|parent| parent.join("plugins")))
-            .into_iter()
-            .chain([Path::new(env!("CARGO_MANIFEST_DIR")).join("../../dist/plugins")])
-            .collect()
+        crate::app::distribution::shipped_plugin_roots()
     }
 }
 

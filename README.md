@@ -14,19 +14,34 @@ Independent plugins provide language support, a terminal, Markdown and image pre
 
 ## Installation
 
-Nanobug is under active development. With the development prerequisites below installed, run these commands from the repository root to build a Windows distribution:
+Nanobug is under active development. On Windows, run `Nanobug-Setup-<version>-x64.exe` to install for your user account. The installer creates a Start menu entry, offers an optional desktop shortcut, and registers an uninstaller. It installs separate program and plugin files under `%LOCALAPPDATA%\Programs\Nanobug`; Rust and Cargo are not required to use them.
+
+Exit Nanobug before installing an update or uninstalling. Settings, history, and installed plugin data in the existing `MeEditor` directories are preserved. Windows installers include English and Simplified Chinese.
+
+With the development prerequisites below and [Inno Setup](https://jrsoftware.org/isdl.php) prepared, build the host directly:
 
 ```powershell
-# Build the Release executable, plugin packages, and first-use catalog.
-.\scripts\package-editor.ps1
-
-# Launch the packaged editor.
-.\dist\editor\Nanobug.exe
+# Build the native Release host; direct development launches also remain available.
+cargo build -p editor-app --release
+cargo run --release
 ```
 
-The output is in `dist/editor/`. Keep the adjacent `plugins/` directory when distributing or copying the application. Using the compiled editor and plugins does not require Rust or Cargo.
+Prepare the executable, plugin ZIPs, first-use catalog, icon, and licenses as described in [native packaging](installer/README.md). Then compile the prepared Windows payload directly from the repository root:
 
-Windows is the primary development and acceptance platform. macOS and Linux have not completed native or cross-build verification.
+```powershell
+# Read the actual host version and invoke the native installer compiler directly.
+$version = ((cargo metadata --no-deps --format-version 1 | ConvertFrom-Json).packages |
+    Where-Object name -eq 'editor-app').version
+$payload = (Resolve-Path .\dist\editor).Path
+$output = Join-Path $PWD 'dist/installers'
+ISCC.exe "/DPayloadDir=$payload" "/DInstallerDir=$output" "/DAppVersion=$version" .\installer\windows\nanobug.iss
+```
+
+Installers are written to `dist/installers/`; prepared runtime files remain in `dist/editor/`. Specify the compiler's full path if ISCC is not on PATH. Keep adjacent `plugins/` and `licenses/` directories for a portable copy.
+
+The repository contains no helper-script directory. Packaging must call Cargo, the host's public CLI, archive tools, and native installer tools directly; it must not invoke archived Codex helper scripts, including through wrappers.
+
+Phase one validated Windows installation, in-place repair, running-app protection, and uninstall. macOS application bundles, DMG/PKG, and Linux DEB/RPM use direct native tools; preparation and commands are documented in [native packaging](installer/README.md). Those platforms are **not built or installation-tested in this phase**. Signing/notarization and platform-specific plugin dependencies require separate release work.
 
 ## Developing Nanobug
 
@@ -47,7 +62,7 @@ cargo run --release -- C:\path\to\project
 
 Debug builds are unoptimized; window movement and editing may be slower. Use Release for everyday evaluation.
 
-The six workspace crates cover the application, document core, platform integration, plugin schema, public protocol, and plugin runtime. Independent plugins live in `plugins/`; build and verification scripts live in `scripts/`. See the [maintainer documentation index](docs/README.md) for details.
+The six workspace crates cover the application, document core, platform integration, plugin schema, public protocol, and plugin runtime. Independent plugins live in `plugins/`; native packaging configuration and instructions live in `installer/`. See the [maintainer documentation index](docs/README.md) for details.
 
 The Cargo package remains `editor-app`. Existing `MeEditor` data directories, `ME_EDITOR_*` environment variables, and persisted command identifiers are retained to preserve settings, history, and installed plugins.
 
@@ -59,11 +74,11 @@ Plugins build against the SDK embedded in the editor through its `--plugin-cargo
 # Build a host that provides the current SDK.
 cargo build -p editor-app
 
-# Build independent packages used for running and debugging.
-.\scripts\build-plugins.ps1 -HostExe .\target\debug\editor-app.exe -Packages terminal,rust,rust-debugger,run-target-example
+# Build an independent component through the actual host's public SDK entry point.
+.\target\debug\editor-app.exe --plugin-cargo plugins/terminal/Cargo.toml build --target wasm32-wasip2 --release
 
-# Verify SDK export and independent plugin builds.
-.\scripts\verify-plugin-sdk.ps1
+# Export the embedded SDK directly for inspection or an external toolchain.
+.\target\debug\editor-app.exe --export-plugin-sdk .\target\sdk-export
 ```
 
 Install or update the generated packages in the plugin manager and approve their declared permissions. See the [run, debug, and build guide](https://t-miracle.github.io/Editor/en/guide/run-debug-build/) for usage and the [Rust debugger README](plugins/rust-debugger/README.md) for dependency preparation and authorization.

@@ -8,8 +8,23 @@ alternate: /zh-cn/guide/getting-started/
 
 # Getting started
 
-Nanobug is a native desktop application. There is no installer wizard and no account: you
-run the executable and it opens a window.
+Nanobug is a native desktop application and does not require an account.
+
+## Installing and updating
+
+On Windows, run the Nanobug x64 Setup installer and follow its English or Simplified Chinese
+wizard. It installs for your user account, adds a Start menu entry, and offers a desktop shortcut.
+The installed application and plugin files do not require Rust or Cargo.
+
+Close all Nanobug windows before updating or uninstalling. Run a newer installer to update the
+same installation. Uninstall through Windows Installed apps; settings, history, and installed
+plugin data in the existing `MeEditor` user-data directories are retained.
+
+macOS packaging uses an application bundle in a DMG (drag Nanobug to Applications), or a PKG
+installer. Linux packaging uses DEB or RPM packages installed with the distribution's package
+manager. These packaging paths are provided for compatibility and have not been built or
+installation-tested in the current phase. macOS signing/notarization and platform-specific
+plugin dependencies require separate release preparation.
 
 ## Opening a file
 

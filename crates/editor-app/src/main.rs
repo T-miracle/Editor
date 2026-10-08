@@ -769,6 +769,8 @@ fn main() -> anyhow::Result<()> {
     if run::cleanup::run_cli()? {
         return Ok(());
     }
+    // Installers must wait for a normal GUI exit; CLI tooling remains independently usable.
+    let _installation_guard = app::distribution::installation_guard()?;
     // Use Simplified Chinese by default while keeping locale changes centralized.
     rust_i18n::set_locale("zh-CN");
 

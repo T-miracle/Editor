@@ -14,19 +14,34 @@ Nanobug 是一个使用 Rust 与 GPUI 构建的原生桌面代码编辑器，优
 
 ## 安装
 
-项目仍在开发中。准备下节所列开发环境后，在仓库根目录执行以下命令，生成 Windows 程序与独立插件包：
+项目仍在开发中。Windows 用户运行 `Nanobug-Setup-<版本>-x64.exe`，按当前用户安装。安装器创建开始菜单入口，提供可选桌面快捷方式，并注册卸载程序。程序与插件以独立文件安装到 `%LOCALAPPDATA%\Programs\Nanobug`，使用时无需 Rust/Cargo。
+
+更新或卸载前先正常退出 Nanobug。既有 `MeEditor` 目录中的设置、历史与已安装插件数据会保留。Windows 安装界面提供英文和简体中文。
+
+准备下节所列开发环境及 [Inno Setup](https://jrsoftware.org/isdl.php) 后，直接构建宿主：
 
 ```powershell
-# 构建 Release 程序、插件包与首次提供索引。
-.\scripts\package-editor.ps1
-
-# 启动打包后的编辑器。
-.\dist\editor\Nanobug.exe
+# 构建原生 Release 主程序；开发时仍可直接启动。
+cargo build -p editor-app --release
+cargo run --release
 ```
 
-产物位于 `dist/editor/`，分发或复制程序时保留同级 `plugins/` 目录。使用已编译的程序与插件无需 Rust/Cargo。
+按[原生打包说明](installer/README.md)准备程序、插件 ZIP、首次提供索引、图标与许可文件，然后从仓库根直接编译 Windows 安装器：
 
-Windows 是当前主要开发与行为验收平台，macOS/Linux 尚未完成实测或交叉构建验收。
+```powershell
+# 读取真实宿主版本，直接调用原生安装器编译工具。
+$version = ((cargo metadata --no-deps --format-version 1 | ConvertFrom-Json).packages |
+    Where-Object name -eq 'editor-app').version
+$payload = (Resolve-Path .\dist\editor).Path
+$output = Join-Path $PWD 'dist/installers'
+ISCC.exe "/DPayloadDir=$payload" "/DInstallerDir=$output" "/DAppVersion=$version" .\installer\windows\nanobug.iss
+```
+
+安装器输出到 `dist/installers/`，准备好的运行文件保留在 `dist/editor/`。ISCC 未加入 PATH 时指定编译工具的完整路径；便携复制时保留同级 `plugins/` 与 `licenses/` 目录。
+
+仓库不保留辅助脚本目录。打包直接调用 Cargo、宿主公开 CLI、归档工具和原生安装器工具；禁止调用移入 Codex 工作区的旧脚本，包括通过包装器间接调用。
+
+第一期已验证 Windows 安装、原位覆盖修复、运行中保护和卸载。macOS 应用包、DMG/PKG 与 Linux DEB/RPM 改为直接使用系统工具，准备步骤与命令见[原生打包说明](installer/README.md)。**本期不构建、不验收这两端的安装行为**；签名、公证与平台专属插件依赖另行准备。
 
 ## 开发 Nanobug
 
@@ -47,7 +62,7 @@ cargo run --release -- C:\path\to\project
 
 Debug 构建未经优化，窗口拖动与编辑响应可能较慢，日常体验建议使用 Release。
 
-源码按职责组织为编辑器应用、文档核心、平台适配、插件格式、公开协议与插件运行时六个 crate。独立插件位于 `plugins/`，构建与验收脚本位于 `scripts/`。详细入口见[维护者文档目录](docs/README.md)。
+源码按职责组织为编辑器应用、文档核心、平台适配、插件格式、公开协议与插件运行时六个 crate。独立插件位于 `plugins/`，原生打包配置与步骤位于 `installer/`。详细入口见[维护者文档目录](docs/README.md)。
 
 Cargo 包名保留为 `editor-app`。为保留设置、历史和已安装插件，继续使用既有 `MeEditor` 数据目录、`ME_EDITOR_*` 环境变量和已保存的命令标识。
 
@@ -59,11 +74,11 @@ Cargo 包名保留为 `editor-app`。为保留设置、历史和已安装插件�
 # 构建提供当前 SDK 的宿主。
 cargo build -p editor-app
 
-# 构建运行与调试所用的独立插件包。
-.\scripts\build-plugins.ps1 -HostExe .\target\debug\editor-app.exe -Packages terminal,rust,rust-debugger,run-target-example
+# 通过真实宿主的公开 SDK 入口独立构建组件。
+.\target\debug\editor-app.exe --plugin-cargo plugins/terminal/Cargo.toml build --target wasm32-wasip2 --release
 
-# 验证 SDK 导出与独立插件构建。
-.\scripts\verify-plugin-sdk.ps1
+# 直接导出内嵌 SDK，供检查或外部工具链使用。
+.\target\debug\editor-app.exe --export-plugin-sdk .\target\sdk-export
 ```
 
 在插件管理中安装或更新生成的包，并批准声明的权限。运行与调试的使用方式见[用户指南](https://t-miracle.github.io/Editor/zh-cn/guide/run-debug-build/)；Rust 调试器的依赖准备与授权范围见[插件说明](plugins/rust-debugger/README.md)。

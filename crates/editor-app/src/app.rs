@@ -4,6 +4,7 @@
 pub(crate) const APP_NAME: &str = "Nanobug";
 
 pub(crate) mod dialog;
+pub(crate) mod distribution;
 pub(crate) mod language_servers;
 pub(crate) mod languages;
 mod layout;
