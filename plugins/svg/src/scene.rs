@@ -88,6 +88,7 @@ impl State {
             )
             .revision(self.revision);
             document.file = Some(file.version.clone());
+            document.root.viewport = Some(self.raster.viewport());
             document.editor_layout = true;
             return api::View {
                 panel: "preview".into(),

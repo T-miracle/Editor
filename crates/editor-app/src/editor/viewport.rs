@@ -10,6 +10,9 @@ use gpui_kit::{App, Pixels, Point, Window, point, px};
 /// The owner paints between steps, so this bounds both layout work and an unsuccessful search.
 const MAX_STEPS: u8 = 48;
 const TOLERANCE: f32 = 0.5;
+/// Search may tolerate layout noise, but exact alignment must retain small semantic scroll progress.
+/// A tall image's one-pixel preview gesture can represent much less than half a source pixel.
+const ALIGN_TOLERANCE: f32 = 0.001;
 
 /// The first visible UTF-8 caret and the fraction of its visual row above the viewport.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -222,20 +225,24 @@ impl Locator {
         };
         let delta = f32::from(editor.input_bounds().top() - bounds.top())
             - layout.line_height * self.target.line_fraction;
-        if delta.abs() <= TOLERANCE {
+        // Permit layout rounding only after one exact proposal was applied. Using the coarse
+        // tolerance before that proposal would swallow small wheel gestures on tall preview blocks.
+        if delta.abs() <= ALIGN_TOLERANCE
+            || (delta.abs() <= TOLERANCE && self.previous.is_some_and(|previous| previous.exact))
+        {
             return self.finish(Step::Settled);
         }
         if self.previous.is_some_and(|previous| {
             previous.exact
-                && (previous.requested - previous.before).abs() > TOLERANCE
-                && (depth - previous.before).abs() <= TOLERANCE
+                && (previous.requested - previous.before).abs() > ALIGN_TOLERANCE
+                && (depth - previous.before).abs() <= ALIGN_TOLERANCE
         }) {
             // A valid final row may not reach the very top in a short document.
             // A measured, unchanged native offset is success at its scroll clamp.
             return self.finish(Step::Settled);
         }
         let requested = (depth - delta).max(0.);
-        if (requested - depth).abs() <= TOLERANCE {
+        if (requested - depth).abs() <= ALIGN_TOLERANCE {
             return self.finish(Step::Settled);
         }
         self.propose(editor, depth, requested, true)
@@ -243,7 +250,8 @@ impl Locator {
 
     /// Keep horizontal scrolling intact and remember only the proposed vertical measurement.
     fn propose(&mut self, editor: &EditorState, before: f32, requested: f32, exact: bool) -> Step {
-        if !requested.is_finite() || (requested - before).abs() <= TOLERANCE {
+        let tolerance = if exact { ALIGN_TOLERANCE } else { TOLERANCE };
+        if !requested.is_finite() || (requested - before).abs() <= tolerance {
             return self.finish(Step::Failed);
         }
         self.previous = Some(Proposal {

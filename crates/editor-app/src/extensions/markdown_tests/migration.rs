@@ -2,6 +2,82 @@
 use super::*;
 use harness::NativeMarkdown;
 
+/// The actual platform specification must survive ZIP installation and native layout without losing its end.
+#[gpui::test]
+#[ignore = "build markdown through scripts/build-plugins.ps1 first"]
+fn delivered_markdown_platform_specification_previews_and_scrolls_to_end(cx: &mut TestAppContext) {
+    let text = include_str!("../../../../../docs/plugins/specs/plugin-api-platform.md");
+    let (mut fixture, ui) = NativeMarkdown::mount(cx, &[("platform.md", text)]);
+    fixture.open("platform.md", ui);
+    // The native document may normalize line endings; mappings always refer to its memory snapshot.
+    let current = ui.update(|_, cx| fixture.app.read(cx).editor.read(cx).text().to_string());
+    let document = &fixture.manager.live["markdown"].views["preview"];
+    assert!(document.validate().is_ok());
+    assert!(
+        document.active_node("preview-limit").is_none(),
+        "the actual file must not display the quota fallback"
+    );
+    // Walk public containers to locate the final mapped rich leaf, rather than relying on a parser-internal ID.
+    fn final_leaf(node: &protocol::ui::Node, offset: usize) -> Option<&str> {
+        match &node.kind {
+            protocol::ui::Kind::Column { children } | protocol::ui::Kind::Row { children } => {
+                children
+                    .iter()
+                    .rev()
+                    .find_map(|child| final_leaf(child, offset))
+            }
+            protocol::ui::Kind::Scroll { content } => final_leaf(content, offset),
+            protocol::ui::Kind::RichText { .. }
+                if node
+                    .source_range
+                    .is_some_and(|range| range.start <= offset && offset < range.end) =>
+            {
+                Some(&node.id)
+            }
+            _ => None,
+        }
+    }
+    // GPUI's debug selector requires a static label; retain this single test-only identity for the process.
+    let last: &'static str = Box::leak(
+        format!(
+            "plugin-ui-{}",
+            final_leaf(&document.root, current.trim_end().len() - 1)
+                .expect("complete final paragraph")
+        )
+        .into_boxed_str(),
+    );
+    let viewport = ui.debug_bounds("plugin-ui-preview-scroll").unwrap();
+    assert!(
+        ui.debug_bounds("plugin-ui-preview-body")
+            .unwrap()
+            .size
+            .height
+            > viewport.size.height
+    );
+    ui.simulate_event(gpui_kit::ScrollWheelEvent {
+        position: viewport.center(),
+        delta: gpui_kit::ScrollDelta::Pixels(gpui_kit::point(px(0.), px(-100_000.))),
+        ..Default::default()
+    });
+    ui.run_until_parked();
+    // This gesture deliberately overshoots the document. Allow native layout to clamp
+    // against the final measured height before checking that delayed synchronization stays stable.
+    fixture.settle(ui);
+    let clamped = ui.debug_bounds("plugin-ui-preview-body").unwrap().top();
+    fixture.settle(ui);
+    let last = ui
+        .debug_bounds(last)
+        .expect("final paragraph rendered at the bottom");
+    assert!(
+        last.top() < viewport.bottom() && last.bottom() > viewport.top(),
+        "the end of the full document remains reachable"
+    );
+    assert!(
+        (ui.debug_bounds("plugin-ui-preview-body").unwrap().top() - clamped).abs() <= px(0.2),
+        "synchronized source receipts must retain the clamped end of the document"
+    );
+}
+
 /// Native text and IME keep their mounted surface while the background guest has not caught up.
 #[gpui::test]
 #[ignore = "build migrated markdown through scripts/build-plugins.ps1 first"]

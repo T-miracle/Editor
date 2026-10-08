@@ -38,10 +38,16 @@ struct Projection {
 }
 
 impl Scrolling {
-    /// A new source or UI projection cancels work instead of carrying old offsets into another scene.
+    /// A new source cancels work instead of carrying old offsets into another document version.
     pub(super) fn reset(&mut self) {
         self.cancel_pending();
         self.driver = None;
+    }
+
+    /// Another revision of the same document cancels queued requests but keeps the manual driver.
+    /// The side the user scrolled last stays authoritative; its next real translation moves the other.
+    pub(super) fn invalidate(&mut self) {
+        self.cancel_pending();
     }
 
     /// An explicit heading intent retires earlier automatic locations before native navigation runs.
@@ -51,16 +57,16 @@ impl Scrolling {
         self.driver = Some(Driver::Preview(None));
     }
 
-    /// Rebuilding the same navigation-owned scene retains its measured preview anchor, not old requests.
-    /// Ordinary initial split/restoration keeps the existing first-measurement behavior when no link owns it.
+    /// Rebuilding an unchanged source retires old requests while retaining the user's driving viewport.
+    /// Startup locale/reflow can arrive before its reverse locate finishes; clearing that driver would
+    /// let a source layout at zero undo the user's preview wheel. Source changes reset it explicitly.
     pub(super) fn refresh(&mut self, navigation: bool) {
-        if navigation {
-            self.cancel_pending();
-            if !matches!(self.driver, Some(Driver::Preview(_))) {
-                self.driver = Some(Driver::Preview(None));
-            }
-        } else {
-            self.reset();
+        self.cancel_pending();
+        if navigation && !matches!(self.driver, Some(Driver::Preview(_))) {
+            self.driver = Some(Driver::Preview(None));
+        } else if !navigation && matches!(self.driver, Some(Driver::Preview(None))) {
+            // An unmeasured heading hold has no user anchor to retain after navigation relinquishes it.
+            self.driver = None;
         }
     }
 

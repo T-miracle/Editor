@@ -29,6 +29,49 @@ fn descendants(nodes: &[ui::Node]) -> Vec<&ui::Node> {
     result
 }
 
+/// Compact ordinary items retain each leaf's mapping; nested lists and loose paragraphs keep their grouping.
+#[test]
+fn compact_list_items_preserve_content_mapping_and_multi_block_spacing() {
+    let source = "- **正文** [链接](next.md)\n- [ ] 待办\n- 父项\n  - 子项\n\n  第二段\n";
+    let nodes = blocks(source, "zh-CN").unwrap();
+    let all = descendants(&nodes);
+    let bodies: Vec<_> = all
+        .iter()
+        .filter(|node| node.id.ends_with("item-body"))
+        .collect();
+    assert_eq!(
+        bodies.len(),
+        1,
+        "only the multi-block parent needs a column"
+    );
+    assert!(matches!(&bodies[0].kind, ui::Kind::Column { children } if children.len() == 3));
+    assert_eq!(bodies[0].layout.gap, 6.);
+    assert!(
+        all.iter()
+            .any(|node| matches!(node.kind, ui::Kind::Checkbox { .. }))
+    );
+    let rich: Vec<_> = all
+        .iter()
+        .filter_map(|node| match &node.kind {
+            ui::Kind::RichText { html } => Some((node, html)),
+            _ => None,
+        })
+        .collect();
+    for text in [
+        "<strong>正文</strong>",
+        "href=\"next.md\"",
+        "待办",
+        "父项",
+        "子项",
+        "第二段",
+    ] {
+        assert!(
+            rich.iter()
+                .any(|(node, html)| html.contains(text) && node.source_range.is_some())
+        );
+    }
+}
+
 /// The guest declares an image with literal author alt text and a source range; it never reads its resource.
 #[test]
 fn standalone_image_declares_source_alt_and_original_utf8_range() {
@@ -138,6 +181,11 @@ fn table_images_preserve_header_cell_layout_and_rich_text() {
     let ui::Kind::Column { children: rows } = &nodes[0].kind else {
         panic!("an image table must keep its native row and cell structure");
     };
+    // Rows keep their own nodes; a rule after each one carries no content of its own.
+    let rows: Vec<_> = rows
+        .iter()
+        .filter(|node| matches!(node.kind, ui::Kind::Row { .. }))
+        .collect();
     assert_eq!(rows.len(), 2);
     for row in rows {
         assert!(matches!(&row.kind, ui::Kind::Row { children } if children.len() == 2));
@@ -161,6 +209,76 @@ fn table_images_preserve_header_cell_layout_and_rich_text() {
             rich.contains(text),
             "table image conversion must preserve every cell's text and style"
         );
+    }
+}
+
+/// A table whose cells carry inline code renders every cell as its own rich block.
+/// One generated `<table>` would let neighbouring cells share native inline state and lose
+/// their glyphs, so each cell owns an identity and its header cell keeps the muted surface.
+#[test]
+fn table_cells_keep_inline_code_in_independent_rich_blocks() {
+    let source = "| 验收 | 结果 |\n| --- | --- |\n| T01 | `language_tests`: 高亮出现 |\n| T02 | `lsp_tests` 与 `dependency_tests` |\n";
+    let nodes = blocks(source, "zh-CN").unwrap();
+    assert_eq!(nodes.len(), 1);
+    let all = descendants(&nodes);
+    assert!(
+        all.iter().all(
+            |node| !matches!(&node.kind, ui::Kind::RichText { html } if html.contains("<table"))
+        ),
+        "a native table must not fall back to one generated HTML table"
+    );
+    let cells: Vec<_> = all
+        .iter()
+        .filter(|node| node.id.contains("table-cell-"))
+        .collect();
+    assert_eq!(
+        cells.len(),
+        6,
+        "every header and body cell keeps its own block"
+    );
+    let header: Vec<_> = cells
+        .iter()
+        .filter(|cell| cell.role == "github-muted")
+        .collect();
+    assert_eq!(
+        header.len(),
+        2,
+        "only the header cells keep the muted table surface"
+    );
+    assert!(header.iter().all(|cell| matches!(
+        &cell.kind,
+        ui::Kind::RichText { html } if html.contains("<strong>")
+    )));
+    assert_eq!(
+        cells
+            .iter()
+            .filter(|cell| matches!(
+                &cell.kind,
+                ui::Kind::RichText { html } if html.contains("<code>language_tests</code>")
+            ))
+            .count(),
+        1
+    );
+    let ids: std::collections::HashSet<_> = all.iter().map(|node| &node.id).collect();
+    assert_eq!(
+        ids.len(),
+        all.len(),
+        "native table cells must have unique identities"
+    );
+    let rich: String = all
+        .iter()
+        .filter_map(|node| match &node.kind {
+            ui::Kind::RichText { html } => Some(html.as_str()),
+            _ => None,
+        })
+        .collect();
+    for text in [
+        "<code>language_tests</code>",
+        "<code>lsp_tests</code>",
+        "<code>dependency_tests</code>",
+        "高亮出现",
+    ] {
+        assert!(rich.contains(text), "missing rendered cell content: {text}");
     }
 }
 

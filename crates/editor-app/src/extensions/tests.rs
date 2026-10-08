@@ -328,6 +328,10 @@ fn second_market_install_shows_visible_consent(cx: &mut TestAppContext) {
         .expect("installation progress window");
     let progress_cx = VisualTestContext::from_window(progress_window, cx).into_mut();
     progress_cx.update(|window, cx| window.draw(cx).clear(cx));
+    // A short installation status must not reserve the canvas of a settings dialog.
+    let progress_size = progress_cx.update(|window, _| window.viewport_size());
+    assert!(progress_size.width <= px(520.));
+    assert!(progress_size.height <= px(260.));
     assert!(
         progress_cx
             .debug_bounds("plugin-install-progress")
@@ -336,6 +340,40 @@ fn second_market_install_shows_visible_consent(cx: &mut TestAppContext) {
     let button = progress_cx
         .debug_bounds("plugin-install-progress-close-region")
         .unwrap();
+    // The compact viewport must still keep cancellation visible and clickable.
+    assert!(button.origin.y + button.size.height <= progress_size.height);
+    // Long progress details scroll inside the compact window without moving its action row.
+    progress_cx.update(|_, cx| {
+        let owner = app.read(cx).extensions.clone();
+        owner.update(cx, |owner, cx| {
+            owner
+                .worker
+                .state
+                .lock()
+                .unwrap()
+                .installation
+                .as_mut()
+                .unwrap()
+                .message = "正在准备插件依赖与资源。\n".repeat(80);
+            cx.notify();
+        });
+    });
+    progress_cx.run_until_parked();
+    progress_cx.update(|window, cx| window.draw(cx).clear(cx));
+    let progress_region = progress_cx.debug_bounds("plugin-install-progress").unwrap();
+    progress_cx.simulate_event(gpui_kit::ScrollWheelEvent {
+        position: progress_region.center(),
+        delta: gpui_kit::ScrollDelta::Pixels(point(px(0.), px(-600.))),
+        touch_phase: gpui_kit::TouchPhase::Moved,
+        modifiers: Default::default(),
+    });
+    progress_cx.update(|window, cx| window.draw(cx).clear(cx));
+    assert_eq!(
+        button,
+        progress_cx
+            .debug_bounds("plugin-install-progress-close-region")
+            .unwrap()
+    );
     progress_cx.simulate_click(button.center(), Default::default());
     let control = progress_cx.update(|_, cx| {
         app.read(cx)

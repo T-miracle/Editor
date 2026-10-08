@@ -372,7 +372,42 @@ impl Instance {
     pub(super) fn decode_completion(&self, payload: &str, id: u64) -> anyhow::Result<api::Output> {
         let completion: api::Completion = serde_json::from_str(payload)?;
         anyhow::ensure!(completion.id == id, "Plugin completion ID mismatch");
-        let output = completion.result?;
+        let mut output = completion.result?;
+        // Restore all deltas before the ordinary checks, and publish none if any peer is invalid.
+        if !output.view_patches.is_empty()
+            && !self
+                .store
+                .data()
+                .api
+                .capabilities
+                .contains_key("ui.incremental")
+        {
+            return Err(Failure::new(
+                ErrorCode::CapabilityUnavailable,
+                "ui.incremental was not negotiated",
+            )
+            .into());
+        }
+        anyhow::ensure!(
+            output.view_patches.len() + output.views.len() <= 8,
+            "Too many native views"
+        );
+        for patch in std::mem::take(&mut output.view_patches) {
+            let previous = self
+                .views
+                .get(&patch.panel)
+                .ok_or_else(|| Failure::new(ErrorCode::StaleRevision, "No base scene for patch"))?;
+            if previous.revision != patch.base_revision {
+                return Err(Failure::new(ErrorCode::StaleRevision, "Stale scene patch").into());
+            }
+            let mut document = patch.document;
+            plugin_protocol::ui::incremental::restore(previous, &mut document, &patch.reused)
+                .map_err(|message| Failure::new(ErrorCode::InvalidRequest, message))?;
+            output.views.push(api::View {
+                panel: patch.panel,
+                document,
+            });
+        }
         anyhow::ensure!(
             !self.store.data().migrating
                 || (output.views.is_empty()
@@ -500,9 +535,21 @@ impl Instance {
             let mut rich_text = false;
             let mut images = false;
             let mut file_images = false;
+            let mut visual_viewport = false;
+            let mut icons = false;
+            let mut invalid_icon = None;
             let mut links = view.document.link_events;
             let mut visit = |node: &ui::Node| {
                 links |= !node.links.is_empty();
+                if let Some(svg) = &node.button_icon {
+                    icons = true;
+                    // Inline artwork shares the package icon whitelist; no ambient SVG loader is authorized.
+                    if invalid_icon.is_none() {
+                        invalid_icon = crate::package::icons::svg(svg.as_bytes())
+                            .err()
+                            .map(|error| error.to_string());
+                    }
+                }
                 if let ui::Kind::Canvas(value) = &node.kind {
                     canvas = true;
                     grid |= value.grid;
@@ -512,6 +559,7 @@ impl Instance {
                 resizable |= node.layout.resizable;
                 images |= matches!(node.kind, ui::Kind::Image { .. });
                 file_images |= matches!(node.kind, ui::Kind::FileImage { .. });
+                visual_viewport |= node.viewport.is_some();
                 // Source metadata is part of the same optional interface even on ordinary nodes.
                 rich_text |= node.source_range.is_some()
                     || matches!(
@@ -564,6 +612,8 @@ impl Instance {
                 (rich_text, "ui.richtext"),
                 (images, "ui.images"),
                 (file_images, "ui.file_images"),
+                (visual_viewport, "ui.viewport"),
+                (icons, "ui.icons"),
             ] {
                 if required && !api.capabilities.contains_key(capability) {
                     return Err(api::Failure::new(
@@ -572,6 +622,9 @@ impl Instance {
                     )
                     .into());
                 }
+            }
+            if let Some(message) = invalid_icon {
+                return Err(Failure::new(ErrorCode::InvalidRequest, message).into());
             }
         }
         Ok(output)

@@ -13,6 +13,67 @@ fn init(cx: &mut TestAppContext) {
     });
 }
 
+/// A drawing provider uses the same public visual input as an image provider, without an ID branch.
+#[gpui::test]
+fn visual_viewport_canvas_emits_shared_input(cx: &mut TestAppContext) {
+    use gpui_kit::{point, px, size};
+    init(cx);
+    let events = Rc::new(RefCell::new(Vec::new()));
+    let output = events.clone();
+    let (_, visual) = cx.add_window_view(move |window, cx| {
+        let mut node = Node::new("drawing", Kind::Canvas(ui::Canvas::default())).grow();
+        node.viewport = Some(ui::VisualViewport {
+            content: Some(ui::ContentSize {
+                width: 100.,
+                height: 50.,
+            }),
+            transform: Some(ui::ContentTransform {
+                scale: 2.4,
+                ..Default::default()
+            }),
+        });
+        let document = Document::new(node).revision(7);
+        document.validate().unwrap();
+        let view = cx.new(|cx| {
+            PluginView::new(
+                "diagram-provider".into(),
+                document,
+                Environment::default(),
+                move |event, _| output.borrow_mut().push(event),
+                window,
+                cx,
+            )
+        });
+        Root::new(view, window, cx)
+    });
+    visual.simulate_resize(size(px(400.), px(300.)));
+    visual.update(|window, cx| window.draw(cx).clear(cx));
+    assert!(events.borrow().iter().any(
+        |event| matches!(&event.action, Action::ViewportInput(input)
+        if event.revision == 7 && input.content == (ui::ContentSize {width: 100., height: 50.})
+            && matches!(input.event, ui::CanvasEvent::Resize {width: 400., height: 300., ..}))
+    ));
+    visual.simulate_event(gpui_kit::ScrollWheelEvent {
+        position: point(px(200.), px(150.)),
+        delta: gpui_kit::ScrollDelta::Pixels(point(px(0.), px(14.))),
+        ..Default::default()
+    });
+    visual.update(|window, cx| window.draw(cx).clear(cx));
+    assert!(
+        events
+            .borrow()
+            .iter()
+            .any(|event| matches!(&event.action, Action::ViewportInput(input)
+        if matches!(input.event, ui::CanvasEvent::Wheel {delta_y: 14., ..})))
+    );
+    assert!(
+        events
+            .borrow()
+            .iter()
+            .all(|event| !matches!(event.action, Action::Canvas(_)))
+    );
+}
+
 /// A pointer gesture belongs to the scene pressed, even when a replacement reuses its node ID.
 #[gpui::test]
 fn checkbox_press_cannot_activate_a_replacement_scene(cx: &mut TestAppContext) {
@@ -747,6 +808,59 @@ fn live_theme_roles_override_native_control_colors_and_fonts(cx: &mut TestAppCon
         Root::new(view, window, cx)
     });
     cx.update(|window, cx| window.draw(cx).clear(cx));
+}
+
+/// Plugin-provided RGB defaults control arbitrary roles; native chrome retains transparent tool buttons.
+#[gpui::test]
+fn github_document_and_transparent_toolbar_roles_render_in_both_themes(cx: &mut TestAppContext) {
+    init(cx);
+    let slot = Rc::new(RefCell::new(None));
+    let capture = slot.clone();
+    let (_, ui) = cx.add_window_view(move |window, cx| {
+        let document = Document::new(Node::rich_text("content",
+            "<p>正文 <code>inline code 中文</code> <a href=\"https://example.com\">链接</a></p><table><tr><td><code>table code</code></td></tr></table>")
+            .role("github"));
+        let view = cx.new(|cx| PluginView::new("neutral-document".into(), document,
+            Environment::default(), |_, _| {}, window, cx));
+        *capture.borrow_mut() = Some(view.clone());
+        Root::new(view, window, cx)
+    });
+    let view = slot.borrow_mut().take().unwrap();
+    for (dark, foreground, background, link, code) in [
+        (false, 0x1f2328, 0xffffff, 0x0969da, 0xf6f8fa),
+        (true, 0xf0f6fc, 0x0d1117, 0x4493f8, 0x151b23),
+    ] {
+        ui.update(|window, cx| {
+            crate::ui::theme::apply_theme(crate::ui::theme::builtin_theme(dark), cx);
+            view.update(cx, |view, _| {
+                // The package supplies domain colors; an arbitrary role has no host preset.
+                for (key, value) in [
+                    ("foreground", foreground),
+                    ("background", background),
+                    ("accent", link),
+                    ("code_background", code),
+                    (
+                        "inline_code_background",
+                        if dark { 0x1f232a } else { 0xf0f1f2 },
+                    ),
+                ] {
+                    view.document
+                        .content_colors
+                        .insert(format!("github.{key}"), value);
+                }
+            });
+            let colors = view.read(cx).colors("github", cx);
+            assert_eq!(colors.foreground, gpui_kit::rgb(foreground).into());
+            assert_eq!(colors.background, gpui_kit::rgb(background).into());
+            assert_eq!(colors.accent, gpui_kit::rgb(link).into());
+            assert_eq!(colors.code_background, gpui_kit::rgb(code).into());
+            assert_ne!(colors.inline_code_background, colors.code_background);
+            assert_eq!(colors.inline_code_background.a, 1.);
+            assert_eq!(view.read(cx).colors("toolbar_button", cx).background.a, 0.);
+            window.draw(cx).clear(cx);
+        });
+        assert!(ui.debug_bounds("plugin-ui-content").unwrap().size.height > gpui_kit::px(30.));
+    }
 }
 
 /// A custom code role changes native glyph metrics, rather than only its surrounding container.

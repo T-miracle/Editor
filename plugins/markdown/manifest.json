@@ -1,7 +1,7 @@
 {
   "id": "markdown",
   "name": "Markdown",
-  "version": "0.12.0",
+  "version": "0.17.0",
   "protocol": 7,
   "contributions": "plugin.toml",
   "component": "markdown.wasm",
@@ -20,6 +20,8 @@
     "base": "^1",
     "required": {
       "ui.native": ">=1.1, <2",
+      "ui.incremental": "^1",
+      "ui.icons": "^1",
       "ui.richtext": "^1",
       "ui.code_highlighting": "^1",
       "ui.images": "^1",
@@ -27,7 +29,7 @@
       "editor.documents": "^1",
       "editor.viewport": "^1",
       "editor.edit": "^1",
-      "editor.toolbar": "^1",
+      "editor.toolbar": "^1.1",
       "editor.images": "^1",
       "editor.navigation": "^1",
       "editor.files": "^1",

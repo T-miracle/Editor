@@ -59,6 +59,16 @@ impl EditorApp {
                     offset,
                     line_fraction,
                 } => {
+                    if projection
+                        .native_ui
+                        .as_ref()
+                        .is_some_and(|view| view.read(cx).source_owns_viewport())
+                    {
+                        return Err(Failure::new(
+                            ErrorCode::Cancelled,
+                            "Newer source input owns the viewport",
+                        ));
+                    }
                     let text = self.editor.read(cx).text();
                     if *offset > text.len() || !text.is_char_boundary(*offset) {
                         return Err(Failure::new(

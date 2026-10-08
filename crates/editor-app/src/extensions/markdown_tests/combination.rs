@@ -241,6 +241,12 @@ fn delivered_markdown_combines_edits_images_tasks_links_ime_and_scaled_layout(
     let link_offset = edited.find("[下一页]").unwrap();
     let link_selector = Box::leak(format!("plugin-ui-b-{link_offset}-paragraph").into_boxed_str());
     let link = ui.debug_bounds(link_selector).unwrap();
+    // Returning through source navigation must reveal the actual link before a real pointer hit.
+    let pane = ui.debug_bounds("plugin-ui-preview-scroll").unwrap();
+    assert!(
+        pane.contains(&point(link.left() + px(12.), link.center().y)),
+        "source Home must reveal the link: link={link:?}, pane={pane:?}"
+    );
     ui.simulate_click(
         point(link.left() + px(12.), link.center().y),
         Default::default(),

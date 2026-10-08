@@ -7,6 +7,8 @@ license.workspace = true
 
 [dependencies]
 anyhow.workspace = true
+# Use the already-locked date library to render receipt dates in the user's system timezone.
+chrono = { version = "0.4.45", default-features = false, features = ["clock"] }
 editor-core = { path = "../editor-core" }
 dirs.workspace = true
 gpui-kit.workspace = true
@@ -22,6 +24,11 @@ serde_json = "1.0"
 semver = "1"
 # Enable Tree-sitter's Wasmtime-backed runtime for plugin-provided grammars.
 tree-sitter = { version = "0.26.13", features = ["wasm"] }
+# Only enables Wasmtime's compiled-module cache for that runtime; the engine, cache and grammar
+# types stay the ones `tree-sitter` re-exports. Plugin injection layers create a fresh WASM store
+# per parse, and without the cache every one of them recompiled the grammar module on the editing
+# path (measured ~90 ms per keystroke in release, ~1.3 s in debug).
+wasmtime = { version = "36.0.16", default-features = false, features = ["cache"] }
 tracing = "0.1"
 url = "2.5"
 plugin-runtime = { path = "../plugin-runtime" }

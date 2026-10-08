@@ -16,6 +16,14 @@ pub(super) struct ViewportState {
     moved: bool,
     queued: Option<Emission>,
     scheduled: bool,
+    /// Manual preview input the guest has not received yet. A source reflow decided from an older
+    /// position must not overtake it, or a preview the user already scrolled snaps back.
+    manual_pending: bool,
+    /// Sending an event is not an acknowledgement of every older in-flight locate.
+    /// Ownership lasts until a genuine source gesture or explicit navigation takes over.
+    manual_owner: bool,
+    /// The same local ownership check protects source against delayed preview-driven requests.
+    source_owner: bool,
     /// Manual ownership spans the whole native drag, including motion outside its original pane.
     manual_pointer: bool,
 }
@@ -50,6 +58,17 @@ struct Emission {
 }
 
 impl ViewportState {
+    /// Native keyboard navigation has the same lasting priority as a wheel gesture.
+    pub(super) fn manual_input(&mut self) {
+        self.cancel_locate();
+        self.manual_owner = true;
+        self.source_owner = false;
+        self.manual_pending = true;
+    }
+    /// A semantic target outside the visible buffer must receive real native layout.
+    pub(super) fn pending_target(&self) -> Option<&str> {
+        self.pending.as_ref().map(|pending| pending.node.as_str())
+    }
     /// Modal, source, tab or scene replacement revokes pending work without changing the host preference.
     pub(super) fn reset_scene(&mut self) {
         self.frame = self.frame.wrapping_add(1);
@@ -83,6 +102,8 @@ impl PluginView {
             self.viewport.reset_scene();
             if !enabled {
                 self.viewport.manual_pointer = false;
+                self.viewport.manual_owner = false;
+                self.viewport.source_owner = false;
             }
             cx.notify();
         }
@@ -114,7 +135,7 @@ impl PluginView {
             ));
         }
         let scroll = self.viewport_scroll().ok_or_else(inactive)?;
-        if self.viewport.manual_pointer {
+        if self.viewport.manual_pointer || self.viewport.manual_owner {
             return Err(api::Failure::new(
                 api::ErrorCode::Cancelled,
                 "Manual viewport drag is active",
@@ -166,23 +187,27 @@ impl PluginView {
     }
 
     /// Native wheel input supersedes an unacknowledged program locate before Base applies its delta.
-    pub(super) fn viewport_wheel(&mut self, position: Point<Pixels>, revision: u64) -> bool {
-        if revision == self.document.revision
-            && self
-                .viewport_scroll()
-                .and_then(|id| self.scrolls.get(id))
-                .is_some_and(|scroll| scroll.bounds().contains(&position))
+    /// A manual gesture is validated against the current scroll node, never against the revision the
+    /// listener was registered under, so a repaint gap cannot leave a locate free to override it.
+    pub(super) fn viewport_wheel(&mut self, position: Point<Pixels>) -> bool {
+        if self
+            .viewport_scroll()
+            .and_then(|id| self.scrolls.get(id))
+            .is_some_and(|scroll| scroll.bounds().contains(&position))
         {
             self.viewport.cancel_locate();
             self.viewport.queued = None;
+            self.viewport.manual_pending = true;
+            self.viewport.manual_owner = true;
+            self.viewport.source_owner = false;
             return true;
         }
         false
     }
 
     /// A native press retains gesture ownership until release; Base still performs the actual drag.
-    pub(super) fn viewport_pointer_down(&mut self, position: Point<Pixels>, revision: u64) {
-        if self.viewport_wheel(position, revision) {
+    pub(super) fn viewport_pointer_down(&mut self, position: Point<Pixels>) {
+        if self.viewport_wheel(position) {
             self.viewport.manual_pointer = true;
         }
     }
@@ -268,11 +293,15 @@ impl PluginView {
         let Some(mut snapshot) = self.viewport_snapshot(&scroll) else {
             return;
         };
-        let layout = self
-            .viewport
-            .last
-            .as_ref()
-            .is_none_or(|old| !same_layout(old, &snapshot));
+        // Real input stays a manual event even when lazy block measurement changes geometry in its frame.
+        let manual = self.viewport.manual_pending
+            || (self.viewport.manual_owner && self.viewport.last.is_none());
+        let layout = !manual
+            && self
+                .viewport
+                .last
+                .as_ref()
+                .is_none_or(|old| !same_layout(old, &snapshot));
         snapshot.position.layout = layout;
         if let Some(program) = &self.viewport.program {
             // Unexpected translation is another scroll intent, not an indefinitely sticky origin.
@@ -282,7 +311,8 @@ impl PluginView {
                 self.viewport.program = None;
             }
         }
-        let changed = snapshot.position.origin.is_some()
+        let changed = self.viewport.manual_pending
+            || snapshot.position.origin.is_some()
             || layout
             || self.viewport.last.as_ref().is_none_or(|old| {
                 old.offset != snapshot.offset
@@ -291,6 +321,8 @@ impl PluginView {
             });
         if !changed {
             self.viewport.queued = None;
+            // Nothing will be reported: no unacknowledged manual position remains.
+            self.viewport.manual_pending = false;
             return;
         }
         self.viewport.queued = Some(Emission {
@@ -311,11 +343,14 @@ impl PluginView {
     fn flush_viewport(&mut self, cx: &mut Context<Self>) {
         self.viewport.scheduled = false;
         let Some(queued) = self.viewport.queued.take() else {
+            // A withdrawn or inactive scene still ends the unacknowledged manual position.
+            self.viewport.manual_pending = false;
             return;
         };
         if self.viewport_scroll() != Some(queued.scroll.as_str())
             || queued.revision != self.document.revision
         {
+            self.viewport.manual_pending = false;
             return;
         }
         if self.emit_version(
@@ -327,6 +362,25 @@ impl PluginView {
             self.viewport.program = None;
             self.viewport.last = Some(queued.snapshot);
         }
+        // The guest has received this position; ownership still lasts until actual source input.
+        self.viewport.manual_pending = false;
+    }
+
+    /// Whether native preview input is still unknown to the guest, so a source reflow cannot drive it.
+    pub(crate) fn preview_input_pending(&self) -> bool {
+        self.viewport.manual_pending
+    }
+
+    /// The editor calls this only for user source input, never for a synchronization receipt.
+    pub(crate) fn source_takes_viewport(&mut self) {
+        self.viewport.manual_owner = false;
+        self.viewport.manual_pending = false;
+        self.viewport.source_owner = true;
+    }
+
+    /// Incoming source locates must not undo a more recent source keyboard or wheel gesture.
+    pub(crate) fn source_owns_viewport(&self) -> bool {
+        self.viewport.source_owner
     }
 
     /// Bounds are expressed relative to the registered viewport with its Base offset removed.

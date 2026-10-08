@@ -10,6 +10,9 @@ alternate: /zh-cn/sdk/ui/
 
 ## File layouts and viewers
 
+Independent preview providers build through the editor's public `--plugin-cargo` entry point;
+packaging uses native archive tools without repository helper scripts.
+
 With `editor.layout ^1`, a selected workspace file provider publishes
 `Document.editor_layout = true` and composes the centre using native Row, Column and Scroll
 nodes. Text layouts bind to `Document.source`; read-only files bind to `Document.file`.
@@ -53,6 +56,37 @@ encoded image at most 8 MiB. `OriginalContain` uses
 ratio, centre, show the whole image and never enlarge automatically. `Contain` explicitly
 allows enlargement. Resource changes, permission revocation and instance retirement
 revoke old results.
+
+## Visual viewports
+
+`ui.viewport ^1` is available to every plugin. Opt in with `Node.viewport: Some(VisualViewport)`
+on `FileImage`, `Image` or `Canvas`. The host reports resize, wheel and pointer input through
+`Action::ViewportInput { content, event }`; a canvas also retains its declared focus/key/text
+input. `content` gives unscaled dimensions, without exposing image bytes or additional file
+authority. Image dimensions come from controlled decoding; leave `VisualViewport.content`
+absent on images. A canvas must declare positive `ContentSize { width, height }` and cannot
+combine a visual viewport with a character grid or `Canvas.scroll`.
+
+The plugin owns scale, pan, wheel direction/step, limits, automatic sizing and reset policy.
+Publish `VisualViewport.transform: Some(ContentTransform { scale, x, y, anchor_x, anchor_y })`
+to apply a uniform scale and a translation in viewport pixels. Anchors are normalized fractions
+in `[0,1]` of both content and viewport. The mapping is
+`(content_point - content_size * anchor) * scale + viewport_size * anchor + translation`.
+The default anchor `(0.5,0.5)` and translation `(0,0)` keep content centred on every frame,
+including window resizes. Painting clips to the current native viewport, with no animated
+position transition. `ContentTransform::project` exposes this same geometry to guests.
+
+With no transform, an image keeps its declared sizing; a canvas uses the default transform.
+This permits the first image measurement to arrive before the guest chooses its initial scale.
+Wheel deltas are logical pixels and pointer coordinates remain viewport-local; gestures do not
+implicitly modify the transform. Images do not own keyboard/IME focus. All input uses ordinary
+scene, revision, modal and disabled-node gates. Discard input from replaced nodes or resources.
+Dimensions are finite, positive and at most 1,000,000; scale is finite and positive, at most
+1,000,000; translations are finite with magnitude at most 1,000,000. Transformed declared canvas
+dimensions and paint also fit that extent budget. Transformed canvas text stays within the existing
+1–128px font quota; IME composition clamps to that range. Image projection over the extent budget
+is not painted, while input remains available to let the guest correct its transform.
+Existing image permissions and decoding quotas remain.
 
 ## Footer tools and preferences
 
@@ -102,6 +136,26 @@ update. Finite import writes legacy intent into authorized plugin private data a
 restores the retired runtime protocol.
 
 ## Composable layout (manifest protocol 7)
+
+`ui.incremental ^1` enables `Output.view_patches`. A ViewPatch has the panel, exact
+`base_revision`, a new document skeleton and `reused` references to nodes in that instance
+and panel's previous validated root. Placeholders are empty Text nodes with matching IDs;
+`source_shift` translates the entire subtree's byte ranges. The host restores subtrees
+before applying ordinary capabilities, permissions, source, node and byte-budget checks,
+then publishes atomically. Duplicate, missing or unused references, overflow and stale
+bases are rejected. The first scene uses `Output.views`; the SDK supplies compact/restore.
+For opted-in incremental text providers, the host coalesces the file/text pair on a fixed
+150 ms first-edit cadence and retains one outstanding publication with bounded retries.
+File identity changes publish immediately. Plugins determine when their own layout hides
+preview content and suspend derived parsing themselves; no host-owned display mode is used.
+
+`ui.icons ^1` enables `Node::button(id, label).icon(svg)` and `Node.button_icon`.
+Only Buttons may carry icons; accessible labels stay nonempty, native focus, disabled
+state and versioned Click remain intact. Each geometric SVG is at most 4096 UTF-8 bytes,
+with at most 64 icons across root, toolbar and dialog, counted in ordinary budgets.
+The same geometry-only SVG checks reject scripts, text, DTD, CSS, href, external resources
+and URL paint. This grants no file or network access. Native buttons occupy 24 × 24
+logical pixels; the host draws the provided artwork with theme tint.
 
 `ui.native >=1.1, <2` adds `Layout.resizable` for non-wrapping Row/Column nodes with 2–16
 children. Plugins choose the split; the host retains native sizing and drag capture and

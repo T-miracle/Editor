@@ -670,8 +670,11 @@ impl Render for ExtensionPanel {
             let view = self.native_document(document, window, cx);
             return div()
                 .size_full()
+                .relative()
                 .key_context("PluginSurface")
-                .child(view)
+                // The viewport has a definite extent; its rich content must not participate in the
+                // parent's intrinsic sizing. Keep normal native paint/event registration each frame.
+                .child(div().absolute().inset_0().size_full().child(view))
                 .children(self.command_popup(window, cx))
                 .into_any_element();
         }

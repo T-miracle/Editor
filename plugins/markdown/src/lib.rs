@@ -11,6 +11,7 @@ mod display;
 mod format;
 mod formatting;
 mod imports;
+mod incremental;
 mod navigation;
 mod preview;
 mod scrolling;
@@ -35,6 +36,10 @@ struct State {
     blocks: Vec<ui::Node>,
     /// Early parser limits share the existing native preview fallback without losing text authority.
     preview_limited: bool,
+    /// Derived immutable blocks survive ordinary paragraph edits and hidden preview periods.
+    parsed: incremental::Parsed,
+    /// The last transmitted tree is the base for bounded ui.incremental publications.
+    published: Option<ui::Document>,
     /// The pending intent stores request ownership only; source text remains a readonly host snapshot.
     formatting: formatting::Formatting,
     /// Image imports preserve complete-file receipts independently of the current source snapshot.
@@ -107,10 +112,22 @@ impl Guest for MarkdownPlugin {
                 {
                     return Ok(api::Output::default());
                 }
-                Ok(api::Output {
-                    views: vec![state.view()],
-                    ..Default::default()
-                })
+                let view = state.view();
+                let mut output = api::Output::default();
+                if let Some(previous) = &state.published {
+                    let mut document = view.document.clone();
+                    let reused = ui::incremental::compact(previous, &mut document);
+                    output.view_patches.push(api::ViewPatch {
+                        panel: view.panel,
+                        base_revision: previous.revision,
+                        document,
+                        reused,
+                    });
+                } else {
+                    output.views.push(view.clone());
+                }
+                state.published = Some(view.document);
+                Ok(output)
             })
         })
     }
@@ -180,8 +197,18 @@ impl State {
                     (None, None) => false,
                     _ => true,
                 };
+                // Another document starts at its own first position; a new revision of this one keeps
+                // the side the user scrolled last, so a source reflow cannot reclaim a scrolled preview.
+                let same_document = matches!(
+                    (&self.source, &document),
+                    (Some(current), Some(next)) if current.version.id == next.id
+                );
                 if changed {
-                    self.scrolling.reset();
+                    if same_document {
+                        self.scrolling.invalidate();
+                    } else {
+                        self.scrolling.reset();
+                    }
                     self.formatting.source_changed();
                     self.imports.source_changed();
                     self.navigation.source_changed(document.as_ref());
@@ -310,19 +337,22 @@ impl State {
                 .controls_viewport(self.source.as_ref().map(|source| &source.version)),
         );
         self.preview_limited = false;
+        if self.display.mode == display::Mode::Source {
+            // Source authority stays fresh for toolbar edits; hidden content does no Markdown parse.
+            self.revision = self.revision.saturating_add(1);
+            return;
+        }
         self.blocks = self.source.as_ref().map_or_else(Vec::new, |source| {
-            preview::blocks(&source.text, &self.environment.locale).unwrap_or_else(|_| {
-                self.preview_limited = true;
-                Vec::new()
-            })
+            self.parsed.update(&source.text, &self.environment.locale);
+            self.preview_limited = self.parsed.limited;
+            self.parsed.nodes.clone()
         });
-        self.navigation_index = self
-            .source
-            .as_ref()
-            .filter(|_| !self.preview_limited)
-            .map_or_else(navigation::Index::default, |source| {
-                navigation::Index::parse(&source.text)
-            });
+        if let Some(source) = &self.source {
+            self.navigation_index
+                .update(&source.text, self.parsed.changed);
+        } else {
+            self.navigation_index = navigation::Index::default();
+        }
         // Final source-mapped leaves supply both pointer and keyboard targets, including linked native images.
         self.navigation_index.annotate(&mut self.blocks);
         self.revision = self.revision.saturating_add(1);
@@ -352,10 +382,19 @@ impl State {
             children.push(ui::Node::scroll("preview-scroll", body).grow());
             ui::Node::column("preview-root", children).grow()
         };
-        let body = ui::Node::column("preview-body", self.blocks.clone())
+        // Hidden content must not expose old source ranges under the new toolbar authority.
+        // Keep the parsed cache privately; showing the pane publishes current mapped blocks again.
+        let blocks = if self.display.mode == display::Mode::Source {
+            Vec::new()
+        } else {
+            self.blocks.clone()
+        };
+        let body = ui::Node::column("preview-body", blocks)
             .padding(12.)
             .gap(8.);
         let mut document = ui::Document::new(preview_root(body)).revision(self.revision);
+        // Every native preview block opts into the same generic GitHub role; source controls retain editor colors.
+        preview::apply_theme(&mut document.root);
         document.source = self.source.as_ref().map(|source| source.version.clone());
         document.editor_image_input = self.source.is_some();
         document.link_events = self.source.is_some();

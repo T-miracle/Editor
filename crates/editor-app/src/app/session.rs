@@ -68,6 +68,7 @@ pub struct SessionState {
     #[serde(
         default,
         rename = "editor_preview_toolbar",
+        alias = "editor_toolbar_visibility",
         skip_serializing_if = "std::collections::BTreeMap::is_empty"
     )]
     pub legacy_preview_toolbar: std::collections::BTreeMap<String, bool>,

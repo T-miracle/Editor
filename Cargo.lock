@@ -1660,6 +1660,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "directories-next"
+version = "2.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "339ee130d97a610ea5a5872d2bbb130fdf68884ff09d3028b81bec8a1ac23bbc"
+dependencies = [
+ "cfg-if",
+ "dirs-sys-next",
+]
+
+[[package]]
 name = "dirs"
 version = "5.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1699,6 +1709,17 @@ dependencies = [
  "option-ext",
  "redox_users 0.5.3",
  "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "dirs-sys-next"
+version = "0.1.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4ebda144c4fe02d1f7ea1a7d9641b6fc6b580adcfa024ae48797ecdeb6825b4d"
+dependencies = [
+ "libc",
+ "redox_users 0.4.6",
+ "winapi",
 ]
 
 [[package]]
@@ -1783,6 +1804,7 @@ name = "editor-app"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "chrono",
  "dirs 6.0.0",
  "editor-core",
  "embed-resource",
@@ -1810,6 +1832,7 @@ dependencies = [
  "tracing",
  "tree-sitter",
  "url",
+ "wasmtime",
  "zip",
 ]
 
@@ -8795,6 +8818,7 @@ dependencies = [
  "wasmparser 0.236.1",
  "wasmtime-environ",
  "wasmtime-internal-asm-macros",
+ "wasmtime-internal-cache",
  "wasmtime-internal-component-macro",
  "wasmtime-internal-component-util",
  "wasmtime-internal-cranelift",
@@ -8864,6 +8888,26 @@ checksum = "63a8e9f4d28b5106e130765b36c8d7083a987e9807371569732f68c313e0502c"
 dependencies = [
  "proc-macro2",
  "quote",
+]
+
+[[package]]
+name = "wasmtime-internal-cache"
+version = "36.0.16"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "65b514e39cd914f34a135ce7696373287ccb9611b083cbe244a48c4903380fb5"
+dependencies = [
+ "anyhow",
+ "base64 0.22.1",
+ "directories-next",
+ "log",
+ "postcard",
+ "rustix 1.1.5",
+ "serde",
+ "serde_derive",
+ "sha2 0.10.9",
+ "toml 0.8.23",
+ "windows-sys 0.60.2",
+ "zstd",
 ]
 
 [[package]]
@@ -10744,6 +10788,34 @@ dependencies = [
  "crc32fast",
  "log",
  "simd-adler32",
+]
+
+[[package]]
+name = "zstd"
+version = "0.13.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e91ee311a569c327171651566e07972200e76fcfe2242a4fa446149a3881c08a"
+dependencies = [
+ "zstd-safe",
+]
+
+[[package]]
+name = "zstd-safe"
+version = "7.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "64d80649ab6db9d9f6f9c80a40becd948eda4714a0a5ac8c4d157a32231c7882"
+dependencies = [
+ "zstd-sys",
+]
+
+[[package]]
+name = "zstd-sys"
+version = "2.1.0+zstd.1.5.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0ef0a8027ec3ee71300ab3bcbcd0393f434aa72b91ca6d635a39941deae8eea0"
+dependencies = [
+ "cc",
+ "pkg-config",
 ]
 
 [[package]]

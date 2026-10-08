@@ -6,8 +6,13 @@ mod bundled_tests;
 mod command_epochs;
 pub(super) mod configurations;
 mod preparation;
+mod resize;
+#[cfg(test)]
+mod resize_tests;
 mod runner;
 pub(super) mod targets;
+#[cfg(test)]
+mod viewport_tests;
 #[cfg(test)]
 mod worker_tests;
 use std::{

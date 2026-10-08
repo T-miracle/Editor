@@ -9,14 +9,63 @@ use std::{
     time::{Duration, Instant},
 };
 
+/// An image consumer cannot publish visual viewports without negotiating the public capability.
+#[test]
+#[ignore = "build current Image package with scripts/build-plugins.ps1 -Packages svg first"]
+fn visual_viewport_requires_negotiation_for_every_provider() {
+    let workspace = tempfile::tempdir().unwrap();
+    let data = tempfile::tempdir().unwrap();
+    std::fs::write(workspace.path().join("photo.png"), b"image").unwrap();
+    let package = image_package("unnegotiated-viewer", false);
+    let mut manager = Manager::open(
+        data.path().to_path_buf(),
+        Environment {
+            workspace: workspace.path().display().to_string(),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    manager
+        .install(&package, package.manifest.permissions.clone())
+        .unwrap();
+    let error = manager
+        .event(
+            "unnegotiated-viewer",
+            Some("preview".into()),
+            api::Notification::FilePreview {
+                file: Some(api::FileContext {
+                    version: api::FileVersion {
+                        id: "photo".into(),
+                        path: "photo.png".into(),
+                        revision: 1,
+                    },
+                    file_type: "png".into(),
+                    text: None,
+                }),
+            },
+        )
+        .unwrap_err();
+    assert_eq!(
+        error.downcast_ref::<api::Failure>().unwrap().code,
+        api::ErrorCode::CapabilityUnavailable
+    );
+}
+
 /// An alternative package identity proves that file routing does not depend on a bundled ID.
-fn image_package(id: &str) -> Package {
+fn image_package(id: &str, viewport: bool) -> Package {
     let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../dist/plugins/svg.zip");
     let mut files = Package::read(&path)
         .expect("build Image with build-plugins.ps1 -Packages svg")
         .files;
     let mut manifest: serde_json::Value = serde_json::from_slice(&files["manifest.json"]).unwrap();
     manifest["id"] = id.into();
+    if !viewport {
+        // Deliberately omit the declaration to exercise output negotiation through the public manager.
+        manifest["api"]["required"]
+            .as_object_mut()
+            .unwrap()
+            .remove("ui.viewport");
+    }
     // Resource declarations follow the same independent identity as its inspected executable manifest.
     let declaration = String::from_utf8(files["plugin.toml"].clone()).unwrap();
     files.insert(
@@ -63,7 +112,7 @@ fn image_file_resources_follow_public_file_context_and_permissions() {
     let bytes = b"opaque image bytes, including invalid UTF-8: \xff";
     std::fs::write(workspace.path().join("photo#1.png"), bytes).unwrap();
     for id in ["svg", "independent-image-viewer"] {
-        let package = image_package(id);
+        let package = image_package(id, true);
         let environment = Environment {
             workspace: workspace.path().display().to_string(),
             ..Default::default()
@@ -101,6 +150,53 @@ fn image_file_resources_follow_public_file_context_and_permissions() {
         ));
         let key = format!("{id}/preview/image/image");
         assert_eq!(&*ready(&mut manager, &key), bytes);
+        for event in [
+            ui::CanvasEvent::Resize {
+                width: 400.,
+                height: 300.,
+                grid: None,
+            },
+            ui::CanvasEvent::Wheel {
+                x: 10.,
+                y: 10.,
+                delta_x: 0.,
+                delta_y: 14.,
+                shift: false,
+            },
+            ui::CanvasEvent::Resize {
+                width: 600.,
+                height: 500.,
+                grid: None,
+            },
+        ] {
+            let revision = manager.live[id].views["preview"].revision;
+            manager
+                .event(
+                    id,
+                    Some("preview".into()),
+                    api::Notification::Ui(ui::UiEvent {
+                        revision,
+                        node: "image".into(),
+                        action: ui::Action::ViewportInput(ui::ViewportInput {
+                            content: ui::ContentSize {
+                                width: 800.,
+                                height: 400.,
+                            },
+                            event,
+                        }),
+                    }),
+                )
+                .unwrap();
+        }
+        let transform = manager.live[id].views["preview"]
+            .root
+            .viewport
+            .as_ref()
+            .unwrap()
+            .transform
+            .unwrap();
+        assert!((transform.scale - 0.56).abs() < 0.0001);
+        assert_eq!((transform.anchor_x, transform.anchor_y), (0.5, 0.5));
         let mut stale = file.clone();
         stale.version.revision = 1;
         let error = send(&mut manager, Some(stale)).unwrap_err();

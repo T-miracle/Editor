@@ -1,4 +1,4 @@
-//! Stable toolbar identities and localized labels describe Markdown intents through public native nodes.
+//! Stable toolbar identities and themed SVGs describe Markdown intents through public native nodes.
 
 use super::format::Command;
 use plugin_protocol::ui;
@@ -7,19 +7,52 @@ use plugin_protocol::ui;
 struct Tool {
     command: Command,
     id: &'static str,
-    labels: (&'static str, &'static str),
+    /// Inline geometry is compiled into the independent guest and validated through `ui.icons`.
+    icon: &'static str,
     tips: (&'static str, &'static str),
 }
 
 const GROUPS: &[(&str, &[Tool])] = &[
     (
         "format-headings",
-        &[Tool {
-            command: Command::Heading,
-            id: "format-heading",
-            labels: ("H", "H"),
-            tips: ("一级标题", "Heading 1"),
-        }],
+        &[
+            Tool {
+                command: Command::Heading,
+                id: "format-heading",
+                icon: include_str!("../icons/format-heading.svg"),
+                tips: ("一级标题", "Heading 1"),
+            },
+            Tool {
+                command: Command::HeadingLevel(2),
+                id: "format-heading-2",
+                icon: include_str!("../icons/format-heading-2.svg"),
+                tips: ("二级标题", "Heading 2"),
+            },
+            Tool {
+                command: Command::HeadingLevel(3),
+                id: "format-heading-3",
+                icon: include_str!("../icons/format-heading-3.svg"),
+                tips: ("三级标题", "Heading 3"),
+            },
+            Tool {
+                command: Command::HeadingLevel(4),
+                id: "format-heading-4",
+                icon: include_str!("../icons/format-heading-4.svg"),
+                tips: ("四级标题", "Heading 4"),
+            },
+            Tool {
+                command: Command::HeadingLevel(5),
+                id: "format-heading-5",
+                icon: include_str!("../icons/format-heading-5.svg"),
+                tips: ("五级标题", "Heading 5"),
+            },
+            Tool {
+                command: Command::HeadingLevel(6),
+                id: "format-heading-6",
+                icon: include_str!("../icons/format-heading-6.svg"),
+                tips: ("六级标题", "Heading 6"),
+            },
+        ],
     ),
     (
         "format-emphasis",
@@ -27,19 +60,19 @@ const GROUPS: &[(&str, &[Tool])] = &[
             Tool {
                 command: Command::Bold,
                 id: "format-bold",
-                labels: ("B", "B"),
+                icon: include_str!("../icons/format-bold.svg"),
                 tips: ("粗体", "Bold"),
             },
             Tool {
                 command: Command::Italic,
                 id: "format-italic",
-                labels: ("I", "I"),
+                icon: include_str!("../icons/format-italic.svg"),
                 tips: ("斜体", "Italic"),
             },
             Tool {
                 command: Command::Strike,
                 id: "format-strike",
-                labels: ("S", "S"),
+                icon: include_str!("../icons/format-strike.svg"),
                 tips: ("删除线", "Strikethrough"),
             },
         ],
@@ -50,13 +83,13 @@ const GROUPS: &[(&str, &[Tool])] = &[
             Tool {
                 command: Command::InlineCode,
                 id: "format-inline-code",
-                labels: ("`", "`"),
+                icon: include_str!("../icons/format-inline-code.svg"),
                 tips: ("行内代码", "Inline code"),
             },
             Tool {
                 command: Command::CodeBlock,
                 id: "format-code-block",
-                labels: ("```", "```"),
+                icon: include_str!("../icons/format-code-block.svg"),
                 tips: ("代码块", "Code block"),
             },
         ],
@@ -67,25 +100,25 @@ const GROUPS: &[(&str, &[Tool])] = &[
             Tool {
                 command: Command::Quote,
                 id: "format-quote",
-                labels: (">", ">"),
+                icon: include_str!("../icons/format-quote.svg"),
                 tips: ("引用", "Block quote"),
             },
             Tool {
                 command: Command::Unordered,
                 id: "format-unordered",
-                labels: ("•", "•"),
+                icon: include_str!("../icons/format-unordered.svg"),
                 tips: ("无序列表", "Unordered list"),
             },
             Tool {
                 command: Command::Ordered,
                 id: "format-ordered",
-                labels: ("1.", "1."),
+                icon: include_str!("../icons/format-ordered.svg"),
                 tips: ("有序列表", "Ordered list"),
             },
             Tool {
                 command: Command::Task,
                 id: "format-task",
-                labels: ("☑", "☑"),
+                icon: include_str!("../icons/format-task.svg"),
                 tips: ("任务列表", "Task list"),
             },
         ],
@@ -96,19 +129,19 @@ const GROUPS: &[(&str, &[Tool])] = &[
             Tool {
                 command: Command::Link,
                 id: "format-link",
-                labels: ("链接", "Link"),
+                icon: include_str!("../icons/format-link.svg"),
                 tips: ("链接", "Link"),
             },
             Tool {
                 command: Command::Image,
                 id: "format-image",
-                labels: ("图片", "Image"),
+                icon: include_str!("../icons/format-image.svg"),
                 tips: ("图片引用模板", "Image reference template"),
             },
             Tool {
                 command: Command::Table,
                 id: "format-table",
-                labels: ("表格", "Table"),
+                icon: include_str!("../icons/format-table.svg"),
                 tips: ("两列表格", "Two-column table"),
             },
         ],
@@ -133,19 +166,17 @@ pub(super) fn node(english: bool, error: Option<&str>) -> ui::Node {
             let buttons = tools
                 .iter()
                 .map(|tool| {
-                    let label = if english {
-                        tool.labels.1
-                    } else {
-                        tool.labels.0
-                    };
                     let tip = if english { tool.tips.1 } else { tool.tips.0 };
-                    ui::Node::button(tool.id, label).tooltip(tip)
+                    ui::Node::button(tool.id, tip)
+                        .icon(tool.icon)
+                        .tooltip(tip)
+                        .role("toolbar_button")
                 })
                 .collect();
-            ui::Node::row(*id, buttons).wrap().gap(4.)
+            ui::Node::row(*id, buttons).wrap().gap(2.)
         })
         .collect();
-    let mut children = vec![ui::Node::row("format-actions", groups).wrap().gap(12.)];
+    let mut children = vec![ui::Node::row("format-actions", groups).wrap().gap(8.)];
     if let Some(error) = error {
         // Buttons keep their natural wrapped height. Only feedback scrolls, so every saved filename remains readable.
         children.push(
@@ -153,6 +184,6 @@ pub(super) fn node(english: bool, error: Option<&str>) -> ui::Node {
         );
     }
     ui::Node::column("format-toolbar", children)
-        .padding(4.)
-        .gap(4.)
+        .padding(2.)
+        .gap(2.)
 }

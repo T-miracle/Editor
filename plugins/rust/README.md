@@ -14,10 +14,10 @@ Rust Analyzer 服务使用包内固定声明：优先检查 HOME 下 Scoop、VS 
 
 通过 `host.sdk` 获取宿主发布的 SDK 与 Cargo 配置路径；`cargo.configPath`、实验性原生诊断及完整和分节 `rust-analyzer` 配置由本插件提供。无需在独立插件项目写入 `.cargo`、复制 SDK 或引用宿主业务源码。服务声明请求 `serverStatusNotification`，等待 `experimental/serverStatus` 的 `/quiescent` 为 `true`，最多 120 秒。
 
-使用已构建宿主打包：
+使用已构建宿主编译组件；随后按[直接打包说明](../../installer/README.md)归档清单与运行资源：
 
 ```powershell
-./scripts/build-plugins.ps1 -HostExe ./target/debug/editor-app.exe -Packages rust,toml,html,javascript
+.\target\debug\editor-app.exe --plugin-cargo plugins/rust/Cargo.toml build --target wasm32-wasip2 --release --target-dir target
 ```
 
 单独编译时使用公开 SDK 入口：

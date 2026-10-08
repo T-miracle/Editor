@@ -2,6 +2,46 @@
 use super::*;
 use harness::NativeMarkdown;
 
+/// A caret inside existing Chinese text formats that line in one native undo transaction.
+#[gpui::test]
+#[ignore = "build markdown through scripts/build-plugins.ps1 first"]
+fn delivered_markdown_heading_switches_current_line_without_inserting_lines(
+    cx: &mut TestAppContext,
+) {
+    let original = "前一行\n中文标题\n后一行";
+    let (mut fixture, ui) = NativeMarkdown::mount(cx, &[("notes.md", original)]);
+    fixture.open("notes.md", ui);
+    fixture.focus_editor(ui);
+    ui.simulate_keystrokes("ctrl-home down right");
+    fixture.click("plugin-ui-format-heading", ui);
+    assert_eq!(
+        ui.update(|_, cx| fixture.app.read(cx).editor.read(cx).text().to_string()),
+        "前一行\n# 中文标题\n后一行",
+        "H1 must replace the current line, not insert a template beside the caret"
+    );
+    for level in 2..=6 {
+        let selector = Box::leak(format!("plugin-ui-format-heading-{level}").into_boxed_str());
+        fixture.click(selector, ui);
+        assert_eq!(
+            ui.update(|_, cx| fixture.app.read(cx).editor.read(cx).text().to_string()),
+            format!("前一行\n{} 中文标题\n后一行", "#".repeat(level))
+        );
+    }
+    fixture.click("plugin-ui-format-heading-6", ui);
+    assert_eq!(
+        ui.update(|_, cx| fixture.app.read(cx).editor.read(cx).text().to_string()),
+        original,
+        "the same heading level toggles its marker off"
+    );
+    fixture.focus_editor(ui);
+    ui.simulate_keystrokes("ctrl-z");
+    fixture.settle(ui);
+    assert_eq!(
+        ui.update(|_, cx| fixture.app.read(cx).editor.read(cx).text().to_string()),
+        "前一行\n###### 中文标题\n后一行"
+    );
+}
+
 const TOOLS: &[(&str, &str)] = &[
     ("plugin-ui-format-heading", "# 中文"),
     ("plugin-ui-format-bold", "**中文**"),
@@ -254,7 +294,7 @@ fn delivered_markdown_toolbar_wraps_all_commands_and_cancels_superseded_intent(
         .center();
     ui.simulate_click(first, Default::default());
     ui.run_until_parked();
-    for key in ["tab", "space"] {
+    for key in ["tab", "tab", "tab", "tab", "tab", "tab", "space"] {
         let keystroke = gpui_kit::Keystroke::parse(key).unwrap();
         ui.simulate_event(gpui_kit::KeyDownEvent {
             keystroke: keystroke.clone(),

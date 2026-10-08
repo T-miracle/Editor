@@ -270,7 +270,7 @@ pub(crate) fn open_dialog(
     )
 }
 
-/// Give content-heavy dialogs a larger initial canvas while sharing modal chrome.
+/// Opens shared modal chrome with caller-selected width and content height in logical pixels.
 pub(crate) fn open_dialog_sized(
     title: impl Into<SharedString>,
     width: f32,
@@ -313,7 +313,12 @@ fn open_dialog_with_builders(
     // The platform keeps this window above its parent and disables parent input.
     options.kind = WindowKind::Dialog;
     options.window_bounds = Some(WindowBounds::Windowed(bounds));
-    options.window_min_size = Some(size(px(520.), px(320.)));
+    // Compact status dialogs must not be enlarged by the settings-dialog minimum.
+    // Larger dialogs retain the existing resize limits; small ones can still grow.
+    options.window_min_size = Some(size(
+        px(width.min(520.)),
+        px((body_height + PANEL_HEADER_HEIGHT).min(320.)),
+    ));
     let native_title = window_title.clone();
     let handle = cx
         .open_window(options, move |window, cx| {

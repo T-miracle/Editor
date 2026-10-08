@@ -49,6 +49,7 @@ pub(super) fn document(document: &Document) -> Result<(), String> {
         drawings: 0,
         vectors: 0,
         images: 0,
+        icons: 0,
         has_source: document.source.is_some(),
         has_file: document.file.is_some(),
         editor_source: document.source.clone(),
@@ -136,6 +137,8 @@ struct Validator {
     vectors: usize,
     /// One document owns the combined image budget across its root, toolbar and dialog.
     images: usize,
+    /// Small inline icons have their own shared budget, independent of document image resources.
+    icons: usize,
     /// Source mappings are meaningful only in a version-bound preview document.
     has_source: bool,
     /// Binary image nodes require an independent file-resource authority.
@@ -177,6 +180,9 @@ impl Validator {
         }
     }
     fn node(&mut self, node: &Node, depth: usize) -> Result<(), String> {
+        if let Some(viewport) = &node.viewport {
+            viewport.validate(&node.kind)?;
+        }
         if depth > 24 {
             return Err("UI nesting quota exceeded".into());
         }
@@ -217,6 +223,16 @@ impl Validator {
         }
         if let Some(tooltip) = &node.tooltip {
             self.text(tooltip)?;
+        }
+        if let Some(svg) = &node.button_icon {
+            if !matches!(&node.kind, Kind::Button { label } if !label.trim().is_empty()) {
+                return Err("Button icons require a Button with an accessible label".into());
+            }
+            self.icons += 1;
+            if svg.is_empty() || svg.len() > 4096 || self.icons > 64 {
+                return Err("UI icon quota exceeded".into());
+            }
+            self.text(svg)?;
         }
         if let Some(range) = node.source_range {
             if !self.has_source {

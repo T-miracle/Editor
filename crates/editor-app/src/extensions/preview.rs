@@ -8,7 +8,83 @@ mod providers;
 mod toolbar;
 pub(crate) mod viewport;
 
+/// Newer revisions a pending publication absorbs before it is sent again without an answer.
+/// Typing therefore coalesces, while one rejected notification still recovers by itself.
+const PREVIEW_SUPERSEDED_RETRY: u8 = 8;
+
 impl ExtensionPanel {
+    /// Coalesce one file/text pair at a time without interpreting the guest's display mode.
+    /// A bounded retry and a fixed first-edit timer prevent both frozen and starved publications.
+    fn defer_source_publication(
+        &mut self,
+        next: &protocol::api::DocumentVersion,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let incremental = self.entries.iter().any(|entry| {
+            Some(&entry.manifest.id) == self.active.as_ref()
+                && entry.supports_capability("ui.incremental")
+        });
+        let same_source = self
+            .preview_version
+            .as_ref()
+            .is_some_and(|old| old.id == next.id && old.path == next.path);
+        if !incremental || !same_source {
+            self.preview_pending = false;
+            self.preview_waiting = false;
+            self.preview_ready = false;
+            self.preview_superseded = 0;
+            return false;
+        }
+        if self.preview_pending && !self.publication_settled() && self.published_source().is_some()
+        {
+            if self.preview_counted.as_ref() != Some(next) {
+                self.preview_counted = Some(next.clone());
+                self.preview_superseded = self.preview_superseded.saturating_add(1);
+            }
+            if self.preview_superseded < PREVIEW_SUPERSEDED_RETRY {
+                return true;
+            }
+        }
+        if !self.preview_ready {
+            if !self.preview_waiting {
+                self.preview_waiting = true;
+                let parent = self.parent.clone();
+                let epoch = self.instance_epoch;
+                let source_id = next.id.clone();
+                cx.spawn(async move |this, cx| {
+                    cx.background_executor()
+                        .timer(Duration::from_millis(150))
+                        .await;
+                    let _ = this.update(cx, |panel, cx| {
+                        // A retired instance or switched file cannot release a replacement's cadence.
+                        if panel.instance_epoch != epoch
+                            || panel
+                                .preview_version
+                                .as_ref()
+                                .is_none_or(|version| version.id != source_id)
+                        {
+                            return;
+                        }
+                        panel.preview_waiting = false;
+                        panel.preview_ready = true;
+                        cx.notify();
+                    });
+                    let _ = parent.update(cx, |app, cx| {
+                        app.editor_panel.update(cx, |_, cx| cx.notify());
+                        cx.notify();
+                    });
+                })
+                .detach();
+            }
+            return true;
+        }
+        self.preview_ready = false;
+        self.preview_pending = false;
+        self.preview_superseded = 0;
+        self.preview_counted = None;
+        false
+    }
+
     /// A failed file decode belongs to this exact current file and can expose the host retry action.
     pub(crate) fn file_preview_failed(&self) -> bool {
         let Some(version) = &self.preview_file else {
@@ -150,19 +226,18 @@ impl EditorApp {
         self.selected_file_provider(cx)
     }
 
-    /// Input changes invalidate the token even for clean disk reloads that keep the saved revision.
+    /// An edit retires derived work without withdrawing the tree the user is reading.
+    /// The source revision itself decides when the next publication happens, so the displayed
+    /// tree, its token and its code results stay valid until the guest answers with a newer revision.
     pub(crate) fn invalidate_editor_previews(&self, cx: &mut Context<Self>) {
         for panel in self.plugin_panels.values() {
             panel.update(cx, |panel, cx| {
                 if panel.editor_preview {
-                    panel.source_viewport.reset();
-                    // A retained focus handle does not authorize a background result from the previous source.
-                    panel.invalidate_code_highlighting(cx);
-                    // Keep the last published input records until synchronization can revoke
-                    // an unselected provider. Clearing them here loses FilePreview(None).
-                    // Text acceptance is invalidated independently by its exact source token.
-                    panel.preview_version = None;
-                    panel.preview_error = None;
+                    // A pending source locate is dropped by its own document/revision check; keeping
+                    // the last measurement preserves the user's synchronized position across an edit.
+                    if panel.preview_error.take().is_some() {
+                        cx.notify();
+                    }
                 }
             });
         }
@@ -176,6 +251,10 @@ impl EditorApp {
         let version = self
             .active_tab_index()
             .and_then(|index| self.plugin_document_version(index).ok());
+        let expected_file = self
+            .active_tab_index()
+            .and_then(|index| self.plugin_file_context(index).ok())
+            .map(|file| file.version);
         let context = self
             .active_text_tab_index()
             .and_then(|index| self.text_tab(index))
@@ -186,14 +265,48 @@ impl EditorApp {
             }
             let active = self.file_panel_is_active(panel, &selected, cx);
             panel.update(cx, |panel, cx| {
+                // File identity and text are one ordered publication. Do not send new text while
+                // its FilePreview is still waiting for the previous parse or the cadence timer.
+                let file_bound = panel.entries.iter().any(|entry| {
+                    Some(&entry.manifest.id) == panel.active.as_ref()
+                        && entry.supports_capability("editor.files")
+                        && entry.supports_capability("ui.tools")
+                });
+                if active && file_bound && panel.preview_file != expected_file {
+                    return;
+                }
+                // A user click flushes the cadence but remains tied to its exact document and node.
+                // Further typing, tab changes or instance replacement cancel it rather than retarget it.
+                if let Some((epoch, requested, node, mut event)) = panel.pending_toolbar.take()
+                    && active
+                    && epoch == panel.instance_epoch
+                    && version.as_ref() == Some(&requested)
+                {
+                    if let Some(document) = panel
+                        .current_document()
+                        .filter(|document| document.source.as_ref() == Some(&requested))
+                    {
+                        let mut unchanged = false;
+                        if let Some(toolbar) = &document.editor_toolbar {
+                            toolbar.visit(&mut |candidate| unchanged |= candidate == &node);
+                        }
+                        if unchanged {
+                            event.revision = document.revision;
+                            panel.send(PluginEvent::Ui(event));
+                        }
+                    } else {
+                        panel.pending_toolbar = Some((epoch, requested, node, event));
+                    }
+                }
                 if active && (panel.preview_document != context || panel.preview_version != version)
                 {
                     if context.is_some() {
                         panel.preview_error = None;
-                        let text = self.editor.read(cx).text().to_string();
                         // No source token means the document is outside this workspace's authority.
                         let Some(version) = &version else {
                             panel.preview_version = None;
+                            panel.preview_pending = false;
+                            panel.preview_superseded = 0;
                             panel.preview_document = context.clone();
                             panel.native_ui = None;
                             panel.native_toolbar = None;
@@ -203,6 +316,7 @@ impl EditorApp {
                             });
                             return;
                         };
+                        let text = self.editor.read(cx).text().to_string();
                         if text.len() > 1024 * 1024 {
                             // The source token remains current while the oversized text never crosses WASM.
                             panel.preview_version = Some(version.clone());
@@ -239,6 +353,7 @@ impl EditorApp {
                             text,
                         });
                         panel.preview_version = Some(version.clone());
+                        panel.preview_pending = true;
                         panel.preview_document = context.clone();
                     }
                 } else if !active && panel.preview_document.take().is_some() {
@@ -249,6 +364,8 @@ impl EditorApp {
                         text: String::new(),
                     });
                     panel.preview_version = None;
+                    panel.preview_pending = false;
+                    panel.preview_superseded = 0;
                     panel.preview_error = None;
                     panel.native_ui = None;
                     panel.native_toolbar = None;
@@ -288,6 +405,12 @@ impl EditorApp {
                         .cloned();
                     let version = file.as_ref().map(|file| file.version.clone());
                     let source = file.as_ref().and_then(|file| file.text.clone());
+                    if let Some(source) = &source
+                        && panel.preview_version.as_ref() != Some(source)
+                        && panel.defer_source_publication(source, cx)
+                    {
+                        return;
+                    }
                     // Queue import before FilePreview in this same actor channel so guest binding
                     // sees the stored legacy bundle; acknowledgement is required before session cleanup.
                     if let (Some(owner), Some(data), Some(file)) = (&owner, &legacy, &file)

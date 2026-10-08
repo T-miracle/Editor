@@ -65,19 +65,85 @@ impl ExtensionPanel {
             let panel = self.surface_id.clone()?;
             let visible = self.visible.clone();
             let epoch = self.instance_epoch;
+            let parent = self.parent.clone();
+            let owner = cx.entity().downgrade();
             self.native_toolbar = Some(cx.new(|cx| {
                 crate::ui::plugin::PluginView::new(
                     plugin.clone(),
                     document,
                     environment,
-                    move |event, _| {
+                    move |event, cx| {
                         if visible.get() {
-                            let _ = tx.send(Work::Event(
-                                plugin.clone(),
-                                epoch,
-                                Some(panel.clone()),
-                                PluginEvent::Ui(event),
-                            ));
+                            // The callback runs inside PluginView's update. A cadence flush also updates
+                            // that view's code jobs, so defer until its native input borrow is released.
+                            let parent = parent.clone();
+                            let owner = owner.clone();
+                            let tx = tx.clone();
+                            let plugin = plugin.clone();
+                            let panel = panel.clone();
+                            cx.defer(move |cx| {
+                                if matches!(event.action, protocol::ui::Action::Click) {
+                                    let handled = parent
+                                        .update(cx, |app, cx| {
+                                            let Some(active) =
+                                                app.active_editor_preview(cx).filter(|active| {
+                                                    Some(active) == owner.upgrade().as_ref()
+                                                })
+                                            else {
+                                                return true;
+                                            };
+                                            let Some(version) =
+                                                app.active_tab_index().and_then(|index| {
+                                                    app.plugin_document_version(index).ok()
+                                                })
+                                            else {
+                                                return true;
+                                            };
+                                            let queued = active.update(cx, |panel, _| {
+                                                let Some(document) = panel.current_document()
+                                                else {
+                                                    return true;
+                                                };
+                                                if document.source.as_ref() == Some(&version) {
+                                                    return false;
+                                                }
+                                                if epoch != panel.instance_epoch
+                                                    || event.revision != document.revision
+                                                {
+                                                    return true;
+                                                }
+                                                let mut node = None;
+                                                if let Some(toolbar) = &document.editor_toolbar {
+                                                    toolbar.visit(&mut |candidate| {
+                                                        if candidate.id == event.node {
+                                                            node = Some(candidate.clone());
+                                                        }
+                                                    });
+                                                }
+                                                if let Some(node) = node {
+                                                    panel.pending_toolbar =
+                                                        Some((epoch, version, node, event.clone()));
+                                                    panel.preview_ready = true;
+                                                }
+                                                true
+                                            });
+                                            if queued {
+                                                app.sync_editor_previews(cx);
+                                            }
+                                            queued
+                                        })
+                                        .unwrap_or(true);
+                                    if handled {
+                                        return;
+                                    }
+                                }
+                                let _ = tx.send(Work::Event(
+                                    plugin.clone(),
+                                    epoch,
+                                    Some(panel.clone()),
+                                    PluginEvent::Ui(event),
+                                ));
+                            });
                         }
                     },
                     window,

@@ -10,8 +10,12 @@ pub use controls::*;
 mod canvas;
 pub use canvas::*;
 mod events;
+mod visual_viewport;
+pub use visual_viewport::*;
 mod tools;
 pub use tools::*;
+pub mod incremental;
+pub use incremental::Reuse;
 
 #[cfg(test)]
 mod images_tests;
@@ -253,6 +257,9 @@ impl Dialog {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Node {
     pub id: String,
+    /// Optional reusable visual input/projection; requires negotiated `ui.viewport`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub viewport: Option<VisualViewport>,
     /// Explicit read-only link targets for native keyboard focus and linked images/alternative text.
     /// URIs use rendered href spelling, not a host-parsed domain format; requires `ui.links`.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -264,6 +271,11 @@ pub struct Node {
     /// Localized hover/accessibility text; this counts toward the ordinary UI text budget.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tooltip: Option<String>,
+    /// Geometry-only inline SVG for an icon-only Button, requiring negotiated `ui.icons`.
+    /// At most 4 KiB per icon and 64 per document; `Kind::Button.label` remains its accessible name.
+    /// The runtime rejects scripts, external resources, text, CSS and XML entities before publication.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub button_icon: Option<String>,
     /// Resolves `plugins[plugin_id].ui[role]` colors and `typography[role]` fonts.
     /// If empty, the host uses the node kind (e.g. `button`) as the role.
     #[serde(default)]
@@ -473,6 +485,8 @@ pub struct UiEvent {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", content = "value", rename_all = "snake_case")]
 pub enum Action {
+    /// Input on a visual viewport; guests own zoom, pan, limits and automatic sizing decisions.
+    ViewportInput(ViewportInput),
     /// Coalesced live geometry of the bound preview scroll; it never mutates its derived block.
     Viewport(crate::api::PreviewViewport),
     /// URI supplied by a clicked native rich-text link, never by parsing or layout alone.
@@ -509,9 +523,11 @@ impl Node {
     pub fn new(id: impl Into<String>, kind: Kind) -> Self {
         Self {
             id: id.into(),
+            viewport: None,
             links: Vec::new(),
             source_range: None,
             tooltip: None,
+            button_icon: None,
             role: String::new(),
             disabled: false,
             layout: Layout::default(),
@@ -596,6 +612,13 @@ impl Node {
                 label: label.into(),
             },
         )
+    }
+    /// Replace a button's visible label with themed geometric `svg`, retaining native focus and Click.
+    /// Returns this node; validation rejects other kinds, empty labels, excessive bytes or unsafe SVG.
+    /// Guests must declare `ui.icons ^1`; this grants no file or network access.
+    pub fn icon(mut self, svg: impl Into<String>) -> Self {
+        self.button_icon = Some(svg.into());
+        self
     }
     pub fn input(id: impl Into<String>, input: Input) -> Self {
         Self::new(id, Kind::Input(input))

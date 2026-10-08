@@ -26,7 +26,7 @@ alternate: /en/sdk/ui/
 新安装不会覆盖有效选择。失效不改写用户选择；文本回退复用普通编辑器，菜单提供“恢复普通编辑界面”，
 非文本保留 Tab、原因与替代查看器入口。选择变化推进目标版本，旧源、旧 UI 版本和旧实例事件继续沿既有门禁拒绝。
 
-独立示例见 `plugins/layout-example` 与 `scripts/build-layout-example.ps1`，不依赖宿主仓库 crate 路径。
+独立预览提供者通过编辑器公开 `--plugin-cargo` 入口构建，归档直接使用原生工具，不调用仓库辅助脚本。
 插件拥有布局、显示模式及共享偏好，宿主只验证权限、引用与资源归属并进行原生绘制。
 
 ## 文件显示与只读图片
@@ -52,6 +52,31 @@ alternate: /en/sdk/ui/
 保持宽高比、居中、完整显示并禁止自动放大；`Contain` 是插件显式请求允许放大的适配。
 插件选择显示策略，宿主通用解码、执行原生绘制；资源改变、权限撤销和实例退出均撤销旧结果。
 
+## 可视视口
+
+`ui.viewport ^1` 对所有插件公开。在 `FileImage`、`Image` 或 `Canvas` 上设置
+`Node.viewport: Some(VisualViewport)`，宿主通过 `Action::ViewportInput { content, event }`
+报告尺寸、滚轮和指针事件；画布还保留自身声明的焦点、键盘及文本输入。
+`content` 是未缩放尺寸，不暴露图片字节或增加文件权限。图片尺寸来自受控解码，
+图片的 `VisualViewport.content` 必须留空；画布须声明正数 `ContentSize { width, height }`，
+不能同时启用字符网格或 `Canvas.scroll`。
+
+插件持有比例、平移、滚轮方向和步长、范围、自动适配及重置策略。
+通过 `VisualViewport.transform: Some(ContentTransform { scale, x, y, anchor_x, anchor_y })`
+声明等比缩放和以视口像素计的平移。锚点是内容与视口上的归一化比例，范围 `[0,1]`。
+映射为 `(内容坐标 - 内容尺寸 * 锚点) * scale + 视口尺寸 * 锚点 + 平移`。
+默认锚点 `(0.5,0.5)`、平移 `(0,0)` 每帧保持居中，窗口调整尺寸时也一样。
+绘制裁剪于当前原生视口，定位没有动画过渡。`ContentTransform::project` 向访客提供相同几何计算。
+
+未设置变换时，图片保留声明的尺寸策略，画布使用默认变换；这样插件可以先收到图片尺寸，
+再决定初始比例。滚轮增量为逻辑像素，指针坐标相对于视口；手势不会隐式修改变换。
+图片不持有键盘或 IME 焦点。输入仍校验场景、revision、模态遮挡和节点禁用状态，
+拒绝替换节点或资源之前的旧回调。尺寸须为有限正数且不超过 1,000,000；
+比例须为有限正数且不超过 1,000,000；平移须有限且绝对值不超过 1,000,000；
+声明的画布尺寸及绘图变换后也不能超过该范围。画布文字变换后仍须符合已有的 1–128px
+字体配额，IME 组合文字限制在该范围。图片变换超过绘图范围时不绘制，但仍提供输入，
+允许插件修正变换。已有图片权限与解码配额继续生效。
+
 `Document.editor_viewport` 以活动 Scroll ID 绑定源视口通知及 `Action::Viewport`。需要 `editor.viewport`、`ui.richtext`、`editor.read` 和精确 source；分栏、同步开关、来源标记、定位与撤销契约见 SDK 随附的 `VIEWPORT.md`。
 
 `ui.code_highlighting ^1` 通过默认关闭的 `Document.code_highlighting` 请求已选动态 WASM 语言提供者高亮只读 CodeBlock；仍需 `ui.richtext`、`editor.read`、当前 source 与本实例工作区编辑区面板。缺失、失败或停用提供者降级为等宽文字，不拒绝整份合法视图。版本、取消、预算与原生主题绘制契约见 SDK 随附的 `CODE_HIGHLIGHTING.md`。
@@ -59,6 +84,21 @@ alternate: /en/sdk/ui/
 `ui.links ^1` 允许 `Document.link_events` 启用实际富文本链接事件 `Action::Link { uri }`；默认惰性，不在解析或绘制时打开地址。节点、UI revision、模态、禁用与实例归属门禁仍有效。事件与版本化 `editor.navigation` 请求的权限、目标及取消契约见 SDK 随附的 `NAVIGATION.md`。
 
 ## 可组合布局（清单 protocol 7）
+
+`ui.incremental ^1` 允许 `Output.view_patches` 发布增量树。ViewPatch 包含面板、精确
+`base_revision`、新文档骨架和 `reused` 引用；只能复用该实例、该面板上一份已验证 root
+中的节点。占位符是相同 ID 的空 Text，`source_shift` 平移整个子树的源码字节范围。
+宿主先恢复子树，再核对原有能力、权限、source、节点和字节预算，成功后原子发布。
+重复、缺失、未使用引用、范围溢出和过期基线均拒绝；首份视图使用 `Output.views`，
+SDK 提供 compact/restore。已协商增量能力的文本提供者使用首次编辑后 150 ms 的固定节拍
+合并文件／文本通知，保持一份在途发布并有界重试；文件身份变化立即发布。
+插件自行判断其布局是否隐藏预览并暂停正文解析，宿主不管理显示模式。
+
+`ui.icons ^1` 提供 `Node::button(id, label).icon(svg)` 与 `Node.button_icon`。
+图标仅用于 Button，非空 label 保留可访问名称，原生焦点、禁用态和版本化 Click 不变。
+单个几何 SVG 最多 4096 个 UTF-8 字节，root、toolbar、dialog 合计最多 64 个，计入普通预算。
+沿用几何 SVG 白名单，拒绝脚本、文字、DTD、CSS、href、外部资源和 URL paint，
+不授予文件或网络访问。原生按钮为 24 × 24 逻辑像素，宿主绘制插件提供的图形并应用主题颜色。
 
 `ui.native >=1.1, <2` 增加 `Layout.resizable`：仅用于有 2–16 个子节点且不换行的 Row／Column。
 插件决定分栏结构；宿主复用原生尺寸状态、指针捕获与拖动行为，并绘制本地分隔线。
@@ -119,6 +159,14 @@ Panel 与 Command 拒绝未知字段；含退役字段或要求退役能力的�
 
 通用 `Node.tooltip: Option<String>` / `.tooltip(text)` 携带随 `Environment.locale` 本地化的提示，原生按钮将其映射为悬浮说明与可访问标签，计入现有 UI 文本预算。`Layout.wrap: bool` 默认 false；行节点可 `.wrap()` 在窄宽度下换行，宿主根据实际内容计算高度。工具栏外层和分组可使用可换行 Row，按钮保留最小尺寸，不设置固定工具栏宽高。
 
+### 工具栏显隐（editor.toolbar 1.1）
+
+`Document.editor_toolbar_toggle: Option<String>` 将该编辑器预览的底栏按钮声明为**仅切换源码顶部工具栏**；字符串为插件提供的本地化 title/可访问名称，非空、至多 4096 字节。按钮复用面板已声明的图标，位于同步滚动右侧；不切换预览面板，不修改文档、选区或撤销栈。工具栏显隐按工作区/面板保存，缺省显示；源码模式继续遵循三种布局。
+
+必须协商 `editor.toolbar ^1.1`，其面板所有权、实例作用域与 `editor.read` 校验与工具栏相同。caption 可在没有活动源码时继续声明，确保按钮不会因切换普通文件而变成面板开关。省略此字段的其他插件保留原有面板开关行为。
+
+通用内置主题 role：`toolbar_button` 默认背景透明，保留焦点、hover/active 和禁用行为；`github` 为随深浅主题变化的 GitHub Primer 文档配色，`github-muted` 使用中性背景。正文、淡化文字、链接、边框和代码背景分别解析，行内代码前景明确继承正文，避免上游 accent 字色覆盖。现有 `plugins[plugin_id].ui[role]` 覆盖仍优先；`code_background` 覆盖代码块／表头底色，`inline_code_background` 单独覆盖行内代码底色。这些 role 是任何插件可用的展示预设，与语言和插件 ID 无关。
+
 ## 常用界面元素
 
 
@@ -126,6 +174,14 @@ Panel 与 Command 拒绝未知字段；含退役字段或要求退役能力的�
 沿用单行输入框的值、占位文字、重置版本、启用状态及 Change/Submit 事件校验。普通回显
 保留原生焦点、选择和 IME 组合；仅在明确替换时增加 `value_revision`。移除控件时释放订阅。
 多行字段使用编辑器本地主题与编辑行为，不创建文档会话或 WebView。
+
+### 图标按钮（ui.icons 1.0）
+
+`Node::button("bold", "粗体").icon(svg).tooltip("粗体")` 将普通按钮的可见文字替换为内联 SVG，`button_icon: Option<String>` 是对应的可选字段。原 `Kind::Button { label }` 保持不变，label 必须非空，继续作为可访问名称；tooltip 可提供更详细的本地化提示。按钮保留 Base 的焦点、禁用态及版本化 `Click` 事件，宿主用本地 24 × 24 逻辑像素按钮与 14 px 图标呈现，颜色随主题继承。未声明图标的节点省略此字段。
+
+必须单独协商 `ui.icons ^1`；缺少能力返回 `CapabilityUnavailable`。图标只能附于 Button，每个非空 SVG 至多 4096 个 UTF-8 字节，root、toolbar、dialog 共计最多 64 个，字节计入原有文本和编码预算。类型、名称或配额不合法返回 `InvalidRequest`。内联 SVG 在发布前复用包图标的 XML 几何白名单：不允许脚本、文字、DTD、CSS、事件处理器、href、命名空间资源引用及 URL paint，只允许有限的路径、矩形、圆、线与几何属性。声明不授予文件、网络、图片读取权限，也不会调用环境资源加载器。
+
+编辑区预览面板可沿用清单的 `icon_light` / `icon_dark` 声明底栏开关图标。有图标的编辑区面板开关位于视图模式及同步滚动控件右侧；面板隐藏时开关仍存在，继续用于重新显示面板。宿主按声明与面板类型排列，不识别具体插件 ID。
 
 | Kind / 构造方法 | 用途 | 事件 |
 | --- | --- | --- |
@@ -136,7 +192,7 @@ Panel 与 Command 拒绝未知字段；含退役字段或要求退役能力的�
 | `RichText` / `Node::rich_text` | 只读原生富文本，输入为受限 HTML 标记，需 `ui.richtext` | — |
 | `CodeBlock` / `Node::code_block` | 保留空白和换行的只读等宽代码，需 `ui.richtext` | — |
 | `Image` / `Node::image` | 按版本与权限异步读取并原生呈现图片，需 `ui.images` | — |
-| `Button` / `Node::button` | 原生按钮，支持键盘激活 | `Click` |
+| `Button` / `Node::button` | 原生按钮，支持键盘激活；`.icon(svg)` 需 `ui.icons` | `Click` |
 | `Input` / `Node::input` | 单行原生编辑，支持中文 IME、选区、撤销与复制粘贴 | `Change(String)`、`Submit(String)` |
 | `Checkbox` / `Node::checkbox` | 复选框 | `Toggle(bool)` |
 | `Choice` | 带稳定选项 ID 的单选组；选项可禁用 | `Select(option_id)` |

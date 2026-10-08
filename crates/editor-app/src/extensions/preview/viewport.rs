@@ -12,6 +12,8 @@ pub(crate) struct SourceTracking {
     settled_origin: Option<u64>,
     /// Retained only for native pointer ownership; it never becomes an editor scroll state.
     manual_pointer: bool,
+    /// Real source input transfers control even when its first frame has no displacement yet.
+    manual_pending: bool,
 }
 
 #[derive(PartialEq)]
@@ -37,6 +39,7 @@ impl SourceTracking {
         self.last = None;
         self.pending = None;
         self.settled_origin = None;
+        self.manual_pending = false;
         // A temporary scene withdrawal cannot end an ongoing Base drag; the global release ends it.
     }
 
@@ -74,6 +77,25 @@ impl SourceTracking {
 }
 
 impl EditorApp {
+    /// Keybinding actions can consume Home/End before element key handlers run. Observe actual input
+    /// at the window boundary, with explicit focus ownership, without intercepting normal editing.
+    pub(crate) fn install_preview_keyboard_tracking(
+        window: &Window,
+        cx: &mut Context<Self>,
+    ) -> Subscription {
+        let target = window.window_handle();
+        let owner = cx.entity().downgrade();
+        cx.intercept_keystrokes(move |_, window, cx| {
+            if window.window_handle() == target {
+                let _ = owner.update(cx, |app, cx| {
+                    if app.editor.focus_handle(cx).is_focused(window) {
+                        app.cancel_source_viewport_location(cx);
+                    }
+                });
+            }
+        })
+    }
+
     /// The guest opts into synchronization by mounting both its mapped Scroll and native source.
     pub(crate) fn editor_preview_sync_enabled(
         &self,
@@ -101,13 +123,11 @@ impl EditorApp {
             .flex()
             .flex_col()
             .min_h_0()
+            // The source pane grows as a flex child; a block wrapper leaves its height intrinsic.
+            // Keep the viewport observer transparent to the toolbar/editor height allocation.
+            .flex()
+            .flex_col()
             .relative()
-            .capture_key_down(cx.listener(|app, _, window, cx| {
-                // Observe navigation at the editor's ancestor so nested dispatch nodes cannot hide it.
-                if app.editor.focus_handle(cx).is_focused(window) {
-                    app.cancel_source_viewport_location(cx);
-                }
-            }))
             .child(source)
             .child(
                 canvas(
@@ -178,15 +198,27 @@ impl EditorApp {
     /// Manual source movement supersedes a queued reverse locate before its next layout step.
     pub(crate) fn cancel_source_viewport_location(&self, cx: &mut Context<Self>) {
         if let Some(panel) = self.active_editor_preview(cx) {
-            panel.update(cx, |panel, _| {
+            panel.update(cx, |panel, cx| {
                 panel.source_viewport.pending = None;
                 panel.source_viewport.settled_origin = None;
+                panel.source_viewport.manual_pending = true;
+                if let Some(view) = &panel.native_ui {
+                    view.update(cx, |view, _| view.source_takes_viewport());
+                }
             });
         }
     }
 
     /// Retain a source press through global release so late reverse requests cannot interrupt Base dragging.
     fn set_source_viewport_pointer(&self, held: bool, cx: &mut Context<Self>) {
+        // The global release also observes clicks in the preview; only an actual source drag may claim it.
+        if !held
+            && self
+                .active_editor_preview(cx)
+                .is_none_or(|panel| !panel.read(cx).source_viewport.manual_pointer)
+        {
+            return;
+        }
         self.cancel_source_viewport_location(cx);
         if let Some(panel) = self.active_editor_preview(cx) {
             panel.update(cx, |panel, _| panel.source_viewport.manual_pointer = held);
@@ -206,25 +238,39 @@ impl EditorApp {
             panel.update(cx, |panel, _| panel.source_viewport.reset());
             return;
         }
-        let Some(document) = self
-            .active_tab_index()
-            .and_then(|index| self.plugin_document_version(index).ok())
-        else {
+        // Report the source against the tree this panel actually displays: a pending publication
+        // keeps its predecessor rendered, and the guest validates the echoed scene revision.
+        let displayed = panel.read(cx).current_document().filter(|scene| {
+            scene.source.is_some() && scene.dialog.is_none() && scene.menu.is_none()
+        });
+        let Some((document, ui_revision)) = displayed.and_then(|scene| {
+            let revision = scene.revision;
+            scene.source.clone().map(|source| (source, revision))
+        }) else {
+            panel.update(cx, |panel, _| panel.source_viewport.reset());
             return;
         };
-        let Some(ui_revision) = panel
-            .read(cx)
-            .current_document()
-            .filter(|scene| {
-                scene.source.as_ref() == Some(&document)
-                    && scene.dialog.is_none()
-                    && scene.menu.is_none()
-            })
-            .map(|scene| scene.revision)
+        let Some(active) = self
+            .active_tab_index()
+            .and_then(|index| self.plugin_document_version(index).ok())
         else {
             panel.update(cx, |panel, _| panel.source_viewport.reset());
             return;
         };
+        if active.id != document.id || active.path != document.path {
+            panel.update(cx, |panel, _| panel.source_viewport.reset());
+            return;
+        }
+        if active != document {
+            // The editor already contains new text while the preview cadence retains the old scene.
+            // Never label new byte offsets with that old revision; resume after publication catches up.
+            // Preserve manual ownership so the next valid sample still reflects the user's input.
+            panel.update(cx, |panel, _| {
+                panel.source_viewport.pending = None;
+                panel.source_viewport.settled_origin = None;
+            });
+            return;
+        }
         let editor = self.editor.clone();
         let mut scroll = None;
         panel.update(cx, |panel, cx| {
@@ -250,6 +296,16 @@ impl EditorApp {
                 }
             }
             let state = editor.read(cx);
+            // A preview the user just scrolled outranks this source reflow: reporting a source that
+            // is still at its top would let the guest drive a scrolled preview back to the top.
+            // The measurement stays unstored, so the next frame reports it once the guest knows.
+            if panel
+                .native_ui
+                .as_ref()
+                .is_some_and(|view| view.read(cx).preview_input_pending())
+            {
+                return;
+            }
             let Some(anchor) = viewport::sample(state, window, cx) else {
                 return;
             };
@@ -262,15 +318,17 @@ impl EditorApp {
                 bounds: state.input_bounds(),
                 line_height: state.line_height(),
             };
-            if tracking.last.as_ref() == Some(&next) && origin.is_none() {
+            if tracking.last.as_ref() == Some(&next) && origin.is_none() && !tracking.manual_pending
+            {
                 return;
             }
             // Native reflow can clamp Y while changing width/height/font metrics; it is still layout input.
-            let layout = tracking.last.as_ref().is_none_or(|old| {
-                old.offset.y == next.offset.y
-                    || old.bounds.size != next.bounds.size
-                    || old.line_height != next.line_height
-            });
+            let layout = !std::mem::take(&mut tracking.manual_pending)
+                && tracking.last.as_ref().is_none_or(|old| {
+                    old.offset.y == next.offset.y
+                        || old.bounds.size != next.bounds.size
+                        || old.line_height != next.line_height
+                });
             tracking.last = Some(next);
             panel.send(protocol::api::Notification::SourceViewport(
                 protocol::api::SourceViewport {

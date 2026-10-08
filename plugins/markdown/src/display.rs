@@ -107,7 +107,20 @@ impl State {
             != file.as_ref().and_then(|file| file.text.as_ref())
         {
             self.blocks.clear();
-            self.scrolling.reset();
+            // Advancing this file's text must preserve the last manual scroll owner. FilePreview
+            // precedes Preview, so resetting here would undo Preview's same-document invalidation.
+            let same_document = self
+                .source
+                .as_ref()
+                .zip(file.as_ref().and_then(|file| file.text.as_ref()))
+                .is_some_and(|(source, next)| {
+                    source.version.id == next.id && source.version.path == next.path
+                });
+            if same_document {
+                self.scrolling.invalidate();
+            } else {
+                self.scrolling.reset();
+            }
             if file.is_none() {
                 self.source = None;
             }
@@ -142,7 +155,8 @@ impl State {
         }
         self.display = Display::decode(self.preferences.write(display.encode())?.data.as_ref())?;
         self.scrolling.reset();
-        self.revision = self.revision.saturating_add(1);
+        // Showing a hidden preview must rebuild its cached source before publishing mapped blocks.
+        self.refresh();
         Ok(())
     }
 
@@ -214,9 +228,9 @@ impl State {
             ),
             (
                 "toolbar",
-                "format-toolbar",
-                "格式工具栏",
-                "Formatting toolbar",
+                "toolbar",
+                "隐藏/显示Markdown工具栏",
+                "Show/hide Markdown toolbar",
                 self.display.toolbar,
                 self.display.mode == Mode::Preview,
             ),
@@ -244,21 +258,34 @@ impl State {
             }
         })
         .collect();
-        // Domain content defaults reside here. User tokens override them through ui.content_colors.
-        let (fg, bg, border, link) = if self.environment.dark {
-            (0xdfe1e5, 0x2b2d30, 0x43454a, 0x7aa5f8)
+        // Primer defaults belong to Markdown. RGB-only defaults precompose inline code against
+        // this plugin's surface, preserving the visual palette without a host-owned preset.
+        let (fg, bg, muted, border, link, muted_fg, inline) = if self.environment.dark {
+            (
+                0xf0f6fc, 0x0d1117, 0x151b23, 0x3d444d, 0x4493f8, 0x9198a1, 0x1f232a,
+            )
         } else {
-            (0x24292f, 0xffffff, 0xd0d7de, 0x0969da)
+            (
+                0x1f2328, 0xffffff, 0xf6f8fa, 0xd1d9e0, 0x0969da, 0x59636e, 0xf0f1f2,
+            )
         };
-        for (key, color) in [
-            ("foreground", fg),
-            ("background", bg),
-            ("border", border),
-            ("accent", link),
-        ] {
-            document
-                .content_colors
-                .insert(format!("rich_text.{key}"), color);
+        for role in ["rich_text", "github", "github-muted"] {
+            for (key, color) in [
+                ("foreground", fg),
+                (
+                    "background",
+                    if role == "github-muted" { muted } else { bg },
+                ),
+                ("border", border),
+                ("accent", link),
+                ("muted_foreground", muted_fg),
+                ("code_background", muted),
+                ("inline_code_background", inline),
+            ] {
+                document
+                    .content_colors
+                    .insert(format!("{role}.{key}"), color);
+            }
         }
         document
     }
@@ -271,7 +298,8 @@ impl State {
         if self.preferences.changed(event)? {
             self.display = Display::decode(self.preferences.value().data.as_ref())?;
             self.scrolling.reset();
-            self.revision = self.revision.saturating_add(1);
+            // A peer may reveal this instance after edits made while its preview was hidden.
+            self.refresh();
         }
         Ok(())
     }

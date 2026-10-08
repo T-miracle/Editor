@@ -4,4 +4,4 @@
 
 本包只有声明与资源，不包含生命周期 WASM 组件或语言服务。`grammar/toml.wasm` 是语法资源，不是动态插件组件。
 
-通过 `scripts/build-plugins.ps1 -HostExe <editor-app.exe>` 打包；ZIP 保留本 README、清单、查询、图标和原始 grammar。
+使用普通 ZIP 工具归档运行资源，保留本 README、清单、查询、图标和原始 grammar；步骤见[直接打包说明](../../installer/README.md)。打包不调用旧辅助脚本。

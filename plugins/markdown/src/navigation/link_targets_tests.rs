@@ -49,6 +49,33 @@ fn document(nodes: Vec<ui::Node>) -> ui::Document {
     document
 }
 
+/// The repository's real platform specification must publish its complete preview, including its final block.
+#[test]
+fn platform_specification_keeps_complete_native_preview() {
+    let source = include_str!("../../../../docs/plugins/specs/plugin-api-platform.md");
+    let mut state = State::default();
+    state.environment.locale = "zh-CN".into();
+    state.source = Some(Source {
+        version: version(),
+        text: source.into(),
+    });
+    state.refresh();
+    assert!(
+        !state.preview_limited,
+        "actual specification exceeds parser work budget"
+    );
+    let validation = document(state.blocks.clone()).validate();
+    assert!(validation.is_ok(), "actual specification: {validation:?}");
+    let view = state.view();
+    assert!(view.document.validate().is_ok());
+    let all = descendants(std::slice::from_ref(&view.document.root));
+    assert!(!all.iter().any(|node| node.id == "preview-limit"));
+    assert!(all.iter().any(|node| {
+        node.source_range
+            .is_some_and(|range| range.end == source.len())
+    }));
+}
+
 /// An image-only outer link remains a native image and resolves the original relative/anchor/web policy target.
 #[test]
 fn image_only_links_declare_leaf_targets_for_relative_anchor_and_web_destinations() {

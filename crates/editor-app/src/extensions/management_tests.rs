@@ -249,7 +249,7 @@ fn log_view_shares_read_state_without_clearing_other_plugins(cx: &mut TestAppCon
     });
 }
 
-/// A long run stays confined to the detail viewport at the larger supported font size.
+/// Descending logs retain a captured read boundary and keep new top entries unread while reviewing history.
 #[gpui::test]
 fn long_runtime_logs_scroll_below_fixed_tabs(cx: &mut TestAppContext) {
     with_manager(cx, "en", true, |form, owner| {
@@ -273,18 +273,9 @@ fn long_runtime_logs_scroll_below_fixed_tabs(cx: &mut TestAppContext) {
         draw(form);
         click(form, "plugin-detail-tabs-5");
         draw(form);
+        // Opening the page acknowledges its captured maximum receipt ID, including old offscreen
+        // warnings. Display order must not accidentally shrink that boundary to the oldest row.
         assert_eq!(logs.unread_severity("manager-first"), None);
-        let late = logs.append(
-            "manager-first",
-            plugin_runtime::logs::LogLevel::Error,
-            "host.plugin",
-            "new offscreen error",
-        );
-        draw(form);
-        assert_eq!(
-            logs.unread_severity("manager-first"),
-            Some(plugin_runtime::logs::LogLevel::Error)
-        );
         let header = form.debug_bounds("plugin-manager-header").unwrap();
         let tabs = form.debug_bounds("plugin-detail-tabs-5").unwrap();
         let viewport = form.debug_bounds("plugin-manager-detail-content").unwrap();
@@ -298,7 +289,7 @@ fn long_runtime_logs_scroll_below_fixed_tabs(cx: &mut TestAppContext) {
         assert_eq!(header, form.debug_bounds("plugin-manager-header").unwrap());
         assert_eq!(tabs, form.debug_bounds("plugin-detail-tabs-5").unwrap());
         assert!(form.update(|_, cx| owner.read(cx).manager_detail_scroll.offset().y < px(0.)));
-        assert_eq!(logs.records("manager-first").len(), initial_count + 101);
+        // In descending order, review the oldest records before the new error arrives at the top.
         form.simulate_event(gpui_kit::ScrollWheelEvent {
             position: viewport.center(),
             delta: gpui_kit::ScrollDelta::Pixels(point(px(0.), px(-99_999.))),
@@ -306,8 +297,96 @@ fn long_runtime_logs_scroll_below_fixed_tabs(cx: &mut TestAppContext) {
             modifiers: Default::default(),
         });
         draw(form);
-        assert!(form.debug_bounds(record_selector(late)).is_some());
+        let previous_offset = form.update(|_, cx| owner.read(cx).manager_detail_scroll.offset());
+        let late = logs.append(
+            "manager-first",
+            plugin_runtime::logs::LogLevel::Error,
+            "host.plugin",
+            "new offscreen error",
+        );
+        draw(form);
+        assert_eq!(logs.records("manager-first").len(), initial_count + 101);
+        assert_eq!(
+            form.update(|_, cx| owner.read(cx).manager_detail_scroll.offset()),
+            previous_offset,
+            "an incoming top entry must not move the user's history viewport"
+        );
+        let late_bounds = form.debug_bounds(record_selector(late)).unwrap();
+        assert!(late_bounds.bottom() <= viewport.top());
+        assert_eq!(
+            logs.unread_severity("manager-first"),
+            Some(plugin_runtime::logs::LogLevel::Error)
+        );
+        assert!(form.debug_bounds("plugin-detail-tabs-5-Error").is_some());
+        // Only scrolling back to the new message reads it and removes the unread error indicator.
+        form.simulate_event(gpui_kit::ScrollWheelEvent {
+            position: viewport.center(),
+            delta: gpui_kit::ScrollDelta::Pixels(point(px(0.), px(99_999.))),
+            touch_phase: gpui_kit::TouchPhase::Moved,
+            modifiers: Default::default(),
+        });
+        draw(form);
+        let late_bounds = form.debug_bounds(record_selector(late)).unwrap();
+        assert!(late_bounds.intersects(&viewport));
         assert_eq!(logs.unread_severity("manager-first"), None);
+        assert!(form.debug_bounds("plugin-detail-tabs-5-Error").is_none());
+        assert_eq!(header, form.debug_bounds("plugin-manager-header").unwrap());
+        assert_eq!(tabs, form.debug_bounds("plugin-detail-tabs-5").unwrap());
+    });
+}
+
+/// Latest receipts appear first even when their displayed, second-resolution timestamps match.
+#[gpui::test]
+fn runtime_logs_show_latest_receipts_at_the_top(cx: &mut TestAppContext) {
+    with_manager(cx, "zh-CN", false, |form, owner| {
+        let logs = form.update(|_, cx| owner.read(cx).runtime_logs());
+        let mut same_second = None;
+        // Appending through the manager's shared sink preserves real record identities. Repeating
+        // the short pair handles a wall-clock second changing between the first two receipts.
+        for _ in 0..4 {
+            let earlier = logs.append(
+                "manager-second",
+                plugin_runtime::logs::LogLevel::Warning,
+                "guest.stderr",
+                "较早的同秒日志",
+            );
+            let latest = logs.append(
+                "manager-second",
+                plugin_runtime::logs::LogLevel::Error,
+                "host.plugin",
+                "最新的同秒日志",
+            );
+            let records = logs.records("manager-second");
+            let pair = &records[records.len() - 2..];
+            if pair[0]
+                .time
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_secs()
+                == pair[1]
+                    .time
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap()
+                    .as_secs()
+            {
+                same_second = Some((earlier, latest));
+                break;
+            }
+        }
+        let (earlier, latest) =
+            same_second.expect("two adjacent receipts within one displayed second");
+        assert!(latest > earlier);
+        click(form, "plugin-row-manager-second");
+        click(form, "plugin-detail-tabs-5");
+        let earlier_bounds = form.debug_bounds(record_selector(earlier)).unwrap();
+        let latest_bounds = form.debug_bounds(record_selector(latest)).unwrap();
+        let viewport = form.debug_bounds("plugin-manager-detail-content").unwrap();
+        assert!(
+            latest_bounds.top() < earlier_bounds.top(),
+            "latest receipt must precede its same-second peer"
+        );
+        assert!(latest_bounds.intersects(&viewport));
+        assert_eq!(logs.unread_severity("manager-second"), None);
     });
 }
 

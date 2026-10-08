@@ -91,7 +91,8 @@ impl Render for InstallationView {
                         })))))
             }))
             .child(
-                h_flex().justify_end().child(
+                // Keep the action visible while long status or consent details scroll above it.
+                h_flex().flex_shrink_0().justify_end().child(
                     div()
                         .id("plugin-install-progress-close-region")
                         .debug_selector(|| "plugin-install-progress-close-region".into())
@@ -131,9 +132,11 @@ impl ExtensionPanel {
         });
         app_dialog::open_dialog_sized(
             "插件安装进度",
-            680.,
-            480.,
-            move |content, _, _| content.child(view.clone()),
+            // Brief progress messages use a compact canvas; detailed steps remain scrollable.
+            520.,
+            200.,
+            // Bound the flex content to the viewport so long messages cannot push out the footer.
+            move |content, _, _| content.min_h_0().overflow_hidden().child(view.clone()),
             cx,
         );
     }

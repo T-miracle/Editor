@@ -15,6 +15,8 @@ mod scroll;
 
 pub(super) struct CanvasView {
     pub(super) drawing: Canvas,
+    /// Optional guest-supplied visual projection; ordinary canvases retain their existing coordinates.
+    pub(super) viewport: Option<protocol::ui::VisualViewport>,
     pub(super) font: protocol::FontStyle,
     pub(super) enabled: bool,
     pub(super) revision: u64,
@@ -32,6 +34,24 @@ pub(super) struct CanvasView {
 }
 
 impl CanvasView {
+    /// Canvas artwork uses the same public content transform as either native image kind.
+    fn project(&self, rect: protocol::Rect, bounds: Bounds<Pixels>) -> protocol::Rect {
+        self.viewport
+            .as_ref()
+            .and_then(|viewport| {
+                viewport.content.map(|content| {
+                    viewport.transform.unwrap_or_default().project(
+                        rect,
+                        content,
+                        protocol::ui::ContentSize {
+                            width: bounds.size.width / px(1.),
+                            height: bounds.size.height / px(1.),
+                        },
+                    )
+                })
+            })
+            .unwrap_or(rect)
+    }
     /// Sibling native controls return keyboard input to the addressed canvas after their action.
     pub(super) fn focus_handle(&self) -> FocusHandle {
         self.focus.clone()
@@ -55,6 +75,7 @@ impl CanvasView {
         ];
         Self {
             drawing,
+            viewport: None,
             font: Default::default(),
             enabled: true,
             revision: 0,
@@ -165,9 +186,17 @@ impl CanvasView {
                 } => {
                     let mut rect = *rect;
                     if *extend_to_bottom {
-                        rect.h = (bounds.size.height / px(1.) - rect.y).max(0.);
+                        let height = self
+                            .viewport
+                            .as_ref()
+                            .and_then(|v| v.content)
+                            .map_or(bounds.size.height / px(1.), |v| v.height);
+                        rect.h = (height - rect.y).max(0.);
                     }
-                    window.paint_quad(fill(rect_bounds(rect, bounds.origin), rgb(*color)));
+                    window.paint_quad(fill(
+                        rect_bounds(self.project(rect, bounds), bounds.origin),
+                        rgb(*color),
+                    ));
                 }
                 protocol::Paint::Text {
                     x,
@@ -189,10 +218,26 @@ impl CanvasView {
                     }
                     paint_text(
                         text,
-                        *size,
+                        *size
+                            * self
+                                .viewport
+                                .as_ref()
+                                .and_then(|v| v.transform)
+                                .map_or(1., |t| t.scale),
                         face,
                         rgb(*color).into(),
-                        bounds.origin + point(px(*x), px(*y)),
+                        {
+                            let rect = self.project(
+                                protocol::Rect {
+                                    x: *x,
+                                    y: *y,
+                                    w: 0.,
+                                    h: 0.,
+                                },
+                                bounds,
+                            );
+                            bounds.origin + point(px(rect.x), px(rect.y))
+                        },
                         window,
                         cx,
                     );
@@ -206,7 +251,7 @@ impl CanvasView {
                     {
                         let _ = window.paint_image(
                             bounds,
-                            rect_bounds(image.rect, bounds.origin),
+                            rect_bounds(self.project(image.rect, bounds), bounds.origin),
                             Default::default(),
                             image.image.clone(),
                             0,
@@ -217,10 +262,16 @@ impl CanvasView {
             }
         }
         if !self.composition.is_empty() {
-            let anchor = self.drawing.caret.unwrap_or_default();
+            let anchor = self.project(self.drawing.caret.unwrap_or_default(), bounds);
             paint_text(
                 &self.composition,
-                self.font.size_px.unwrap_or(14.),
+                (self.font.size_px.unwrap_or(14.)
+                    * self
+                        .viewport
+                        .as_ref()
+                        .and_then(|v| v.transform)
+                        .map_or(1., |t| t.scale))
+                .clamp(1., 128.),
                 font(
                     self.font
                         .family
@@ -504,12 +555,15 @@ impl EntityInputHandler for CanvasView {
         _: &mut Context<Self>,
     ) -> Option<Bounds<Pixels>> {
         Some(rect_bounds(
-            self.drawing.caret.unwrap_or(protocol::Rect {
-                x: 0.,
-                y: 0.,
-                w: 1.,
-                h: self.font.size_px.unwrap_or(14.),
-            }),
+            self.project(
+                self.drawing.caret.unwrap_or(protocol::Rect {
+                    x: 0.,
+                    y: 0.,
+                    w: 1.,
+                    h: self.font.size_px.unwrap_or(14.),
+                }),
+                self.bounds,
+            ),
             self.bounds.origin,
         ))
     }

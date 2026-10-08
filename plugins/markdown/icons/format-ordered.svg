@@ -1,0 +1,4 @@
+<!-- Ordered list: outlined numerals are geometry, keeping rendering independent of fonts. -->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+  <path d="m3 5 2-1v6M3 10h4M3 15c0-3 4-3 4-1 0 2-4 3-4 6h4M11 7h10M11 17h10"/>
+</svg>

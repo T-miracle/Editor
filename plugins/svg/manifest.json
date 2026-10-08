@@ -1,7 +1,7 @@
 {
   "id": "svg",
   "name": "Image",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "protocol": 7,
   "api": {
     "base": "^1",
@@ -9,6 +9,7 @@
       "ui.native": ">=1.1, <2",
       "ui.canvas": ">=1.1, <2",
       "ui.file_images": "^1",
+      "ui.viewport": "^1",
       "editor.files": "^1",
       "editor.documents": "^1",
       "editor.layout": "^1",

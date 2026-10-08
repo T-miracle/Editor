@@ -38,6 +38,20 @@ impl Document {
             )
         })?;
         let valid = match (&node.kind, &event.action) {
+            (
+                Kind::Canvas(_) | Kind::Image { .. } | Kind::FileImage { .. },
+                Action::ViewportInput(input),
+            ) => {
+                node.viewport.is_some()
+                    && input.content.valid()
+                    && match &node.kind {
+                        Kind::Canvas(canvas) => {
+                            node.viewport.as_ref().unwrap().content == Some(input.content)
+                                && canvas.accepts(&input.event)
+                        }
+                        _ => Canvas::default().accepts(&input.event),
+                    }
+            }
             (Kind::Scroll { content }, Action::Viewport(position)) => {
                 self.dialog.is_none()
                     && self.menu.is_none()
@@ -67,7 +81,9 @@ impl Document {
                 .iter()
                 .any(|option| option.id == *id && !option.disabled),
             (Kind::Tabs { tabs, .. }, Action::Select(id)) => tabs.iter().any(|tab| tab.id == *id),
-            (Kind::Canvas(canvas), Action::Canvas(event)) => canvas.accepts(event),
+            (Kind::Canvas(canvas), Action::Canvas(event)) => {
+                node.viewport.is_none() && canvas.accepts(event)
+            }
             _ => false,
         };
         if valid {

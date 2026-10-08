@@ -2,6 +2,8 @@
 use plugin_runtime::{Manager, Package, plugin_protocol::Environment};
 use serde_json::{Value, json};
 use std::io::{Cursor, Write};
+#[path = "composable_ui/icons.rs"]
+mod ui_icons;
 
 /// Owned content defaults and adjustable native panes are independently negotiated before publication.
 #[test]

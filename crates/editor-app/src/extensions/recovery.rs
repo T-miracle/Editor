@@ -41,17 +41,20 @@ impl ExtensionPanel {
         severity_icon(self.runtime_logs().unread_severity(id))
     }
 
-    /// Render a snapshot and acknowledge only its entries after the page is displayed.
+    /// Present the latest receipts first and acknowledge only the captured entries after display.
     /// A switch, closed dialog or concurrent arrival cannot make an old view read new records.
     pub(super) fn runtime_status(&mut self, id: &str, cx: &mut Context<Self>) -> AnyElement {
-        let records = self.runtime_logs().records(id);
+        let mut records = self.runtime_logs().records(id);
+        // Use full receipt precision and identity; local labels may repeat within a second or DST transition.
+        records.sort_by_key(|record| std::cmp::Reverse((record.time, record.id)));
         if self
             .manager_log_view
             .as_ref()
             .map(|(plugin, _)| plugin.as_str())
             != Some(id)
         {
-            let through = records.last().map_or(0, |record| record.id);
+            // Confirmation follows receipt identity, independently of date order or a system-clock adjustment.
+            let through = records.iter().map(|record| record.id).max().unwrap_or(0);
             self.manager_log_view = Some((id.to_owned(), through));
             let owner = cx.entity().downgrade();
             let plugin = id.to_owned();
@@ -192,18 +195,10 @@ pub(crate) fn level_label(level: LogLevel) -> String {
     .to_string()
 }
 
-/// An explicit UTC clock preserves event time without adding a timezone dependency.
+/// Show receipt dates in the user's system timezone, using a fixed calendar format and whole seconds.
+/// Both the complete log and status summaries use this label; sorting retains the original instant.
 pub(crate) fn log_time(record: &LogRecord) -> String {
-    let time = record
-        .time
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default();
-    let seconds = time.as_secs() % 86_400;
-    format!(
-        "{:02}:{:02}:{:02}.{:03} UTC",
-        seconds / 3600,
-        seconds / 60 % 60,
-        seconds % 60,
-        time.subsec_millis()
-    )
+    chrono::DateTime::<chrono::Local>::from(record.time)
+        .format("%Y-%m-%d %H:%M:%S")
+        .to_string()
 }

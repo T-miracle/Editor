@@ -120,6 +120,9 @@ impl NativeMarkdown {
     pub fn settle(&mut self, cx: &mut VisualTestContext) {
         use super::super::composable_tests::{publish, pump};
         for _ in 0..5 {
+            // Advance the real publication cadence deterministically instead of sleeping in native tests.
+            cx.executor().advance_clock(Duration::from_millis(160));
+            cx.run_until_parked();
             pump(&mut self.manager, &self.app, cx);
             self.manager.poll();
             let requests = self

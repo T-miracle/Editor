@@ -129,6 +129,24 @@ pub struct ExtensionPanel {
     preview_version: Option<protocol::api::DocumentVersion>,
     /// File-only scenes use their own resource authority, never a fake source revision.
     preview_file: Option<protocol::api::FileVersion>,
+    /// True while the guest still owes a tree for the text this panel published last.
+    /// One publication stays in flight so typing cannot rebuild the preview for every character.
+    preview_pending: bool,
+    /// Revisions that arrived while that publication was in flight; a bounded retry keeps a
+    /// rejected notification from freezing the preview behind a guest that never answers.
+    preview_superseded: u8,
+    /// The newest revision already counted as superseded, so frames cannot inflate that count.
+    preview_counted: Option<protocol::api::DocumentVersion>,
+    /// A bounded publication cadence gives input priority without starving continuous typing.
+    preview_waiting: bool,
+    preview_ready: bool,
+    /// An explicit toolbar click can flush coalesced text without applying against stale source bytes.
+    pending_toolbar: Option<(
+        u64,
+        protocol::api::DocumentVersion,
+        protocol::ui::Node,
+        protocol::ui::UiEvent,
+    )>,
     /// A host transport limit is shown against the current source instead of leaving an empty preview.
     preview_error: Option<String>,
     /// Only an authorized visible split enables either semantic viewport stream.
@@ -143,6 +161,8 @@ pub struct ExtensionPanel {
     /// Immutable package icons are loaded once per version, outside the render path.
     tool_icons: HashMap<String, Option<Icon>>,
     focus: FocusHandle,
+    /// Keep the footer control's keyboard focus stable when source toolbars change the render tree.
+    footer_focus: FocusHandle,
     bounds: Bounds<Pixels>,
     /// Keyed native controls own text editing, canvas input and composition.
     native_ui: Option<Entity<crate::ui::plugin::PluginView>>,
@@ -205,15 +225,7 @@ impl ExtensionPanel {
     }
     /// Discover shipped ZIPs for the local market tab and inspect their manifests once.
     fn load_market_packages(&mut self) {
-        let exe = std::env::current_exe()
-            .ok()
-            .and_then(|path| path.parent().map(Path::to_owned));
-        let roots = exe
-            .into_iter()
-            .map(|path| path.join("plugins"))
-            .chain(std::iter::once(
-                PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../dist/plugins"),
-            ));
+        let roots = crate::app::distribution::shipped_plugin_roots();
         let mut paths = Vec::new();
         for root in roots {
             if let Ok(files) = std::fs::read_dir(root) {
@@ -312,6 +324,12 @@ impl ExtensionPanel {
             preview_document: None,
             preview_version: None,
             preview_file: None,
+            preview_pending: false,
+            preview_superseded: 0,
+            preview_counted: None,
+            preview_waiting: false,
+            preview_ready: false,
+            pending_toolbar: None,
             preview_error: None,
             panel_title: "插件管理".into(),
             panel_icons: [None, None],
@@ -319,6 +337,7 @@ impl ExtensionPanel {
             panel_icon_digest: None,
             tool_icons: HashMap::new(),
             focus: cx.focus_handle(),
+            footer_focus: cx.focus_handle(),
             bounds: Bounds::default(),
             native_ui: None,
             native_toolbar: None,
@@ -408,6 +427,12 @@ impl ExtensionPanel {
             preview_document: None,
             preview_version: None,
             preview_file: None,
+            preview_pending: false,
+            preview_superseded: 0,
+            preview_counted: None,
+            preview_waiting: false,
+            preview_ready: false,
+            pending_toolbar: None,
             preview_error: None,
             panel_title: panel.title,
             panel_icons,
@@ -415,6 +440,7 @@ impl ExtensionPanel {
             panel_icon_digest,
             tool_icons: HashMap::new(),
             focus: cx.focus_handle(),
+            footer_focus: cx.focus_handle(),
             bounds: Bounds::default(),
             native_ui: None,
             native_toolbar: None,
@@ -569,6 +595,11 @@ impl ExtensionPanel {
                     self.preview_document = None;
                     self.preview_version = None;
                     self.preview_file = None;
+                    self.preview_waiting = false;
+                    self.preview_ready = false;
+                    self.pending_toolbar = None;
+                    self.preview_pending = false;
+                    self.preview_superseded = 0;
                     self.preview_error = None;
                     // A replacement can reuse source/UI revisions; instance retirement still revokes its locate.
                     self.source_viewport.withdraw();
@@ -757,6 +788,17 @@ impl ExtensionPanel {
         self.command("panel.opened".into());
         self.focus(window, cx);
     }
+    /// Preview publication state for native tests: the revision sent and the one the guest echoed.
+    #[cfg(test)]
+    pub(crate) fn sent_and_published_revision(&self) -> (Option<u64>, Option<u64>) {
+        (
+            self.preview_version
+                .as_ref()
+                .map(|version| version.revision),
+            self.published_source().map(|source| source.revision),
+        )
+    }
+
     fn current_document(&self) -> Option<Arc<protocol::ui::Document>> {
         self.active
             .as_ref()
@@ -797,6 +839,31 @@ impl ExtensionPanel {
                 && previous.revision <= current.revision)
                 .then(|| scene.clone())
         })
+    }
+    /// True when the guest has already published a tree for the text this panel sent last.
+    /// While it has not, one publication stays in flight and the newest text waits for it.
+    fn publication_settled(&self) -> bool {
+        let Some(sent) = &self.preview_version else {
+            return true;
+        };
+        self.published_source().is_some_and(|published| {
+            published.id == sent.id
+                && published.path == sent.path
+                && published.revision >= sent.revision
+        })
+    }
+
+    /// The source version echoed by this panel's guest publication, when the guest has one.
+    fn published_source(&self) -> Option<&protocol::api::DocumentVersion> {
+        self.active
+            .as_ref()
+            .and_then(|id| {
+                self.views.get(&format!(
+                    "{id}/{}",
+                    self.surface_id.as_deref().unwrap_or_default()
+                ))
+            })
+            .and_then(|document| document.source.as_ref())
     }
     /// Use the native file picker; unsigned packages show their requested capabilities before install.
     fn choose_package(&mut self, cx: &mut Context<Self>) {

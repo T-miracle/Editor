@@ -1,6 +1,6 @@
 # 终端 WebAssembly 插件
 
-当前版本 0.12.1 使用清单 protocol 7 和类型化能力接口。插件通过通用布局树组合 `SideTabs`、`Canvas` 和原生菜单，并通过 `ui.tools` 提供右侧功能组的新建与菜单按钮；独立终端窗口显隐在左侧窗口组。图标、ANSI 和内容默认配色由包内 `icons/`、`theme.json` 提供，`ui.content_colors` 允许用户主题覆盖。终端解析、网格、历史、会话与 Shell 配置仍由 WASM 插件持有。宿主提供授权后的通用接口及原生绘制。架构与包格式见 [运行时插件说明](../../docs/runtime-plugins.md)。
+当前版本 0.12.1 使用清单 protocol 7 和类型化能力接口。插件通过通用布局树组合 `SideTabs`、`Canvas` 和原生菜单，并通过 `ui.tools` 提供右侧功能组的新建与菜单按钮；独立终端窗口显隐在左侧窗口组。图标、ANSI 和内容默认配色由包内 `icons/`、`theme.json` 提供，`ui.content_colors` 允许用户主题覆盖。终端解析、网格、历史、会话与 Shell 配置仍由 WASM 插件持有。宿主提供授权后的通用接口及原生绘制。架构与包格式见 [运行时插件说明](../../docs/plugins/runtime-plugins.md)。
 
 0.12.1 增加公开 `run.configurations 1.0` 的 Shell 脚本配置。Windows 只提供本机可用的 Windows PowerShell、PowerShell 7、cmd；Linux/macOS 只提供本机可用的 sh、bash、zsh。未安装和其他系统的解释器不显示，WSL 保留既有交互终端入口，但不以仅存在 wsl.exe 推断脚本环境可用。
 
@@ -10,7 +10,7 @@
 
 本目录同时包含插件源码与打包清单：`src/` 为终端功能实现，`Cargo.toml` 为 WASM crate，`manifest.json` 为安装声明，终端核心直接依赖 [term-wm-vt100 上游](https://github.com/jzombie/term-wm-vt100)，锁定提交 `5ffcf205c709b2378dc91cfa4637ae0f819d6c74`，支持 WASM 编译及主屏幕缩放重排，不包含本地 vendor 源码，Shell 目录元数据使用 `vte`，许可文本随插件包分发。编译接口由编辑器自动缓存和注入，不需要同级 `sdk/` 或主程序源码。独立构建使用 `editor-app.exe --plugin-cargo terminal/Cargo.toml build --target wasm32-wasip2 --release`。Cargo 包名仍为 `terminal-guest`。
 
-执行 `./scripts/build-plugins.ps1` 生成标准 ZIP 包 `dist/plugins/terminal.zip`。点击设置左侧的插件图标，在“插件管理”弹窗中选择该包，确认来源与权限。也可使用“查看随附插件”。安装后立即启用，无需重启编辑器；点击底部终端图标显示面板。
+通过实际宿主的公开 `--plugin-cargo` 入口构建组件，再归档清单、README、terminal.wasm、图标和许可为标准 ZIP；见[直接打包说明](../../installer/README.md)。点击设置左侧的插件图标，在“插件管理”弹窗中选择该包，确认来源与权限。安装后立即启用，无需重启编辑器；点击底部终端图标显示面板。
 
 同 ID 包执行更新。更新前保存会话并关闭旧 Shell 及其子进程；恢复 Tab、配置和旧输出后，仅为之前仍运行的会话启动新 Shell；已退出会话保留历史，不重启，不重放旧命令。恢复保留原有网格尺寸、文字样式、软换行、光标位置与历史滚动位置，不插入提示文字或新增命令行；旧格式中自动生成的恢复分隔行会在迁移时清除。验证失败保留旧版；切换后失败会重新启用旧版。正常关闭编辑器后再次打开也会恢复这些数据。
 
@@ -214,5 +214,5 @@ Windows 已进行实际运行验证。图片协议、kitty 扩展键盘协议和
 
 交互目标不变时，普通输出和绘制保持 UI revision，连续按键及输入法提交不会因为异步输出过期。停用、卸载和替换会清理所属进程与原生输入状态；隐藏面板保留正在运行的 Shell。
 
-回归入口：`editor-app.exe --plugin-cargo plugins/terminal/Cargo.toml test`；实际包通过 `cargo test -p plugin-runtime --test terminal_migration -- --ignored --test-threads=1` 验证。详见 [迁移验证记录](../../docs/specs/plugin-api-terminal-migration-verification.md)。
+回归入口：`editor-app.exe --plugin-cargo plugins/terminal/Cargo.toml test`；实际包通过 `cargo test -p plugin-runtime --test terminal_migration -- --ignored --test-threads=1` 验证。详见 [迁移验证记录](../../docs/plugins/verification/plugin-api-terminal-migration-verification.md)。
 公开执行契约 2.0 还提供 input（每次最多 1024 字节）、locate（恢复同一受管会话展示）和 events（游标增量输出与状态，每次 1–16 项）。受管视图隐藏不停止程序。stop 默认请求正常退出，force 只终止本会话进程树；受理不代表已退出，状态随真实进程结束更新。输出按原始字节交付，正常退出保留完整无符号原生退出码；旧 ^1 消费者需更新声明。

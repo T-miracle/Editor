@@ -644,6 +644,17 @@ pub struct View {
     pub document: crate::ui::Document,
 }
 
+/// A revision-checked native tree delta. Unchanged subtrees travel as bounded reuse references.
+/// The host restores them from this panel's last validated tree before applying normal UI checks.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ViewPatch {
+    pub panel: String,
+    pub base_revision: u64,
+    pub document: crate::ui::Document,
+    pub reused: Vec<crate::ui::Reuse>,
+}
+
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Output {
@@ -656,6 +667,9 @@ pub struct Output {
     pub configuration: Option<crate::settings::Proposal>,
     #[serde(default)]
     pub views: Vec<View>,
+    /// Requires ui.incremental 1; full and patched publications share atomic validation.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub view_patches: Vec<ViewPatch>,
     pub snapshot: Option<crate::Snapshot>,
 }
 

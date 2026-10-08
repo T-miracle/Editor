@@ -3,6 +3,33 @@ use super::*;
 use gpui_kit::{TestAppContext, VisualTestContext, gpui};
 use std::time::Duration;
 
+/// Receipt labels use the system's local calendar, including the date across UTC midnight, without fractions.
+#[test]
+fn runtime_log_time_uses_local_calendar_and_whole_seconds() {
+    use chrono::{Local, TimeZone};
+    let logs = plugin_runtime::RuntimeLogs::default();
+    logs.append(
+        "time-fixture",
+        plugin_runtime::LogLevel::Info,
+        "host.test",
+        "message",
+    );
+    let mut record = logs.records("time-fixture").pop().unwrap();
+    for (date, expected) in [
+        ((2026, 10, 4, 0, 5, 9), "2026-10-04 00:05:09"),
+        ((2024, 2, 29, 13, 12, 5), "2024-02-29 13:12:05"),
+    ] {
+        let (year, month, day, hour, minute, second) = date;
+        // Build an instant from a known local date rather than assuming an offset such as UTC+8.
+        let local = Local
+            .with_ymd_and_hms(year, month, day, hour, minute, second)
+            .single()
+            .unwrap();
+        record.time = std::time::SystemTime::from(local) + Duration::from_millis(987);
+        assert_eq!(recovery::log_time(&record), expected);
+    }
+}
+
 /// The same worker publication and native button route recover a fault while the editor keeps unsaved text.
 #[gpui::test]
 #[ignore = "build capability-example first"]

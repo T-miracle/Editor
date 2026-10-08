@@ -107,6 +107,8 @@ struct EditorApp {
     definition_popup_focus: editor::DefinitionPopupFocus,
     /// Observe navigation before native keybindings consume their events.
     _hover_keyboard_subscription: Subscription,
+    /// Source shortcuts must claim synchronized scrolling before native action dispatch consumes them.
+    _preview_keyboard_subscription: Subscription,
     /// Preserve a pressed selection until it becomes a text move or an ordinary click.
     editor_text_drag: editor::TextDragState,
     /// Cancels app-level hover requests when the pointer moves to another symbol.
@@ -400,6 +402,7 @@ impl EditorApp {
             completion_popup: Rc::new(editor::CompletionPopupState::default()),
             definition_popup_focus: editor::DefinitionPopupFocus::new(window, cx),
             _hover_keyboard_subscription: Self::install_hover_keyboard_dismissal(window, cx),
+            _preview_keyboard_subscription: Self::install_preview_keyboard_tracking(window, cx),
             editor_text_drag: editor::TextDragState::default(),
             pointer_hover_generation: 0,
             pointer_hover_context: None,

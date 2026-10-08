@@ -7,6 +7,67 @@ use plugin_runtime::plugin_protocol::{
 };
 use std::cell::RefCell;
 
+/// A source locate already queued before a wheel may arrive after the wheel's notification was sent.
+/// Reporting the manual position must not make that stale reverse request authoritative again.
+#[gpui::test]
+fn viewport_late_source_locate_cannot_reverse_a_reported_wheel(cx: &mut TestAppContext) {
+    let (view, _, cx) = mount(cx, fixture(0), true);
+    wheel(cx, -60.);
+    let before = cx.debug_bounds("plugin-ui-row-0").unwrap().top();
+    let result = cx
+        .update(|_, cx| view.update(cx, |view, cx| view.locate_viewport("row-0", 0., 999, 0, cx)));
+    settle(cx);
+    assert_eq!(
+        cx.debug_bounds("plugin-ui-row-0").unwrap().top(),
+        before,
+        "a delayed source locate reversed a manual wheel"
+    );
+    assert!(
+        result.is_err(),
+        "the superseded source request must be cancelled"
+    );
+}
+
+/// Initial layout bounds work to the visible buffer and explicit navigation materializes a distant leaf.
+#[gpui::test]
+fn viewport_virtual_blocks_materialize_navigation_target(cx: &mut TestAppContext) {
+    let mut document = fixture(0);
+    document.root = Node::scroll(
+        "viewport",
+        Node::column(
+            "group",
+            (0..100)
+                .map(|index| {
+                    Node::column(
+                        format!("block-{index}"),
+                        vec![
+                            Node::text(format!("leaf-{index}"), "可见段落")
+                                .height(40.)
+                                .source_range(index * 20..index * 20 + 20),
+                        ],
+                    )
+                    .height(40.)
+                    .source_range(index * 20..index * 20 + 20)
+                })
+                .collect(),
+        ),
+    )
+    .height(120.);
+    let (view, _, cx) = mount(cx, document, true);
+    assert!(cx.debug_bounds("plugin-ui-leaf-0").is_some());
+    assert!(
+        cx.debug_bounds("plugin-ui-leaf-90").is_none(),
+        "offscreen rich descendants should not receive layout"
+    );
+    cx.update(|_, cx| view.update(cx, |view, cx| view.reveal_node("leaf-90", 0, cx).unwrap()));
+    settle(cx);
+    let target = cx
+        .debug_bounds("plugin-ui-leaf-90")
+        .expect("navigation must render the target");
+    let viewport = cx.debug_bounds("plugin-ui-viewport").unwrap();
+    assert!((target.top() - viewport.top()).abs() < px(1.));
+}
+
 /// Fixed-height, uniquely mapped leaves make visible positions independent of font metrics.
 fn fixture(revision: u64) -> Document {
     let rows = (0..30)
@@ -224,6 +285,8 @@ fn viewport_manual_pointer_and_keyboard_cancel_queued_native_locations(cx: &mut 
         window.activate_window();
         view.update(cx, |view, cx| {
             view.view_focus.focus(window, cx);
+            // A new source gesture explicitly transfers ownership after the completed preview drag.
+            view.source_takes_viewport();
             view.locate_viewport("row-5", 0., 102, 0, cx).unwrap();
         });
     });
@@ -374,6 +437,8 @@ fn viewport_link_reveal_waits_for_current_geometry_and_latest_intent(cx: &mut Te
     cx.update(|_, cx| {
         view.update(cx, |view, cx| {
             view.reveal_node("row-4", 0, cx).unwrap();
+            // Only a newer physical source intent can supersede explicit preview navigation.
+            view.source_takes_viewport();
             view.locate_viewport("row-18", 0.5, 99, 0, cx).unwrap();
         })
     });
@@ -518,4 +583,39 @@ fn viewport_nested_scroll_ranges_cannot_borrow_the_outer_native_owner(cx: &mut T
             }
         })
     });
+}
+
+/// A manual preview position outranks a source reflow until the guest has received it.
+/// Otherwise a source still at its top can drive a preview the user already scrolled back up.
+#[gpui::test]
+fn viewport_manual_input_withholds_source_reflow_until_it_is_reported(cx: &mut TestAppContext) {
+    let (view, events, cx) = mount(cx, fixture(0), true);
+    events.borrow_mut().clear();
+    settle(cx);
+    assert!(
+        !cx.update(|_, cx| view.read(cx).preview_input_pending()),
+        "an untouched preview has no unacknowledged manual position"
+    );
+    events.borrow_mut().clear();
+    let bounds = cx.debug_bounds("plugin-ui-viewport").unwrap();
+    cx.update(|_, cx| {
+        view.update(cx, |view, _| {
+            assert!(view.viewport_wheel(bounds.center()));
+            assert!(
+                view.preview_input_pending(),
+                "the wheel owns the preview before its frame reports it"
+            );
+        })
+    });
+    settle(cx);
+    // Ownership itself is observable even if a clamped/zero delta has not moved Base yet.
+    assert!(!position(&events).layout);
+    events.borrow_mut().clear();
+    // Real native input scrolls Base; the frame that follows reports the manual position.
+    wheel(cx, -45.);
+    assert_eq!(position(&events).origin, None);
+    assert!(
+        !cx.update(|_, cx| view.read(cx).preview_input_pending()),
+        "the reported position is no longer waiting for delivery"
+    );
 }

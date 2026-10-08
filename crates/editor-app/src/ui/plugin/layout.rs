@@ -31,6 +31,10 @@ struct Reveal {
 }
 
 impl SceneLayout {
+    /// Virtualized ancestors must materialize a requested reveal before its next measurement.
+    pub(super) fn pending_target(&self) -> Option<&str> {
+        self.pending.as_ref().map(|pending| pending.node.as_str())
+    }
     /// A newer semantic locate supersedes an earlier explicit reveal before either changes native scroll.
     pub(super) fn cancel_reveal(&mut self) {
         self.pending = None;
@@ -116,6 +120,7 @@ impl PluginView {
                 "Block has no active scroll owner",
             ));
         }
+        self.viewport.manual_input();
         self.viewport.cancel_locate();
         self.scene_layout.pending = Some(Reveal {
             node: node.into(),
@@ -128,6 +133,7 @@ impl PluginView {
     /// Native keyboard focus uses the live active tree, including ordinary linked images without source maps.
     /// A pointer focus does not call this path: moving an image before MouseUp would invalidate its click.
     pub(super) fn reveal_focused_link(&mut self, node: &str, cx: &mut Context<Self>) {
+        self.viewport.manual_input();
         if self.scene_current.get() && self.scene_layout.scroll_owner.contains_key(node) {
             self.viewport.cancel_locate();
             self.scene_layout.pending = Some(Reveal {
@@ -152,6 +158,7 @@ impl PluginView {
         if revision != self.document.revision {
             return;
         }
+        self.virtual_blocks.measure(node, bounds);
         if self
             .scene_layout
             .bounds

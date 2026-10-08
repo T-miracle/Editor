@@ -127,6 +127,10 @@ const SDK_FILES: &[(&str, &[u8])] = &[
         include_bytes!("../../plugin-protocol/src/ui/canvas.rs"),
     ),
     (
+        "src/ui/visual_viewport.rs",
+        include_bytes!("../../plugin-protocol/src/ui/visual_viewport.rs"),
+    ),
+    (
         "DEPENDENCIES.md",
         include_bytes!("../../../website/src/content/docs/en/sdk/dependencies.md"),
     ),
@@ -197,6 +201,11 @@ const SDK_FILES: &[(&str, &[u8])] = &[
     (
         "src/ui/validate.rs",
         include_bytes!("../../plugin-protocol/src/ui/validate.rs"),
+    ),
+    // Incremental native publication is part of the same independently exported public SDK.
+    (
+        "src/ui/incremental.rs",
+        include_bytes!("../../plugin-protocol/src/ui/incremental.rs"),
     ),
     (
         "src/ui/tests.rs",

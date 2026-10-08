@@ -39,9 +39,12 @@ pub(crate) fn rich_text_view(
 fn document_style(font_size: Pixels, colors: RichTextColors, cx: &App) -> TextViewStyle {
     rich_text_style(font_size, cx)
         .with_foreground(colors.foreground)
-        .with_code_background(colors.background)
+        .with_muted_foreground(colors.muted_foreground)
+        .with_code_background(colors.code_background)
         .with_inline_code(HighlightStyle {
-            background_color: Some(colors.background),
+            // Base merges omitted highlight fields with its accent theme; pin glyphs to the document.
+            color: Some(colors.foreground),
+            background_color: Some(colors.inline_code_background),
             ..Default::default()
         })
         .with_border(colors.border)
@@ -64,7 +67,11 @@ fn document_style(font_size: Pixels, colors: RichTextColors, cx: &App) -> TextVi
 /// The caller resolves plugin role overrides; the local renderer preserves them on native glyphs.
 pub(crate) struct RichTextColors {
     pub foreground: Hsla,
-    pub background: Hsla,
+    /// Quote/muted text remains on the same resolved document palette.
+    pub muted_foreground: Hsla,
+    /// Block/table surfaces are distinct from translucent inline spans.
+    pub code_background: Hsla,
+    pub inline_code_background: Hsla,
     pub border: Hsla,
     pub link: Hsla,
 }
@@ -116,13 +123,20 @@ mod tests {
                     px(14.),
                     RichTextColors {
                         foreground: palette.foreground,
-                        background: palette.background,
+                        muted_foreground: palette.muted_foreground,
+                        code_background: palette.background,
+                        inline_code_background: palette.background,
                         border: palette.border,
                         link: palette.primary,
                     },
                     cx,
                 );
                 assert_eq!(style.foreground(), palette.foreground);
+                assert_eq!(
+                    style.inline_code().color,
+                    Some(palette.foreground),
+                    "inline code glyphs must not inherit Base's accent foreground"
+                );
                 assert_eq!(
                     style.inline_code().background_color,
                     Some(palette.background)
@@ -132,7 +146,9 @@ mod tests {
                     px(14.),
                     RichTextColors {
                         foreground: color,
-                        background: color,
+                        muted_foreground: color,
+                        code_background: color,
+                        inline_code_background: color,
                         border: color,
                         link: color,
                     },

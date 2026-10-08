@@ -6,4 +6,4 @@
 
 本目录包含计数器与笔记插件的完整实现：`src/` 为代码，`Cargo.toml` 为 WASM crate，`manifest.json` 声明面板与命令。编译接口由编辑器自动缓存和注入，不需要同级 `sdk/` 或主程序源码。独立构建使用 `editor-app.exe --plugin-cargo example/Cargo.toml build --target wasm32-wasip2 --release`。
 
-在仓库根目录执行 `./scripts/build-plugins.ps1`，生成标准 ZIP 包 `dist/plugins/example.zip`，然后通过编辑器的插件管理界面安装。Cargo 包名仍为 `example-guest`。
+通过实际宿主 `--plugin-cargo plugins/example/Cargo.toml build --target wasm32-wasip2 --release` 独立构建组件，再用 ZIP 工具归档清单、README 与 example.wasm。步骤见[直接打包说明](../../installer/README.md)，通过插件管理界面安装。Cargo 包名仍为 example-guest。

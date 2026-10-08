@@ -42,6 +42,8 @@ impl Worker {
             // First-use preparation retains its native cancellation token until the serialized cutover.
             let mut bundled_install: Option<super::super::bundled::Candidate> = None;
             let mut deferred = VecDeque::new();
+            // A coalesced geometry burst retains its first input/lifecycle boundary verbatim.
+            let mut next_received = None;
             // Host session identity joined to the configuration and launch that requested it.
             let mut run_requests = BTreeMap::<u64, (String, u64)>::new();
             // Real adapter handshakes and inspections remain pending while the actor serves other work.
@@ -69,6 +71,8 @@ impl Worker {
                     None
                 } else if preparation.is_none() && !deferred.is_empty() {
                     deferred.pop_front()
+                } else if let Some(work) = next_received.take() {
+                    Some(work)
                 } else {
                     match rx.recv_timeout(Duration::from_millis(30)) {
                         Ok(work) => Some(work),
@@ -76,6 +80,12 @@ impl Worker {
                         Err(_) => break,
                     }
                 };
+                // Deferred persistent choices keep their ordering; only ready canvas geometry is sampled.
+                if (preparation.is_some() || deferred.is_empty())
+                    && let Some(ready) = work.take()
+                {
+                    work = Some(super::resize::coalesce(ready, &rx, &mut next_received));
+                }
                 if let Some(pending) = &preparation {
                     if bundled_install.as_ref().is_some_and(|candidate| {
                         !candidate.request.is_active()
@@ -586,6 +596,7 @@ impl Worker {
                                     api::Notification::Ui(_)
                                         | api::Notification::Preview { .. }
                                         | api::Notification::FilePreview { .. }
+                                        | api::Notification::SourceViewport(_)
                                 );
                                 match manager.event(&id, panel, event) {
                                     Err(error)
@@ -598,6 +609,8 @@ impl Worker {
                                     {
                                         // Only typed obsolete native input is benign. Guest faults and every other
                                         // rejection continue through the ordinary diagnostic/error path.
+                                        // Source positions are sampled from the displayed frame and can
+                                        // legitimately arrive after a newer preview has replaced its scene.
                                         output.lock().unwrap().logs.append(
                                             &id,
                                             plugin_runtime::logs::LogLevel::Info,

@@ -1,6 +1,61 @@
 //! Contract regression cases are also shipped with the standalone SDK.
 use super::*;
 
+/// An icon changes only presentation: wire round trips retain its label and versioned Click validation.
+#[test]
+fn icon_buttons_retain_accessible_labels_and_native_events() {
+    let svg = "<svg viewBox=\"0 0 24 24\"><path d=\"M4 4h16v16H4Z\"/></svg>";
+    let button = Node::button("tool", "标题").icon(svg).tooltip("一级标题");
+    let encoded = serde_json::to_vec(&button).unwrap();
+    let decoded: Node = serde_json::from_slice(&encoded).unwrap();
+    assert_eq!(decoded, button);
+    let mut document = Document::new(decoded).revision(5);
+    document.validate().unwrap();
+    let event = UiEvent {
+        revision: 5,
+        node: "tool".into(),
+        action: Action::Click,
+    };
+    document.validate_event(&event).unwrap();
+    document.root.disabled = true;
+    assert!(document.validate_event(&event).is_err());
+    // Older plain buttons omit the additive metadata and keep their existing text presentation.
+    let plain: Node =
+        serde_json::from_str(r#"{"id":"plain","kind":{"type":"button","label":"Plain"}}"#).unwrap();
+    assert!(plain.button_icon.is_none());
+    assert!(
+        !serde_json::to_value(plain)
+            .unwrap()
+            .as_object()
+            .unwrap()
+            .contains_key("button_icon")
+    );
+}
+
+/// Artwork shares root/toolbar/dialog budgets and cannot create an unnamed or non-button control.
+#[test]
+fn icon_buttons_enforce_kind_names_and_shared_quotas() {
+    for node in [
+        Node::text("bad", "Text").icon("<svg/>"),
+        Node::button("bad", " ").icon("<svg/>"),
+        Node::button("bad", "Bad").icon(""),
+        Node::button("bad", "Bad").icon("x".repeat(4097)),
+    ] {
+        assert!(Document::new(node).validate().is_err());
+    }
+    let icons = (0..64)
+        .map(|index| Node::button(format!("b{index}"), "Action").icon("<svg/>"))
+        .collect();
+    let mut document = Document::new(Node::row("buttons", icons));
+    document.validate().unwrap();
+    document.dialog = Some(Dialog::new(
+        "dialog",
+        "Title",
+        Node::button("extra", "Extra").icon("<svg/>"),
+    ));
+    assert!(document.validate().unwrap_err().contains("icon quota"));
+}
+
 /// Alternative text is a real link only with an explicit target and opt-in; replaced scenes stay inert.
 #[test]
 fn declared_content_links_match_their_target_and_scene() {
@@ -191,6 +246,21 @@ fn editor_toolbar_is_version_bound_and_shares_document_quotas() {
     assert!(
         document.validate().is_err(),
         "toolbar reset the depth budget"
+    );
+}
+
+/// Toolbar visibility is plugin-owned; an unknown legacy field cannot re-enter the public tree.
+#[test]
+fn host_toolbar_toggle_is_absent_from_the_current_tree() {
+    let document = Document::new(Node::text("body", "Preview"));
+    let mut wire = serde_json::to_value(&document).unwrap();
+    wire["editor_toolbar_toggle"] = serde_json::json!("显示/隐藏工具栏");
+    let decoded: Document = serde_json::from_value(wire).unwrap();
+    assert!(
+        serde_json::to_value(decoded)
+            .unwrap()
+            .get("editor_toolbar_toggle")
+            .is_none()
     );
 }
 
@@ -633,4 +703,64 @@ fn editor_viewport_events_require_exact_current_active_block_and_bounded_geometr
     ] {
         assert!(target.validate().is_err());
     }
+}
+/// Visual viewports survive the public JSON contract instead of being silently discarded.
+#[test]
+fn visual_viewport_roundtrips_on_a_canvas() {
+    let mut value = serde_json::to_value(Document::new(Node::new(
+        "map",
+        Kind::Canvas(Canvas::default()),
+    )))
+    .unwrap();
+    value["root"]["viewport"] = serde_json::json!({
+        "content": {"width": 100.0, "height": 50.0},
+        "transform": {"scale": 2.0, "x": 0.0, "y": 0.0, "anchor_x": 0.5, "anchor_y": 0.5}
+    });
+    let document: Document = serde_json::from_value(value.clone()).unwrap();
+    document.validate().unwrap();
+    assert_eq!(
+        serde_json::to_value(document).unwrap()["root"]["viewport"],
+        value["root"]["viewport"]
+    );
+}
+
+/// The visual contract must reject mixing content projection with character-grid scrolling.
+#[test]
+fn visual_viewport_rejects_grid_and_preserves_declared_geometry() {
+    let mut canvas = Canvas::default();
+    canvas.grid = true;
+    let mut node = Node::new("map", Kind::Canvas(canvas));
+    node.viewport = Some(VisualViewport {
+        content: Some(ContentSize {
+            width: 100.,
+            height: 50.,
+        }),
+        transform: Some(ContentTransform {
+            scale: 2.4,
+            ..Default::default()
+        }),
+    });
+    assert!(Document::new(node).validate().is_err());
+    let t = ContentTransform {
+        scale: 2.4,
+        ..Default::default()
+    };
+    let rect = t.project(
+        crate::Rect {
+            x: 0.,
+            y: 0.,
+            w: 100.,
+            h: 50.,
+        },
+        ContentSize {
+            width: 100.,
+            height: 50.,
+        },
+        ContentSize {
+            width: 400.,
+            height: 300.,
+        },
+    );
+    assert!((rect.x - 80.).abs() < 0.001 && (rect.y - 90.).abs() < 0.001);
+    assert!((rect.w - 240.).abs() < 0.001 && (rect.h - 120.).abs() < 0.001);
 }

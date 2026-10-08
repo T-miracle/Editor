@@ -8,6 +8,7 @@ use plugin_protocol::{
 use std::cell::RefCell;
 
 mod display;
+mod raster;
 mod scene;
 
 /// Zoom is the absolute scale of the SVG's intrinsic dimensions.
@@ -45,6 +46,8 @@ struct State {
     zoom_document: Option<String>,
     /// Raster previews carry file authority without manufacturing a text session or revision.
     file: Option<api::FileContext>,
+    /// Readonly image view intent uses the same public geometry envelope as other visual plugins.
+    raster: raster::Raster,
     revision: u64,
     source: String,
     intrinsic: Option<(f32, f32)>,
@@ -67,6 +70,7 @@ impl Default for State {
             document: None,
             zoom_document: None,
             file: None,
+            raster: Default::default(),
             revision: 0,
             source: String::new(),
             intrinsic: None,
@@ -133,6 +137,11 @@ impl State {
         match event {
             api::Notification::FilePreview { file } if panel == Some("preview") => {
                 self.display.bind(file.as_ref())?;
+                if self.file.as_ref().map(|file| &file.version)
+                    != file.as_ref().map(|file| &file.version)
+                {
+                    self.raster = Default::default();
+                }
                 self.file = file;
                 if self
                     .file
@@ -180,7 +189,22 @@ impl State {
                 self.document(document, text)
             }
             api::Notification::Ui(event)
-                if panel == Some("preview") && event.node == "preview-canvas" =>
+                if panel == Some("preview")
+                    && event.revision == self.revision
+                    && event.node == "image"
+                    && self.file.as_ref().is_some_and(|file| file.text.is_none()) =>
+            {
+                if let ui::Action::ViewportInput(input) = event.action {
+                    // Geometry changes keep node/authority identity, so already queued wheel deltas remain valid.
+                    // FilePreview replaces that identity and advances the revision before accepting more input.
+                    self.raster
+                        .input(input, self.environment.ui_font.size_px.unwrap_or(14.));
+                }
+            }
+            api::Notification::Ui(event)
+                if panel == Some("preview")
+                    && event.revision == self.revision
+                    && event.node == "preview-canvas" =>
             {
                 if let ui::Action::Canvas(event) = event.action {
                     self.canvas_event(event);
@@ -371,12 +395,16 @@ impl State {
         })
     }
 
-    /// Preserve intrinsic dimensions, shrinking only when either viewport axis is too small.
+    /// Start small SVGs at a 240px longest edge, containing them when the viewport is smaller.
     fn default_size(&mut self) {
         self.view_mode = ViewMode::DefaultSize;
         if let Some((width, height)) = self.intrinsic {
             let viewport = self.viewport();
-            self.scale = 1_f32.min(viewport.w / width).min(viewport.h / height);
+            self.scale = (240. / width.max(height))
+                .max(1.)
+                .min(viewport.w / width)
+                .min(viewport.h / height)
+                .min(self.max_scale());
         }
     }
 

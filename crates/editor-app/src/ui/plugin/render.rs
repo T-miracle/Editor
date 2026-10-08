@@ -17,6 +17,7 @@ impl PluginView {
         self.sync_widgets(window, cx);
         self.sync_code_highlighting(cx);
         let viewport_frame = self.begin_viewport_frame();
+        self.virtual_blocks.begin();
         let revision = self.document.revision;
         let root = self.document.root.clone();
         let body = self.node(&root, false, window, cx);
@@ -31,7 +32,7 @@ impl PluginView {
             .capture_key_down(cx.listener(|view, _, window, cx| {
                 // Register on the focused root's ancestry; an overlay's paint node may be a sibling.
                 if view.view_focus.contains_focused(window, cx) {
-                    view.viewport.cancel_locate();
+                    view.viewport.manual_input();
                 }
             }))
             .relative()
@@ -61,9 +62,10 @@ impl PluginView {
                     window.on_mouse_event(
                         move |event: &gpui_kit::ScrollWheelEvent, phase, _, cx| {
                             if phase.capture() {
-                                let _ = input.update(cx, |view, _| {
-                                    view.viewport_wheel(event.position, revision);
-                                });
+                                // Manual input revokes pending locates against the live scene; a
+                                // repaint gap must not leave one free to override this wheel.
+                                let _ =
+                                    input.update(cx, |view, _| view.viewport_wheel(event.position));
                             }
                         },
                     );
@@ -71,9 +73,8 @@ impl PluginView {
                     let pointer = viewport.clone();
                     window.on_mouse_event(move |event: &gpui_kit::MouseDownEvent, phase, _, cx| {
                         if phase.capture() {
-                            let _ = pointer.update(cx, |view, _| {
-                                view.viewport_pointer_down(event.position, revision)
-                            });
+                            let _ = pointer
+                                .update(cx, |view, _| view.viewport_pointer_down(event.position));
                         }
                     });
                     let drag = viewport.clone();
@@ -233,6 +234,10 @@ impl PluginView {
         let block = node.id.clone();
         let revision = self.document.revision;
         let pressed_node = node.id.clone();
+        // Compact icon buttons have a known square extent. Publishing it at the outer layout
+        // boundary avoids repeated intrinsic sizing through nested wrapping toolbar groups.
+        let icon_extent = (node.button_icon.is_some() && matches!(node.kind, Kind::Button { .. }))
+            .then_some(24. + node.layout.padding * 2.);
         self.font(
             div()
                 .id(SharedString::from(format!("plugin-ui-{}-wrapper", node.id)))
@@ -246,8 +251,8 @@ impl PluginView {
                 .min_w_0()
                 .min_h_0()
                 .when(node.layout.grow, |v| v.flex_1())
-                .when_some(node.layout.width, |v, w| v.w(px(w)))
-                .when_some(node.layout.height, |v, h| v.h(px(h)))
+                .when_some(node.layout.width.or(icon_extent), |v, w| v.w(px(w)))
+                .when_some(node.layout.height.or(icon_extent), |v, h| v.h(px(h)))
                 .p(px(node.layout.padding))
                 .bg(colors.background)
                 .text_color(colors.foreground)

@@ -6,15 +6,22 @@ use gpui_kit::{TestAppContext, gpui};
 mod code_highlighting;
 mod combination;
 mod distribution;
+mod first_open;
 mod format_toolbar;
 mod harness;
+mod icon_toolbar;
 mod image_import;
 mod image_preview;
+mod input_latency;
 mod link_navigation;
 mod migration;
 mod modes;
 mod navigation_safety;
+mod preview_updates;
 mod range_edits;
+mod responsiveness;
+mod small_scroll;
+mod source_layout;
 mod source_overlay;
 mod synchronized_scroll;
 mod task_checkboxes;
@@ -120,7 +127,10 @@ fn delivered_markdown_preview_tracks_unsaved_native_edits_and_reclaims_split(
         "<strong>",
         "<em>",
         "<del>",
-        "<table>",
+        // Tables are composed from one native block per cell, never one generated `<table>`.
+        "table-cell-1-0",
+        "table-row-1",
+        "\"separator\"",
         "checkbox",
         "code_block",
         "替代文字",
@@ -167,6 +177,9 @@ fn delivered_markdown_preview_tracks_unsaved_native_edits_and_reclaims_split(
     });
     cx.simulate_keystrokes("ctrl-v");
     cx.run_until_parked();
+    // Publication intentionally coalesces edits for 150 ms; advance that real cadence before pumping.
+    cx.executor().advance_clock(Duration::from_millis(160));
+    cx.run_until_parked();
     for _ in 0..2 {
         pump(&mut manager, &app, cx);
         publish(&mut manager, &mut renderer, &app, cx);
@@ -178,6 +191,8 @@ fn delivered_markdown_preview_tracks_unsaved_native_edits_and_reclaims_split(
     );
     assert_eq!(std::fs::read_to_string(&path).unwrap(), original);
     cx.simulate_keystrokes("ctrl-z");
+    cx.run_until_parked();
+    cx.executor().advance_clock(Duration::from_millis(160));
     cx.run_until_parked();
     for _ in 0..2 {
         pump(&mut manager, &app, cx);
@@ -191,6 +206,8 @@ fn delivered_markdown_preview_tracks_unsaved_native_edits_and_reclaims_split(
     );
     cx.simulate_keystrokes("ctrl-y");
     cx.run_until_parked();
+    cx.executor().advance_clock(Duration::from_millis(160));
+    cx.run_until_parked();
     for _ in 0..2 {
         pump(&mut manager, &app, cx);
         publish(&mut manager, &mut renderer, &app, cx);
@@ -201,6 +218,8 @@ fn delivered_markdown_preview_tracks_unsaved_native_edits_and_reclaims_split(
             .contains("未保存中文")
     );
     cx.simulate_input("追加中文");
+    cx.run_until_parked();
+    cx.executor().advance_clock(Duration::from_millis(160));
     cx.run_until_parked();
     for _ in 0..2 {
         pump(&mut manager, &app, cx);
@@ -264,6 +283,9 @@ fn delivered_markdown_preview_tracks_unsaved_native_edits_and_reclaims_split(
             )
         });
     });
+    cx.run_until_parked();
+    // External reconciliation observes the same cadence as an ordinary edit to this open document.
+    cx.executor().advance_clock(Duration::from_millis(160));
     cx.run_until_parked();
     for _ in 0..2 {
         pump(&mut manager, &app, cx);

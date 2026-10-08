@@ -21,6 +21,7 @@ mod theme;
 mod viewport;
 #[cfg(test)]
 mod viewport_tests;
+mod virtual_blocks;
 mod widgets;
 
 use gpui_base::input::{InputEvent, InputState};
@@ -30,7 +31,7 @@ use gpui_kit::{
 };
 use plugin_runtime::plugin_protocol::{
     Environment,
-    ui::{Action, Document, Kind, UiEvent},
+    ui::{self, Action, Document, Kind, UiEvent},
 };
 use std::{
     cell::Cell,
@@ -70,6 +71,8 @@ pub(crate) struct PluginView {
     scene_layout: layout::SceneLayout,
     /// Coalesced source-block geometry and one locate receipt; Base owns the actual scroll offset.
     viewport: viewport::ViewportState,
+    /// Exact block extents survive scene revisions independently of temporary visible elements.
+    virtual_blocks: virtual_blocks::VirtualBlocks,
     /// Base resolves the release target; the local adapter retains the real native press owner.
     link_press: Option<links::LinkPress>,
     /// Per-target Base focus survives source refresh; subscriptions reveal only the focused link cue.
@@ -77,6 +80,8 @@ pub(crate) struct PluginView {
     /// Versioned readonly capture cache and a cancellable, bounded native background batch.
     code_highlights: code::CodeHighlights,
     canvases: BTreeMap<String, Entity<canvas::CanvasView>>,
+    /// Geometry publications are deduplicated; zoom/pan state belongs exclusively to the guest.
+    visual_measurements: BTreeMap<String, Rc<Cell<Option<(ui::ContentSize, ui::ContentSize)>>>>,
     /// Collection widgets retain native rename/drag state independently of canvas redraws.
     collections: BTreeMap<String, Entity<controls::CollectionView>>,
     popup: Option<Entity<controls::CollectionView>>,
@@ -159,6 +164,10 @@ impl PluginView {
                     .is_none_or(|old| !std::sync::Arc::ptr_eq(old, image))
             });
         self.photos = photos;
+        // Decoding may supply intrinsic dimensions after the original block was measured.
+        if changed {
+            self.virtual_blocks.clear();
+        }
         if changed {
             self.link_press = None;
             cx.notify();
@@ -249,10 +258,12 @@ impl PluginView {
             scrolls: BTreeMap::new(),
             scene_layout: Default::default(),
             viewport: Default::default(),
+            virtual_blocks: Default::default(),
             link_press: None,
             link_focus: BTreeMap::new(),
             code_highlights: Default::default(),
             canvases: BTreeMap::new(),
+            visual_measurements: BTreeMap::new(),
             collections: BTreeMap::new(),
             popup: None,
             origin: Default::default(),
@@ -309,11 +320,25 @@ impl PluginView {
             self.invalidate_code_highlighting(cx);
         }
         let old_dialog = self.document.dialog.as_ref().map(|d| d.id.clone());
+        // New resource authority must publish its intrinsic geometry again, even at the same size.
+        if self.document.file != document.file || self.document.source != document.source {
+            self.visual_measurements.clear();
+        }
+        if self.document.source.as_ref().map(|source| &source.id)
+            != document.source.as_ref().map(|source| &source.id)
+        {
+            self.source_takes_viewport();
+            self.virtual_blocks.clear();
+        }
         // A new scene/theme cannot adopt an earlier pointer press, even when node IDs are reused.
         self.link_press = None;
         let next_dialog = document.dialog.as_ref().map(|d| d.id.clone());
         let menu_changed = self.document.menu.as_ref().map(|menu| &menu.id)
             != document.menu.as_ref().map(|menu| &menu.id);
+        if self.environment != environment {
+            self.virtual_blocks.clear();
+        }
+        self.virtual_blocks.retain(&document);
         self.document = document;
         self.environment = environment;
         // Each popup opening owns a fresh dismiss acknowledgement, even when it reuses an ID.
@@ -410,6 +435,11 @@ impl PluginView {
             .map(|node| node.id.clone())
             .collect();
         self.canvases.retain(|id, _| canvas_ids.contains(id));
+        self.visual_measurements.retain(|id, _| {
+            nodes.iter().any(|node| {
+                node.id == *id && node.viewport.is_some() && self.document.active_node(id).is_some()
+            })
+        });
         let checkbox_ids: BTreeSet<_> = nodes
             .iter()
             .filter(|node| matches!(node.kind, Kind::Checkbox { .. }))
@@ -441,7 +471,22 @@ impl PluginView {
                                 );
                                 cx.defer(move |cx| {
                                     let accepted = owner.update(cx, |this, cx| {
-                                        this.emit_version(&id, revision, Action::Canvas(event), cx)
+                                        // Canvas and image viewports use the same input envelope, without host zoom state.
+                                        let action = this
+                                            .document
+                                            .active_node(&id)
+                                            .and_then(|node| node.viewport.as_ref())
+                                            .and_then(|viewport| viewport.content)
+                                            .map_or_else(
+                                                || Action::Canvas(event.clone()),
+                                                |content| {
+                                                    Action::ViewportInput(ui::ViewportInput {
+                                                        content,
+                                                        event: event.clone(),
+                                                    })
+                                                },
+                                            );
+                                        this.emit_version(&id, revision, action, cx)
                                     });
                                     if measurement && !matches!(accepted, Ok(true)) {
                                         let _ = canvas.update(cx, |view, cx| {
@@ -465,6 +510,12 @@ impl PluginView {
                 ));
                 self.canvases[&node.id].update(cx, |view, cx| {
                     view.drawing = drawing.clone();
+                    if view.viewport.as_ref().and_then(|v| v.content)
+                        != node.viewport.as_ref().and_then(|v| v.content)
+                    {
+                        view.invalidate_measurement();
+                    }
+                    view.viewport = node.viewport.clone();
                     view.font = font;
                     if active && !view.enabled {
                         view.invalidate_measurement();

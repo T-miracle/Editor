@@ -6,6 +6,28 @@ use std::ops::Range;
 
 mod inline;
 
+/// Opt derived native blocks into the public GitHub palette without changing the editor's global theme.
+/// A block that already carries a deliberate role (a table header cell) keeps its own preset.
+pub(super) fn apply_theme(node: &mut ui::Node) {
+    if node.role.is_empty() {
+        node.role = "github".into();
+    }
+    match &mut node.kind {
+        ui::Kind::Column { children } | ui::Kind::Row { children } => {
+            for child in children {
+                apply_theme(child);
+            }
+        }
+        ui::Kind::Scroll { content } => apply_theme(content),
+        ui::Kind::Tabs { tabs, .. } => {
+            for tab in tabs {
+                apply_theme(&mut tab.content);
+            }
+        }
+        _ => {}
+    }
+}
+
 /// Parser events retain nesting and UTF-8 ranges until the native tree has been derived.
 struct Element<'a> {
     tag: Option<Tag<'a>>,
@@ -170,8 +192,7 @@ impl Renderer<'_> {
                 Tag::Heading { .. } => {
                     self.content(std::slice::from_ref(part), range, "heading", false)
                 }
-                Tag::Table(_) if has_image(&element.children) => self.table(element),
-                Tag::Table(_) => self.rich(std::slice::from_ref(part), range, "table", false),
+                Tag::Table(_) => self.table(element),
                 Tag::Paragraph => {
                     self.content(std::slice::from_ref(part), range, "paragraph", false)
                 }
@@ -189,7 +210,10 @@ impl Renderer<'_> {
         }
     }
 
-    /// Image tables retain header/body rows and flex cells, so an image cannot flatten their structure.
+    /// Every cell is its own read-only rich block, so one cell's markup (inline code, links,
+    /// emphasis or an image) can never share a native element with its neighbours. The header row
+    /// keeps the Primer muted surface and each row is closed by a rule the host draws in the table
+    /// border color, which restores the grid a single generated `<table>` used to provide.
     /// Per-row cell identities stay unique even when GFM pads several missing cells at the same byte offset.
     fn table(&self, element: &Element<'_>) -> ui::Node {
         let mut rows = Vec::new();
@@ -210,17 +234,20 @@ impl Renderer<'_> {
                 } else {
                     vec![Tag::Paragraph]
                 };
-                cells.push(
-                    inline::flow(
-                        &cell.children,
-                        cell.range.clone(),
-                        &format!("table-cell-{row_index}-{cell_index}"),
-                        &wrappers,
-                        self.locale,
-                    )
-                    .padding(4.)
-                    .grow(),
-                );
+                let mut cell = inline::flow(
+                    &cell.children,
+                    cell.range.clone(),
+                    &format!("table-cell-{row_index}-{cell_index}"),
+                    &wrappers,
+                    self.locale,
+                )
+                .padding(4.)
+                .grow();
+                if header {
+                    // The host resolves this generic preset to Primer's muted surface in both themes.
+                    cell.role = "github-muted".into();
+                }
+                cells.push(cell);
             }
             rows.push(
                 ui::Node::row(
@@ -230,6 +257,10 @@ impl Renderer<'_> {
                 .gap(4.)
                 .source_range(row.range.clone()),
             );
+            rows.push(ui::Node::new(
+                identity(&row.range, &format!("table-rule-{row_index}")),
+                ui::Kind::Separator,
+            ));
         }
         ui::Node::column(identity(&element.range, "table"), rows)
             .gap(4.)
@@ -264,21 +295,21 @@ impl Renderer<'_> {
                 let width = (marker.chars().count() as f32 * 8. + 4.).max(20.);
                 ui::Node::text(identity(&item.range, "list-marker"), marker).width(width)
             };
+            let mut body = self.blocks(&item.children);
+            // One block already supplies its own layout and source range. An extra column
+            // adds no spacing but spends a native node for every ordinary list item.
+            // Multiple blocks still need a column to retain paragraph/nested-list spacing.
+            let body = if body.len() == 1 {
+                body.pop().unwrap().grow()
+            } else {
+                ui::Node::column(identity(&item.range, "item-body"), body)
+                    .gap(6.)
+                    .grow()
+            };
             items.push(
-                ui::Node::row(
-                    identity(&item.range, "item"),
-                    vec![
-                        marker,
-                        ui::Node::column(
-                            identity(&item.range, "item-body"),
-                            self.blocks(&item.children),
-                        )
-                        .gap(6.)
-                        .grow(),
-                    ],
-                )
-                .gap(6.)
-                .source_range(item.range.clone()),
+                ui::Node::row(identity(&item.range, "item"), vec![marker, body])
+                    .gap(6.)
+                    .source_range(item.range.clone()),
             );
         }
         ui::Node::column(identity(&element.range, "list"), items)

@@ -55,7 +55,9 @@ impl PluginView {
                 }
             }
             Kind::Scroll { content } => {
-                let child = self.node(content, disabled, window, cx);
+                // Materialize mapped content near the viewport while retaining native reveal targets.
+                let content = self.windowed_content(content, &node.id);
+                let child = self.node(&content, disabled, window, cx);
                 let handle = self.scrolls.get(&node.id).cloned().unwrap_or_default();
                 div()
                     .relative()

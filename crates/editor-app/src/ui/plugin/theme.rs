@@ -5,16 +5,23 @@ use gpui_kit::{FontWeight, Hsla, Styled, component::ActiveTheme as _, px, rgb};
 pub(super) struct Colors {
     pub background: Hsla,
     pub foreground: Hsla,
+    pub muted_foreground: Hsla,
     pub border: Hsla,
     pub hover: Hsla,
     pub active: Hsla,
     pub accent: Hsla,
     pub accent_foreground: Hsla,
+    /// Fenced code and table headers use the document's neutral block surface.
+    pub code_background: Hsla,
+    /// Primer uses translucent neutral inline code independently of block/table surfaces.
+    pub inline_code_background: Hsla,
 }
 
 impl PluginView {
     pub(super) fn colors(&self, role: &str, cx: &App) -> Colors {
         let palette = cx.theme();
+        // User theme tokens override the current plugin's bounded document defaults.
+        // Domain palettes are supplied by the guest; native rendering has no plugin preset.
         let color = |key: &str, fallback: Hsla| {
             self.environment
                 .color(&self.plugin, &format!("ui.{role}.{key}"))
@@ -30,7 +37,9 @@ impl PluginView {
         Colors {
             background: color(
                 "background",
-                if role == "button" {
+                if role == "toolbar_button" {
+                    palette.transparent
+                } else if role == "button" {
                     palette.button
                 } else {
                     palette.background
@@ -44,6 +53,7 @@ impl PluginView {
                     palette.foreground
                 },
             ),
+            muted_foreground: color("muted_foreground", palette.muted_foreground),
             border: color(
                 "border",
                 if role == "input" {
@@ -70,6 +80,11 @@ impl PluginView {
             ),
             accent: color("accent", palette.primary),
             accent_foreground: color("accent_foreground", palette.primary_foreground),
+            code_background: color("code_background", color("background", palette.background)),
+            inline_code_background: color(
+                "inline_code_background",
+                color("code_background", color("background", palette.background)),
+            ),
         }
     }
 

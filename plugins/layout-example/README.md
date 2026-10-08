@@ -8,10 +8,10 @@
 
 ```powershell
 cargo build -p editor-app
-./scripts/build-layout-example.ps1 -HostExe ./target/debug/editor-app.exe
+.\target\debug\editor-app.exe --plugin-cargo plugins/layout-example/Cargo.toml build --target wasm32-wasip2 --release --target-dir target
 ```
 
-构建产物在 `target/plugin-layout-test/`，不作为内置产品插件发行。
+组件产物位于 `target/wasm32-wasip2/release/`。按[直接归档说明](../../installer/README.md)将清单、README、layout-example.wasm 与 icons 准备为标准 ZIP，测试夹具保存到 `target/plugin-layout-test/layout-example.zip`；本示例不作为内置产品插件发行。
 
 `diagnostic-trap` 是显式诊断命令，不贡献菜单或功能按钮；通过公开 Manager 调用它可模拟 WASM 故障，
 验证文本会话、图片标签、资源撤销与手动重试。宿主无需为示例身份添加专属分支。

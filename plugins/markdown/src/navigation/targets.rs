@@ -46,6 +46,52 @@ pub(super) enum Destination {
 }
 
 impl Index {
+    /// Ordinary local edits only replace their own links and translate following byte ranges.
+    /// Heading edits reindex the document because duplicate slugs can rename distant anchors.
+    pub(crate) fn update(&mut self, source: &str, changed: Option<(usize, usize, usize)>) {
+        let Some((start, old_end, new_end)) = changed else {
+            *self = Self::parse(source);
+            return;
+        };
+        let mut replacement = Self::parse(&source[start..new_end]);
+        if !replacement.headings.is_empty()
+            || self
+                .headings
+                .iter()
+                .any(|heading| heading.range.start < old_end && heading.range.end > start)
+        {
+            *self = Self::parse(source);
+            return;
+        }
+        let shift = new_end as isize - old_end as isize;
+        let translate = |range: &mut Range<usize>, delta: isize| {
+            range.start = range.start.saturating_add_signed(delta);
+            range.end = range.end.saturating_add_signed(delta);
+        };
+        self.links
+            .retain(|link| link.range.end <= start || link.range.start >= old_end);
+        for link in &mut self.links {
+            if link.range.start >= old_end {
+                translate(&mut link.range, shift);
+                for caption in &mut link.caption {
+                    translate(&mut caption.range, shift);
+                }
+            }
+        }
+        for heading in &mut self.headings {
+            if heading.range.start >= old_end {
+                translate(&mut heading.range, shift);
+            }
+        }
+        for link in &mut replacement.links {
+            translate(&mut link.range, start as isize);
+            for caption in &mut link.caption {
+                translate(&mut caption.range, start as isize);
+            }
+        }
+        self.links.extend(replacement.links);
+        self.links.sort_by_key(|link| link.range.start);
+    }
     /// Raw HTML and fenced code are not Link events and never become ambient navigation instructions.
     pub(crate) fn parse(source: &str) -> Self {
         let mut index = Self::default();

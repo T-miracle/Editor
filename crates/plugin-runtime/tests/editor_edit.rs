@@ -66,6 +66,35 @@ fn toolbar_package(
     })
 }
 
+/// Unknown asset metadata cannot opt an independent guest into host-owned footer behavior.
+#[test]
+#[ignore = "build current capability-example through the host SDK first"]
+fn legacy_toolbar_asset_cannot_publish_a_host_toggle() {
+    let package = toolbar_package(|_, files| {
+        let mut document: Value = serde_json::from_slice(&files["composed-ui.json"]).unwrap();
+        document["editor_toolbar_toggle"] = json!("Show/hide fixture toolbar");
+        files.insert(
+            "composed-ui.json".into(),
+            serde_json::to_vec(&document).unwrap(),
+        );
+    })
+    .unwrap();
+    let root = tempfile::tempdir().unwrap();
+    let mut manager = Manager::open(root.path().into(), Environment::default()).unwrap();
+    manager
+        .install(&package, package.manifest.permissions.clone())
+        .unwrap();
+    preview(&mut manager).unwrap();
+    let scene = manager.live["edit-fixture"].views["welcome"].as_ref();
+    assert!(scene.tools.is_empty());
+    assert!(
+        serde_json::to_value(scene)
+            .unwrap()
+            .get("editor_toolbar_toggle")
+            .is_none()
+    );
+}
+
 /// The manager supplies immutable unsaved text and a document identity to the declared preview.
 fn preview(manager: &mut Manager) -> anyhow::Result<()> {
     manager.event(

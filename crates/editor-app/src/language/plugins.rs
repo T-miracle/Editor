@@ -13,7 +13,69 @@ use std::{
     path::{Path, PathBuf},
     sync::Arc,
 };
-use tree_sitter::{Parser, WasmStore, wasmtime::Engine};
+use tree_sitter::{
+    Parser, WasmStore,
+    wasmtime::{Cache, CacheConfig, Config, Engine},
+};
+
+/// Compiled grammar artifacts live beside the editor's other cache files, never in the workspace.
+const GRAMMAR_CACHE_DIRECTORY: &str = "MeEditor";
+const GRAMMAR_CACHE_SUBDIRECTORY: &str = "grammars";
+
+/// The one engine every plugin grammar is loaded and parsed on.
+///
+/// Tree-sitter creates a fresh WASM store per parser, and the editor's highlighter creates one
+/// parser per injection layer per parse. Compiling the module again for each of those stores cost
+/// roughly 90 ms per keystroke in release builds (about 1.3 s in debug ones) and stalled typing and
+/// IME composition in Markdown sources, although nothing about the grammar had changed. Wasmtime's
+/// compiled-module cache turns those repeated loads into cache hits while every parser keeps its
+/// own isolated store.
+fn grammar_engine() -> Engine {
+    /// Grammars load on validation workers and on the editing path, so one engine serves both.
+    static ENGINE: std::sync::OnceLock<Engine> = std::sync::OnceLock::new();
+    ENGINE
+        .get_or_init(|| build_grammar_engine(grammar_cache()))
+        .clone()
+}
+
+/// Build the shared engine from an opened cache, or without one when caching is unavailable.
+///
+/// A missing cache only costs the compilation this engine exists to avoid repeating, so an unusable
+/// cache directory must never fail plugin loading.
+fn build_grammar_engine(cache: anyhow::Result<Cache>) -> Engine {
+    let mut config = Config::new();
+    match cache {
+        Ok(cache) => {
+            config.cache(Some(cache));
+        }
+        Err(error) => {
+            tracing::warn!("plugin grammar cache is unavailable: {error:#}");
+        }
+    }
+    match Engine::new(&config) {
+        Ok(engine) => engine,
+        Err(error) => {
+            tracing::warn!("plugin grammar engine fell back to defaults: {error:#}");
+            Engine::default()
+        }
+    }
+}
+
+/// Open the process-wide compiled-module cache for plugin grammars.
+///
+/// Wasmtime creates and canonicalizes the directory itself, so an unusable location degrades to
+/// recompiling rather than failing plugin loading.
+fn grammar_cache() -> anyhow::Result<Cache> {
+    let mut config = CacheConfig::new();
+    if let Some(directory) = dirs::cache_dir() {
+        config.with_directory(
+            directory
+                .join(GRAMMAR_CACHE_DIRECTORY)
+                .join(GRAMMAR_CACHE_SUBDIRECTORY),
+        );
+    }
+    Cache::new(config).context("create plugin grammar cache")
+}
 
 /// Remove a plugin parser immediately when its installed package is disabled or uninstalled.
 pub fn mask_language(language_id: &str) {
@@ -131,7 +193,9 @@ fn load_language(
 ) -> anyhow::Result<(Arc<LoadedGrammar>, String)> {
     let expected_abi = contribution.tree_sitter_abi;
 
-    let engine = Engine::default();
+    // Validation runs on a background worker, so it also warms the shared compiled-module cache
+    // before the first keystroke needs the grammar.
+    let engine = grammar_engine();
     let mut store = WasmStore::new(&engine).context("create Tree-sitter WASM store")?;
     let language = store
         .load_language(&contribution.grammar_name, &grammar_bytes)
@@ -260,6 +324,35 @@ mod tests {
             register_plugin(&root)
                 .unwrap_or_else(|error| panic!("{name} failed to load: {error:#}"));
         }
+    }
+
+    /// Repeated stores for one grammar must reuse the compiled module.
+    ///
+    /// The editor's highlighter creates a parser — and therefore a WASM store — for every injection
+    /// layer it parses. Recompiling the grammar there put about 90 ms of work into every keystroke
+    /// of a Markdown source (measured in release builds), so a store load whose module was already
+    /// compiled must stay cheap.
+    #[test]
+    fn repeated_grammar_loads_reuse_compiled_modules() {
+        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../plugins/markdown/grammar");
+        let grammar = fs::read(root.join("markdown.wasm")).unwrap();
+        // A private cache directory keeps the first load a real compile regardless of other runs.
+        let directory = tempfile::tempdir().unwrap();
+        let mut config = CacheConfig::new();
+        config.with_directory(directory.path());
+        let engine = build_grammar_engine(Cache::new(config));
+        let load = || {
+            let started = std::time::Instant::now();
+            let mut store = WasmStore::new(&engine).unwrap();
+            store.load_language("markdown", &grammar).unwrap();
+            started.elapsed()
+        };
+        let compiled = load();
+        let cached = load();
+        assert!(
+            cached * 4 < compiled || cached <= std::time::Duration::from_millis(50),
+            "repeated grammar load recompiled the module: first {compiled:?}, second {cached:?}"
+        );
     }
 
     /// A missing grammar stays inert and reaches callers as a load error.

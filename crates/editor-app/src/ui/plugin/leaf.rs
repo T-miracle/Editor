@@ -23,7 +23,9 @@ impl PluginView {
         match &node.kind {
             Kind::SideTabs(_) => self.collections[&node.id].clone().into_any_element(),
             Kind::Canvas(_) => self.canvases[&node.id].clone().into_any_element(),
-            Kind::FileImage { alt, sizing } => self.render_file_image(&node.id, alt, *sizing, cx),
+            Kind::FileImage { alt, sizing } => {
+                self.render_file_image(&node.id, alt, *sizing, node.viewport.clone(), cx)
+            }
             Kind::Text { text } => div().child(text.clone()).into_any_element(),
             Kind::Image { source, alt } => {
                 // Direct retained pixels bypass GPUI's ambient file/URL loader. Height follows the image ratio.
@@ -37,6 +39,15 @@ impl PluginView {
                 if let Some(photo) = photo
                     && let Ok(Some(bitmap)) = &photo.decoded
                 {
+                    if node.viewport.is_some() {
+                        return self.render_visual_bitmap(
+                            &node.id,
+                            bitmap.clone(),
+                            ui::ImageSizing::OriginalContain,
+                            node.viewport.clone(),
+                            cx,
+                        );
+                    }
                     let image_id = format!("plugin-image-{}", node.id);
                     let pixels_id = format!("plugin-image-pixels-{}", node.id);
                     div()
@@ -97,7 +108,9 @@ impl PluginView {
                         .unwrap_or(14.)),
                     crate::ui::controls::RichTextColors {
                         foreground: colors.foreground,
-                        background: colors.background,
+                        muted_foreground: colors.muted_foreground,
+                        code_background: colors.code_background,
+                        inline_code_background: colors.inline_code_background,
                         border: colors.border,
                         link: colors.accent,
                     },
@@ -132,7 +145,7 @@ impl PluginView {
                     .id(native_id.clone())
                     .w_full()
                     .overflow_x_scroll()
-                    .bg(colors.background)
+                    .bg(colors.code_background)
                     .border_1()
                     .border_color(colors.border)
                     .rounded(px(4.))
@@ -165,7 +178,17 @@ impl PluginView {
                             let control = format!("plugin-button-{}", node.id);
                             move || control.clone()
                         })
-                        .label(label.clone())
+                        .accessibility_label(label.clone())
+                        .when(node.button_icon.is_none(), |button| {
+                            button.label(label.clone())
+                        })
+                        .when_some(node.button_icon.as_ref(), |button, svg| {
+                            // The negotiated, validated icon retains Base focus and Click behavior.
+                            button
+                                .icon(crate::ui::controls::Icon::default().data(svg.as_bytes()))
+                                .small()
+                                .compact()
+                        })
                         .when_some(node.tooltip.clone(), |button, tooltip| {
                             button.accessibility_label(tooltip.clone()).tooltip(tooltip)
                         })

@@ -4,5 +4,5 @@ file_icons = "icons.json"
 [plugin]
 id = "svg"
 name = "Image"
-version = "0.5.0"
+version = "0.6.0"
 host_version = ">=0.1.0"

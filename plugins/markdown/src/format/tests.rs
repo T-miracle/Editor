@@ -51,6 +51,38 @@ fn emphasis_with_whitespace_and_blank_lines_renders_as_formatting() {
 
 use super::*;
 
+/// Heading switches preserve current-line UTF-8 content, indentation and CRLF rather than creating a new line.
+#[test]
+fn heading_levels_switch_and_toggle_existing_line_without_changing_line_endings() {
+    let source = "前文\r\n  ## 中文标题\r\n后文";
+    let cursor = source.find('文').unwrap() + "文".len();
+    let cursor = source[cursor..].find("中文").unwrap() + cursor + "中".len();
+    for level in 1..=6 {
+        let edit = plan(Command::HeadingLevel(level), source, cursor..cursor, false).unwrap();
+        let expected = if level == 2 {
+            "  中文标题".into()
+        } else {
+            format!("  {} 中文标题", "#".repeat(level as usize))
+        };
+        let mut candidate = source.to_owned();
+        candidate.replace_range(edit.range.clone(), &edit.text);
+        assert_eq!(candidate, format!("前文\r\n{expected}\r\n后文"));
+        assert!(edit.selection.is_empty());
+        assert!(candidate.is_char_boundary(edit.selection.start));
+    }
+    for invalid in [0, 7, 255] {
+        assert!(
+            plan(
+                Command::HeadingLevel(invalid),
+                source,
+                cursor..cursor,
+                false
+            )
+            .is_none()
+        );
+    }
+}
+
 /// The surrounding source can prevent punctuation-adjacent delimiters from rendering as emphasis.
 #[test]
 fn emphasis_rejects_unrepresentable_punctuation_in_the_full_document() {

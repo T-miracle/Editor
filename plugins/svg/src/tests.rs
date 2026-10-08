@@ -1,6 +1,137 @@
 //! Specifications exercise the current SDK dispatch and observable canvas output.
 use super::*;
 
+/// Raster zoom policy is supplied through the same exported dispatch as a third-party viewer.
+#[test]
+fn raster_viewport_input_owns_zoom_and_preserves_center_across_resize() {
+    prepare(Environment::default());
+    let send = |event| {
+        let message = api::Invocation {
+            id: 2,
+            message: api::Input::Event {
+                panel: Some("preview".into()),
+                event,
+            },
+        };
+        let payload = ImagePreview::dispatch(serde_json::to_string(&message).unwrap()).unwrap();
+        let reply: api::Completion = serde_json::from_str(&payload).unwrap();
+        let document = reply.result.unwrap().views.remove(0).document;
+        document.validate().unwrap();
+        document
+    };
+    let file = api::FileContext {
+        version: api::FileVersion {
+            id: "photo".into(),
+            path: "photo.png".into(),
+            revision: 1,
+        },
+        file_type: "png".into(),
+        text: None,
+    };
+    let mut document = send(api::Notification::FilePreview {
+        file: Some(file.clone()),
+    });
+    let input = |revision, event| {
+        api::Notification::Ui(ui::UiEvent {
+            revision,
+            node: "image".into(),
+            action: ui::Action::ViewportInput(ui::ViewportInput {
+                content: ui::ContentSize {
+                    width: 800.,
+                    height: 400.,
+                },
+                event,
+            }),
+        })
+    };
+    document = send(input(
+        document.revision,
+        ui::CanvasEvent::Resize {
+            width: 400.,
+            height: 300.,
+            grid: None,
+        },
+    ));
+    assert_eq!(
+        document
+            .root
+            .viewport
+            .as_ref()
+            .unwrap()
+            .transform
+            .unwrap()
+            .scale,
+        0.5
+    );
+    document = send(input(
+        document.revision,
+        ui::CanvasEvent::Wheel {
+            x: 10.,
+            y: 10.,
+            delta_x: 0.,
+            delta_y: 14.,
+            shift: false,
+        },
+    ));
+    let t = document.root.viewport.as_ref().unwrap().transform.unwrap();
+    assert!((t.scale - 0.56).abs() < 0.0001);
+    assert_eq!((t.anchor_x, t.anchor_y, t.x, t.y), (0.5, 0.5, 0., 0.));
+    document = send(input(
+        document.revision,
+        ui::CanvasEvent::Resize {
+            width: 600.,
+            height: 500.,
+            grid: None,
+        },
+    ));
+    assert_eq!(document.root.viewport.as_ref().unwrap().transform, Some(t));
+    // A retained event cannot modify the replacement scene, and a new file restores automatic sizing.
+    document = send(input(
+        0,
+        ui::CanvasEvent::Wheel {
+            x: 10.,
+            y: 10.,
+            delta_x: 0.,
+            delta_y: 14.,
+            shift: false,
+        },
+    ));
+    assert_eq!(document.root.viewport.as_ref().unwrap().transform, Some(t));
+    let mut replacement = file;
+    // Wheel deltas already queued for one unchanged file/node identity must all reach the policy.
+    let queued_revision = document.revision;
+    for _ in 0..3 {
+        document = send(input(
+            queued_revision,
+            ui::CanvasEvent::Wheel {
+                x: 10.,
+                y: 10.,
+                delta_x: 0.,
+                delta_y: 14.,
+                shift: false,
+            },
+        ));
+    }
+    assert!(
+        (document
+            .root
+            .viewport
+            .as_ref()
+            .unwrap()
+            .transform
+            .unwrap()
+            .scale
+            - 0.7867597)
+            .abs()
+            < 0.0001
+    );
+    replacement.version.id = "another-photo".into();
+    document = send(api::Notification::FilePreview {
+        file: Some(replacement),
+    });
+    assert!(document.root.viewport.unwrap().transform.is_none());
+}
+
 /// Decode exactly the result envelope exported by the SDK.
 fn dispatch(message: api::Input) -> ui::Canvas {
     let payload =
@@ -86,9 +217,9 @@ fn vector(scene: &ui::Canvas) -> (Rect, &str) {
         .expect("a valid document must produce a vector image")
 }
 
-/// Opening a small image preserves its intrinsic dimensions instead of enlarging it.
+/// A small SVG opens at a 240px longest edge while preserving its aspect ratio and center.
 #[test]
-fn default_preview_preserves_small_intrinsic_image_dimensions() {
+fn default_preview_enlarges_small_svg_to_a_240_pixel_longest_edge() {
     prepare(Environment::default());
     canvas(ui::CanvasEvent::Resize {
         width: 400.,
@@ -100,8 +231,32 @@ fn default_preview_preserves_small_intrinsic_image_dimensions() {
         "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"100\" height=\"50\"/>".into(),
     );
     let (rect, _) = vector(&scene);
-    assert_eq!((rect.w, rect.h), (100., 50.));
-    assert_eq!((rect.x, rect.y), (150., 141.));
+    assert!((rect.w - 240.).abs() < 0.01 && (rect.h - 120.).abs() < 0.01);
+    assert!((rect.x - 80.).abs() < 0.01 && (rect.y - 106.).abs() < 0.01);
+    // A viewport smaller than the preferred minimum still contains the complete SVG.
+    let narrow = canvas(ui::CanvasEvent::Resize {
+        width: 120.,
+        height: 100.,
+        grid: None,
+    });
+    let rect = vector(&narrow).0;
+    assert!((rect.w - 88.).abs() < 0.01 && (rect.h - 44.).abs() < 0.01);
+    let restored = canvas(ui::CanvasEvent::Resize {
+        width: 400.,
+        height: 300.,
+        grid: None,
+    });
+    assert!((vector(&restored).0.w - 240.).abs() < 0.01);
+    command("actual-size".into());
+    let manual = canvas(ui::CanvasEvent::Resize {
+        width: 600.,
+        height: 400.,
+        grid: None,
+    });
+    assert!(
+        (vector(&manual).0.w - 100.).abs() < 0.01,
+        "manual 1:1 ignores the initial minimum"
+    );
 }
 
 /// Transparent vectors sit above the board, and off-center wheel input keeps the image centered.
@@ -118,10 +273,10 @@ fn document_renders_above_checkerboard_and_stays_centered_during_zoom() {
     let (rect, rendered) = vector(&scene);
     assert_eq!(rendered, source);
     // Intrinsic-to-logical scaling uses f32, so compare the visible geometry within a subpixel.
-    assert!((rect.x - 100.).abs() < 0.01);
-    assert!((rect.y - 116.).abs() < 0.01);
-    assert!((rect.w - 200.).abs() < 0.01);
-    assert!((rect.h - 100.).abs() < 0.01);
+    assert!((rect.x - 80.).abs() < 0.01);
+    assert!((rect.y - 106.).abs() < 0.01);
+    assert!((rect.w - 240.).abs() < 0.01);
+    assert!((rect.h - 120.).abs() < 0.01);
     assert!(matches!(scene.paint.last(), Some(Paint::Svg { .. })));
     assert!(scene.paint.iter().any(|paint| matches!(
         paint,
@@ -138,8 +293,8 @@ fn document_renders_above_checkerboard_and_stays_centered_during_zoom() {
         y: 126.,
     });
     let (rect, _) = vector(&zoomed);
-    assert!((rect.w - 224.).abs() < 0.01);
-    assert!((rect.h - 112.).abs() < 0.01);
+    assert!((rect.w - 268.8).abs() < 0.01);
+    assert!((rect.h - 134.4).abs() < 0.01);
     assert!((rect.x + rect.w / 2. - 200.).abs() < 0.01);
     assert!((rect.y + rect.h / 2. - 166.).abs() < 0.01);
     // An opposite-corner wheel event and every toolbar command must retain the same center.
@@ -238,7 +393,7 @@ fn svg_toolbar_controls_zoom_and_places_percentage_at_right() {
         "all four toolbar controls use real SVG assets"
     );
     assert!(scene.paint.iter().any(|operation| matches!(operation,
-        Paint::Text { x, y, text, .. } if text == "100%" && *x > 300. && *y < 32.
+        Paint::Text { x, y, text, .. } if text == "120%" && *x > 300. && *y < 32.
     )));
     // An unmatched release must not activate a button or change the current image size.
     let unchanged = canvas(ui::CanvasEvent::Pointer {
@@ -249,8 +404,8 @@ fn svg_toolbar_controls_zoom_and_places_percentage_at_right() {
         clicks: 1,
         shift: false,
     });
-    assert!((vector(&unchanged).0.w - 200.).abs() < 0.01);
-    for (index, expected) in [(0, 224.), (1, 200.), (2, 200.), (3, 352.)] {
+    assert!((vector(&unchanged).0.w - 240.).abs() < 0.01);
+    for (index, expected) in [(0, 268.8), (1, 240.), (2, 200.), (3, 352.)] {
         let rect = icons[index];
         canvas(ui::CanvasEvent::Pointer {
             phase: ui::PointerPhase::Down,

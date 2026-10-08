@@ -5,7 +5,7 @@
 
 ```powershell
 cargo build -p editor-app
-./scripts/build-layout-example.ps1 -Packages tools-example
+.\target\debug\editor-app.exe --plugin-cargo plugins/tools-example/Cargo.toml build --target wasm32-wasip2 --release --target-dir target
 ```
 
-产物位于 `target/plugin-layout-test/tools-example.zip`，不作为内置产品插件发行。
+组件产物位于 `target/wasm32-wasip2/release/`。按[直接归档说明](../../installer/README.md)将清单、README、tools-example.wasm 与 icons 准备为标准 ZIP，测试夹具保存到 `target/plugin-layout-test/tools-example.zip`；本示例不作为内置产品插件发行。

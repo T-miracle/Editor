@@ -7,6 +7,8 @@ use std::{collections::HashSet, ops::Range};
 #[derive(Clone, Copy)]
 pub(super) enum Command {
     Heading,
+    /// Levels two through six share the current-line heading transaction with level one.
+    HeadingLevel(u8),
     Bold,
     Italic,
     Strike,
@@ -42,6 +44,7 @@ pub(super) fn plan(
     if matches!(
         command,
         Command::Heading
+            | Command::HeadingLevel(_)
             | Command::CodeBlock
             | Command::Quote
             | Command::Unordered
@@ -51,6 +54,14 @@ pub(super) fn plan(
     ) && (divides_crlf(source, selection.start) || divides_crlf(source, selection.end))
     {
         return None;
+    }
+    if let Command::Heading | Command::HeadingLevel(_) = command {
+        let level = match command {
+            Command::Heading => 1,
+            Command::HeadingLevel(level) => level,
+            _ => unreachable!(),
+        };
+        return heading(source, selection, level, english);
     }
     if selection.is_empty() {
         let edit = template(command, source, selection.start, english);
@@ -84,6 +95,7 @@ pub(super) fn plan(
             }
         }
         Command::Heading
+        | Command::HeadingLevel(_)
         | Command::Quote
         | Command::Unordered
         | Command::Ordered
@@ -101,6 +113,68 @@ pub(super) fn plan(
                 text,
             }
         }
+    })
+}
+
+/// Change ATX markers on existing target lines; never split a line around the caret.
+/// Repeating its current level removes the marker. CRLF and up to three indentation spaces survive.
+fn heading(source: &str, selection: Range<usize>, level: u8, english: bool) -> Option<Edit> {
+    if !(1..=6).contains(&level) {
+        return None;
+    }
+    let range = whole_lines(source, &selection);
+    if selection.is_empty() && source[range.clone()].is_empty() {
+        let word = if english { "heading" } else { "标题" };
+        return Some(inline(
+            range,
+            word,
+            &format!("{} ", "#".repeat(level as usize)),
+            "",
+        ));
+    }
+    let mut text = String::new();
+    let mut caret = None;
+    for line in source[range.clone()].split_inclusive('\n') {
+        let indent = line.bytes().take_while(|byte| *byte == b' ').count().min(3);
+        let body = &line[indent..];
+        let hashes = body.bytes().take_while(|byte| *byte == b'#').count();
+        let existing = if (1..=6).contains(&hashes)
+            && body
+                .as_bytes()
+                .get(hashes)
+                .is_none_or(|byte| matches!(byte, b' ' | b'\t' | b'\r' | b'\n'))
+        {
+            hashes
+                + body[hashes..]
+                    .bytes()
+                    .take_while(|byte| matches!(byte, b' ' | b'\t'))
+                    .count()
+        } else {
+            0
+        };
+        let marker = if existing > 0 && hashes == level as usize {
+            String::new()
+        } else {
+            format!("{} ", "#".repeat(level as usize))
+        };
+        // Keep an empty caret at the same logical content column after prefix replacement.
+        if selection.is_empty() {
+            let column = selection.start.saturating_sub(range.start);
+            caret = Some(
+                range.start + indent + marker.len() + column.saturating_sub(indent + existing),
+            );
+        }
+        text.push_str(&line[..indent]);
+        text.push_str(&marker);
+        text.push_str(&body[existing..]);
+    }
+    let end = range.start + text.len();
+    let resulting_selection =
+        caret.map_or(range.start..end, |caret| caret.min(end)..caret.min(end));
+    Some(Edit {
+        range,
+        text,
+        selection: resulting_selection,
     })
 }
 
@@ -235,6 +309,7 @@ fn fenced(range: Range<usize>, body: &str, newline: &str) -> Edit {
 fn prefix(command: Command, index: usize) -> String {
     match command {
         Command::Heading => "# ".into(),
+        Command::HeadingLevel(level) => format!("{} ", "#".repeat(level as usize)),
         Command::Quote => "> ".into(),
         Command::Unordered => "- ".into(),
         Command::Ordered => format!("{}. ", index + 1),
@@ -246,7 +321,7 @@ fn prefix(command: Command, index: usize) -> String {
 /// Every empty-selection command offers a localized editable placeholder; block templates stay on their own lines.
 fn template(command: Command, source: &str, cursor: usize, english: bool) -> Edit {
     let words = match command {
-        Command::Heading => ("标题", "heading"),
+        Command::Heading | Command::HeadingLevel(_) => ("标题", "heading"),
         Command::Bold => ("粗体", "bold text"),
         Command::Italic => ("斜体", "italic text"),
         Command::Strike => ("删除线", "deleted text"),
@@ -282,6 +357,7 @@ fn template(command: Command, source: &str, cursor: usize, english: bool) -> Edi
             insert_block(source, cursor, text, 2..2 + headers.1.len())
         }
         Command::Heading
+        | Command::HeadingLevel(_)
         | Command::Quote
         | Command::Unordered
         | Command::Ordered
