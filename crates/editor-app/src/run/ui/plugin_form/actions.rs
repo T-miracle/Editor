@@ -87,6 +87,9 @@ impl EditorApp {
         event: native::UiEvent,
         cx: &mut Context<Self>,
     ) {
+        if self.handle_host_configuration_event(id, &event, cx) {
+            return;
+        }
         let Some(form) = self.run_form.clone() else {
             return;
         };
@@ -157,6 +160,11 @@ impl EditorApp {
             }
             let mut arguments = self.configuration_arguments(&snapshot);
             arguments["intent"] = "save".into();
+            if snapshot.provider == crate::plugin_development::configuration::PROVIDER {
+                let result = crate::plugin_development::configuration::validate(&arguments);
+                self.accept_plugin_commit(form.entity_id(), &id, snapshot, result, cx);
+                continue;
+            }
             let request = self.plugin_configuration_bridge.reserve(
                 Purpose::Commit {
                     window: form.entity_id(),

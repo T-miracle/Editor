@@ -68,20 +68,36 @@ The Cargo package remains `editor-app`. Existing `MeEditor` data directories, `M
 
 ## Plugin development
 
-Plugins build against the SDK embedded in the editor through its `--plugin-cargo` entry point. See the [Plugin SDK](https://t-miracle.github.io/Editor/en/sdk/) for capabilities and packaging, and the [maintainer documentation index](docs/README.md) for host integration and verification.
+Each plugin project uses a versioned `nanobug-plugin.json` to declare its manifest, optional WASM/native builds and explicit assets. GUI and CLI share this policy. ZIPs default to **each plugin project root**; a local configuration or `--output` can override the directory. A successful build atomically replaces `<id>-<version>.zip`; failure retains the previous ZIP. Packaging does not bump the manifest version.
+
+In **Edit configurations → Add → Nanobug**, choose **Plugin Packaging** or **Plugin Development** to create a draft. Packaging supports several projects and an output-directory picker. Development opens an isolated editor with shipped plugins plus the development version, without creating a ZIP. Its logs offer manual reload; automatic reload is optional. Build only prepares artifacts, and WASM source breakpoints are unavailable. Settings, installed plugins, private data and history are isolated and retained per configuration; resetting the environment starts afresh.
 
 ```powershell
 # Build a host that provides the current SDK.
 cargo build -p editor-app
 
-# Build an independent component through the actual host's public SDK entry point.
-.\target\debug\editor-app.exe --plugin-cargo plugins/terminal/Cargo.toml build --target wasm32-wasip2 --release
+# Build and ZIP a plugin, using its project root as output.
+.\target\debug\editor-app.exe --plugin-package plugins/example
+
+# Batch packaging; relative --output is resolved from the current directory.
+.\target\debug\editor-app.exe --plugin-package plugins/toml plugins/html --output dist/plugins
+
+# Prepare a directory candidate without ZIP or launching a development window.
+.\target\debug\editor-app.exe --plugin-build plugins/example
+
+# Run an isolated development instance (this example declares no permissions).
+.\target\debug\editor-app.exe --plugin-dev plugins/example --watch
+
+# Low-level independent Cargo builds still use the host's embedded SDK.
+.\target\debug\editor-app.exe --plugin-cargo plugins/example/Cargo.toml check --target wasm32-wasip2
 
 # Export the embedded SDK directly for inspection or an external toolchain.
 .\target\debug\editor-app.exe --export-plugin-sdk .\target\sdk-export
 ```
 
-Install or update the generated packages in the plugin manager and approve their declared permissions. See the [run, debug, and build guide](https://t-miracle.github.io/Editor/en/guide/run-debug-build/) for usage and the [Rust debugger README](plugins/rust-debugger/README.md) for dependency preparation and authorization.
+For CLI development, send `reload` or `stop` on standard input. `--workspace` selects a test workspace (the plugin project by default); `--profile` selects isolated data. Repeat `--grant <permission>` for the permissions declared in the manifest. New permissions require stopping and authorizing another run; changing the plugin ID also requires restarting the configuration. Missing compilers/SDK targets are reported and never installed automatically. Native build steps declare their exact OS/architecture; foreign native artifacts are rejected. Windows is verified; macOS/Linux use portable paths and process interfaces but remain unverified.
+
+Install or update generated ZIPs in the plugin manager and approve their declared permissions. See the [packaging format](https://t-miracle.github.io/Editor/en/sdk/packaging/), [run, debug, and build guide](https://t-miracle.github.io/Editor/en/guide/run-debug-build/) and [Rust debugger README](plugins/rust-debugger/README.md). Maintainer decisions and verification are indexed in [docs/plugins/README.md](docs/plugins/README.md).
 
 ## Contributing
 

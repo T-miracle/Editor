@@ -8,6 +8,8 @@ alternate: /zh-cn/sdk/configurations/
 
 # Configuration templates — run.configurations 1.0
 
+The editor also owns two **Nanobug** templates, **Plugin Packaging** and **Plugin Development**, which remain available without plugin providers. They reuse native forms and local draft storage but execute the host's shared project builder. Their project/output/workspace fields follow the [packaging format](/en/sdk/packaging/); they do not change the public provider contract below.
+
 A compatible plugin can contribute command templates and its own native form through `configurations::declaration()`. Publish that exact contract in the manifest's services, negotiate `plugin.services >=1.1,<2`, and declare `ui.native ^1` and the native capabilities used by the form. Identity is authenticated by service routing; a payload cannot choose a different provider. The host supplies configuration identity, the tree, local storage and request lifecycle. The plugin supplies executable policy, editable defaults, layout and business validation.
 
 ## Methods and envelopes

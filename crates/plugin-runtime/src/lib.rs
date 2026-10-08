@@ -25,6 +25,8 @@ pub use request_state::Completion;
 mod instance;
 mod language_service;
 pub use language_service::{LanguageService, ServiceProcess};
+/// Shared project builds, validated development directories and atomic ZIP publication.
+pub mod development;
 mod manager;
 mod migration;
 mod package;

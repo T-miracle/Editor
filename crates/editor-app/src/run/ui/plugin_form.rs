@@ -13,6 +13,7 @@ mod state;
 pub(super) use state::*;
 #[cfg(test)]
 mod fault_tests;
+mod host;
 #[cfg(test)]
 mod native_profile;
 #[cfg(test)]
@@ -49,6 +50,8 @@ pub(crate) struct Bridge {
     resume: Option<(String, u8)>,
     origins: BTreeMap<String, plugin_runtime::TargetOrigin>,
     live_origins: Vec<plugin_runtime::TargetOrigin>,
+    /// Host-owned workflows are available independently of installed template providers.
+    pub(crate) jobs: crate::plugin_development::jobs::Jobs,
 }
 impl Bridge {
     fn reserve(&mut self, purpose: Purpose, workspace: String) -> u64 {
@@ -97,6 +100,8 @@ impl EditorApp {
         });
         form.update(cx, |form, cx| {
             let mut state = State::new(set, selected.clone());
+            state.catalog =
+                crate::plugin_development::configuration::templates(&self.workspace_key());
             state.tree = Some(tree);
             state.tree_observer = Some(observer);
             form.plugin = Some(Box::new(state));
@@ -162,6 +167,18 @@ impl EditorApp {
         let Some(snapshot) = snapshot else {
             return;
         };
+        if snapshot.provider == crate::plugin_development::configuration::PROVIDER {
+            let mut arguments = self.configuration_arguments(&snapshot);
+            arguments["event"] = snapshot
+                .pending_events
+                .first()
+                .cloned()
+                .unwrap_or_default()
+                .into();
+            let result = crate::plugin_development::configuration::form(&arguments);
+            self.accept_plugin_form(form.entity_id(), id, snapshot, result, cx);
+            return;
+        }
         let origin = form
             .read(cx)
             .plugin
@@ -216,6 +233,7 @@ impl EditorApp {
             let set = self.run_controls.configuration_set();
             for (id, mut data) in set.plugin_configurations {
                 if matches!(data.validation, ConfigurationValidation::Valid)
+                    && data.provider != crate::plugin_development::configuration::PROVIDER
                     && !origins
                         .iter()
                         .any(|origin| origin.provider() == data.provider)
@@ -284,6 +302,11 @@ impl EditorApp {
                             })
                         })
                         .collect();
+                    state
+                        .catalog
+                        .extend(crate::plugin_development::configuration::templates(
+                            &workspace,
+                        ));
                     state.error = (!catalog.failures.is_empty()).then(|| {
                         catalog
                             .failures

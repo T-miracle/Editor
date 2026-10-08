@@ -56,7 +56,7 @@ HTTP(S) 网页链接在点击后通过受控系统浏览器入口打开，需要
 
 图标通过公开 `ui.tools` 能力和 `Document.tools` 提供，模式在插件内部改变 `editor.layout` 内容。三个 SVG 分别以文本行、左右分栏和预览图案表达模式，采用 16 × 16 的设计网格和 `currentColor` 随主题着色，按项目底栏按钮的 14 px 尺寸显示；按钮提示、选中态和键盘焦点由通用宿主控件提供。
 
-先构建匹配宿主，通过 `editor-app.exe --plugin-cargo plugins/markdown/Cargo.toml build --target wasm32-wasip2 --release` 独立编译，再将清单、README、markdown.wasm、grammar、查询、图标与许可归档为标准 ZIP。步骤见[直接打包说明](../../installer/README.md)。访客项目使用版本化 SDK，无需引用宿主源码路径，打包不调用旧辅助脚本。
+通过宿主 `editor-app.exe --plugin-package plugins/markdown` 完整构建并封装 ZIP，默认输出为插件项目根部的 `markdown-0.17.0.zip`。项目描述在 `nanobug-plugin.json`，也可使用宿主“插件打包”配置选择输出位置；不调用归档脚本。
 
 分栏默认开启双向同步滚动，模式组右侧的链条按钮可关闭，选择按工作区保存；仅编辑、仅预览时开关不可操作。源码与预览按当前内容块对应，程序性定位回执不反向触发；图片加载、表格、换行、宽度及窗口变化后重新测量。滚轮、键盘及滚动条拖动继续由原生 Base 控件处理，手动拖动到释放期间拒绝迟到定位。源文档、场景或实例变化立即撤销旧定位，不修改文本、选区、焦点与 Undo。实际交付状态以[工单目录](docs/tickets/README.md)与验证记录为准。
 

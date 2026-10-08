@@ -1,0 +1,73 @@
+_version: 2
+plugin_dev.package:
+  en: "Plugin Packaging"
+  zh-CN: "插件打包"
+plugin_dev.development:
+  en: "Plugin Development"
+  zh-CN: "插件调试"
+plugin_dev.name:
+  en: "Configuration name"
+  zh-CN: "配置名称"
+plugin_dev.command:
+  en: "Command"
+  zh-CN: "命令"
+plugin_dev.projects:
+  en: "Plugin projects"
+  zh-CN: "插件项目"
+plugin_dev.projects_hint:
+  en: "One project directory per line"
+  zh-CN: "每行一个插件项目目录"
+plugin_dev.missing_description:
+  en: "Missing plugin project description: %{path}. Select a project containing nanobug-plugin.json, or add its build description."
+  zh-CN: "缺少插件项目描述：%{path}。请选择包含 nanobug-plugin.json 的插件项目，或补充该项目的构建描述。"
+plugin_dev.project_read_failed:
+  en: "Cannot load plugin project: %{path}"
+  zh-CN: "无法读取插件项目：%{path}"
+plugin_dev.choose_projects:
+  en: "Choose plugin projects…"
+  zh-CN: "选择插件项目…"
+plugin_dev.output:
+  en: "ZIP output directory"
+  zh-CN: "ZIP 输出目录"
+plugin_dev.output_hint:
+  en: "Empty uses the project default; the default is each plugin project root."
+  zh-CN: "留空使用项目默认位置，默认在各插件项目根目录。"
+plugin_dev.choose_output:
+  en: "Choose output directory…"
+  zh-CN: "选择输出目录…"
+plugin_dev.workspace:
+  en: "Test workspace (empty uses the plugin project)"
+  zh-CN: "测试工作区（留空使用插件项目）"
+plugin_dev.choose_workspace:
+  en: "Choose test workspace…"
+  zh-CN: "选择测试工作区…"
+plugin_dev.watch:
+  en: "Automatically rebuild and reload on changes"
+  zh-CN: "文件变化后自动构建并重新加载"
+plugin_dev.reset:
+  en: "Reset development environment"
+  zh-CN: "重置开发环境"
+plugin_dev.development_hint:
+  en: "Run opens an isolated development window. Build only prepares artifacts. WASM source debugging is unavailable."
+  zh-CN: "运行会打开独立开发窗口；构建仅准备产物；暂不提供 WASM 源码断点调试。"
+plugin_dev.reload:
+  en: "Reload plugin"
+  zh-CN: "重新加载插件"
+plugin_dev.no_source_debug:
+  en: "This template provides development runs and logs, without WASM source debugging."
+  zh-CN: "此模板提供开发运行与日志，暂不支持 WASM 源码断点调试。"
+plugin_dev.permission_title:
+  en: "Allow plugin development"
+  zh-CN: "允许插件开发运行"
+plugin_dev.permission_detail:
+  en: "Run in an isolated profile and trust this test workspace. Requested permissions: %{permissions}"
+  zh-CN: "使用隔离数据并信任此测试工作区。开发插件请求的权限：%{permissions}"
+plugin_dev.allow:
+  en: "Allow"
+  zh-CN: "允许"
+plugin_dev.cancel:
+  en: "Cancel"
+  zh-CN: "取消"
+plugin_dev.reset_busy:
+  en: "Stop this development instance before resetting its environment."
+  zh-CN: "请先停止此开发实例，再重置环境。"

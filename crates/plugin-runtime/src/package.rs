@@ -108,6 +108,33 @@ impl Package {
             actual_total += data.len();
             anyhow::ensure!(files.insert(name, data).is_none(), "Duplicate package path");
         }
+        Self::validated_files(files, digest)
+    }
+
+    /// Inspect a development directory's immutable bytes without creating an intermediate ZIP.
+    /// Paths, quotas, permissions, protocol and resource references use the installation validator.
+    /// Returns a content-addressed package, or an error before any registry/data mutation.
+    pub fn from_files(files: BTreeMap<String, Vec<u8>>) -> anyhow::Result<Self> {
+        anyhow::ensure!(files.len() <= 512, "Too many package entries");
+        let mut hash = Sha256::new();
+        let mut total = 0usize;
+        for (name, bytes) in &files {
+            validate_relative(name)?;
+            total = total
+                .checked_add(bytes.len())
+                .ok_or_else(|| anyhow::anyhow!("Package quota overflow"))?;
+            anyhow::ensure!(total <= 128 * 1024 * 1024, "Expanded package exceeds quota");
+            // Length prefixes keep different path/content boundaries from sharing a digest.
+            hash.update((name.len() as u64).to_le_bytes());
+            hash.update(name.as_bytes());
+            hash.update((bytes.len() as u64).to_le_bytes());
+            hash.update(bytes);
+        }
+        Self::validated_files(files, format!("{:x}", hash.finalize()))
+    }
+
+    /// Archive and development inputs converge here; neither can bypass admission checks.
+    fn validated_files(files: BTreeMap<String, Vec<u8>>, digest: String) -> anyhow::Result<Self> {
         let manifest: Manifest = serde_json::from_slice(
             files
                 .get("manifest.json")

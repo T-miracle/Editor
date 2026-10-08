@@ -1,0 +1,19 @@
+{
+  "version": 1,
+  "manifest": "manifest.json",
+  "output": ".",
+  "assets": [
+    {
+      "source": "README.md",
+      "destination": "README.md"
+    },
+    {
+      "source": "plugin.toml",
+      "destination": "plugin.toml"
+    },
+    {
+      "source": "run-targets",
+      "destination": "run-targets"
+    }
+  ]
+}

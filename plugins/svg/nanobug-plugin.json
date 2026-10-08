@@ -1,0 +1,27 @@
+{
+  "version": 1,
+  "manifest": "manifest.json",
+  "output": ".",
+  "wasm": {
+    "manifest": "Cargo.toml"
+  },
+  "assets": [
+    {"source": "examples", "destination": "examples"},
+    {
+      "source": "README.md",
+      "destination": "README.md"
+    },
+    {
+      "source": "plugin.toml",
+      "destination": "plugin.toml"
+    },
+    {
+      "source": "icons.json",
+      "destination": "icons.json"
+    },
+    {
+      "source": "icons",
+      "destination": "icons"
+    }
+  ]
+}

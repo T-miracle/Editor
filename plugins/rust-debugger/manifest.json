@@ -1,7 +1,7 @@
 {
   "id": "rust-debugger",
   "name": "Rust Debugger",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "protocol": 7,
   "component": "rust-debugger.wasm",
   "permissions": [

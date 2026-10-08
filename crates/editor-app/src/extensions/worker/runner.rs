@@ -37,6 +37,8 @@ impl Worker {
                     }
                 };
             let mut last_save = Instant::now();
+            let mut development = crate::plugin_development::instance::Loader::default();
+            let mut development_install = None::<String>;
             let mut vectors = super::super::images::VectorRenderer::default();
             let mut preparation: Option<BackgroundPreparation> = None;
             // First-use preparation retains its native cancellation token until the serialized cutover.
@@ -57,6 +59,15 @@ impl Worker {
             let mut target_calls = super::targets::TargetCalls::default();
             let mut configuration_calls = super::configurations::ConfigurationCalls::default();
             loop {
+                // Development candidates use the live actor's transaction and private data owner.
+                if preparation.is_none() && deferred.is_empty() {
+                    if let Some(package) =
+                        development.poll(authority.load(std::sync::atomic::Ordering::Acquire))
+                    {
+                        development_install = Some(package.manifest.id.clone());
+                        deferred.push_back(Work::Install(package));
+                    }
+                }
                 // Target calls use their own bounded roots and never block the actor on build output.
                 // Only the candidate travels between threads. Cutover remains serialized with live dispatch.
                 let completed = preparation
@@ -960,6 +971,18 @@ impl Worker {
                         &format!("host.lifecycle.{:?}", operation.action),
                         t!("plugins.log_operation_complete").to_string(),
                     );
+                }
+                if lifecycle
+                    .as_ref()
+                    .is_some_and(|operation| development_install.as_ref() == Some(&operation.id))
+                {
+                    let id = development_install.take().unwrap();
+                    match &result {
+                        Ok(()) => println!("Development plugin activated: {id}"),
+                        Err(error) => eprintln!(
+                            "Development activation failed; previous version retained: {error:#}"
+                        ),
+                    }
                 }
                 if lifecycle.is_some() {
                     published.progress = None;

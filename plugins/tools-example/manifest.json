@@ -1,7 +1,7 @@
 {
   "id": "tools-example",
   "name": "Tools Example",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "protocol": 7,
   "api": {"base":"^1","required":{"ui.native":"^1","ui.tools":"^1","editor.files":"^1","editor.documents":"^1"}},
   "component": "tools-example.wasm",

@@ -22,6 +22,10 @@ Configurations stay on this machine, scoped to the workspace. They do not create
 
 ## Build and launch
 
+The **Nanobug** group always offers **Plugin Packaging** and **Plugin Development**. Select either to create a draft. Packaging accepts one project directory per line and a manually entered or selected ZIP output directory. Leave output empty to use each project's shared default, normally its own root. Run builds and produces one ZIP per project; Build prepares artifacts without ZIPs.
+
+Plugin Development accepts one project and an optional test workspace. Run confirms trust/permissions and opens an independent editor with isolated settings, plugins, private data and history. Shipped plugins remain available; the development version replaces a shipped plugin with the same ID. Data is retained for this configuration. Stop it before choosing **Reset development environment**. The output panel offers **Reload plugin**; automatic reload is optional. Failed reload retains the old version. Build prepares artifacts without opening a window; Debug is disabled because WASM source breakpoints are unavailable. See [packaging and development](/en/sdk/packaging/) for project declarations.
+
 The Rust plugin offers a **Cargo** group with run, build and debug templates. Run defaults
 to `run --release`, Build to `build --release`, and Debug to `run`; all these arguments remain
 editable. Missing Cargo or a root Cargo project leaves these ordinary templates disabled

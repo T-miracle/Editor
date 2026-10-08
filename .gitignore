@@ -1,6 +1,9 @@
 /target/
 **/target/
 /dist/
+# Host-generated plugin archives default to their source project directory.
+/plugins/**/*.zip
+/plugins/**/dist/
 /.idea/
 /.vscode/
 *.log

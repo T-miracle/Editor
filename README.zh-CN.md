@@ -68,20 +68,36 @@ Cargo 包名保留为 `editor-app`。为保留设置、历史和已安装插件�
 
 ## 插件开发
 
-插件通过主程序的 `--plugin-cargo` 入口使用内嵌 SDK。公开能力与打包方式见[插件 SDK](https://t-miracle.github.io/Editor/zh-cn/sdk/)，宿主集成与验证入口见[维护者文档目录](docs/README.md)。
+每个插件项目使用版本化的 `nanobug-plugin.json` 声明清单、可选 WASM／原生构建和明确的资源。GUI 与 CLI 共享这份规则。ZIP 默认生成在**各插件项目根目录**，本地配置或 `--output` 可以覆盖。构建成功原子替换 `<id>-<version>.zip`，失败保留旧 ZIP；打包不自动提升清单版本。
+
+在“编辑配置 → 添加 → Nanobug”选择“插件打包”或“插件调试”，创建配置草稿。打包支持多个项目和输出目录选择器。插件调试启动独立编辑器，加载随附插件与开发版本，不生成 ZIP；日志提供手动重载，也可开启自动重载。“构建”仅准备产物，暂不提供 WASM 源码断点调试。设置、已安装插件、私有数据和历史按配置隔离并保留，重置环境后重新开始。
 
 ```powershell
 # 构建提供当前 SDK 的宿主。
 cargo build -p editor-app
 
-# 通过真实宿主的公开 SDK 入口独立构建组件。
-.\target\debug\editor-app.exe --plugin-cargo plugins/terminal/Cargo.toml build --target wasm32-wasip2 --release
+# 构建插件并生成 ZIP，默认输出至插件项目根目录。
+.\target\debug\editor-app.exe --plugin-package plugins/example
 
-# 直接导出内嵌 SDK，供检查或外部工具链使用。
+# 批量打包；相对 --output 从当前命令目录解析。
+.\target\debug\editor-app.exe --plugin-package plugins/toml plugins/html --output dist/plugins
+
+# 准备目录候选，不生成 ZIP，也不启动开发窗口。
+.\target\debug\editor-app.exe --plugin-build plugins/example
+
+# 启动隔离开发实例（此示例未声明权限）。
+.\target\debug\editor-app.exe --plugin-dev plugins/example --watch
+
+# 底层独立 Cargo 构建继续使用宿主内嵌 SDK。
+.\target\debug\editor-app.exe --plugin-cargo plugins/example/Cargo.toml check --target wasm32-wasip2
+
+# 直接导出内嵌 SDK，供检查或其他工具链使用。
 .\target\debug\editor-app.exe --export-plugin-sdk .\target\sdk-export
 ```
 
-在插件管理中安装或更新生成的包，并批准声明的权限。运行与调试的使用方式见[用户指南](https://t-miracle.github.io/Editor/zh-cn/guide/run-debug-build/)；Rust 调试器的依赖准备与授权范围见[插件说明](plugins/rust-debugger/README.md)。
+CLI 开发运行通过标准输入发送 `reload` 或 `stop`。`--workspace` 指定测试工作区，默认使用插件项目；`--profile` 指定隔离数据目录。用多个 `--grant <权限名>` 显式授权清单中声明的权限。新增权限需停止后重新授权运行，更改插件 ID 也需重新启动配置。缺失的编译器／SDK 目标会报错，不会自动安装。原生构建明确声明系统和架构，拒绝混入其他平台的原生产物。Windows 已验证；macOS/Linux 使用兼容的路径与进程接口，尚未实测。
+
+在插件管理中安装或更新生成的 ZIP，并批准声明的权限。详见[打包格式](https://t-miracle.github.io/Editor/zh-cn/sdk/packaging/)、[运行、调试与构建指南](https://t-miracle.github.io/Editor/zh-cn/guide/run-debug-build/)和 [Rust 调试器说明](plugins/rust-debugger/README.md)。维护者决策和验收见[插件文档入口](docs/plugins/README.md)。
 
 ## 参与贡献
 

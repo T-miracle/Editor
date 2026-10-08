@@ -1,7 +1,7 @@
 {
   "id": "terminal",
   "name": "终端",
-  "version": "0.12.1",
+  "version": "0.12.2",
   "protocol": 7,
   "api": {
     "base": "^1",

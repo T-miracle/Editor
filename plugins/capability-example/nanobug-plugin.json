@@ -1,0 +1,16 @@
+{
+  "version": 1,
+  "manifest": "manifest.json",
+  "output": ".",
+  "wasm": {
+    "manifest": "Cargo.toml"
+  },
+  "assets": [
+    {"source": "welcome.txt", "destination": "welcome.txt"},
+    {"source": "composed-ui.json", "destination": "composed-ui.json"},
+    {
+      "source": "README.md",
+      "destination": "README.md"
+    }
+  ]
+}

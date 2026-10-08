@@ -20,7 +20,7 @@ SVG 提供以下缩放按钮。PNG、JPEG、GIF、WebP 同样支持滚轮缩放�
 - 普通 SVG 支持 1%–3200% 缩放；极大或极小的 SVG 会扩展范围以支持默认尺寸和窗口适应，最终受绘图尺寸上限约束。
 - 已放大的图片裁剪在预览面板内；改变分割线宽度会更新预览视口。
 
-0.5.1 使用 `protocol = 7`，协商 `ui.native >=1.1`、`ui.canvas >=1.1`、`editor.layout`、`ui.tools`、`editor.documents`、`editor.files`、`ui.file_images` 与 `storage.private >=1.1`。权限 `editor.read` 用于当前 SVG 内存内容与文件上下文；`workspace.read` 用于受控图片资源；`storage` 用于私有显示意图。更新时新增权限须确认。每帧回传目标身份与 revision，旧版本不能覆盖新内容；同一路径重开使用新身份。图标由本包提供，普通 Canvas 承载矢量与指针事件。插件不申请进程或网络权限。
+0.6.0 使用 `protocol = 7`，协商 `ui.native >=1.1`、`ui.canvas >=1.1`、`ui.viewport ^1`、`editor.layout`、`ui.tools`、`editor.documents`、`editor.files`、`ui.file_images` 与 `storage.private >=1.1`。权限 `editor.read` 用于当前 SVG 内存内容与文件上下文；`workspace.read` 用于受控图片资源；`storage` 用于私有显示意图。更新时新增权限须确认。每帧回传目标身份与 revision，旧版本不能覆盖新内容；同一路径重开使用新身份。图标由本包提供，普通 Canvas 承载矢量与指针事件。插件不申请进程或网络权限。
 
 支持静态 SVG 的路径、颜色、渐变、透明度及嵌入资源；主程序负责原生文字和图像渲染。SVG 外部图片路径不会被读取。单个 SVG 源码上限为 1 MiB。其他格式通过独立文件版本与受控原生图片资源读取，要求 `editor.files`、`ui.file_images` 和 `workspace.read`；编码字节上限 8 MiB，解码尺寸／内存遵守宿主有限预算，超限、损坏和未授权均显示原因。
 
@@ -30,11 +30,11 @@ SVG 提供以下缩放按钮。PNG、JPEG、GIF、WebP 同样支持滚轮缩放�
 # 主程序提供协议与 WIT 接口缓存。
 cargo build -p editor-app
 ./target/debug/editor-app.exe --plugin-cargo plugins/svg/Cargo.toml test --lib
-.\target\debug\editor-app.exe --plugin-cargo plugins/svg/Cargo.toml build --target wasm32-wasip2 --release --target-dir target
-# 按 installer/README.md 归档实际运行资源到 dist/plugins/svg.zip 后验证文档同步、缩放、解析恢复和权限。
-cargo run -p plugin-runtime --example svg_preview_smoke -- dist/plugins/svg.zip
+./target/debug/editor-app.exe --plugin-package plugins/svg --output dist/plugins
+# 通过真实 WASM 组件验证文档同步、缩放、解析恢复和权限。
+cargo run -p plugin-runtime --example svg_preview_smoke -- dist/plugins/svg-0.6.0.zip
 # 检查真实组件的原生颜色、透明洞和半透明像素，并输出预览图。
-cargo run -p editor-app --example svg_preview_render -- dist/plugins/svg.zip plugins/svg/examples/gear.svg target/svg-render.png
+cargo run -p editor-app --example svg_preview_render -- dist/plugins/svg-0.6.0.zip plugins/svg/examples/gear.svg target/svg-render.png
 # 使用隔离数据启动原生窗口，验证插件加载及正常关闭。
-# 准备实际包后直接启动宿主进行原生验收，步骤见仓库 installer/README.md。
+# 安装 ZIP 后在编辑器中检查预览、输入和资源撤销。
 ```

@@ -16,10 +16,15 @@ fn panel_text<'a>(manager: &'a Manager, plugin_id: &str) -> &'a str {
 
 /// Package inspection, consent and typed calls must work with the independently built artifact.
 #[test]
-#[ignore = "build the host, then run scripts/verify-plugin-sdk.ps1 first"]
+#[ignore = "build an external capability-example with host --plugin-package and set NANOBUG_SDK_PACKAGE"]
 fn externally_built_sdk_package_includes_readme_and_runs_through_public_manager() {
-    let path = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../target/plugin-sdk-test/capability-example.zip");
+    // Explicit external fixtures allow the current CLI to replace the retired SDK helper script.
+    let path = std::env::var_os("NANOBUG_SDK_PACKAGE")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| {
+            Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../../target/plugin-sdk-test/capability-example.zip")
+        });
     let package = Package::read(&path).expect("read the package built outside the repository");
     assert_eq!(package.manifest.protocol, 7);
     assert_eq!(

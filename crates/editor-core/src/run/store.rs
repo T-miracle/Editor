@@ -36,6 +36,10 @@ impl std::error::Error for RunStoreError {}
 
 /// Base directory for host-local run configurations, shared with other editor state.
 pub fn default_root() -> Option<PathBuf> {
+    // Isolated development processes supply their host-local profile before GUI initialization.
+    if let Some(root) = std::env::var_os("ME_EDITOR_PROFILE_HOME").filter(|root| !root.is_empty()) {
+        return Some(PathBuf::from(root).join("run"));
+    }
     Some(dirs::config_dir()?.join("MeEditor").join("run"))
 }
 

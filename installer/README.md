@@ -8,8 +8,8 @@ PowerShell/Python 脚本只在本机 Codex 工作区存档，打包不得调用�
 
 运行 `cargo build -p editor-app --release` 后，将 `target/release/editor-app.exe` 复制为
 `dist/editor/Nanobug.exe`；复制品牌 ICO 到 `dist/editor/Nanobug.ico`，第三方许可到
-`dist/editor/licenses/`。通过主程序 `--plugin-cargo` 独立构建各 WASM 组件，使用 ZIP 工具准备
-`dist/editor/plugins/`。不要把编译器、宿主源码或脚本放入运行目录。
+`dist/editor/licenses/`。通过主程序 `--plugin-package` 按各项目的 `nanobug-plugin.json` 独立构建
+并自动生成 `dist/editor/plugins/<id>-<version>.zip`。不要把编译器、宿主源码或脚本放入运行目录。
 
 有组件的默认包为 terminal、example、svg、rust、rust-debugger、markdown；组件 Cargo 名称分别
 为 terminal-guest、example-guest、svg-guest、rust-language-guest、rust-debugger-guest、markdown-guest。
@@ -18,27 +18,18 @@ PowerShell/Python 脚本只在本机 Codex 工作区存档，打包不得调用�
 只收录清单引用资源，不归档 src、Cargo 缓存或 target 目录。
 
 ```powershell
-# 所有组件都通过实际主程序的公开 SDK 入口构建；显式指定共同输出位置。
+# 项目描述负责 SDK、原生桥、资源、摘要和 ZIP；显式指定安装目录中的插件输出位置。
 $hostExe = (Resolve-Path .\target\release\editor-app.exe).Path
-$target = Join-Path $PWD 'target'
-foreach ($name in @('terminal', 'example', 'svg', 'rust', 'rust-debugger', 'markdown')) {
-    & $hostExe --plugin-cargo "plugins/$name/Cargo.toml" build --target wasm32-wasip2 --release --target-dir $target
-    if ($LASTEXITCODE -ne 0) { throw "Plugin component build failed: $name" }
-}
-
-# Rust 调试桥按其原有 Windows 清单构建，归档时使用实际 SHA-256 替换分发清单占位。
-rustc --edition 2024 -O plugins/rust-debugger/native/bridge.rs -o target/me-debug-bridge.exe
+& $hostExe --plugin-package plugins/terminal plugins/example plugins/svg plugins/rust plugins/rust-debugger plugins/markdown plugins/toml plugins/html plugins/javascript plugins/run-target-example --output dist/editor/plugins
+if ($LASTEXITCODE -ne 0) { throw 'Plugin packaging failed' }
 ```
 
-WASM 重命名为清单要求的 terminal.wasm、example.wasm、svg.wasm、rust.wasm、rust-debugger.wasm、
-markdown.wasm，源产物为 `target/wasm32-wasip2/release/<Cargo 名称替换为下划线>.wasm`。
-Rust 调试包加入 `native/me-debug-bridge.exe`；分发清单的
-`services.adapter.installation.artifacts[1].sha256` 必须对应该桥接文件实际字节，不修改源占位。
-terminal 包还包含 THIRD_PARTY_LICENSES 中的终端核心与 VTE 许可；markdown 包包含
-`src/pulldown-cmark-LICENSE`，归档路径为 `licenses/pulldown-cmark-LICENSE`。
+宿主把 WASM 映射到清单规定的包内路径，原生桥摘要写入分发清单，不修改源占位。
+terminal 项目描述收录终端核心与 VTE 许可；markdown 将 `src/pulldown-cmark-LICENSE`
+映射到 `licenses/pulldown-cmark-LICENSE`。完整包校验通过后才原子替换 ZIP。
 
-以普通 ZIP 工具归档准备好的包目录，包根不能多套一层文件夹。首次提供索引
-`plugins/bundle-defaults.json` 使用 version 1；packages 中 Markdown 项的 file 为 markdown.zip、
+自动 ZIP 的包根不会多套一层文件夹。首次提供索引 `plugins/bundle-defaults.json` 使用 version 1；
+packages 中 Markdown 项的 file 必须匹配本次实际生成的 `markdown-<清单版本>.zip`，
 file_extensions 为 `["md", "markdown"]`，sha256 为最终 ZIP 的小写 SHA-256。
 所有 ZIP/资源与索引准备好后，从仓库根执行：
 

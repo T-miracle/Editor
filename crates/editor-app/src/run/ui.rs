@@ -45,7 +45,11 @@ impl EditorApp {
     /// Read published host sessions into the run controls before the frame is painted.
     pub(crate) fn sync_run_controls(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.sync_plugin_configurations(window, cx);
-        let (executions, errors, stops, statuses) = self.extensions.read(cx).take_host_runs();
+        if !self.run_permitted(cx) {
+            self.plugin_configuration_bridge.jobs.stop_all();
+        }
+        let (mut executions, errors, stops, statuses) = self.extensions.read(cx).take_host_runs();
+        executions.extend(self.plugin_configuration_bridge.jobs.snapshots());
         for (session, request, result) in self.extensions.read(cx).take_run_locations() {
             if self.run_controls.finish_location(session, request) {
                 self.status = match result {
@@ -513,6 +517,7 @@ impl EditorApp {
 
     /// Leave after stopping every run session through the provider that owns it.
     pub(crate) fn confirm_leave(&mut self, cx: &mut Context<Self>) {
+        self.plugin_configuration_bridge.jobs.stop_all();
         // A preparation is asked to stop as a sequence, not as a program: its step may not have a
         // session yet, and one asked to stop must not be followed by the program it was preparing.
         let mut already_stopped = Vec::new();
@@ -542,7 +547,8 @@ impl EditorApp {
         // because two requests for one program are two answers for one stop, and the provider was
         // told once.
         for session in self.run_controls.active_sessions() {
-            if already_stopped.contains(&session.id)
+            if session.plugin == crate::plugin_development::configuration::PROVIDER
+                || already_stopped.contains(&session.id)
                 || self.run_controls.is_stopping(&session.config)
             {
                 continue;
@@ -941,6 +947,9 @@ impl EditorApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.start_host_configuration(config_id, false, window, cx) {
+            return;
+        }
         if self.guard_plugin_execution(config_id, plugin_form::Execution::Run(env.clone()), cx) {
             return;
         }
@@ -1493,6 +1502,9 @@ impl EditorApp {
         let Some(config) = self.run_controls.selected().cloned() else {
             return;
         };
+        if self.start_host_configuration(&config.id, true, window, cx) {
+            return;
+        }
         if self.guard_plugin_execution(&config.id, plugin_form::Execution::Build, cx) {
             return;
         }
@@ -1817,6 +1829,13 @@ impl EditorApp {
         let Some(config) = self.run_controls.selected().cloned() else {
             return;
         };
+        if self.plugin_configuration_bridge.jobs.stop(
+            &config.id,
+            mode == plugin_runtime::plugin_protocol::process::ExitMode::Force,
+        ) {
+            cx.notify();
+            return;
+        }
         if let Some(request) = self.run_controls.provider_preparation_request(&config.id) {
             self.run_controls.request_configuration_stop(&config.id);
             self.run_controls.cancel_rerun(&config.id);

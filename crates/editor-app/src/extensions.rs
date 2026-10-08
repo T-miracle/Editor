@@ -1251,6 +1251,7 @@ impl ExtensionPanel {
 impl EditorApp {
     /// Keep the window alive while snapshots finish; GPUI's final quit grace is only 200 ms.
     pub(crate) fn shutdown_plugins(&mut self, cx: &mut Context<Self>) {
+        self.plugin_configuration_bridge.jobs.stop_all();
         if self.shutting_down {
             return;
         }

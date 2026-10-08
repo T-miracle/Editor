@@ -79,6 +79,12 @@ pub struct LocalHistory {
 
 impl LocalHistory {
     pub fn for_current_user() -> Result<Self, HistoryError> {
+        // Development profiles retain history independently from the user's normal editor data.
+        if let Some(root) =
+            std::env::var_os("ME_EDITOR_PROFILE_HOME").filter(|root| !root.is_empty())
+        {
+            return Self::at(PathBuf::from(root).join("history"));
+        }
         let root = dirs::data_local_dir()
             .ok_or(HistoryError::DataDirectoryUnavailable)?
             .join("MeEditor")

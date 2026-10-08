@@ -5,9 +5,8 @@
 //! to plugin projects through this export. Moving that directory therefore breaks this
 //! build on purpose.
 //!
-//! The exported names stay as they were before the move, so plugin projects and the
-//! distribution checks see an unchanged file set; only the sources changed location and
-//! became lower-case for readable URLs.
+//! Established exported filenames stay stable. Shared project packaging documentation ships
+//! alongside the public contract; website names remain lower-case for readable URLs.
 use anyhow::Context;
 use sha2::{Digest, Sha256};
 use std::path::{Path, PathBuf};
@@ -15,6 +14,11 @@ use std::process::Command;
 use std::{borrow::Cow, io::Write};
 
 const SDK_FILES: &[(&str, &[u8])] = &[
+    // The shared project format is shipped beside the public contract for independent authors.
+    (
+        "PACKAGING.md",
+        include_bytes!("../../../website/src/content/docs/en/sdk/packaging.md"),
+    ),
     (
         "src/api/preference_binding.rs",
         include_bytes!("../../plugin-protocol/src/api/preference_binding.rs"),
@@ -305,11 +309,7 @@ pub(crate) fn cargo_config() -> anyhow::Result<PathBuf> {
         serde_json::to_string(&sdk)?
     );
     let config = sdk.join("host-cargo.toml");
-    if !std::fs::read(&config).is_ok_and(|existing| existing == contents.as_bytes()) {
-        let mut file = tempfile::NamedTempFile::new_in(&sdk)?;
-        file.write_all(contents.as_bytes())?;
-        file.persist(&config)?;
-    }
+    publish(&config, contents.as_bytes())?;
     Ok(config)
 }
 
@@ -334,6 +334,7 @@ fn exported_bytes<'a>(relative: &str, bytes: &'a [u8]) -> Cow<'a, [u8]> {
             .to_owned();
     }
     for (route, file) in [
+        ("packaging", "PACKAGING.md"),
         ("configurations", "CONFIGURATIONS.md"),
         ("debug", "DEBUG.md"),
         ("targets", "TARGETS.md"),
@@ -358,6 +359,12 @@ fn exported_bytes<'a>(relative: &str, bytes: &'a [u8]) -> Cow<'a, [u8]> {
         };
         document = document.replace(&format!("]({route}"), &format!("]({file}"));
     }
+    // User guides are not part of the guest SDK source bundle; exported links still open the
+    // published guide while capability references above resolve to local SDK Markdown.
+    document = document.replace(
+        "](/en/guide/",
+        "](https://t-miracle.github.io/Editor/en/guide/",
+    );
     Cow::Owned(document.into_bytes())
 }
 
@@ -381,14 +388,27 @@ pub fn export(target: &Path) -> anyhow::Result<()> {
     for (relative, raw) in SDK_FILES {
         let bytes = exported_bytes(relative, raw);
         let path = target.join(relative);
-        if std::fs::read(&path).is_ok_and(|existing| existing == bytes.as_ref()) {
-            continue;
+        publish(&path, bytes.as_ref())?;
+    }
+    Ok(())
+}
+
+/// Concurrent first-use builds can prepare the identical content-addressed SDK. On Windows,
+/// replacement may fail while another reader opens the winner; identical committed bytes are
+/// already success. Other write failures still report the exact path and preserve existing data.
+fn publish(path: &Path, bytes: &[u8]) -> anyhow::Result<()> {
+    if std::fs::read(path).is_ok_and(|existing| existing == bytes) {
+        return Ok(());
+    }
+    let parent = path.parent().context("SDK file needs a parent")?;
+    std::fs::create_dir_all(parent)?;
+    let mut file = tempfile::NamedTempFile::new_in(parent)?;
+    file.write_all(bytes)?;
+    if let Err(error) = file.persist(path) {
+        if !std::fs::read(path).is_ok_and(|existing| existing == bytes) {
+            return Err(error.error)
+                .with_context(|| format!("Could not publish SDK file {}", path.display()));
         }
-        let parent = path.parent().unwrap();
-        std::fs::create_dir_all(parent)?;
-        let mut file = tempfile::NamedTempFile::new_in(parent)?;
-        file.write_all(bytes.as_ref())?;
-        file.persist(&path)?;
     }
     Ok(())
 }
@@ -396,6 +416,32 @@ pub fn export(target: &Path) -> anyhow::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Two independent host invocations can publish a fresh SDK concurrently without partial files.
+    #[test]
+    fn concurrent_sdk_exports_converge() {
+        let root = tempfile::tempdir().unwrap();
+        let barrier = std::sync::Arc::new(std::sync::Barrier::new(4));
+        let workers = (0..4)
+            .map(|_| {
+                let path = root.path().to_owned();
+                let ready = barrier.clone();
+                std::thread::spawn(move || {
+                    ready.wait();
+                    export(&path)
+                })
+            })
+            .collect::<Vec<_>>();
+        for worker in workers {
+            worker.join().unwrap().unwrap();
+        }
+        for (relative, bytes) in SDK_FILES {
+            assert_eq!(
+                std::fs::read(root.path().join(relative)).unwrap(),
+                exported_bytes(relative, bytes).as_ref()
+            );
+        }
+    }
 
     /// Both checkout styles remove Astro metadata and rewrite links while retaining body newlines.
     #[test]

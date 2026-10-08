@@ -145,8 +145,10 @@ impl SessionState {
         let mut hasher = DefaultHasher::new();
         self.workspace.hash(&mut hasher);
         Some(
-            dirs::config_dir()?
-                .join("MeEditor")
+            std::env::var_os("ME_EDITOR_PROFILE_HOME")
+                .filter(|root| !root.is_empty())
+                .map(PathBuf::from)
+                .or_else(|| dirs::config_dir().map(|root| root.join("MeEditor")))?
                 .join(format!("{:016x}.json", hasher.finish())),
         )
     }

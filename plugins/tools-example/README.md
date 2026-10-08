@@ -5,7 +5,7 @@
 
 ```powershell
 cargo build -p editor-app
-.\target\debug\editor-app.exe --plugin-cargo plugins/tools-example/Cargo.toml build --target wasm32-wasip2 --release --target-dir target
+./target/debug/editor-app.exe --plugin-package plugins/tools-example
 ```
 
-组件产物位于 `target/wasm32-wasip2/release/`。按[直接归档说明](../../installer/README.md)将清单、README、tools-example.wasm 与 icons 准备为标准 ZIP，测试夹具保存到 `target/plugin-layout-test/tools-example.zip`；本示例不作为内置产品插件发行。
+宿主按 `nanobug-plugin.json` 构建组件并收集清单、README、tools-example.wasm 与 icons，自动生成项目根部的 `tools-example-0.1.1.zip`。需要旧测试夹具路径时将 ZIP 复制为 `target/plugin-layout-test/tools-example.zip`；本示例不作为内置产品插件发行。

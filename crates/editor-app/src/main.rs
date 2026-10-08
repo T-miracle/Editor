@@ -3,6 +3,8 @@ mod editor;
 mod explorer;
 mod extensions;
 pub mod language;
+/// Built-in packaging and isolated plugin development share one project build module.
+mod plugin_development;
 /// Run controls own saved configurations and the sessions launched from them.
 mod run;
 mod sdk_export;
@@ -754,6 +756,9 @@ impl EditorApp {
 }
 
 fn resolve_startup_target() -> anyhow::Result<(Workspace, Option<PathBuf>)> {
+    if let Some(instance) = plugin_development::instance::context() {
+        return Ok((Workspace::open(&instance.workspace)?, None));
+    }
     let argument = std::env::args_os().nth(1).map(PathBuf::from);
     let target = argument.unwrap_or(std::env::current_dir()?);
     if target.is_file() {
@@ -766,6 +771,9 @@ fn resolve_startup_target() -> anyhow::Result<(Workspace, Option<PathBuf>)> {
 }
 
 fn main() -> anyhow::Result<()> {
+    if plugin_development::run_cli()? {
+        return Ok(());
+    }
     if sdk_export::run_cli()? {
         return Ok(());
     }

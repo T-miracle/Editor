@@ -2971,6 +2971,14 @@ impl RunControls {
     /// Both halves matter: a configuration that cannot run cannot be debugged either, and a debug
     /// click that cannot proceed is refused with a reason rather than quietly behaving like Run.
     pub fn debug_blocker(&self, id: &str) -> Option<String> {
+        if self
+            .configs
+            .plugin_configurations
+            .get(id)
+            .is_some_and(|data| data.provider == crate::plugin_development::configuration::PROVIDER)
+        {
+            return Some(t!("plugin_dev.no_source_debug").into());
+        }
         if let Err(reason) = self.debug_availability() {
             return Some(reason.to_owned());
         }

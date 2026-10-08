@@ -1,0 +1,26 @@
+{
+  "version": 1,
+  "manifest": "manifest.json",
+  "output": ".",
+  "wasm": {
+    "manifest": "Cargo.toml"
+  },
+  "assets": [
+    {
+      "source": "README.md",
+      "destination": "README.md"
+    },
+    {
+      "source": "theme.json",
+      "destination": "theme.json"
+    },
+    {
+      "source": "icons",
+      "destination": "icons"
+    },
+    {
+      "source": "licenses",
+      "destination": "licenses"
+    }
+  ]
+}

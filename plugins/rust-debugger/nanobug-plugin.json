@@ -1,0 +1,32 @@
+{
+  "version": 1,
+  "manifest": "manifest.json",
+  "output": ".",
+  "wasm": {
+    "manifest": "Cargo.toml"
+  },
+  "assets": [
+    {
+      "source": "README.md",
+      "destination": "README.md"
+    },
+    {
+      "source": "{build}/me-debug-bridge.exe",
+      "destination": "native/me-debug-bridge.exe"
+    }
+  ],
+  "native": [
+    {
+      "program": "rustc",
+      "platform": "windows-x86_64",
+      "args": [
+        "--edition",
+        "2024",
+        "-O",
+        "native/bridge.rs",
+        "-o",
+        "{build}/me-debug-bridge.exe"
+      ]
+    }
+  ]
+}

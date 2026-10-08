@@ -46,7 +46,7 @@ scope-write / scope-read 将工作区的 source.txt 与私有 value.txt 一起�
 
 SDK 提供 open_workspace、open_data、read_file、write_file、close_resource；句柄由宿主签发，不应持久化。workspace.files 1.0 只读，storage.private 1.0 支持私有根目录直接子文件的原子写入，每文件最多 1 MiB，累计受清单 storage_limit 约束。用户设置、其他工作区数据及宿主快照均不在可读根目录内。
 
-通过宿主公开的 --plugin-cargo 入口构建，不使用宿主业务源码路径。开发打包脚本为 build-capability-example.ps1；输出仅用于新平台迁移验证，不纳入正式发行包。
+通过宿主 `editor-app.exe --plugin-package plugins/capability-example` 完整构建并封装 ZIP，默认输出为插件项目根部的 `capability-example-0.16.2.zip`。项目描述在 `nanobug-plugin.json`，也可使用宿主“插件打包”配置选择输出位置；不调用归档脚本。底层独立构建仍可使用宿主 `--plugin-cargo` 入口和内嵌 SDK，不引用宿主业务源码路径。
 
 ## 编辑器请求与事件
 
