@@ -882,3 +882,6 @@ impl Drop for Manager {
         self.shutdown();
     }
 }
+
+#[cfg(all(test, windows))]
+mod registry_write_tests;

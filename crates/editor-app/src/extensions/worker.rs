@@ -5,6 +5,8 @@ mod admission;
 mod bundled_tests;
 pub(super) mod configurations;
 mod preparation;
+#[cfg(all(test, windows))]
+mod registry_startup_tests;
 mod runner;
 pub(super) mod targets;
 #[cfg(test)]

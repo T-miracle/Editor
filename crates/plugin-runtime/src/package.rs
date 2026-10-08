@@ -7,7 +7,9 @@ use std::{
     io::{Cursor, Read, Write},
     path::Path,
 };
+mod atomic_file;
 pub(crate) mod icons;
+pub(crate) use atomic_file::atomic_write;
 
 /// LSP declarations carry exactly the native service authority that the host will exercise.
 fn validate_language_services(manifest: &Manifest) -> anyhow::Result<()> {
@@ -593,27 +595,6 @@ pub(crate) fn validate_relative(name: &str) -> anyhow::Result<()> {
     );
     Ok(())
 }
-/// Replace atomically in the same directory; a failed write leaves the prior file intact.
-/// Canonical parents preserve Windows extended paths when receipts or private data exceed MAX_PATH.
-pub(crate) fn atomic_write(path: &Path, bytes: &[u8]) -> anyhow::Result<()> {
-    let parent = path
-        .parent()
-        .ok_or_else(|| anyhow::anyhow!("Missing parent"))?;
-    std::fs::create_dir_all(parent)?;
-    let filename = path
-        .file_name()
-        .ok_or_else(|| anyhow::anyhow!("Missing filename"))?;
-    // tempfile uses native rename APIs: both paths must retain the same canonical parent,
-    // rather than passing a long ordinary destination that Windows cannot resolve.
-    let parent = parent.canonicalize()?;
-    let destination = parent.join(filename);
-    let mut temp = tempfile::NamedTempFile::new_in(&parent)?;
-    temp.write_all(bytes)?;
-    temp.as_file().sync_all()?;
-    temp.persist(destination)?;
-    Ok(())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
