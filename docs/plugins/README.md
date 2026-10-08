@@ -16,6 +16,7 @@
 - [解析取消后的原生撤销回归](verification/xml-language-tools/05-parser-cancellation.md)：实际 XML 组合复验捕获的独立解析器生命周期缺陷与恢复验证。
 - [大纲单一高亮与临时展开](verification/xml-language-tools/06-cursor-highlight-and-expansion.md)：光标位置唯一选中背景、默认两层及移动后收起旧自动路径。
 - [Windows 插件状态原子替换恢复](verification/plugin-state-atomic-replacement.md)：启动写入短暂占用回归、有限重试、原数据保护和持续失败定位。
+- [XML 分支合并与工作区推送](verification/xml-language-tools/07-main-merge-and-publication.md)：各工作区分支发布、XML 先推送再合并，以及宿主打包与快捷键的集成验证。
 
 - [插件安装进度弹窗尺寸调整](verification/plugin-install-progress-size.md)：紧凑窗口、长进度信息滚动与底部按钮布局回归。
 - [插件 UI 解耦与文件显示布局总方案](specs/plugin-ui-decoupling.md)、[五个实施工单（#62–#66）](tickets/plugin-ui-decoupling/README.md)。已在 `codex/plugin-ui-decoupling` 完成实现、验收及双轴审查，五张工单均已推送并核对关闭。
@@ -103,6 +104,7 @@ Markdown 插件：[总方案](../../plugins/markdown/docs/spec.md)、[工单目�
 - [TOML](../../plugins/toml/README.md)
 - [HTML](../../plugins/html/README.md)
 - [JavaScript](../../plugins/javascript/README.md)
+- [XML](../../plugins/xml/README.md)
 - [Markdown](../../plugins/markdown/README.md)
 - [Markdown 输入与增量预览验收](../../plugins/markdown/docs/verification/17-incremental-input-viewport.md)（0.15.0：用户实测输入仍卡顿，性能验收重新打开）
 - [Markdown 源码输入与过期视口通知](../../plugins/markdown/docs/verification/18-source-input-and-stale-viewport.md)（宿主跟进修复与实测限制）
