@@ -1,0 +1,280 @@
+{
+  "status": "completed",
+  "completed_date": "2026-10-03",
+  "delivery_commit": "92cca291735a7940990307cea6b9b498d5a46433",
+  "delivery_status": "committed-and-pushed",
+  "ticket_issue_state": "closed",
+  "ticket_issue_state_reason": "completed",
+  "design_issue_state": "open",
+  "date": "2026-10-02",
+  "label": "ready-for-agent",
+  "native_edges": [
+    "02<-01",
+    "03<-02",
+    "04<-03",
+    "05<-04",
+    "06<-03",
+    "07<-05",
+    "07<-06",
+    "08<-07",
+    "09<-08",
+    "10<-03",
+    "11<-03",
+    "12<-07",
+    "13<-04",
+    "14<-07",
+    "14<-10",
+    "14<-11",
+    "14<-13",
+    "15<-14",
+    "16<-08",
+    "16<-15",
+    "17<-15",
+    "18<-15",
+    "19<-17",
+    "20<-09",
+    "20<-12",
+    "20<-16",
+    "20<-18",
+    "20<-19"
+  ],
+  "tickets": [
+    {
+      "number": 2,
+      "id": 5668197557,
+      "blocked_by": [],
+      "ticket": 1,
+      "title": "安装并运行新能力协议示例",
+      "file": "01-capability-bootstrap.md",
+      "url": "https://github.com/T-miracle/Editor/issues/2"
+    },
+    {
+      "number": 3,
+      "id": 5668197729,
+      "blocked_by": [
+        1
+      ],
+      "ticket": 2,
+      "title": "在工作区内隔离插件实例并回收资源",
+      "file": "02-scoped-instances.md",
+      "url": "https://github.com/T-miracle/Editor/issues/3"
+    },
+    {
+      "number": 4,
+      "id": 5668197955,
+      "blocked_by": [
+        2
+      ],
+      "ticket": 3,
+      "title": "通过类型化请求操作编辑器并管理异步事件",
+      "file": "03-typed-requests-events.md",
+      "url": "https://github.com/T-miracle/Editor/issues/4"
+    },
+    {
+      "number": 5,
+      "id": 5668198206,
+      "blocked_by": [
+        3
+      ],
+      "ticket": 4,
+      "title": "在设置界面配置插件并按作用域热生效",
+      "file": "04-declarative-settings.md",
+      "url": "https://github.com/T-miracle/Editor/issues/5"
+    },
+    {
+      "number": 6,
+      "id": 5668198378,
+      "blocked_by": [
+        4
+      ],
+      "ticket": 5,
+      "title": "安装未知语言并动态选择高亮提供者",
+      "file": "05-dynamic-language.md",
+      "url": "https://github.com/T-miracle/Editor/issues/6"
+    },
+    {
+      "number": 7,
+      "id": 5668198515,
+      "blocked_by": [
+        3
+      ],
+      "ticket": 6,
+      "title": "按权限启动声明服务与交互式进程",
+      "file": "06-native-process-capabilities.md",
+      "url": "https://github.com/T-miracle/Editor/issues/7"
+    },
+    {
+      "number": 8,
+      "id": 5668198672,
+      "blocked_by": [
+        5,
+        6
+      ],
+      "ticket": 7,
+      "title": "用可选 WASM 钩子启动未知语言的 LSP",
+      "file": "07-generic-lsp.md",
+      "url": "https://github.com/T-miracle/Editor/issues/8"
+    },
+    {
+      "number": 9,
+      "id": 5668198910,
+      "blocked_by": [
+        7
+      ],
+      "ticket": 8,
+      "title": "安装语言插件时自动准备私有服务依赖",
+      "file": "08-managed-dependencies.md",
+      "url": "https://github.com/T-miracle/Editor/issues/9"
+    },
+    {
+      "number": 10,
+      "id": 5668199127,
+      "blocked_by": [
+        8
+      ],
+      "ticket": 9,
+      "title": "经额外授权执行依赖安装步骤",
+      "file": "09-authorized-installers.md",
+      "url": "https://github.com/T-miracle/Editor/issues/10"
+    },
+    {
+      "number": 11,
+      "id": 5668199265,
+      "blocked_by": [
+        3
+      ],
+      "ticket": 10,
+      "title": "在插件面板内组合原生组件与自定义画布",
+      "file": "10-composable-ui.md",
+      "url": "https://github.com/T-miracle/Editor/issues/11"
+    },
+    {
+      "number": 12,
+      "id": 5668199395,
+      "blocked_by": [
+        3
+      ],
+      "ticket": 11,
+      "title": "通过版本化服务契约替换插件协作提供者",
+      "file": "11-plugin-services.md",
+      "url": "https://github.com/T-miracle/Editor/issues/12"
+    },
+    {
+      "number": 13,
+      "id": 5668199549,
+      "blocked_by": [
+        7
+      ],
+      "ticket": 12,
+      "title": "定位插件超限与 LSP 崩溃并独立恢复",
+      "file": "12-fault-recovery.md",
+      "url": "https://github.com/T-miracle/Editor/issues/13"
+    },
+    {
+      "number": 14,
+      "id": 5668199715,
+      "blocked_by": [
+        4
+      ],
+      "ticket": 13,
+      "title": "通过隔离数据副本迁移插件私有状态",
+      "file": "13-data-migration.md",
+      "url": "https://github.com/T-miracle/Editor/issues/14"
+    },
+    {
+      "number": 15,
+      "id": 5668199857,
+      "blocked_by": [
+        7,
+        10,
+        11,
+        13
+      ],
+      "ticket": 14,
+      "title": "热切换含服务与界面的插件并在失败时恢复",
+      "file": "14-transactional-hot-update.md",
+      "url": "https://github.com/T-miracle/Editor/issues/15"
+    },
+    {
+      "number": 16,
+      "id": 5668200017,
+      "blocked_by": [
+        14
+      ],
+      "ticket": 15,
+      "title": "升级已安装记录并通过新 SDK 重装插件",
+      "file": "15-installed-data-sdk-migration.md",
+      "url": "https://github.com/T-miracle/Editor/issues/16"
+    },
+    {
+      "number": 17,
+      "id": 5668200170,
+      "blocked_by": [
+        8,
+        15
+      ],
+      "ticket": 16,
+      "title": "迁移现有语言包并移除 Rust 专属宿主配置",
+      "file": "16-migrate-language-plugins.md",
+      "url": "https://github.com/T-miracle/Editor/issues/17"
+    },
+    {
+      "number": 18,
+      "id": 5668200343,
+      "blocked_by": [
+        15
+      ],
+      "ticket": 17,
+      "title": "将终端完整迁移到公开进程与组合 UI 能力",
+      "file": "17-migrate-terminal.md",
+      "url": "https://github.com/T-miracle/Editor/issues/18"
+    },
+    {
+      "number": 19,
+      "id": 5668200509,
+      "blocked_by": [
+        15
+      ],
+      "ticket": 18,
+      "title": "迁移示例与 SVG 插件并验证原生 UI 泛用性",
+      "file": "18-migrate-ui-plugins.md",
+      "url": "https://github.com/T-miracle/Editor/issues/19"
+    },
+    {
+      "number": 20,
+      "id": 5668200758,
+      "blocked_by": [
+        17
+      ],
+      "ticket": 19,
+      "title": "用终端服务契约承接执行请求",
+      "file": "19-terminal-service-consumer.md",
+      "url": "https://github.com/T-miracle/Editor/issues/20"
+    },
+    {
+      "number": 21,
+      "id": 5668200919,
+      "blocked_by": [
+        9,
+        12,
+        16,
+        18,
+        19
+      ],
+      "ticket": 20,
+      "title": "删除旧协议并完成完整契约验收",
+      "file": "20-contract-and-release.md",
+      "url": "https://github.com/T-miracle/Editor/issues/21"
+    }
+  ],
+  "complete": true,
+  "repository": "T-miracle/Editor",
+  "parent": {
+    "title": "[Spec] 插件平台 API 通用化与可扩展性重构",
+    "id": 5668197355,
+    "url": "https://github.com/T-miracle/Editor/issues/1",
+    "number": 1
+  },
+  "verified_issue_count": 21,
+  "verified_edge_count": 28
+}

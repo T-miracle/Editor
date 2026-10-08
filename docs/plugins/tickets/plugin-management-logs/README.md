@@ -1,6 +1,6 @@
 # 插件管理与运行日志改造工单
 
-状态：01–03 / #23–#25 全部实现并通过行为验收。日期：2026-10-04。
+状态：01–03 / #23–#25 全部实现并通过行为验收。实施完成日期：2026-10-04；父方案 #22 已于 2026-10-05 核对完成并关闭，状态为 completed。
 依据：[规格](../../specs/plugin-management-logs.md)。已发布至 T-miracle/Editor，均使用 ready-for-agent 标签。方案 [#22](https://github.com/T-miracle/Editor/issues/22)；工单 01–03 分别为 [#23](https://github.com/T-miracle/Editor/issues/23)、[#24](https://github.com/T-miracle/Editor/issues/24)、[#25](https://github.com/T-miracle/Editor/issues/25)。原生阻塞关系已读回确认，完整 ID 映射见 [publication.json](publication.json)。
 
 | 工单 | 阻塞项 | 端到端交付 | 状态 |
@@ -13,4 +13,4 @@
 没有需另设工单的广域预重构；必要局部抽取先保持行为并验证，再完成所在切片。不自动启动并行代理。
 
 已确认测试边界：实际插件包经公开管理器、后台发布进入原生界面；复用现有启动、恢复与组合 UI 夹具，不新增插件专属测试 API。
-本批独立于已完成平台工单 01–20。发布前已核对重复议题，发布后已核对标签与原生阻塞关系；未关闭或改写父议题。01 的实现和验收见[分栏验证](../../verification/plugin-management-tabs-verification.md)，02 见[运行日志验证](../../verification/plugin-runtime-logs-verification.md)，03 见[底栏摘要验证](../../verification/plugin-status-popover-verification.md)。执行交付遵循已确认的提交、推送与关闭授权。
+本批独立于已完成平台工单 01–20。发布前已核对重复议题，发布后已核对标签与原生阻塞关系；实施期间未自动关闭父议题，后按用户明确要求核对并关闭 #22。01 的实现和验收见[分栏验证](../../verification/plugin-management-tabs-verification.md)，02 见[运行日志验证](../../verification/plugin-runtime-logs-verification.md)，03 见[底栏摘要验证](../../verification/plugin-status-popover-verification.md)。执行交付遵循已确认的提交、推送与关闭授权。

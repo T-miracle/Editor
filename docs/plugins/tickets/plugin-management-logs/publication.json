@@ -6,6 +6,9 @@
   "spec": {
     "kind": "spec",
     "number": 22,
+    "state": "closed",
+    "state_reason": "completed",
+    "closed_at": "2026-10-04T16:39:57Z",
     "id": 5690180755,
     "url": "https://github.com/T-miracle/Editor/issues/22"
   },

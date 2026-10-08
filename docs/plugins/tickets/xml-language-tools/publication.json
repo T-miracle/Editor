@@ -1,0 +1,58 @@
+{
+  "repository": "T-miracle/Editor",
+  "stable_id": "xml-language-tools",
+  "parent": {
+    "number": 72,
+    "id": 5741225770,
+    "url": "https://github.com/T-miracle/Editor/issues/72"
+  },
+  "tickets": [
+    {
+      "ordinal": "01",
+      "number": 73,
+      "id": 5741227101,
+      "url": "https://github.com/T-miracle/Editor/issues/73",
+      "state": "closed",
+      "state_reason": "completed",
+      "implementation_commit": "400c5310ca0dd9995b66f23ea1d440c24a89c5f3",
+      "closed_at": "2026-10-07T10:08:45Z"
+    },
+    {
+      "ordinal": "02",
+      "number": 74,
+      "id": 5741227354,
+      "url": "https://github.com/T-miracle/Editor/issues/74",
+      "state": "closed",
+      "state_reason": "completed",
+      "implementation_commit": "2ba72a0c866478353bdbe350b89ae4c79a974fd0",
+      "closed_at": "2026-10-07T16:16:21Z"
+    },
+    {
+      "ordinal": "03",
+      "number": 75,
+      "id": 5741227526,
+      "url": "https://github.com/T-miracle/Editor/issues/75",
+      "state": "closed",
+      "state_reason": "completed",
+      "implementation_commit": "2ba72a0c866478353bdbe350b89ae4c79a974fd0",
+      "closed_at": "2026-10-07T16:16:44Z"
+    }
+  ],
+  "dependencies": [
+    {
+      "blocked": 74,
+      "blocked_by": 73,
+      "blocked_by_id": 5741227101,
+      "verified": true
+    },
+    {
+      "blocked": 75,
+      "blocked_by": 73,
+      "blocked_by_id": 5741227101,
+      "verified": true
+    }
+  ],
+  "implementation_branch": "codex/xml-language-tools",
+  "implementation_base": "ae63225",
+  "published_on": "2026-10-07"
+}

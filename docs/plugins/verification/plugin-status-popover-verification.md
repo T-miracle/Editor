@@ -2,6 +2,8 @@
 
 状态：已完成，2026-10-04，Windows。依据：[规格](../specs/plugin-management-logs.md)、[工单](../tickets/plugin-management-logs/03-status-popover.md)、[运行日志验证](plugin-runtime-logs-verification.md)。
 
+本记录保留本工单交付时的历史行为与结果。后续摘要时间格式要求见[本地日期与降序验证](plugin-log-time-order-verification.md)，当前显示规则以该补充和现行规格为准。
+
 ## 交付行为
 
 - 底栏只显示一个插件入口：错误优先于警告，再到正常加载。警告和错误使用项目主题的彩色图标，未查看提醒持续存在。

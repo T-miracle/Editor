@@ -2,6 +2,8 @@
 
 状态：已完成，2026-10-04，Windows。依据：[规格](../specs/plugin-management-logs.md)、[工单](../tickets/plugin-management-logs/02-runtime-logs.md)。底栏摘要属于 #25。
 
+本记录保留本工单交付时的历史行为与结果。后续日期格式及日志降序要求见[本地日期与降序验证](plugin-log-time-order-verification.md)，当前显示规则以该补充和现行规格为准。
+
 ## 交付行为
 
 - RuntimeLogs 是管理器、WASM 实例、原生语言服务和窗口共享的本次进程日志源。记录保存稳定 ID、插件 ID、宿主接收时间、Info / Warning / Error、来源和消息。每插件最多 512 条，每条最多 8192 个 Unicode 标量；淘汰最早条目和其已读状态。没有磁盘持久化，关闭窗口、切换插件或重启插件保留本次运行历史。

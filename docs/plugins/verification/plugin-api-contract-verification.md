@@ -12,7 +12,7 @@
 
 Rust SDK 的旧类型移除是源码破坏性变更，因此提升 SDK 次版本并重建消费者；线上能力协议仍为清单 protocol 7、base 1，WIT 世界保持 0.1.0。能力分别协商版本。旧协议包在安装及恢复前拒绝，设置、作用域、快照和私有文件通过既有有限数据导入保留。
 
-最终实际终端检查还发现 `process 1.2` 默认 PTY 启动会覆盖已恢复画面。补充通用 `process 1.3` 的可选 `inherit_cursor`，默认关闭且不序列化默认值；Windows 插件按需响应公开字节流中的光标查询。宿主没有终端插件识别或提示符解析。Windows 尺寸调整使用有界后台队列；退役/失败后先确认整个 Job 已退出，再以固定中性回复解除 OS 握手。详见 [公开进程协议](../../../crates/plugin-protocol/PROCESSES.md)。
+最终实际终端检查还发现 `process 1.2` 默认 PTY 启动会覆盖已恢复画面。补充通用 `process 1.3` 的可选 `inherit_cursor`，默认关闭且不序列化默认值；Windows 插件按需响应公开字节流中的光标查询。宿主没有终端插件识别或提示符解析。Windows 尺寸调整使用有界后台队列；退役/失败后先确认整个 Job 已退出，再以固定中性回复解除 OS 握手。详见 [公开进程协议](../../../website/src/content/docs/en/sdk/processes.md)。
 
 交付包为 terminal 0.7.1、example 0.3.1、svg 0.2.1、rust/toml/html/javascript 0.2.1。capability-example 0.15.1 仅供验收，不加入发行插件目录。语言资源清单与包版本一致，所有实际 ZIP 包含 README。声明式资源包继续不携带空 WASM。
 

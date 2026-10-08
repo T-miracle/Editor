@@ -33,7 +33,7 @@
 
 - [设计基线 #1](https://github.com/T-miracle/Editor/issues/1)
 - 实施工单 #2–#21，工单序号 01–20 与 GitHub issue 编号不同。
-- [本地目录与依赖图](../specs/plugin-api-tickets/README.md)
+- [本地目录与依赖图](../plugins/tickets/README.md)
 - 发布记录与真实 ID 映射保存在本地工单目录的 publication.json。
 
 ## PR 作为请求入口

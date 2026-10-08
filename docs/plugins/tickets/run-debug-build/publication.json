@@ -1,0 +1,150 @@
+{
+  "label": "ready-for-agent",
+  "parent": {
+    "number": 48,
+    "id": 5698743120,
+    "url": "https://github.com/T-miracle/Editor/issues/48"
+  },
+  "date": "2026-10-04",
+  "repository": "T-miracle/Editor",
+  "tickets": [
+    {
+      "blocked_by": [],
+      "file": "01-manual-run.md",
+      "url": "https://github.com/T-miracle/Editor/issues/49",
+      "number": 49,
+      "key": "run-debug-build/01-manual-run",
+      "id": 5698743242,
+      "title": "01 — 手动配置运行真实程序"
+    },
+    {
+      "blocked_by": [
+        49
+      ],
+      "file": "02-stop-and-leave.md",
+      "url": "https://github.com/T-miracle/Editor/issues/50",
+      "number": 50,
+      "key": "run-debug-build/02-stop-and-leave",
+      "id": 5698743351,
+      "title": "02 — 正常停止、重新运行与离开确认"
+    },
+    {
+      "blocked_by": [
+        50
+      ],
+      "file": "03-parallel-output.md",
+      "url": "https://github.com/T-miracle/Editor/issues/51",
+      "number": 51,
+      "key": "run-debug-build/03-parallel-output",
+      "id": 5698743459,
+      "title": "03 — 统一下拉管理并行会话与输出"
+    },
+    {
+      "blocked_by": [
+        49
+      ],
+      "file": "04-shell-environment.md",
+      "url": "https://github.com/T-miracle/Editor/issues/52",
+      "number": 52,
+      "key": "run-debug-build/04-shell-environment",
+      "id": 5698743667,
+      "title": "04 — Shell 脚本与本机环境配置"
+    },
+    {
+      "blocked_by": [
+        50,
+        52
+      ],
+      "file": "05-build-prelaunch.md",
+      "url": "https://github.com/T-miracle/Editor/issues/53",
+      "number": 53,
+      "key": "run-debug-build/05-build-prelaunch",
+      "id": 5698743784,
+      "title": "05 — 独立构建与顺序启动前步骤"
+    },
+    {
+      "blocked_by": [
+        53
+      ],
+      "file": "06-shared-config.md",
+      "url": "https://github.com/T-miracle/Editor/issues/54",
+      "number": 54,
+      "key": "run-debug-build/06-shared-config",
+      "id": 5698743878,
+      "title": "06 — 共享配置与本机覆盖"
+    },
+    {
+      "blocked_by": [
+        53
+      ],
+      "file": "07-rust-discovery.md",
+      "url": "https://github.com/T-miracle/Editor/issues/55",
+      "number": 55,
+      "key": "run-debug-build/07-rust-discovery",
+      "id": 5698743970,
+      "title": "07 — Rust 目标发现、保存与修复"
+    },
+    {
+      "blocked_by": [
+        51,
+        52
+      ],
+      "file": "08-execution-providers.md",
+      "url": "https://github.com/T-miracle/Editor/issues/56",
+      "number": 56,
+      "key": "run-debug-build/08-execution-providers",
+      "id": 5698744060,
+      "title": "08 — 按配置选择执行提供者与插件调用"
+    },
+    {
+      "blocked_by": [
+        55,
+        56
+      ],
+      "file": "09-rust-debug-launch.md",
+      "url": "https://github.com/T-miracle/Editor/issues/57",
+      "number": 57,
+      "key": "run-debug-build/09-rust-debug-launch",
+      "id": 5698744133,
+      "title": "09 — Rust 启动调试与源码断点"
+    },
+    {
+      "blocked_by": [
+        57
+      ],
+      "file": "10-debug-inspection.md",
+      "url": "https://github.com/T-miracle/Editor/issues/58",
+      "number": 58,
+      "key": "run-debug-build/10-debug-inspection",
+      "id": 5698744244,
+      "title": "10 — 单步、变量、调用栈与多会话调试"
+    },
+    {
+      "blocked_by": [
+        57
+      ],
+      "file": "11-provider-lifecycle.md",
+      "url": "https://github.com/T-miracle/Editor/issues/59",
+      "number": 59,
+      "key": "run-debug-build/11-provider-lifecycle",
+      "id": 5698744325,
+      "title": "11 — 插件变更确认与会话故障回收"
+    },
+    {
+      "blocked_by": [
+        54,
+        58,
+        59
+      ],
+      "file": "12-delivery-acceptance.md",
+      "url": "https://github.com/T-miracle/Editor/issues/60",
+      "number": 60,
+      "key": "run-debug-build/12-delivery-acceptance",
+      "id": 5698744390,
+      "title": "12 — 独立插件接入与整体验收交付"
+    }
+  ],
+  "status": "published",
+  "verified_issue_count": 13,
+  "verified_edge_count": 16
+}

@@ -1,5 +1,7 @@
 # 运行时插件平台
 
+插件完整构建／ZIP 和隔离开发运行使用宿主 `--plugin-package`、`--plugin-build`、`--plugin-dev`；GUI 提供对应内建模板。现行命令见[根 README](../../README.zh-CN.md)，共享项目规则见[已确认方案](specs/plugin-development-packaging.md)。原仓库辅助脚本已移除，归档副本不参与构建。
+
 主程序只运行当前能力协议（清单 protocol 7、api.base ^1）。插件使用声明式贡献，必要时附加 WASM 生命周期或策略钩子。语言识别、高亮、LSP、UI、进程和插件间服务按声明与能力协商，不按插件名称选择实现。
 
 ## 安装与热生效
@@ -22,7 +24,7 @@ WIT 世界 `editor:plugin/plugin@0.1.0` 提供 host.request 导入与 dispatch �
 
 不再存在旧 Message/Reply/Scene、字符串宿主命令、chrome/controls 兼容字段或运行时转换。标准组件、SideTabs 与 Canvas 组成同一棵 UI 树，宿主的 gpui-base 行为和本地外观负责输入、焦点、布局、滚动、菜单及弹窗。SVG 预览接收带 DocumentVersion 的内存文本，必须回传 source，包含未保存编辑；过期结果不能覆盖新文档。
 
-详细接口见 [SDK](../../crates/plugin-protocol/README.md)、[UI](../../crates/plugin-protocol/UI.md)、[语言](../../crates/plugin-protocol/LANGUAGES.md)、[LSP](../../crates/plugin-protocol/LSP.md)、[进程](../../crates/plugin-protocol/PROCESSES.md)、[服务](../../crates/plugin-protocol/SERVICES.md)。
+详细接口见 [SDK](../../crates/plugin-protocol/README.md)、[UI](../../website/src/content/docs/en/sdk/ui.md)、[语言](../../website/src/content/docs/en/sdk/languages.md)、[LSP](../../website/src/content/docs/en/sdk/lsp.md)、[进程](../../website/src/content/docs/en/sdk/processes.md)、[服务](../../website/src/content/docs/en/sdk/services.md)。读者正文维护在站点源，宿主同时导出这些英文契约供独立插件使用。
 
 文件预览可以通过公开 `editor.presentation` 声明源码／分栏／预览三态，通过 `editor.toolbar` 提供源码顶部操作；版本化范围编辑、图片输入、导航及视口请求分别核对文档身份、revision 和来源权限。Markdown 使用这些通用接口提供实时原生预览、任务框写回、同级图片导入和双向内容块滚动；SVG 使用同一底栏三态入口。详见[Markdown 使用说明](../../plugins/markdown/README.md)、[导航](../../crates/plugin-protocol/NAVIGATION.md)、[视口](../../crates/plugin-protocol/VIEWPORT.md)和[代码块高亮](../../crates/plugin-protocol/CODE_HIGHLIGHTING.md)。新增插件仍只使用公开契约，不需要宿主按插件名称分支。
 
@@ -53,7 +55,7 @@ WASM 不继承宿主目录、环境、输入输出或网络访问。每次调用
 4. 候选激活成功后以日志、备份和原子替换提交包记录与私有数据，再发布新实例。
 5. 准备失败保留旧实例；切换失败恢复旧版本及数据并分配新实例身份，旧句柄和回调不会复活。
 
-备份及恢复失败路径、休眠工作区升级见 [迁移契约](../../crates/plugin-protocol/MIGRATION.md)。快照是插件的逻辑数据，不能恢复 OS 进程内存或撤销用户文档、外部文件等副作用。终端恢复有界历史和新 Shell；经 interactive.execute 服务创建的执行会话只恢复历史，不重跑程序。
+备份及恢复失败路径、休眠工作区升级见 [迁移契约](../../website/src/content/docs/en/sdk/migration.md)。快照是插件的逻辑数据，不能恢复 OS 进程内存或撤销用户文档、外部文件等副作用。终端恢复有界历史和新 Shell；经 interactive.execute 服务创建的执行会话只恢复历史，不重跑程序。
 
 WASM 指令、时间和内存有独立预算；队列、进程、文件、绘图和事件均有上限。超限定位到插件/作用域/操作；插件可独立重启，LSP 有限重试。停用与卸载结清请求、撤销订阅和租约并回收进程树。
 
@@ -61,7 +63,7 @@ WASM 指令、时间和内存有独立预算；队列、进程、文件、绘图
 
 ## 构建与验证
 
-当前构建通过实际主程序 CLI，归档直接使用 ZIP 工具，步骤见[原生打包说明](../../installer/README.md)。仓库旧辅助脚本已移出，打包不调用这些脚本。
+当前插件构建通过实际主程序 CLI，完整候选由宿主校验并自动生成 ZIP，步骤见[根 README](../../README.zh-CN.md#插件开发)和[本次方案](specs/plugin-development-packaging.md)。仓库旧辅助脚本已移出，打包不调用这些脚本。
 
 插件依赖主程序内嵌的 SDK，不引用宿主源码或复制 vendor。`--plugin-cargo` 按内容摘要管理接口缓存，插件声明 `plugin-protocol = { version = "=0.2.0", features = ["guest"] }`。显式 --export-plugin-sdk 供其他工具链使用；使用已编译插件无需 Rust/Cargo。
 
@@ -69,24 +71,24 @@ WASM 指令、时间和内存有独立预算；队列、进程、文件、绘图
 cargo build -p editor-app
 # LSP、安装器与进程契约使用本地原生夹具。
 cargo build -p plugin-runtime --examples
-.\target\debug\editor-app.exe --plugin-cargo plugins/terminal/Cargo.toml build --target wasm32-wasip2 --release
-.\target\debug\editor-app.exe --plugin-cargo plugins/capability-example/Cargo.toml build --target wasm32-wasip2 --release
+# 完整构建 WASM／原生产物、资源和 ZIP。
+.\target\debug\editor-app.exe --plugin-package plugins/terminal plugins/capability-example plugins/example --output dist/plugins
+# 仅准备开发目录；实际重载测试使用此命令打印的目录作为夹具。
+.\target\debug\editor-app.exe --plugin-build plugins/example
 .\target\debug\editor-app.exe --export-plugin-sdk .\target\sdk-export
 cargo fmt --check
 cargo check --workspace
 cargo test --workspace --exclude editor-app
-# 原生集成共享全局语言注册表，按顺序运行。
+# 宿主模板和 SDK 导出回归；其他实际交互测试按对应验收记录执行。
 $env:RUST_MIN_STACK = '16777216'
-cargo test -p editor-app --bin editor-app -- --test-threads=1
-cargo test -p plugin-runtime --tests -- --ignored --test-threads=1
-# 先结束 Cargo 再运行真实语言分析，避免 rust-analyzer 等待父 Cargo 的 target 锁。
-$artifacts = cargo test -p editor-app --bin editor-app --no-run --message-format=json
-$testExe = $artifacts | ForEach-Object { $_ | ConvertFrom-Json } |
-    Where-Object { $_.reason -eq 'compiler-artifact' -and $_.profile.test -and $_.executable } |
-    Select-Object -ExpandProperty executable -Last 1
-& $testExe --ignored --test-threads=1
+cargo test -p editor-app plugin_development -- --test-threads=1
+cargo test -p editor-app sdk_export -- --test-threads=1
 ```
 
-发行包为 terminal、example、svg、rust、toml、html、javascript、markdown；每包包含 README。Rust 包附带公开 LSP 钩子，仅提供语言资源的包无需空生命周期组件。Markdown 包同时包含两份 WASM grammar 和独立解析组件。终端直接使用上游 term-wm-vt100，许可随包分发；基础主题内置。
+实际 WASM 测试须先准备对应夹具，再显式执行所选 `--ignored` 测试。目录候选的 `NANOBUG_DEVELOPMENT_CANDIDATE` 和 SDK ZIP 的 `NANOBUG_SDK_PACKAGE` 命令见[本次验收记录](verification/plugin-development-packaging.md)；不得用普通 workspace 测试的跳过结果替代真实验收。
 
-Windows 上执行实际 WASM、GPUI、ConPTY、进程树和语言服务验收。macOS/Linux 未在本次环境实测或交叉构建，不以 Windows 结果替代其他平台验证。完整矩阵及日志见 [最终契约验收](verification/plugin-api-contract-verification.md)。
+现有 14 个项目均提供共享描述并独立打包，每包包含其 README。Rust 包附带公开 LSP 钩子，仅提供语言资源的包无需空生命周期组件。Markdown 包同时包含两份 WASM grammar 和独立解析组件。终端直接使用上游 term-wm-vt100，许可随包分发；基础主题内置。
+
+Windows 本次实际 WASM、目录重载及 GPUI 验收见[插件开发验收](verification/plugin-development-packaging.md)。既有 ConPTY、进程树、语言服务等平台完整矩阵见[历史最终契约验收](verification/plugin-api-contract-verification.md)，不计为本次重跑。macOS/Linux 未在本次环境实测或交叉构建，不以 Windows 结果替代其他平台验证。
+
+原生安装器使用直接工具，步骤见[安装与分发](../../installer/README.md)。
