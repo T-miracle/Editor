@@ -51,6 +51,7 @@ impl Manager {
     /// Count resources across logical workspaces and the application owner for shutdown diagnostics.
     pub fn resource_count(&self) -> usize {
         self.images.len()
+            + self.structure_resource_count()
             + self
                 .language_services
                 .values()
@@ -121,6 +122,7 @@ impl Manager {
         if self.workspace_open {
             // Host protocol transports are recreated when this window selects another workspace.
             self.language_services.clear();
+            self.clear_structure_providers();
             self.parked.insert(
                 old_key,
                 ParkedWorkspace {
@@ -195,6 +197,7 @@ impl Manager {
             self.retire_workspace_images();
             self.retire_workspace_image_inputs();
             self.language_services.clear();
+            self.clear_structure_providers();
         }
         let (environment, mut live) = if current {
             self.workspace_open = false;
@@ -288,6 +291,8 @@ impl Manager {
         // Programs get a shared bounded cleanup window and then forceful tree termination. The UI
         // awaits the actor's shutdown acknowledgement; only afterwards may its window disappear.
         self.stop_owned_programs();
+        // Revocation must invalidate workers retained by a host before its last Arc is released.
+        self.clear_structure_providers();
         // Host execution sessions end with the window that owns them; no start is left queued.
         self.host_sessions.retire();
         let _ = self.checkpoint();

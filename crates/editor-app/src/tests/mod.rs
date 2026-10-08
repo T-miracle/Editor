@@ -1,10 +1,16 @@
 //! Exercises editor shell interactions through GPUI's test context.
 
+mod editing_fixture;
+mod language_editing;
 mod language_fixture;
+mod outline;
 mod run_file_tabs;
 mod shortcuts;
 mod shortcuts_controls;
 mod shortcuts_editing;
+mod tag_editing;
+mod xml_formatting;
+mod xml_language_tools;
 pub(crate) use language_fixture::declared_language_service;
 pub(crate) use shortcuts::with_editor as with_shortcut_editor;
 pub(crate) use shortcuts::with_editor_profile as with_shortcut_editor_profile;

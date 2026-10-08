@@ -23,6 +23,7 @@ mod resource_roots;
 mod service_replies;
 mod settings;
 mod stdio;
+mod structure;
 mod tools;
 use resource_roots::ResourceRoots;
 wasmtime::component::bindgen!({path:"../plugin-protocol/wit",world:"plugin",require_store_data_send:true});
@@ -64,6 +65,12 @@ struct State {
     active: bool,
     /// A bounded discovery invocation can read granted resources without launching native work.
     language_hook: bool,
+    /// Separate stateless language workers reject every host operation, including during Prepare.
+    language_pure: bool,
+    /// Typed outputs are accepted only while the matching pure callback is running.
+    language_completion_call: bool,
+    /// Only this callback may publish a structure proposal; it cannot impersonate completion data.
+    language_structure_call: bool,
     /// Read-only discovery can release only the file roots allocated by its own hook.
     language_hook_checkpoint: Option<u64>,
     /// Migration grants access exclusively to a transaction's isolated private-data copy.
@@ -207,11 +214,61 @@ impl Instance {
         bytes: &[u8],
         manifest: &Manifest,
         grants: &BTreeSet<String>,
+        environment: Environment,
+        data: PathBuf,
+        assets: PathBuf,
+        snapshot: Option<Snapshot>,
+        host_resources: crate::HostResources,
+    ) -> anyhow::Result<Self> {
+        Self::prepare_with_mode(
+            engine,
+            bytes,
+            manifest,
+            grants,
+            environment,
+            data,
+            assets,
+            snapshot,
+            host_resources,
+            false,
+        )
+    }
+    /// Language workers never restore a private snapshot or activate package resources.
+    pub(crate) fn prepare_language_worker(
+        engine: &Engine,
+        bytes: &[u8],
+        manifest: &Manifest,
+        grants: &BTreeSet<String>,
+        environment: Environment,
+        data: PathBuf,
+        assets: PathBuf,
+        host_resources: crate::HostResources,
+    ) -> anyhow::Result<Self> {
+        Self::prepare_with_mode(
+            engine,
+            bytes,
+            manifest,
+            grants,
+            environment,
+            data,
+            assets,
+            None,
+            host_resources,
+            true,
+        )
+    }
+    /// Build the same isolated transport, choosing pure authority before the first guest instruction runs.
+    fn prepare_with_mode(
+        engine: &Engine,
+        bytes: &[u8],
+        manifest: &Manifest,
+        grants: &BTreeSet<String>,
         mut environment: Environment,
         data: PathBuf,
         assets: PathBuf,
         snapshot: Option<Snapshot>,
         host_resources: crate::HostResources,
+        pure: bool,
     ) -> anyhow::Result<Self> {
         let api = super::capabilities::negotiate(manifest)?;
         manifest
@@ -226,7 +283,9 @@ impl Instance {
             manifest.permissions.is_subset(grants),
             "Plugin needs additional permission consent"
         );
-        std::fs::create_dir_all(&data)?;
+        if !pure {
+            std::fs::create_dir_all(&data)?;
+        }
         let component = Component::new(engine, bytes).inspect_err(|error| {
             host_resources.logs.append(
                 &manifest.id,
@@ -296,6 +355,9 @@ impl Instance {
             assets,
             active: false,
             language_hook: false,
+            language_pure: pure,
+            language_completion_call: false,
+            language_structure_call: false,
             language_hook_checkpoint: None,
             migrating: false,
             staged_writes: Some(Default::default()),

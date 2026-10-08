@@ -2,6 +2,8 @@
 use crate::language::providers::{self, GrammarProvider};
 use crate::*;
 use gpui_kit::AnyElement;
+mod associations;
+mod editing;
 
 /// The current request owns status; stale worker results never replace this state or global parsers.
 #[derive(Default)]
@@ -10,6 +12,8 @@ pub(crate) struct DynamicLanguages {
     generation: u64,
     scope: plugin_runtime::plugin_protocol::settings::Scope,
     error: Option<String>,
+    /// Optional native settings input, never a second document editor state.
+    extension_input: Option<Entity<gpui_base::input::InputState>>,
 }
 
 /// Reuse native host controls for independent recognition and grammar preferences.
@@ -39,12 +43,16 @@ pub(crate) fn render_settings(view: &Entity<EditorApp>, cx: &App) -> AnyElement 
                 }),
         ),
     );
+    content = content.child(associations::render(view, cx));
+    content = content.child(editing::render(view, cx));
     let rows = providers::rows();
     if rows.is_empty() {
         content = content.child(t!("settings.providers_empty").to_string());
     }
     for row in rows {
-        let status = if row.selected.is_some() {
+        let status = if let Some(error) = &row.configuration_error {
+            error.message()
+        } else if row.selected.is_some() {
             t!(format!("settings.provider_source_{}", row.source)).to_string()
         } else if row.candidates.is_empty() {
             t!("settings.provider_missing").to_string()
@@ -55,6 +63,10 @@ pub(crate) fn render_settings(view: &Entity<EditorApp>, cx: &App) -> AnyElement 
             "LSP".into()
         } else if row.key.starts_with("highlight:") {
             t!("settings.provider_highlight")
+        } else if row.key.starts_with("formatter:") {
+            t!("settings.provider_formatter")
+        } else if row.key.starts_with("structure:") {
+            t!("settings.provider_structure")
         } else {
             t!("settings.provider_recognition")
         };
@@ -64,7 +76,9 @@ pub(crate) fn render_settings(view: &Entity<EditorApp>, cx: &App) -> AnyElement 
             .child(
                 div()
                     .debug_selector({
-                        let selector = if row.selected.is_some() {
+                        let selector = if row.configuration_error.is_some() {
+                            format!("provider-invalid-{}-{}", row.source, row.key)
+                        } else if row.selected.is_some() {
                             format!("provider-source-{}-{}", row.source, row.key)
                         } else if row.candidates.is_empty() {
                             format!("provider-unavailable-{}", row.key)
@@ -72,6 +86,9 @@ pub(crate) fn render_settings(view: &Entity<EditorApp>, cx: &App) -> AnyElement 
                             format!("provider-choice-needed-{}", row.key)
                         };
                         move || selector.clone()
+                    })
+                    .when(row.configuration_error.is_some(), |element| {
+                        element.text_color(cx.theme().danger)
                     })
                     .child(status),
             );
@@ -101,6 +118,10 @@ pub(crate) fn render_settings(view: &Entity<EditorApp>, cx: &App) -> AnyElement 
         let key = row.key.clone();
         options = options.child(
             Button::new(format!("provider-reset-{}", row.key))
+                .debug_selector({
+                    let selector = format!("provider-reset-{}", row.key);
+                    move || selector.clone()
+                })
                 .label(t!("settings.plugin_reset").to_string())
                 .small()
                 .disabled(!trusted)

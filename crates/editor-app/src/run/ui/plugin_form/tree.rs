@@ -1,6 +1,6 @@
 //! Native configuration tree over gpui-base; local rows and drops only change window drafts.
 use super::*;
-use crate::ui::controls::{Button, Icon, Input, tree_row};
+use crate::ui::controls::{Button, Icon, Input, TreeRowAppearance, tree_row};
 use gpui_base::TreeItem;
 use std::collections::BTreeSet;
 
@@ -193,6 +193,7 @@ pub(super) fn render(
                     entry.is_expanded(),
                     selected.is_selected(),
                     invalid,
+                    TreeRowAppearance::Standard,
                     cx,
                     folder.then_some(toggle),
                 )

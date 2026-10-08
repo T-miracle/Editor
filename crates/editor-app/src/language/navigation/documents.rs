@@ -49,11 +49,7 @@ impl LanguageServer {
                 .get(document.uri.as_str())
                 .is_some_and(|active| active.same_lifetime(&document))
             {
-                connection.notify(
-                    "textDocument/didClose",
-                    json!({"textDocument":{"uri":document.uri}}),
-                )?;
-                connection.diagnostics.close(document.uri.as_str());
+                connection.close_synchronized_document(&document.uri)?;
                 connection.documents.remove(document.uri.as_str());
             }
         }
@@ -68,11 +64,7 @@ impl LanguageServerConnection {
             if old.same_lifetime(document) {
                 return Ok(());
             }
-            self.notify(
-                "textDocument/didClose",
-                json!({"textDocument":{"uri":document.uri}}),
-            )?;
-            self.diagnostics.close(document.uri.as_str());
+            self.close_synchronized_document(&document.uri)?;
         }
         self.documents
             .insert(document.uri.as_str().into(), document.clone());

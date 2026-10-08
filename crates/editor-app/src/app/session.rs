@@ -34,6 +34,12 @@ pub struct SessionState {
     pub explorer_width: f32,
     #[serde(default = "default_true")]
     pub explorer_visible: bool,
+    /// New and older workspaces without this field hide Outline; an explicit saved choice still restores.
+    #[serde(default)]
+    pub outline_visible: bool,
+    /// Cursor tracking may be disabled without disabling tree updates or explicit navigation.
+    #[serde(default = "default_true")]
+    pub outline_follow_cursor: bool,
     /// Newly introduced project roots start expanded for previously saved workspaces too.
     #[serde(default = "default_true")]
     pub explorer_root_expanded: bool,
@@ -124,6 +130,8 @@ impl SessionState {
             window_height: 820.,
             explorer_width: 280.,
             explorer_visible: true,
+            outline_visible: false,
+            outline_follow_cursor: true,
             explorer_root_expanded: true,
             explorer_reveal_on_tab_switch: false,
             extension_height: default_extension_height(),

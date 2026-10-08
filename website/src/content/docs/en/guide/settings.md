@@ -23,6 +23,12 @@ project, so they follow you between projects and never enter a repository.
 
 ## Languages
 
+Use **File associations** to add a file extension and choose an installed language. A leading
+dot is optional and case is ignored. The change applies to already-open files. Remove an
+association to return to plugin recognition. If its language provider is disabled or removed,
+the association remains saved and the file is shown as plain text until that language is available.
+These are user settings; choosing an association does not enable a plugin or change workspace trust.
+
 The languages section lists the language providers the installed plugins contribute, separately
 for recognition (which language a file is) and highlighting. A provider can be chosen
 explicitly, and a project may have its own confirmed choice that overrides yours.

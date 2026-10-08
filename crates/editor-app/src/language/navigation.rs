@@ -1,11 +1,15 @@
 //! Connects plugin languages to their declared language servers.
 
+mod completion_hooks;
+mod definitions;
 mod diagnostics;
 mod documents;
+pub(crate) mod editing;
 pub(crate) use documents::DocumentLease;
 mod recovery;
 pub(crate) use recovery::RecoveryState;
 mod service;
+mod snapshots;
 mod startup;
 mod transport;
 
@@ -256,10 +260,21 @@ struct LanguageServerConnection {
     language_id: String,
     next_id: u64,
     diagnostics: diagnostics::DiagnosticsStore,
+    /// Only declared immutable URI providers may attribute an unversioned push to live text.
+    snapshot_uris: Option<snapshots::SnapshotUris>,
     /// None disables didSave; the boolean controls inclusion of the saved text.
     save_notifications: Option<bool>,
     /// Prefer standard pull diagnostics when advertised, including for unsaved buffers.
     pull_diagnostics: bool,
+    /// Standard navigation capabilities remain independent of the concrete language or server.
+    definition_provider: bool,
+    type_definition_provider: bool,
+    formatting_provider: bool,
+    rename_provider: bool,
+    prepare_rename_provider: bool,
+    linked_editing_provider: bool,
+    /// Set only after the authorized editing 1.1 client marker and matching server handshake.
+    semantic_linked_editing_provider: bool,
     /// Keep host-injected options available for subsequent workspace/configuration requests.
     configuration: Value,
     /// Fault teardown permits a bounded stderr EOF drain; ordinary retirement cuts off alerts first.
@@ -267,22 +282,6 @@ struct LanguageServerConnection {
 }
 
 impl LanguageServerConnection {
-    /// Opens or replaces a document snapshot, then returns all locations from the server.
-    fn definitions(
-        &mut self,
-        uri: Uri,
-        source: String,
-        position: Position,
-    ) -> anyhow::Result<Vec<LocationLink>> {
-        let uri_text = self.sync_document(uri, source)?;
-        let params = json!({
-            "textDocument": { "uri": uri_text },
-            "position": position
-        });
-        let response = self.request("textDocument/definition", params)?;
-        decode_definitions(response)
-    }
-
     /// Requests completion after publishing the current editor snapshot.
     fn completions(
         &mut self,
@@ -327,36 +326,6 @@ impl LanguageServerConnection {
         serde_json::from_value(response)
             .map(Some)
             .context("decode language hover response")
-    }
-
-    /// Publish changed snapshots once; identical hover and diagnostic requests share a version.
-    fn sync_document(&mut self, uri: Uri, source: String) -> anyhow::Result<String> {
-        // Attribute already queued, unversioned pushes to the old snapshot before replacing it.
-        self.drain_messages()?;
-        let uri_text = uri.as_str().to_owned();
-        let Some(version) = self.diagnostics.next_version(&uri_text, &source) else {
-            return Ok(uri_text);
-        };
-        ensure!(
-            version < i32::MAX,
-            "LSP document version exhausted; restart service"
-        );
-        if !self.diagnostics.is_open(&uri_text) {
-            self.notify("textDocument/didOpen", json!({
-                "textDocument": { "uri": uri_text, "languageId": self.language_id, "version": version, "text": source }
-            }))?;
-        } else {
-            self.notify(
-                "textDocument/didChange",
-                json!({
-                    "textDocument": { "uri": uri_text, "version": version },
-                    "contentChanges": [{ "text": source }]
-                }),
-            )?;
-        }
-        self.diagnostics
-            .synchronized(uri_text.clone(), source, version);
-        Ok(uri_text)
     }
 
     /// Wait for the matching response while processing retained diagnostic pushes and server requests.
@@ -477,7 +446,7 @@ pub(crate) fn file_uri(path: &Path) -> Option<Uri> {
 }
 
 /// Converts a UTF-8 byte offset into the UTF-16 line and column required by LSP.
-pub(super) fn position_at_byte(source: &str, byte_offset: usize) -> Position {
+pub(crate) fn position_at_byte(source: &str, byte_offset: usize) -> Position {
     let prefix = &source[..byte_offset.min(source.len())];
     let line = prefix.bytes().filter(|byte| *byte == b'\n').count() as u32;
     let column = prefix

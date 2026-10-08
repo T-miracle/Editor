@@ -44,7 +44,15 @@ impl EditorApp {
 
     pub(crate) fn sync_dynamic_language_servers(&mut self, cx: &mut Context<Self>) {
         let selected = crate::language::providers::language_servers();
+        let selected_formatters = crate::language::providers::formatters();
         let available = self.extensions.read(cx).language_services();
+        // Role maps share adapters for the same immutable plan; a native service owns one process lease.
+        let previous = self
+            .language_servers
+            .values()
+            .chain(self.language_edits.formatters.values())
+            .cloned()
+            .collect::<Vec<_>>();
         // Worker publications also carry ongoing transport failures, not only the initial handshake result.
         for server in self.language_servers.values() {
             if let Some(recovery) = server.recovery_state()
@@ -78,7 +86,6 @@ impl EditorApp {
                     .and_then(|service| service.as_ref().ok())
                     .is_some_and(|service| server.uses_service(service) && server.is_active());
             if !keep {
-                server.retire();
                 changed = true;
             }
             keep
@@ -102,8 +109,14 @@ impl EditorApp {
                         continue;
                     }
                 };
-                let Some(server) =
-                    language_navigation::LanguageServer::from_service(plan.clone()).map(Arc::new)
+                let Some(server) = previous
+                    .iter()
+                    .find(|server| server.is_active() && server.uses_service(&plan))
+                    .cloned()
+                    .or_else(|| {
+                        language_navigation::LanguageServer::from_service(plan.clone())
+                            .map(Arc::new)
+                    })
                 else {
                     continue;
                 };
@@ -164,6 +177,91 @@ impl EditorApp {
                 .detach();
             }
         }
+        self.language_edits.formatter_errors.clear();
+        self.language_edits.formatters.retain(|language, server| {
+            self.session_state.workspace_trusted
+                && selected_formatters
+                    .get(language)
+                    .and_then(|id| id.as_ref())
+                    .and_then(|id| available.get(id))
+                    .and_then(|plan| plan.as_ref().ok())
+                    .is_some_and(|plan| server.is_active() && server.uses_service(plan))
+        });
+        if self.session_state.workspace_trusted {
+            for (language, id) in selected_formatters {
+                if self.language_edits.formatters.contains_key(&language) {
+                    continue;
+                }
+                let Some(plan) = id.as_ref().and_then(|id| available.get(id)) else {
+                    continue;
+                };
+                let plan = match plan {
+                    Ok(plan) => plan.clone(),
+                    Err(error) => {
+                        self.language_edits
+                            .formatter_errors
+                            .insert(language, error.clone());
+                        continue;
+                    }
+                };
+                let shared = self
+                    .language_servers
+                    .values()
+                    .chain(previous.iter())
+                    .find(|server| server.is_active() && server.uses_service(&plan))
+                    .cloned();
+                let Some(server) = shared.or_else(|| {
+                    language_navigation::LanguageServer::from_service(plan).map(Arc::new)
+                }) else {
+                    continue;
+                };
+                self.language_edits
+                    .formatters
+                    .insert(language.clone(), server.clone());
+                // Formatting-only services initialize through the same bounded transport and permissions.
+                if !self
+                    .language_servers
+                    .values()
+                    .any(|main| Arc::ptr_eq(main, &server))
+                {
+                    cx.spawn(async move |this, cx| {
+                        let current = server.clone();
+                        let result = cx
+                            .background_executor()
+                            .scheduler_executor()
+                            .spawn_dedicated(move |_| async move { server.prepare_until_ready() })
+                            .await;
+                        let _ = this.update(cx, |app, cx| {
+                            if app
+                                .language_edits
+                                .formatters
+                                .get(&language)
+                                .is_some_and(|server| Arc::ptr_eq(server, &current))
+                                && current.is_active()
+                            {
+                                if let Err(error) = result {
+                                    app.language_edits
+                                        .formatter_errors
+                                        .insert(language, format!("{error:#}"));
+                                }
+                                cx.notify();
+                            }
+                        });
+                    })
+                    .detach();
+                }
+            }
+        }
+        for server in previous {
+            if !self
+                .language_servers
+                .values()
+                .chain(self.language_edits.formatters.values())
+                .any(|active| Arc::ptr_eq(active, &server))
+            {
+                server.retire();
+            }
+        }
         let mut documents_changed = false;
         for tab in self.tabs.iter().filter_map(|file| file.text.as_ref()) {
             let path = tab.path();
@@ -174,9 +272,7 @@ impl EditorApp {
             }
             // Recognition can change without replacing any service; revoke old per-document authority first.
             if previous != language {
-                if let Some(server) = self.language_servers.get(&previous) {
-                    Self::close_server_document(server.clone(), path, cx);
-                }
+                self.close_language_services_document(&previous, path, cx);
             }
             documents_changed = true;
             editor::detach_language_server(&tab.editor, cx);
@@ -194,17 +290,32 @@ impl EditorApp {
             self.reset_syntax_diagnostics(cx);
             cx.notify();
         }
+        self.sync_linked_input(cx);
     }
     /// didClose is delivered on the transport executor, without blocking tab removal on the UI thread.
     pub(crate) fn close_language_document(&self, path: &Path, cx: &mut Context<Self>) {
-        let Some(server) = self
-            .language_servers
-            .get(&editor::language_for_path(path))
-            .cloned()
-        else {
-            return;
-        };
-        Self::close_server_document(server, path, cx);
+        let language = editor::language_for_path(path);
+        self.close_language_services_document(&language, path, cx);
+    }
+
+    /// Both roles lose a document together; shared adapters receive a single close notification.
+    /// The previous recognition identity is explicit because current path recognition may have changed.
+    fn close_language_services_document(
+        &self,
+        language: &str,
+        path: &Path,
+        cx: &mut Context<Self>,
+    ) {
+        let main = self.language_servers.get(language).cloned();
+        let formatter = self.language_edits.formatters.get(language).cloned();
+        if let Some(server) = &main {
+            Self::close_server_document(server.clone(), path, cx);
+        }
+        if let Some(server) = formatter
+            && main.as_ref().is_none_or(|main| !Arc::ptr_eq(main, &server))
+        {
+            Self::close_server_document(server, path, cx);
+        }
     }
 
     /// Closing a tab and changing its recognizer share synchronous lease revocation and asynchronous wire cleanup.

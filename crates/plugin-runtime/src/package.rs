@@ -7,7 +7,9 @@ use std::{
     io::{Cursor, Read, Write},
     path::Path,
 };
+mod atomic_file;
 pub(crate) mod icons;
+pub(crate) use atomic_file::atomic_write;
 
 /// LSP declarations carry exactly the native service authority that the host will exercise.
 fn validate_language_services(manifest: &Manifest) -> anyhow::Result<()> {
@@ -33,6 +35,64 @@ fn validate_language_services(manifest: &Manifest) -> anyhow::Result<()> {
         anyhow::ensure!(
             !provider.hook || manifest.component.is_some(),
             "LSP hooks require WASM"
+        );
+        // Independent roles negotiate before installation, so an older host cannot silently
+        // treat a formatting-only contribution as the document's primary analysis service.
+        for (enabled, capability) in [
+            (
+                !provider.primary || provider.formatting,
+                "language.formatting",
+            ),
+            (provider.editing, "language.editing"),
+        ] {
+            anyhow::ensure!(
+                !enabled
+                    || manifest
+                        .api
+                        .as_ref()
+                        .is_some_and(|api| api.required.contains_key(capability)),
+                "Language editing role requires {capability}"
+            );
+        }
+        anyhow::ensure!(
+            provider.primary || provider.formatting,
+            "A language service must provide analysis or formatting"
+        );
+        if provider.optional_installation {
+            anyhow::ensure!(
+                manifest
+                    .api
+                    .as_ref()
+                    .and_then(|api| api.required.get("dependencies"))
+                    .is_some_and(|requirement| {
+                        requirement.matches(&semver::Version::new(1, 1, 0))
+                            && !requirement.matches(&semver::Version::new(1, 0, 0))
+                    }),
+                "Optional service installation requires dependencies >=1.1"
+            );
+        }
+        if provider.diagnostic_snapshots {
+            anyhow::ensure!(
+                manifest
+                    .api
+                    .as_ref()
+                    .and_then(|api| api.required.get("language.lsp"))
+                    .is_some_and(|requirement| {
+                        requirement.matches(&semver::Version::new(1, 3, 0))
+                            && !requirement.matches(&semver::Version::new(1, 2, 0))
+                    }),
+                "Immutable diagnostic snapshots require language.lsp >=1.3"
+            );
+        }
+        anyhow::ensure!(
+            !provider.completion_hook
+                || (manifest.component.is_some()
+                    && manifest.permissions.contains("editor.read")
+                    && manifest
+                        .api
+                        .as_ref()
+                        .is_some_and(|api| api.required.contains_key("language.completion"))),
+            "Snapshot completion requires WASM, language.completion and editor.read"
         );
         for service in std::iter::once(&provider.service).chain(&provider.alternatives) {
             anyhow::ensure!(
@@ -157,6 +217,7 @@ impl Package {
         semver::Version::parse(&manifest.version)?;
         super::capabilities::require_current(&manifest)?;
         validate_language_services(&manifest)?;
+        crate::structure::validate_manifest(&manifest)?;
         manifest
             .plugin_services
             .validate()
@@ -561,19 +622,6 @@ pub(crate) fn validate_relative(name: &str) -> anyhow::Result<()> {
     );
     Ok(())
 }
-/// Replace atomically in the same directory; a failed write leaves the prior file intact.
-pub(crate) fn atomic_write(path: &Path, bytes: &[u8]) -> anyhow::Result<()> {
-    let parent = path
-        .parent()
-        .ok_or_else(|| anyhow::anyhow!("Missing parent"))?;
-    std::fs::create_dir_all(parent)?;
-    let mut temp = tempfile::NamedTempFile::new_in(parent)?;
-    temp.write_all(bytes)?;
-    temp.as_file().sync_all()?;
-    temp.persist(path)?;
-    Ok(())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

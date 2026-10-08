@@ -115,7 +115,7 @@ pub(crate) fn resolve(program: &str) -> anyhow::Result<PathBuf> {
         if candidate.is_file() {
             let path = candidate.canonicalize()?;
             #[cfg(windows)]
-            let path = executable_spelling(path)?;
+            let path = child_path_spelling(path)?;
             #[cfg(windows)]
             anyhow::ensure!(
                 path.extension()
@@ -153,12 +153,13 @@ fn program_candidates(program: &str) -> anyhow::Result<Vec<PathBuf>> {
     Ok(candidates)
 }
 
-/// .NET Framework programs reject device-prefixed argv[0]; both pipes and PTYs use the same spelling.
+/// Native interpreters and module loaders can reject device-prefixed argv paths. Return an ordinary
+/// Windows spelling only after proving that it resolves to the same previously validated target.
 #[cfg(windows)]
-fn executable_spelling(canonical: PathBuf) -> anyhow::Result<PathBuf> {
+pub(crate) fn child_path_spelling(canonical: PathBuf) -> anyhow::Result<PathBuf> {
     let program = canonical
         .to_str()
-        .ok_or_else(|| anyhow::anyhow!("Executable path is not Unicode"))?;
+        .ok_or_else(|| anyhow::anyhow!("Native path is not Unicode"))?;
     let ordinary = if let Some(path) = program.strip_prefix(r"\\?\UNC\") {
         format!(r"\\{path}")
     } else {
@@ -167,7 +168,7 @@ fn executable_spelling(canonical: PathBuf) -> anyhow::Result<PathBuf> {
     let ordinary = PathBuf::from(ordinary);
     anyhow::ensure!(
         ordinary.canonicalize()? == canonical,
-        "Executable path spelling changed its target"
+        "Native path spelling changed its target"
     );
     Ok(ordinary)
 }

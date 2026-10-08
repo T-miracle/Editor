@@ -1,0 +1,4 @@
+{
+  "schema_version": 1,
+  "icons": [{ "extensions": ["xml", "svg", "xsd", "xsl", "xslt"], "light": "icons/file.svg", "dark": "icons/file_dark.svg" }]
+}

@@ -10,6 +10,8 @@ Nanobug 是一个使用 Rust 与 GPUI 构建的原生桌面代码编辑器，优
 
 语言支持、终端、Markdown 与图片预览，以及运行、调试和构建能力通过独立插件接入。内置插件与第三方插件使用同一套公开接口。
 
+XML 插件提供 Schema 辅助、补全、格式化、配对标签编辑与文档大纲；HTML、JavaScript 提供独立的原生语言服务。新工作区默认隐藏大纲，可从底部窗口控件打开。
+
 [文档](https://t-miracle.github.io/Editor/zh-cn/) · [快速开始](https://t-miracle.github.io/Editor/zh-cn/guide/getting-started/) · [插件 SDK](https://t-miracle.github.io/Editor/zh-cn/sdk/) · [问题反馈](https://github.com/T-miracle/Editor/issues)
 
 ## 安装

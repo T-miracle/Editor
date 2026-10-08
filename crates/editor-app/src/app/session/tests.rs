@@ -3,19 +3,41 @@
 use super::*;
 use crate::{EditorApp, typography};
 use editor_core::Workspace;
-use gpui_base::dock::{DockAreaState, DockLayout};
+use gpui_base::dock::{DockAreaState, DockLayout, PanelInfo, PanelState};
 use gpui_base::{
     Placement,
     dock::{DockPlacement, InsertTarget, PanelId},
 };
 use gpui_kit::{
-    AppContext as _, Entity, TestAppContext, VisualTestContext, component::Root, gpui, px, size,
+    AppContext as _, Axis, Entity, TestAppContext, VisualTestContext, component::Root, gpui, px,
+    size,
 };
 use plugin_runtime::{Installed, plugin_protocol::Manifest};
 use std::{cell::RefCell, rc::Rc};
 
 /// Remove only the isolated workspace's generated session file, including on assertion failure.
 struct SessionFile(PathBuf);
+
+/// Fresh and legacy records hide Outline, while an explicit workspace choice survives save/reload.
+#[test]
+fn outline_visibility_defaults_hidden_and_preserves_saved_choice() {
+    let directory = tempfile::tempdir().unwrap();
+    let mut state = SessionState::for_workspace(directory.path());
+    let _cleanup = SessionFile(state.file_path().unwrap());
+    assert!(!state.outline_visible);
+    let mut legacy = serde_json::to_value(&state).unwrap();
+    legacy.as_object_mut().unwrap().remove("outline_visible");
+    let migrated: SessionState = serde_json::from_value(legacy).unwrap();
+    assert!(!migrated.outline_visible);
+    for visible in [true, false] {
+        state.outline_visible = visible;
+        state.save();
+        assert_eq!(
+            SessionState::load(directory.path()).outline_visible,
+            visible
+        );
+    }
+}
 
 /// A successful private write acknowledges one unchanged bundle, never newer or unrelated settings.
 #[test]
@@ -76,6 +98,35 @@ fn assert_layout_eq(actual: DockAreaState, expected: DockAreaState) {
         actual, expected,
         "restart must preserve the current split tree and sizes"
     );
+}
+
+/// This legacy fixture gains only an equal-height Outline beside Explorer; every previously saved field stays exact.
+fn expected_legacy_outline_migration(mut layout: DockAreaState) -> DockAreaState {
+    let explorer = layout.center.children[0].clone();
+    assert_eq!(explorer.children[0].panel_name, "Explorer");
+    // Both columns span the same center height. Derive the new halves from the independently saved Editor/tasks column,
+    // rather than copying recovered measurements or dropping old size assertions from the comparison.
+    let height = layout.center.children[1]
+        .info
+        .sizes()
+        .unwrap()
+        .iter()
+        .copied()
+        .fold(px(0.), |total, extent| total + extent);
+    assert!(height > px(0.));
+    layout.center.children[0] = PanelState {
+        panel_name: "StackPanel".into(),
+        children: vec![
+            explorer,
+            PanelState {
+                panel_name: "TabPanel".into(),
+                children: vec![PanelState::new("Outline")],
+                info: PanelInfo::tabs(0),
+            },
+        ],
+        info: PanelInfo::stack(vec![height / 2.; 2], Axis::Vertical),
+    };
+    layout
 }
 
 /// Publish two distinct contributions of the same panel type through the host's regular sync.
@@ -162,7 +213,7 @@ fn dock_layout_survives_editor_restart(cx: &mut TestAppContext) {
     });
 }
 
-/// Async plugin startup must retain nested splits, moved panels, closed docks and stable identities.
+/// Async startup preserves legacy plugin layout and sizes while adding the new host Outline only inside Explorer's region.
 #[gpui::test]
 fn plugin_dock_layout_survives_delayed_startup(cx: &mut TestAppContext) {
     cx.update(|cx| {
@@ -263,6 +314,8 @@ fn plugin_dock_layout_survives_delayed_startup(cx: &mut TestAppContext) {
         .replace("terminal/terminal", "me.terminal/terminal")
         .replace("terminal/tasks", "me.terminal/tasks");
     let mut legacy_session: SessionState = serde_json::from_str(&serialized).unwrap();
+    // This equal-split migration fixture explicitly restores a visible Outline rather than relying on its default.
+    legacy_session.outline_visible = true;
     legacy_session.disabled_plugins = vec!["me.uninstalled-test".into()];
     legacy_session.save();
     let slot = Rc::new(RefCell::new(None));
@@ -275,6 +328,7 @@ fn plugin_dock_layout_survives_delayed_startup(cx: &mut TestAppContext) {
     let restored = slot.borrow_mut().take().unwrap();
     visual.update(|_, cx| {
         let app = restored.read(cx);
+        assert!(app.session_state.outline_visible);
         assert_eq!(app.session_state.disabled_plugins, ["uninstalled-test"]);
         assert!(app.pending_dock_restore);
         assert_layout_eq(
@@ -287,7 +341,10 @@ fn plugin_dock_layout_survives_delayed_startup(cx: &mut TestAppContext) {
         window.draw(cx).clear(cx);
         let app = restored.read(cx);
         assert!(!app.pending_dock_restore);
-        assert_layout_eq(app.dock_area.read(cx).dump(cx), expected);
+        assert_layout_eq(
+            app.dock_area.read(cx).dump(cx),
+            expected_legacy_outline_migration(expected),
+        );
         for key in ["terminal/terminal", "terminal/tasks"] {
             let id = PanelId::from(app.plugin_panels[key].entity_id());
             assert!(

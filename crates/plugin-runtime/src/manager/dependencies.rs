@@ -27,6 +27,8 @@ impl Manager {
             next,
             &values,
             control,
+            !self.installed.contains_key(&package.manifest.id),
+            &self.host_resources.logs,
         )?;
         Ok(())
     }
@@ -40,6 +42,8 @@ pub(super) fn prepare_dependencies_for(
     next: Option<&mut Instance>,
     values: &Effective,
     control: &InstallControl,
+    allow_optional_failure: bool,
+    logs: &crate::RuntimeLogs,
 ) -> anyhow::Result<BTreeMap<String, Plan>> {
     control.stage(InstallStage::Preparing)?;
     if !package
@@ -58,8 +62,30 @@ pub(super) fn prepare_dependencies_for(
         .join(&package.digest);
     // Keep every prepared dependency pinned until its immutable receipt has been published.
     let mut prepared = Vec::new();
-    for plan in plans.values() {
-        prepared.push(crate::dependencies::prepare(root, &assets, plan, control)?);
+    for (key, plan) in &plans {
+        match crate::dependencies::prepare(root, &assets, plan, control) {
+            Ok(dependency) => prepared.push(dependency),
+            Err(error) => {
+                // Cancellation/authority withdrawal always aborts, including an optional download.
+                control.check()?;
+                let optional = allow_optional_failure
+                    && package.manifest.language_servers.iter().any(|provider| {
+                        provider.optional_installation
+                            && key == &format!("provider:{}", provider.id)
+                    });
+                if !optional {
+                    return Err(error);
+                }
+                // No service is published as ready: the ordinary cache lookup later returns this
+                // provider's unavailable state while resource contributions can still activate.
+                logs.append(
+                    &package.manifest.id,
+                    crate::LogLevel::Error,
+                    "dependencies/prepare",
+                    format!("Optional language service is unavailable: {error:#}"),
+                );
+            }
+        }
     }
     control.check()?;
     let identity = format!("{:x}", Sha256::digest(serde_json::to_vec(&plans)?));
@@ -106,6 +132,8 @@ pub(super) fn resolve_dependency_plans(
                 .prepare_language(plugin_protocol::language::Context {
                     provider: provider.id.clone(),
                     workspace: environment.workspace.clone(),
+                    package_root: String::new(),
+                    data_root: String::new(),
                     settings: values.clone(),
                     candidates,
                 })?

@@ -85,19 +85,25 @@ pub(crate) fn package(exe: &Path, log: &Path) -> Package {
 }
 
 /// Publish the production worker's prepared plans together with its registry snapshot.
-pub(super) fn publish(
+pub(crate) fn publish(
     app: &Entity<EditorApp>,
     manager: &mut plugin_runtime::Manager,
     cx: &mut gpui_kit::VisualTestContext,
 ) {
     let services = manager.language_services();
+    // Shared GPUI fixtures mirror both production publications without exposing the worker as an API.
+    let structures = manager.structure_providers();
     cx.update(|window, cx| {
         app.update(cx, |app, cx| {
             app.extensions.update(cx, |panel, cx| {
                 {
                     let mut state = panel.worker.state.lock().unwrap();
                     state.entries = manager.published_entries();
+                    // The public manager has finished preparation; mirror the actor's completed
+                    // publication so layout restoration does not wait for a nonexistent test worker.
+                    state.startup.clear();
                     state.language_services = services;
+                    state.structure_providers = structures;
                     state.configuration_revision += 1;
                 }
                 panel.poll(cx);

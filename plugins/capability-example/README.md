@@ -1,5 +1,17 @@
 # Capability Example
 
+0.17.0 adds an independently packaged `language.structure` provider probe with arbitrary
+definition types, UTF-8 source ranges, package artwork and separate folds. Actual SDK-built
+fixtures exercise stale metadata, malformed replies, denied IO, worker traps and retirement;
+an invalid proposal rejects only that reply, while a trapped pure worker loses its lease.
+默认包只声明可选结构能力；验收包单独声明提供者并申请 `editor.read`，不让示例面板成为宿主大纲。
+
+0.16.2 adds a real public `language.completion` snapshot probe. A separately packaged language
+provider attempts normally granted asset, workspace, private-data, editor and subscription calls;
+its pure worker must receive `PermissionDenied` for all of them. Host integration checks stale
+metadata, invalid ranges, response limits and retirement using the independently built ZIP.
+默认包只声明可选补全能力，不增加新的语言或执行权限；验收包显式申请源文本读取与提供者能力。
+
 The panel menu explicitly offers the execution-budget and memory-budget fault demonstrations. Use an isolated fixture profile: each command deliberately traps this example instance so the native fault reminder and resource cleanup can be inspected.
 
 版本 0.15.7 的普通 `preview-probe` 命令接收完整公开 `ui::Document` 并原样发布到 welcome 面板，用于独立检查版本、能力与权限的发布门禁；它不修正或伪造 source。组合 UI 资产的 `code_highlighting` 在没有 Preview source 时暂时关闭，绑定版本后恢复原声明。代码高亮消费者需要协商 `ui.code_highlighting`、`ui.richtext` 与 `editor.documents` 并获得 `editor.read`；普通等宽代码保持默认惰性。
@@ -46,7 +58,7 @@ scope-write / scope-read 将工作区的 source.txt 与私有 value.txt 一起�
 
 SDK 提供 open_workspace、open_data、read_file、write_file、close_resource；句柄由宿主签发，不应持久化。workspace.files 1.0 只读，storage.private 1.0 支持私有根目录直接子文件的原子写入，每文件最多 1 MiB，累计受清单 storage_limit 约束。用户设置、其他工作区数据及宿主快照均不在可读根目录内。
 
-通过宿主 `editor-app.exe --plugin-package plugins/capability-example` 完整构建并封装 ZIP，默认输出为插件项目根部的 `capability-example-0.16.2.zip`。项目描述在 `nanobug-plugin.json`，也可使用宿主“插件打包”配置选择输出位置；不调用归档脚本。底层独立构建仍可使用宿主 `--plugin-cargo` 入口和内嵌 SDK，不引用宿主业务源码路径。
+通过宿主 `editor-app.exe --plugin-package plugins/capability-example` 完整构建并封装 ZIP，默认输出为插件项目根部的 `capability-example-0.17.0.zip`。项目描述在 `nanobug-plugin.json`，也可使用宿主“插件打包”配置选择输出位置；不调用归档脚本。底层独立构建仍可使用宿主 `--plugin-cargo` 入口和内嵌 SDK，不引用宿主业务源码路径。
 
 ## 编辑器请求与事件
 

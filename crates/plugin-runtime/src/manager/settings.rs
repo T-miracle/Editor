@@ -246,6 +246,8 @@ impl Manager {
         }
         // Compute effective plans before retiring transports: unrelated settings must not restart them.
         self.language_services();
+        // A new effective configuration retires only structure workers whose settings changed.
+        self.structure_providers();
         Ok(())
     }
 

@@ -1,0 +1,23 @@
+[package]
+name = "xml-language-guest"
+version = "0.2.1"
+edition = "2024"
+rust-version = "1.95"
+license = "MIT"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+# The packaged host supplies the public SDK; this package never imports repository crates.
+plugin-protocol = { version = "=0.2.0", features = ["guest"] }
+serde_json = "1.0"
+serde = { version = "1.0", features = ["derive"] }
+url = "2.5"
+# The same bounded parser serves pure completion and later XML structure consumers.
+quick-xml = "=0.41.0"
+globset = "=0.4.20"
+# Decode only the readonly native URI used for exact association matching; no filesystem is opened.
+percent-encoding = "=2.3.2"
+
+[workspace]

@@ -29,36 +29,13 @@ pub(crate) fn init(cx: &mut App) {
     if cx.has_global::<Initialized>() {
         return;
     }
-    cx.bind_keys([
-        KeyBinding::new("ctrl-k", OpenShortcuts, Some("EditorShell")),
-        KeyBinding::new(
-            "ctrl-s",
-            SaveDocument,
-            Some("EditorShell && !PluginSurface"),
-        ),
-        KeyBinding::new(
-            "ctrl-shift-r",
-            RefreshWorkspace,
-            Some("EditorShell && !PluginSurface"),
-        ),
-        KeyBinding::new("ctrl-alt-t", ToggleTheme, Some("EditorShell")),
-        KeyBinding::new(
-            "f12",
-            NavigateToDefinition,
-            Some("EditorShell && !PluginSurface"),
-        ),
-        KeyBinding::new(
-            "ctrl-i",
-            ShowDefinitionDetails,
-            Some("EditorShell && !PluginSurface"),
-        ),
-        KeyBinding::new("f8", NextSyntaxError, Some("EditorShell && !PluginSurface")),
-        KeyBinding::new(
-            "shift-f8",
-            PreviousSyntaxError,
-            Some("EditorShell && !PluginSurface"),
-        ),
-    ]);
+    // Executable startup, shortcut profiles and language fixtures use the same document scope and defaults.
+    app::bind_editor_shell_keys(cx);
+    cx.bind_keys([KeyBinding::new(
+        "ctrl-k",
+        OpenShortcuts,
+        Some("EditorShell"),
+    )]);
     runtime::register(cx);
     cx.set_global(Initialized);
 }

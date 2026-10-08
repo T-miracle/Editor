@@ -3,7 +3,7 @@
 use super::navigation::{DocumentLease, LanguageServer, file_uri, position_at_byte};
 use anyhow::Result;
 use gpui_base::input::{CompletionProvider, Rope};
-use gpui_kit::gpui::{App, Task, Window};
+use gpui_kit::gpui::{App, EntityId, Task, WeakEntity, Window};
 use lsp_types::{
     CompletionContext, CompletionResponse, CompletionTextEdit, Position, Range, TextEdit,
 };
@@ -15,6 +15,15 @@ pub struct LanguageCompletionProvider {
     document: DocumentLease,
     triggers: Vec<String>,
     whitespace_suffixes: Vec<String>,
+    /// Resolve and recheck the actual native document revision on the UI thread, without a second text owner.
+    owner: Option<(WeakEntity<crate::EditorApp>, EntityId)>,
+}
+
+/// Native results use the editor revision; only workspace documents may supply a guest snapshot.
+#[derive(Clone, PartialEq, Eq)]
+struct CompletionVersion {
+    revision: u64,
+    snapshot: Option<plugin_runtime::plugin_protocol::api::DocumentVersion>,
 }
 
 impl LanguageCompletionProvider {
@@ -25,7 +34,19 @@ impl LanguageCompletionProvider {
             triggers: server.completion_triggers().to_vec(),
             whitespace_suffixes: server.completion_after_whitespace().to_vec(),
             server,
+            owner: None,
         })
+    }
+    /// Production providers bind snapshot hooks to the same open editor entity as plugin document APIs.
+    pub(crate) fn for_editor(
+        path: &Path,
+        server: Arc<LanguageServer>,
+        app: WeakEntity<crate::EditorApp>,
+        editor: EntityId,
+    ) -> Option<Self> {
+        let mut provider = Self::new(path, server)?;
+        provider.owner = Some((app, editor));
+        Some(provider)
     }
 }
 
@@ -53,6 +74,41 @@ impl CompletionProvider for LanguageCompletionProvider {
         let start = position_at_byte(&source, byte_offset - prefix.len());
         let server = self.server.clone();
         let document = self.document.clone();
+        if let Some((app, editor)) = &self.owner {
+            let app = app.clone();
+            let editor = *editor;
+            return cx.spawn(async move |cx| {
+                // Change effects settle before this task reads the actual source version.
+                let version = cx.update(|cx| completion_version(&app, editor, &source, cx))?;
+                let request_source = source.clone();
+                let request_version = version.clone();
+                let response = cx
+                    .background_executor()
+                    .scheduler_executor()
+                    .spawn_dedicated(move |_| async move {
+                        let result = if let Some(snapshot) = request_version.snapshot {
+                            server.completions_at_version(
+                                document,
+                                request_source,
+                                position,
+                                snapshot,
+                            )
+                        } else {
+                            // Opening dependency source keeps native services available without extending
+                            // workspace-scoped guest document authority to that external file.
+                            server.completions_for(document, request_source, position)
+                        };
+                        result.map(|response| rank_completions(response, &prefix, start, position))
+                    })
+                    .await?;
+                let current = cx.update(|cx| completion_version(&app, editor, &source, cx))?;
+                anyhow::ensure!(
+                    current == version,
+                    "Completion document revision has changed"
+                );
+                Ok(response)
+            });
+        }
         cx.background_executor()
             .scheduler_executor()
             .spawn_dedicated(move |_| async move {
@@ -75,6 +131,45 @@ impl CompletionProvider for LanguageCompletionProvider {
                 || self.triggers.iter().any(|trigger| trigger == new_text)
                 || (new_text == " " && !self.whitespace_suffixes.is_empty()))
     }
+}
+
+/// Readonly identity and text comparison reject closed, replaced and changed source entities.
+fn completion_version(
+    app: &WeakEntity<crate::EditorApp>,
+    editor: EntityId,
+    source: &str,
+    cx: &App,
+) -> Result<CompletionVersion> {
+    let app = app
+        .upgrade()
+        .ok_or_else(|| anyhow::anyhow!("Completion window has closed"))?;
+    let app = app.read(cx);
+    anyhow::ensure!(
+        app.session_state.workspace_trusted,
+        "Completion workspace is restricted"
+    );
+    let index = app
+        .tabs
+        .iter()
+        .position(|tab| tab.owns_editor_id(editor))
+        .ok_or_else(|| anyhow::anyhow!("Completion document has closed"))?;
+    let text = app.tabs[index]
+        .text
+        .as_ref()
+        .ok_or_else(|| anyhow::anyhow!("Completion document has no text session"))?;
+    anyhow::ensure!(
+        text.editor.read(cx).text().to_string() == source,
+        "Completion source has changed"
+    );
+    let snapshot = if app.tabs[index].path().starts_with(app.workspace.root()) {
+        Some(app.plugin_document_version(index)?)
+    } else {
+        None
+    };
+    Ok(CompletionVersion {
+        revision: text.capability_revision,
+        snapshot,
+    })
 }
 
 /// Check the current line so spaces elsewhere do not send needless LSP requests.

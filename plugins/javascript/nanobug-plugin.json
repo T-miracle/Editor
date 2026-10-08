@@ -26,6 +26,14 @@
     {
       "source": "icons",
       "destination": "icons"
+    },
+    {
+      "source": "native/server.cjs",
+      "destination": "native/server.cjs"
+    },
+    {
+      "source": "licenses/native",
+      "destination": "licenses/native"
     }
   ]
 }

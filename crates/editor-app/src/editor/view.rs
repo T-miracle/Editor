@@ -51,11 +51,6 @@ impl EditorApp {
                     } else {
                         row_style.background.unwrap_or(cx.theme().background)
                     };
-                    let row_border = if inactive_selection {
-                        Some(cx.theme().border)
-                    } else {
-                        row_style.border
-                    };
                     let is_folder = Path::new(item.id.as_str()).is_dir();
                     let row_path = PathBuf::from(item.id.as_str());
                     let drop_target = app.explorer_drag.target() == Some(row_path.as_path());
@@ -97,9 +92,7 @@ impl EditorApp {
                         .py(px(row_style.padding_y_px.unwrap_or(0.3)))
                         .px(px(row_style.padding_x_px.unwrap_or(4.)))
                         .pl(px(14.) * entry.depth() + px(8.))
-                        .when_some(row_border, |this, border| {
-                            this.border_l_1().border_color(border)
-                        })
+                        // Selection is indicated by its background, without a leading accent border.
                         .on_mouse_down(
                             MouseButton::Left,
                             cx.listener(move |this, _, window, cx| {

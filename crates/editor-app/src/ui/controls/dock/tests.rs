@@ -200,14 +200,8 @@ fn exercise_native_split_drag(cx: &mut TestAppContext, placement: Placement, imm
                 let indicator = cx
                     .debug_bounds("local-dock-drop-indicator")
                     .expect("edge drops must retain DockArea's split preview");
-                let expected = match placement {
-                    Placement::Left | Placement::Right => {
-                        size(target.size.width / 2., target.size.height)
-                    }
-                    Placement::Top | Placement::Bottom => {
-                        size(target.size.width, target.size.height / 2.)
-                    }
-                };
+                // Right-side panels always stack vertically, even when the pointer arrives at a side edge.
+                let expected = size(target.size.width, target.size.height / 2.);
                 assert_eq!(indicator.size, expected);
             }
             cx.simulate_mouse_up(destination, MouseButton::Left, Default::default());
@@ -227,7 +221,11 @@ fn exercise_native_split_drag(cx: &mut TestAppContext, placement: Placement, imm
                     vec![source_id]
                 );
             } else {
-                let expected = match placement {
+                let effective = match placement {
+                    Placement::Left | Placement::Right => Placement::Top,
+                    placement => placement,
+                };
+                let expected = match effective {
                     Placement::Left | Placement::Top => vec![source_id, target_id],
                     Placement::Right | Placement::Bottom => vec![target_id, source_id],
                 };
@@ -235,13 +233,7 @@ fn exercise_native_split_drag(cx: &mut TestAppContext, placement: Placement, imm
                 let PaneRef::Split { axis, .. } = tree.root().kind() else {
                     panic!("edge drops must produce a split, not a tab group");
                 };
-                assert_eq!(
-                    axis,
-                    match placement {
-                        Placement::Left | Placement::Right => gpui_kit::Axis::Horizontal,
-                        Placement::Top | Placement::Bottom => gpui_kit::Axis::Vertical,
-                    }
-                );
+                assert_eq!(axis, gpui_kit::Axis::Vertical);
                 assert!(
                     area.layout(DockPlacement::Left)
                         .unwrap()

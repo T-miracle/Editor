@@ -6,6 +6,8 @@ mod bundled_tests;
 mod command_epochs;
 pub(super) mod configurations;
 mod preparation;
+#[cfg(all(test, windows))]
+mod registry_startup_tests;
 mod resize;
 #[cfg(test)]
 mod resize_tests;
@@ -344,6 +346,9 @@ pub(super) struct Published {
     pub install_control: Option<plugin_runtime::InstallControl>,
     pub service_states: BTreeMap<String, String>,
     pub language_services: BTreeMap<String, Result<Arc<plugin_runtime::LanguageService>, String>>,
+    /// Readonly structure workers publish independently of native language-service availability.
+    pub structure_providers:
+        BTreeMap<String, Result<Arc<plugin_runtime::StructureProvider>, String>>,
     pub configurations: BTreeMap<String, Result<settings::Effective, String>>,
     pub configuration_result: Option<(u64, Result<(), String>)>,
     pub configuration_revision: u64,

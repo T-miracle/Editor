@@ -3,6 +3,20 @@ use super::*;
 use plugin_protocol::settings::{Effective, EffectiveValue, Phase, Source};
 
 impl Instance {
+    /// Pure workers accept one typed source operation; initialization cannot manufacture its result.
+    pub(crate) fn complete_snapshot(
+        &mut self,
+        request: language::CompletionRequest,
+    ) -> anyhow::Result<api::Output> {
+        anyhow::ensure!(
+            self.store.data().language_pure,
+            "Completion requires a pure language worker"
+        );
+        self.store.data_mut().language_completion_call = true;
+        let result = self.notify(None, api::Notification::LanguageCompletion(request));
+        self.store.data_mut().language_completion_call = false;
+        result
+    }
     /// The hook sees only isolated files; ephemeral handles cannot escape into the activated instance.
     pub(crate) fn migrate_data(
         &mut self,
@@ -31,8 +45,18 @@ impl Instance {
     /// Discovery is bounded by the normal fuel/deadline and cannot mutate files, processes or UI.
     pub(crate) fn prepare_language(
         &mut self,
-        context: language::Context,
+        mut context: language::Context,
     ) -> anyhow::Result<language::Proposal> {
+        // These roots were admitted for this instance, not supplied by a guest. Canonicalize the
+        // current candidate/committed directories on every call so native caches never keep a stale root.
+        context.package_root = self
+            .store
+            .data()
+            .assets
+            .canonicalize()?
+            .display()
+            .to_string();
+        context.data_root = self.store.data().data.canonicalize()?.display().to_string();
         let checkpoint = self.store.data().roots.checkpoint();
         self.store.data_mut().language_hook = true;
         self.store.data_mut().language_hook_checkpoint = Some(checkpoint);

@@ -150,6 +150,15 @@ const SDK_FILES: &[(&str, &[u8])] = &[
         "src/language.rs",
         include_bytes!("../../plugin-protocol/src/language.rs"),
     ),
+    // Pure structure providers build independently against the same versioned data types as the host.
+    (
+        "src/structure.rs",
+        include_bytes!("../../plugin-protocol/src/structure.rs"),
+    ),
+    (
+        "STRUCTURE.md",
+        include_bytes!("../../../website/src/content/docs/en/sdk/structure.md"),
+    ),
     (
         "src/process.rs",
         include_bytes!("../../plugin-protocol/src/process.rs"),
@@ -347,6 +356,7 @@ fn exported_bytes<'a>(relative: &str, bytes: &'a [u8]) -> Cow<'a, [u8]> {
         ("services", "SERVICES.md"),
         ("dependencies", "DEPENDENCIES.md"),
         ("lsp", "LSP.md"),
+        ("structure", "STRUCTURE.md"),
         ("ui", "UI.md"),
         ("processes", "PROCESSES.md"),
         ("languages", "LANGUAGES.md"),

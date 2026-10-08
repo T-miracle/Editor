@@ -1,7 +1,14 @@
 //! Immutable provider snapshots separate recognition from grammar choice and stale task publication.
 use plugin_runtime::plugin_protocol::settings::Scope;
 use plugin_schema::{Highlighter, LanguageDefinition};
+mod associations;
+mod editing;
+mod formatting;
 mod preferences;
+pub(crate) use associations::{associate_extension, file_associations};
+pub(crate) use editing::{editing_preferences, has_editing_override, set_editing_preference};
+use formatting::FormatterPreferenceError;
+pub(crate) use formatting::{formatter_error, formatters};
 use preferences::Saved;
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -29,6 +36,11 @@ struct Registry {
     recognizers: BTreeMap<String, Vec<(String, LanguageDefinition)>>,
     highlighters: BTreeMap<String, Vec<GrammarProvider>>,
     language_servers: BTreeMap<String, Vec<String>>,
+    /// Formatting and structure remain selectable without changing analysis or grammar choices.
+    formatters: BTreeMap<String, Vec<String>>,
+    /// Invalid explicit formatting values retain their scope without poisoning other preference edits.
+    formatter_preference_errors: BTreeMap<String, FormatterPreferenceError>,
+    structure_providers: BTreeMap<String, Vec<String>>,
     /// Retain a valid selected provider when another package joins the candidate set.
     selected: BTreeMap<String, String>,
     /// Never reuse an earlier selection generation, including disable/re-enable and A/B/A choices.
@@ -56,10 +68,43 @@ pub(crate) fn refresh(
         Vec<plugin_runtime::plugin_protocol::language::Provider>,
     )>,
 ) {
+    refresh_with_structures(root, entries, services, Vec::new());
+}
+
+/// Publish independent language roles as one snapshot; callers without structure use `refresh`.
+pub(crate) fn refresh_with_structures(
+    root: &Path,
+    entries: Vec<(String, PathBuf, Vec<LanguageDefinition>, Vec<Highlighter>)>,
+    services: Vec<(
+        String,
+        Vec<plugin_runtime::plugin_protocol::language::Provider>,
+    )>,
+    structures: Vec<(
+        String,
+        Vec<plugin_runtime::plugin_protocol::structure::Provider>,
+    )>,
+) {
     let mut next = Registry::default();
     for (owner, providers) in services {
         for provider in providers {
-            next.language_servers
+            let key = format!("{owner}/{}", provider.id);
+            if provider.primary {
+                next.language_servers
+                    .entry(provider.language.clone())
+                    .or_default()
+                    .push(key.clone());
+            }
+            if provider.formatting {
+                next.formatters
+                    .entry(provider.language)
+                    .or_default()
+                    .push(key);
+            }
+        }
+    }
+    for (owner, providers) in structures {
+        for provider in providers {
+            next.structure_providers
                 .entry(provider.language)
                 .or_default()
                 .push(format!("{owner}/{}", provider.id));
@@ -132,7 +177,15 @@ pub(crate) fn refresh(
 impl Registry {
     fn resolve(&mut self) {
         self.selected.clear();
+        self.formatter_preference_errors.clear();
+        // Verification is tied to current explicit values, never a history of installed providers.
+        self.saved
+            .formatter_choices
+            .prune(&self.saved.user, &self.saved.projects);
         for (key, candidates) in self.candidates() {
+            if !self.validate_formatter_explicit(&key, &candidates) {
+                continue;
+            }
             let explicit = self
                 .saved
                 .projects
@@ -162,6 +215,14 @@ impl Registry {
     /// Selection keys separate file recognition from the language's highlight provider.
     fn candidates(&self) -> BTreeMap<String, Vec<String>> {
         let mut rows = BTreeMap::new();
+        for (role, declarations) in [
+            ("formatter", &self.formatters),
+            ("structure", &self.structure_providers),
+        ] {
+            for (language, providers) in declarations {
+                rows.insert(format!("{role}:{language}"), providers.clone());
+            }
+        }
         for (language, providers) in &self.language_servers {
             rows.insert(format!("lsp:{language}"), providers.clone());
         }
@@ -182,6 +243,29 @@ impl Registry {
                     .map(|provider| format!("{}/{}", provider.owner, provider.declaration.id))
                     .collect(),
             );
+        }
+        // A loaded invalid formatter must remain visible and resettable even with no live candidates.
+        for key in self
+            .saved
+            .user
+            .keys()
+            .chain(
+                self.saved
+                    .projects
+                    .get(&self.workspace)
+                    .into_iter()
+                    .flat_map(|layer| layer.keys()),
+            )
+            .chain(
+                self.saved
+                    .automatic
+                    .get(&self.workspace)
+                    .into_iter()
+                    .flat_map(|layer| layer.keys()),
+            )
+            .filter(|key| key.starts_with("formatter:"))
+        {
+            rows.entry(key.clone()).or_default();
         }
         rows
     }
@@ -274,6 +358,8 @@ pub(crate) struct ProviderRow {
     pub candidates: Vec<String>,
     pub selected: Option<String>,
     pub source: &'static str,
+    /// Only never-validated explicit values are errors; normally withdrawn choices retain fallback rows.
+    pub configuration_error: Option<FormatterPreferenceError>,
 }
 
 pub(crate) fn rows() -> Vec<ProviderRow> {
@@ -292,7 +378,10 @@ pub(crate) fn rows() -> Vec<ProviderRow> {
     rows.into_iter()
         .map(|(key, candidates)| {
             let selected = registry.selected.get(&key).cloned();
-            let source = if registry
+            let configuration_error = registry.formatter_preference_errors.get(&key).cloned();
+            let source = if let Some(error) = &configuration_error {
+                error.source
+            } else if registry
                 .saved
                 .projects
                 .get(&registry.workspace)
@@ -315,6 +404,7 @@ pub(crate) fn rows() -> Vec<ProviderRow> {
                 candidates,
                 selected,
                 source,
+                configuration_error,
             }
         })
         .collect()
@@ -355,6 +445,11 @@ pub(crate) fn choose(scope: Scope, key: &str, provider: Option<&str>) -> anyhow:
     } else {
         layer.remove(key);
     }
+    // This UI entry has just checked live candidates. Persist its exact value with the same
+    // atomic snapshot; resetting a layer also removes its proof rather than retaining history.
+    saved
+        .formatter_choices
+        .record(scope, &registry.workspace, key, provider);
     // A reset deliberately relinquishes remembered choice in this workspace before fallback resolution.
     saved
         .automatic
@@ -383,6 +478,10 @@ pub(crate) fn language_for_path(path: &Path) -> Option<String> {
         .and_then(|s| s.to_str())
         .unwrap_or("")
         .to_lowercase();
+    // An explicit association wins while its language exists; a missing provider stays plain.
+    if let Some(language) = registry.saved.associations.get(&extension) {
+        return registry.code_language(language);
+    }
     let key = if registry
         .recognizers
         .contains_key(&format!("file:{filename}"))
@@ -429,6 +528,16 @@ pub(crate) fn language_servers() -> BTreeMap<String, Option<String>> {
         .collect()
 }
 
+/// Structure follows the same stable choice and user/project precedence as every language role.
+pub(crate) fn structure_provider(language: &str) -> Option<String> {
+    REGISTRY
+        .read()
+        .unwrap()
+        .selected
+        .get(&format!("structure:{language}"))
+        .cloned()
+}
+
 /// A removed or replaced provider cannot register a parser after its task completes.
 pub(crate) fn is_current(provider: &GrammarProvider) -> bool {
     grammars().contains(provider)
@@ -469,7 +578,8 @@ pub(crate) fn handles_path(path: &Path) -> bool {
         .and_then(|s| s.to_str())
         .unwrap_or("")
         .to_lowercase();
-    registry.recognizers.contains_key(&format!("file:{file}"))
+    registry.saved.associations.contains_key(&ext)
+        || registry.recognizers.contains_key(&format!("file:{file}"))
         || registry.recognizers.contains_key(&format!("ext:{ext}"))
 }
 

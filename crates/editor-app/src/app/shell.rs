@@ -2,6 +2,39 @@
 
 use crate::*;
 
+/// Share one document scope between default keys and unbound shortcut metadata.
+/// Embedded native source panes receive document commands without granting surrounding plugin controls that authority.
+pub(crate) const DOCUMENT_COMMAND_CONTEXT: &str =
+    "EditorShell && !PluginSurface || EditorShell > NativeEditorSource";
+
+/// Keep repeated window/fixture initialization from superseding already applied user bindings.
+struct ShellBindingsInitialized;
+impl gpui_kit::Global for ShellBindingsInitialized {}
+
+/// Register shell commands in the current app after Base initialization.
+/// Startup and native shell fixtures share this table, including the plugin-surface scope boundary.
+pub(crate) fn bind_editor_shell_keys(cx: &mut App) {
+    if cx.has_global::<ShellBindingsInitialized>() {
+        return;
+    }
+    // A plugin layout can embed the host's native source pane. Its descendant context admits
+    // document commands without granting the surrounding guest controls those same shortcuts.
+    let document_context = Some(DOCUMENT_COMMAND_CONTEXT);
+    cx.bind_keys([
+        KeyBinding::new("shift-alt-f", FormatDocument, document_context),
+        KeyBinding::new("f2", RenameSymbol, document_context),
+        KeyBinding::new("ctrl-s", SaveDocument, document_context),
+        KeyBinding::new("ctrl-shift-r", RefreshWorkspace, document_context),
+        KeyBinding::new("ctrl-alt-t", ToggleTheme, Some("EditorShell")),
+        KeyBinding::new("f12", NavigateToDefinition, document_context),
+        KeyBinding::new("ctrl-i", ShowDefinitionDetails, document_context),
+        // Error navigation follows the active document and wraps at either end.
+        KeyBinding::new("f8", NextSyntaxError, document_context),
+        KeyBinding::new("shift-f8", PreviousSyntaxError, document_context),
+    ]);
+    cx.set_global(ShellBindingsInitialized);
+}
+
 #[cfg(target_os = "windows")]
 const WINDOWS_TIMER_RESOLUTION_MS: u32 = 1;
 
@@ -309,6 +342,7 @@ impl Render for EditorApp {
         self.sync_plugin_documents(cx);
         self.sync_run_controls(window, cx);
         self.dispatch_editor_requests(window, cx);
+        self.sync_outline(window, cx);
         if let Some(path) = self.pending_plugin_file.take() {
             self.open_file(path, window, cx);
         }
@@ -356,6 +390,9 @@ impl Render for EditorApp {
             .on_action(cx.listener(Self::on_toggle_theme_action))
             .on_action(cx.listener(Self::on_navigate_to_definition))
             .on_action(cx.listener(Self::on_show_definition_details))
+            .on_action(cx.listener(Self::format_document_action))
+            .on_action(cx.listener(Self::rename_symbol_action))
+            .on_action(cx.listener(Self::toggle_outline))
             .on_action(cx.listener(|app, _: &NextSyntaxError, window, cx| {
                 app.navigate_syntax_error(false, window, cx);
             }))
@@ -437,15 +474,7 @@ impl Render for EditorApp {
                     .child(
                         StatusBar::new()
                             .left(self.render_plugin_toolbar(explorer_panel_icon(cx), window, cx))
-                            .left(
-                                div()
-                                    .flex_1()
-                                    .min_w_0()
-                                    .max_w(px(320.))
-                                    .truncate()
-                                    .child(self.status.clone()),
-                            )
-                            // Keep error counts separate from temporary save/loading messages.
+                            // The footer shows controls and document indicators without transient status text.
                             .when(
                                 self.active_text_tab_index().is_some()
                                     && self

@@ -20,6 +20,7 @@ mod plugin_services;
 mod preferences;
 mod preparation;
 mod recovery;
+mod structure;
 pub use data_updates::PreparedInstallation;
 pub use debug_services::{
     DebugAbilities, DebugAnswer, DebugBreakpoint, DebugFrame, DebugRequest, DebugSession,
@@ -102,6 +103,8 @@ pub struct Manager {
     trusted: bool,
     workspace_open: bool,
     language_services: BTreeMap<String, language::Prepared>,
+    /// Pure snapshot workers share plugin lifecycle, without owning native LSP processes.
+    structure_providers: BTreeMap<String, structure::Prepared>,
     /// Byte producers are independent of WASM calls and retained only for current preview identities.
     images: BTreeMap<String, crate::images::Entry>,
     image_budget: std::sync::Arc<std::sync::atomic::AtomicUsize>,
@@ -202,6 +205,7 @@ impl Manager {
             trusted,
             workspace_open: true,
             language_services: BTreeMap::new(),
+            structure_providers: BTreeMap::new(),
             images: BTreeMap::new(),
             image_budget: Default::default(),
             image_input_budget: Default::default(),
@@ -738,6 +742,7 @@ mod icon_tests {
                 data_format: None,
                 plugin_services: Default::default(),
                 language_servers: Default::default(),
+                structure_providers: Default::default(),
                 services: Default::default(),
                 settings: Default::default(),
                 settings_hook: false,
@@ -804,6 +809,7 @@ mod scope_tests {
             data_format: None,
             plugin_services: Default::default(),
             language_servers: Default::default(),
+            structure_providers: Default::default(),
             services: Default::default(),
             settings: Default::default(),
             settings_hook: false,
@@ -876,3 +882,6 @@ impl Drop for Manager {
         self.shutdown();
     }
 }
+
+#[cfg(all(test, windows))]
+mod registry_write_tests;

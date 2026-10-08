@@ -35,6 +35,7 @@ impl InstallationPreparation {
             &self.environment,
             &candidate,
         )?;
+        let dependency_logs = self.host_resources.logs.clone();
         let mut next = Instance::prepare_with_resources(
             &self.engine,
             self.package
@@ -92,6 +93,8 @@ impl InstallationPreparation {
             Some(&mut next),
             &configuration,
             control,
+            self.previous_digest.is_none(),
+            &dependency_logs,
         )?;
         Ok(PreparedInstallation {
             enable_requested: false,

@@ -43,6 +43,9 @@ tempfile.workspace = true
 # Discover nested plugin manifests without traversing ignored build output.
 ignore.workspace = true
 notify.workspace = true
+# Validate provider name patterns and preserve native grapheme deletion in linked ranges.
+regex = "1"
+unicode-segmentation = "1"
 
 [build-dependencies]
 # Reuse the locked Windows resource compiler for the product icon and file metadata.

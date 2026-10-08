@@ -1,5 +1,9 @@
 //! Create an owned stdio transport and perform the standard LSP initialization handshake.
 use super::*;
+use plugin_runtime::plugin_protocol::language::{
+    SEMANTIC_LINKED_EDITING_CAPABILITY, SEMANTIC_LINKED_EDITING_VERSION,
+    SemanticLinkedEditingCapabilities,
+};
 impl LanguageServerConnection {
     /// Starts the plugin's server and completes the LSP handshake.
     pub(super) fn start(
@@ -28,8 +32,20 @@ impl LanguageServerConnection {
             language_id: service.provider.language.clone(),
             next_id: 1,
             diagnostics: diagnostics::DiagnosticsStore::default(),
+            snapshot_uris: service
+                .provider
+                .diagnostic_snapshots
+                .then(snapshots::SnapshotUris::new)
+                .transpose()?,
             save_notifications: None,
             pull_diagnostics: false,
+            definition_provider: false,
+            type_definition_provider: false,
+            formatting_provider: false,
+            rename_provider: false,
+            prepare_rename_provider: false,
+            linked_editing_provider: false,
+            semantic_linked_editing_provider: false,
             configuration,
             failed: false,
         };
@@ -45,8 +61,23 @@ impl LanguageServerConnection {
     /// Server capabilities control optional notifications; initialization options stay opaque plugin data.
     fn initialize(&mut self, root_uri: &Uri) -> anyhow::Result<()> {
         let root_uri = root_uri.as_str();
-        // Experimental capability names are data supplied by the language plugin.
-        let experimental = self.service.provider.client_experimental.clone();
+        // Ordinary experimental names remain plugin data. This reserved marker must originate
+        // from the negotiated runtime grant, never a plugin-supplied initialization override.
+        let mut experimental = self.service.provider.client_experimental.clone();
+        experimental.remove(SEMANTIC_LINKED_EDITING_CAPABILITY);
+        let semantic_linked_authorized = self.service.provider.editing
+            && self
+                .service
+                .capability("language.editing")
+                .is_some_and(|version| version.major == 1 && version.minor >= 1);
+        if semantic_linked_authorized {
+            experimental.insert(
+                SEMANTIC_LINKED_EDITING_CAPABILITY.into(),
+                serde_json::to_value(SemanticLinkedEditingCapabilities {
+                    version: SEMANTIC_LINKED_EDITING_VERSION,
+                })?,
+            );
+        }
         let initialized = self.request(
             "initialize",
             json!({
@@ -58,7 +89,9 @@ impl LanguageServerConnection {
                 "initializationOptions": self.configuration,
                 "capabilities": {
                     "general": { "positionEncodings": ["utf-16"] },
-                    "workspace": { "workspaceFolders": true },
+                    // Single-document versioned text edits are supported; resource and annotation
+                    // capabilities remain unadvertised because this native command cannot apply them.
+                    "workspace": { "workspaceFolders": true, "workspaceEdit": {"documentChanges":true} },
                     "textDocument": {
                         "diagnostic": { "dynamicRegistration": false, "relatedDocumentSupport": false },
                         "synchronization": { "didSave": true },
@@ -69,6 +102,10 @@ impl LanguageServerConnection {
                             "codeDescriptionSupport": true
                         },
                         "definition": { "linkSupport": true },
+                        "typeDefinition": { "linkSupport": true },
+                        "formatting": { "dynamicRegistration": false },
+                        "rename": { "dynamicRegistration": false, "prepareSupport": true },
+                        "linkedEditingRange": { "dynamicRegistration": false },
                         "completion": {
                             "completionItem": { "snippetSupport": false }
                         },
@@ -82,6 +119,24 @@ impl LanguageServerConnection {
         // Only send optional save notifications when the server requests them.
         self.pull_diagnostics = initialized["capabilities"]["diagnosticProvider"].is_object()
             || initialized["capabilities"]["diagnosticProvider"] == Value::Bool(true);
+        // Objects express options/registration data; false or absent means the method is unavailable.
+        self.definition_provider = initialized["capabilities"]["definitionProvider"].is_object()
+            || initialized["capabilities"]["definitionProvider"] == Value::Bool(true);
+        self.type_definition_provider = initialized["capabilities"]["typeDefinitionProvider"]
+            .is_object()
+            || initialized["capabilities"]["typeDefinitionProvider"] == Value::Bool(true);
+        let capabilities = &initialized["capabilities"];
+        let supported =
+            |key: &str| capabilities[key].is_object() || capabilities[key] == Value::Bool(true);
+        self.formatting_provider = supported("documentFormattingProvider");
+        self.rename_provider = supported("renameProvider");
+        self.prepare_rename_provider =
+            capabilities["renameProvider"]["prepareProvider"] == Value::Bool(true);
+        self.linked_editing_provider = supported("linkedEditingRangeProvider");
+        self.semantic_linked_editing_provider = semantic_linked_supported(
+            semantic_linked_authorized,
+            capabilities["experimental"][SEMANTIC_LINKED_EDITING_CAPABILITY].clone(),
+        );
         self.save_notifications = match &initialized["capabilities"]["textDocumentSync"]["save"] {
             Value::Bool(true) => Some(false),
             Value::Object(options) => Some(
@@ -100,5 +155,32 @@ impl LanguageServerConnection {
         );
         self.notify("initialized", json!({ "capabilities": {} }))?;
         Ok(())
+    }
+}
+
+/// Parsing a strict marker never grants an absent runtime capability or a future extension version.
+fn semantic_linked_supported(authorized: bool, marker: Value) -> bool {
+    authorized
+        && serde_json::from_value::<SemanticLinkedEditingCapabilities>(marker)
+            .is_ok_and(|marker| marker.version == SEMANTIC_LINKED_EDITING_VERSION)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Only the currently negotiated marker shape enables the generic semantic request.
+    #[test]
+    fn semantic_linked_handshake_rejects_unknown_versions_fields_and_absent_authority() {
+        assert!(semantic_linked_supported(true, json!({"version":1})));
+        for marker in [
+            Value::Null,
+            json!(true),
+            json!({"version":2}),
+            json!({"version":1,"trusted":true}),
+        ] {
+            assert!(!semantic_linked_supported(true, marker));
+        }
+        assert!(!semantic_linked_supported(false, json!({"version":1})));
     }
 }

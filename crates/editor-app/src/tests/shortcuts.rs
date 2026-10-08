@@ -4,7 +4,8 @@ use crate::{EditorApp, theme, typography};
 use editor_core::Workspace;
 use gpui_kit::{
     AppContext as _, Entity, Focusable, KeyBinding, TestAppContext, VisualTestContext,
-    component::Root, gpui, px, size,
+    component::{ActiveTheme, Root},
+    gpui, px, size,
 };
 use std::{path::Path, time::Duration};
 
@@ -111,6 +112,45 @@ pub(super) fn click(visual: &mut VisualTestContext, selector: &'static str) {
         .unwrap_or_else(|| panic!("missing {selector}"));
     visual.simulate_click(bounds.center(), Default::default());
     draw(visual);
+}
+
+/// Late shell setup must preserve overrides and expose newly merged language operations in the real catalog.
+#[gpui::test]
+fn shortcuts_language_commands_keep_overrides_after_shell_initialization(cx: &mut TestAppContext) {
+    with_editor(
+        cx,
+        false,
+        vec![KeyBinding::new(
+            "shift-alt-f",
+            crate::ToggleTheme,
+            Some("EditorShell && !PluginSurface || EditorShell > NativeEditorSource"),
+        )],
+        |visual, _, _| {
+            visual.update(|_, cx| crate::app::bind_editor_shell_keys(cx));
+            assert!(!visual.update(|_, cx| cx.theme().is_dark()));
+            visual.simulate_keystrokes("shift-alt-f");
+            draw(visual);
+            assert!(visual.update(|_, cx| cx.theme().is_dark()));
+            // Discover the language commands through their translated visible rows, without invoking them.
+            visual.simulate_keystrokes("ctrl-k alt-right");
+            for (label, selector) in [
+                (
+                    "shortcuts.operation.FormatDocument",
+                    "shortcut-operation-me_editor::FormatDocument",
+                ),
+                (
+                    "shortcuts.operation.RenameSymbol",
+                    "shortcut-operation-me_editor::RenameSymbol",
+                ),
+            ] {
+                visual.simulate_keystrokes("ctrl-a backspace");
+                visual.simulate_input(&rust_i18n::t!(label));
+                draw(visual);
+                assert!(visual.debug_bounds(selector).is_some());
+            }
+            visual.simulate_keystrokes("escape");
+        },
+    );
 }
 
 /// Opening from keys, the pointer, or the application menu retains the original editing target.

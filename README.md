@@ -10,6 +10,8 @@ Nanobug is a native desktop code editor built with Rust and GPUI, with Windows a
 
 Independent plugins provide language support, a terminal, Markdown and image previews, and run, debug, and build tools. Bundled and third-party plugins use the same public interfaces.
 
+The XML plugin provides schema assistance, completion, formatting, paired tag editing, and a document outline. HTML and JavaScript provide independent native language services. New workspaces start with the outline hidden; open it from the bottom window controls.
+
 [Documentation](https://t-miracle.github.io/Editor/en/) · [Getting started](https://t-miracle.github.io/Editor/en/guide/getting-started/) · [Plugin SDK](https://t-miracle.github.io/Editor/en/sdk/) · [Report an issue](https://github.com/T-miracle/Editor/issues)
 
 ## Installation

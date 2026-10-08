@@ -1,8 +1,12 @@
 //! Real resource packages must change an already-open editor through the installed contribution path.
 use super::*;
 use gpui_kit::{TestAppContext, gpui};
+mod associations;
+mod external_completion;
 mod injection_tests;
 pub(crate) mod packages;
+mod xml_image;
+mod xml_input;
 use packages::{language_package, repack, rust_resource_package};
 
 /// A delayed primary load must not overwrite a dynamic choice using the same public language ID.

@@ -103,6 +103,8 @@ impl Manager {
                 .prepare_language(plugin_protocol::language::Context {
                     provider: provider.id.clone(),
                     workspace: self.environment.workspace.clone(),
+                    package_root: String::new(),
+                    data_root: String::new(),
                     settings: settings.clone(),
                     candidates: candidates.clone(),
                 })?
@@ -201,7 +203,43 @@ impl Manager {
             program,
             args,
             self.host_resources.logs.clone(),
+            // Server extensions borrow only versions negotiated by this package, never its own flags.
+            crate::capabilities::negotiate(&entry.manifest)?.capabilities,
         );
+        if language_service.provider.completion_hook {
+            let assets = self
+                .root
+                .join("packages")
+                .join(&entry.manifest.id)
+                .join(&entry.digest);
+            let bytes = std::fs::read(crate::instance::safe_path(
+                &assets,
+                entry
+                    .manifest
+                    .component
+                    .as_deref()
+                    .ok_or_else(|| anyhow::anyhow!("Completion requires a component"))?,
+                true,
+            )?)?;
+            // This independent instance sees no private snapshot and grants no host operation, even in Prepare.
+            let instance = Instance::prepare_language_worker(
+                self.engine
+                    .as_ref()
+                    .ok_or_else(|| anyhow::anyhow!("Plugin engine is unavailable"))?,
+                &bytes,
+                &entry.manifest,
+                &entry.grants,
+                self.environment.clone(),
+                self.data_directory(&entry.manifest.id),
+                assets,
+                self.host_resources.clone(),
+            )?;
+            language_service.completion = Some(crate::language_service::CompletionHook {
+                instance: std::sync::Mutex::new(Some(instance)),
+                settings,
+                sequence: std::sync::atomic::AtomicU64::new(1),
+            });
+        }
         language_service.dependencies = prepared.map(|prepared| prepared.locks).unwrap_or_default();
         Ok(language_service)
     }
@@ -209,5 +247,7 @@ impl Manager {
     pub(super) fn retire_language_services(&mut self, id: &str) {
         self.language_services
             .retain(|key, _| !key.starts_with(&format!("{id}/")));
+        // Every pure language role loses authority at the same package retirement boundary.
+        self.retire_structure_providers(id);
     }
 }

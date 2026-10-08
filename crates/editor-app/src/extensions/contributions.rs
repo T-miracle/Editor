@@ -103,7 +103,7 @@ pub fn refresh_entries(root: &Path, installed: &[Installed]) {
         }
     }
     catalog.icon_rules = Arc::new(rules);
-    crate::language::providers::refresh(
+    crate::language::providers::refresh_with_structures(
         root,
         catalog
             .plugins
@@ -126,6 +126,18 @@ pub fn refresh_entries(root: &Path, installed: &[Installed]) {
                 (
                     entry.manifest.id.clone(),
                     entry.manifest.language_servers.clone(),
+                )
+            })
+            .collect(),
+        installed
+            .iter()
+            .filter(|entry| {
+                entry.enabled && entry.error.is_none() && entry.compatibility_error().is_none()
+            })
+            .map(|entry| {
+                (
+                    entry.manifest.id.clone(),
+                    entry.manifest.structure_providers.clone(),
                 )
             })
             .collect(),

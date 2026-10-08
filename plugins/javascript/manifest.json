@@ -1,12 +1,71 @@
 {
   "id": "javascript",
   "name": "JavaScript",
-  "version": "0.2.2",
+  "version": "0.3.0",
   "protocol": 7,
   "contributions": "plugin.toml",
-  "permissions": [],
+  "permissions": [
+    "process.service.format",
+    "dependencies.prepare"
+  ],
   "storage_limit": 1024,
   "api": {
-    "base": "^1"
-  }
+    "base": "^1",
+    "required": {
+      "language.lsp": ">=1.3,<2",
+      "language.formatting": "^1",
+      "process": "^1",
+      "dependencies": ">=1.1,<2"
+    }
+  },
+  "services": {
+    "format": {
+      "program": "node.exe",
+      "args": [
+        "${dependency:server}/server.cjs"
+      ],
+      "installation": {
+        "artifacts": [
+          {
+            "id": "node",
+            "version": "24.19.0",
+            "platform": "windows-x86_64",
+            "sha256": "3602f2bb1a10f2cbab4c36886218a33c1ab3db87290e73b033c46c77147d0237",
+            "source": {
+              "kind": "url",
+              "url": "https://nodejs.org/dist/v24.19.0/win-x64/node.exe"
+            },
+            "format": {
+              "kind": "file",
+              "path": "node.exe"
+            }
+          },
+          {
+            "id": "server",
+            "version": "0.3.0",
+            "platform": "windows-x86_64",
+            "sha256": "ac1532e4f0a071fe709c32a3c57f65471c24d6c7d6bc62baf44ddfeb8fc865c6",
+            "source": {
+              "kind": "package",
+              "path": "native/server.cjs"
+            },
+            "format": {
+              "kind": "file",
+              "path": "server.cjs"
+            }
+          }
+        ],
+        "executable": "node/node.exe"
+      }
+    }
+  },
+  "language_servers": [
+    {
+      "id": "format",
+      "language": "javascript",
+      "service": "format",
+      "primary": false,
+      "formatting": true
+    }
+  ]
 }

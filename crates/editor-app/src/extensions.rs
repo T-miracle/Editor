@@ -4,7 +4,7 @@ mod bundled;
 mod capability_tests;
 mod commands;
 #[cfg(test)]
-mod composable_tests;
+pub(crate) mod composable_tests;
 pub(crate) mod contributions;
 #[cfg(test)]
 mod dependency_tests;
@@ -222,6 +222,24 @@ impl ExtensionPanel {
             return BTreeMap::new();
         }
         self.worker.state.lock().unwrap().language_services.clone()
+    }
+    /// Outline consumers receive immutable structure leases; trust revocation masks queued publications.
+    pub(crate) fn structure_providers(
+        &self,
+    ) -> BTreeMap<String, Result<Arc<plugin_runtime::StructureProvider>, String>> {
+        if !self
+            .worker
+            .trusted
+            .load(std::sync::atomic::Ordering::Acquire)
+        {
+            return BTreeMap::new();
+        }
+        self.worker
+            .state
+            .lock()
+            .unwrap()
+            .structure_providers
+            .clone()
     }
     /// Discover shipped ZIPs for the local market tab and inspect their manifests once.
     fn load_market_packages(&mut self) {

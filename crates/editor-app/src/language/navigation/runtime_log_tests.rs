@@ -57,9 +57,17 @@ fn fixture_package_with_readiness(
         "[plugin]\nid = \"{OWNER}\"\nname = \"Observed Language Service\"\nversion = \"1.0.0\"\nhost_version = \">=0.1.0\"\n"
     );
     let files = BTreeMap::from([
-        ("manifest.json", serde_json::to_vec(&manifest).unwrap()),
-        ("plugin.toml", declaration.into_bytes()),
+        (
+            "manifest.json".into(),
+            serde_json::to_vec(&manifest).unwrap(),
+        ),
+        ("plugin.toml".into(), declaration.into_bytes()),
     ]);
+    resource_package(files)
+}
+
+/// Alternate public declarations reuse the same ZIP path without widening another module's visibility.
+fn resource_package(files: BTreeMap<String, Vec<u8>>) -> Package {
     let mut archive = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
     for (path, bytes) in files {
         archive
@@ -113,7 +121,9 @@ fn wait_for_log(logs: &RuntimeLogs, message: &str) -> Vec<LogRecord> {
 }
 
 // Notification admission and readiness have their own real-service regressions.
+mod completion_hooks;
 mod notifications;
+mod snapshots;
 
 /// More log pushes than the document queue can hold must still arrive while no document is open.
 #[test]

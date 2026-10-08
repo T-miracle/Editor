@@ -87,7 +87,7 @@ cargo test -p editor-app sdk_export -- --test-threads=1
 
 实际 WASM 测试须先准备对应夹具，再显式执行所选 `--ignored` 测试。目录候选的 `NANOBUG_DEVELOPMENT_CANDIDATE` 和 SDK ZIP 的 `NANOBUG_SDK_PACKAGE` 命令见[本次验收记录](verification/plugin-development-packaging.md)；不得用普通 workspace 测试的跳过结果替代真实验收。
 
-现有 14 个项目均提供共享描述并独立打包，每包包含其 README。Rust 包附带公开 LSP 钩子，仅提供语言资源的包无需空生命周期组件。Markdown 包同时包含两份 WASM grammar 和独立解析组件。终端直接使用上游 term-wm-vt100，许可随包分发；基础主题内置。
+现有 15 个项目均提供共享描述并独立打包，每包包含其 README。XML 包含结构回调、grammar 与 SVG 辅助 Schema；HTML、JavaScript 包含已构建的原生服务及许可。Rust 包附带公开 LSP 钩子，仅提供语言资源的包无需空生命周期组件。Markdown 包同时包含两份 WASM grammar 和独立解析组件。终端直接使用上游 term-wm-vt100，许可随包分发；基础主题内置。
 
 Windows 本次实际 WASM、目录重载及 GPUI 验收见[插件开发验收](verification/plugin-development-packaging.md)。既有 ConPTY、进程树、语言服务等平台完整矩阵见[历史最终契约验收](verification/plugin-api-contract-verification.md)，不计为本次重跑。macOS/Linux 未在本次环境实测或交叉构建，不以 Windows 结果替代其他平台验证。
 

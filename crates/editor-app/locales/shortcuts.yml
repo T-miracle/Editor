@@ -42,6 +42,12 @@ shortcuts.operation.OpenShortcuts:
 shortcuts.operation.ActivateToken:
   en: "Activate text token"
   zh-CN: "激活文本标记"
+shortcuts.operation.FormatDocument:
+  en: "Format document"
+  zh-CN: "格式化文档"
+shortcuts.operation.RenameSymbol:
+  en: "Rename symbol"
+  zh-CN: "重命名符号"
 shortcuts.operation.Backspace:
   en: "Delete backward"
   zh-CN: "向前删除"

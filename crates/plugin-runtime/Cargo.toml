@@ -20,7 +20,8 @@ roxmltree = "0.21.1"
 plugin-protocol = { path = "../plugin-protocol" }
 plugin-schema = { path = "../plugin-schema" }
 serde.workspace = true
-serde_json.workspace = true
+# Structure's bounded decoder counts node and container depth separately; other messages keep the default limit.
+serde_json = { workspace = true, features = ["unbounded_depth"] }
 wasmtime = { version = "36.0.16", default-features = false, features = ["component-model", "cranelift", "runtime", "std"] }
 wasmtime-wasi = "36.0.16"
 portable-pty = "0.9"

@@ -27,6 +27,8 @@ mod language_service;
 pub use language_service::{LanguageService, ServiceProcess};
 /// Shared project builds, validated development directories and atomic ZIP publication.
 pub mod development;
+mod structure;
+pub use structure::{StructureProvider, StructureSnapshot};
 mod manager;
 mod migration;
 mod package;
