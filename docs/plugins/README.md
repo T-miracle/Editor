@@ -6,4 +6,4 @@
 - [插件平台规格](../specs/plugin-api-platform.md)、[平台实施工单](../specs/plugin-api-tickets/README.md)、[运行与构建](../runtime-plugins.md)、[公开协议与 SDK](../../crates/plugin-protocol/README.md)。
 - [插件管理与日志方案](specs/plugin-management-logs.md)、[对应工单](tickets/plugin-management-logs/README.md)、[管理页验收](verification/plugin-management-tabs-verification.md)。
 
-平台历史资料当前仍跟踪在 `docs/specs/`；后续重归档应同步修改本入口及消费者链接，不能依赖其他聊天尚未提交的副本。
+已补齐 `specs/`、`tickets/`、`verification/` 中的平台历史资料；原 `docs/specs/` 保留旧路径记录，不以旧副本覆盖现行管理与日志文档。内容不同的早期资料见[2026-10-03 历史入口](archive/2026-10-03/README.md)。

@@ -1,0 +1,52 @@
+{
+  "date": "2026-10-03",
+  "repository": "T-miracle/Editor",
+  "status": "implementation-in-progress",
+  "label": "ready-for-agent",
+  "spec": {
+    "kind": "spec",
+    "number": 22,
+    "id": 5690180755,
+    "url": "https://github.com/T-miracle/Editor/issues/22"
+  },
+  "tickets": [
+    {
+      "kind": "ticket",
+      "ticket": 1,
+      "file": "01-management-tabs.md",
+      "number": 23,
+      "implementation": "completed",
+      "verification": "../../verification/plugin-management-tabs-verification.md",
+      "id": 5690180869,
+      "url": "https://github.com/T-miracle/Editor/issues/23",
+      "blocked_by": []
+    },
+    {
+      "kind": "ticket",
+      "ticket": 2,
+      "file": "02-runtime-logs.md",
+      "number": 24,
+      "id": 5690181110,
+      "url": "https://github.com/T-miracle/Editor/issues/24",
+      "blocked_by": [
+        23
+      ]
+    },
+    {
+      "kind": "ticket",
+      "ticket": 3,
+      "file": "03-status-popover.md",
+      "number": 25,
+      "id": 5690181696,
+      "url": "https://github.com/T-miracle/Editor/issues/25",
+      "blocked_by": [
+        24
+      ]
+    }
+  ],
+  "native_edges": [
+    "24<-23",
+    "25<-24"
+  ],
+  "verified": true
+}
