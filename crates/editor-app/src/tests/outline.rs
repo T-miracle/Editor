@@ -60,6 +60,12 @@ fn wait_outline(cx: &mut VisualTestContext) {
 
 /// Observe a genuinely painted virtual row, including automatic scrolling to a distant definition.
 fn wait_node(cx: &mut VisualTestContext, selector: &'static str) {
+    // Package interaction acceptance opens the hidden-by-default panel through the user's footer control.
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+    if cx.debug_bounds("outline-hide").is_none() {
+        let toggle = cx.debug_bounds("outline-toggle").unwrap();
+        cx.simulate_click(toggle.center(), Default::default());
+    }
     let deadline = Instant::now() + Duration::from_secs(8);
     loop {
         // Base debounce and asynchronous highlighting use the test dispatcher clock, while WASM still uses wall time.
@@ -159,20 +165,33 @@ fn native_outline_package_navigation_follow_and_revocation(cx: &mut TestAppConte
         folding::fold_at(&app, 1, 2, visual),
         "comment structure must expose a functioning native gutter fold"
     );
-    visual.update(|window, cx| {
-        app.update(cx, |app, cx| {
-            app.editor.update(cx, |editor, cx| {
-                editor.set_cursor_position(lsp_types::Position::new(5, 6), window, cx)
-            });
-            cx.notify();
-        })
+    // Use the source's actual hit region: an application notification here would hide broken cursor propagation.
+    let leaf_offset = source.find("leaf name").unwrap() + 1;
+    let leaf_position = visual.update(|_, cx| {
+        app.read(cx)
+            .editor
+            .read(cx)
+            .range_to_bounds(&(leaf_offset..leaf_offset))
+            .unwrap()
+            .center()
     });
+    visual.simulate_click(leaf_position, Default::default());
     visual.run_until_parked();
     visual.update(|window, cx| window.draw(cx).clear(cx));
     assert!(
         visual.debug_bounds("outline-node-/0/0/0").is_some(),
         "enabled follow expands the innermost element's ancestors"
     );
+    // Moving out of the deep element must retract the temporary branch with only ordinary native key input.
+    visual.simulate_keystrokes("ctrl-home right");
+    visual.update(|window, cx| window.draw(cx).clear(cx));
+    assert!(
+        visual.debug_bounds("outline-node-/0/0").is_some()
+            && visual.debug_bounds("outline-node-/0/0/0").is_none(),
+        "moving to the root restores the two-level outline baseline"
+    );
+    visual.simulate_click(leaf_position, Default::default());
+    wait_node(visual, "outline-node-/0/0/0");
     // A disclosure changes expansion without moving the editor or activating its definition.
     let before_disclosure = visual.update(|_, cx| app.read(cx).editor.read(cx).cursor());
     // Follow-disabled browsing retains a collapsed branch while the native editor moves inside it.

@@ -1,6 +1,6 @@
 //! Outline uses Base tree selection/keyboard/virtualization and project-owned row and dock chrome.
 use super::*;
-use crate::ui::controls::tree_row;
+use crate::ui::controls::{TreeRowAppearance, tree_row};
 use gpui_base::Tree;
 
 pub(crate) struct OutlinePanel {
@@ -42,11 +42,7 @@ impl dock::BasePanel for OutlinePanel {
     }
 }
 impl DockPanel for OutlinePanel {
-    fn title(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let follow = self
-            .parent
-            .upgrade()
-            .is_some_and(|app| app.read(cx).session_state.outline_follow_cursor);
+    fn title(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
         h_flex()
             .w_full()
             .justify_between()
@@ -55,35 +51,16 @@ impl DockPanel for OutlinePanel {
             .child(
                 h_flex()
                     .gap_1()
-                    .child(
-                        crate::ui::controls::Button::new("outline-follow")
-                            .debug_selector(|| "outline-follow".into())
-                            .icon(Icon::default().path("icons/explorer-locate.svg"))
-                            .small()
-                            .compact()
-                            .ghost()
-                            .tooltip(t!("outline.follow_cursor").to_string())
-                            .accessibility_label(t!("outline.follow_cursor").to_string())
-                            .when(follow, |button| button.primary())
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                cx.stop_propagation();
-                                let _ = this.parent.update(cx, |app, cx| {
-                                    app.session_state.outline_follow_cursor =
-                                        !app.session_state.outline_follow_cursor;
-                                    app.session_state.save();
-                                    app.outline.cursor = None;
-                                    cx.notify();
-                                });
-                            })),
-                    )
+                    // Cursor following belongs to the model; the header only needs the hide control.
                     .child(
                         crate::ui::controls::Button::new("outline-hide")
                             .debug_selector(|| "outline-hide".into())
-                            .icon(IconName::Minus)
+                            .icon(Icon::new(IconName::WindowMinimize))
                             .small()
                             .compact()
                             .ghost()
                             .tooltip(t!("outline.hide").to_string())
+                            .accessibility_label(t!("outline.hide").to_string())
                             .on_click({
                                 let parent = self.parent.clone();
                                 move |_, window, cx| {
@@ -171,9 +148,11 @@ impl Render for OutlinePanel {
             .child(
                 Tree::new(&tree)
                     .size_full()
+                    // Match Explorer's inset so top-level labels and selected rows align.
+                    .p_1()
                     // Base's virtual list needs its own bounded frame; sizing the outer Tree alone paints only a measure row.
                     .list_style(StyleRefinement::default().flex_grow_1().size_full())
-                    .item(move |index, entry, selected, _, cx| {
+                    .item(move |index, entry, _selected, _, cx| {
                         let id = entry.item().id.to_string();
                         let definition = &definitions[&id];
                         let data = definition.icon.as_ref().and_then(|icon| {
@@ -222,8 +201,10 @@ impl Render for OutlinePanel {
                             icon,
                             entry.is_folder(),
                             entry.is_expanded(),
-                            selected.is_selected() || current.as_ref() == Some(&id),
+                            // Keyboard browsing tracks Base selection separately; only the editor's node owns the background.
+                            current.as_ref() == Some(&id),
                             false,
+                            TreeRowAppearance::Explorer,
                             cx,
                             entry
                                 .is_folder()
@@ -245,28 +226,5 @@ impl Render for OutlinePanel {
                     }),
             )
             .into_any_element()
-    }
-}
-
-impl EditorApp {
-    /// A persistent host toggle restores a hidden outline without changing its dock position.
-    pub(crate) fn render_outline_toggle(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        crate::ui::controls::Button::new("outline-toggle")
-            .icon(Icon::default().path("icons/outline-definition.svg"))
-            .small()
-            .compact()
-            .ghost()
-            .tooltip(
-                t!(if self.session_state.outline_visible {
-                    "outline.hide"
-                } else {
-                    "outline.show"
-                })
-                .to_string(),
-            )
-            .accessibility_label(t!("panel.outline").to_string())
-            .on_click(
-                cx.listener(|app, _, window, cx| app.toggle_outline(&ToggleOutline, window, cx)),
-            )
     }
 }

@@ -24,18 +24,18 @@ fn native_outline_header_buttons_keep_window_alive(cx: &mut TestAppContext) {
         window.activate_window();
         window.draw(cx).clear(cx);
     });
-    let initial_follow = visual.update(|_, cx| app.read(cx).session_state.outline_follow_cursor);
-    let follow = visual.debug_bounds("outline-follow").unwrap();
-    visual.simulate_click(follow.center(), Default::default());
+    // A fresh workspace hides Outline while keeping its footer control available for explicit opening.
+    visual.update(|_, cx| assert!(!app.read(cx).session_state.outline_visible));
+    assert!(visual.debug_bounds("outline-hide").is_none());
+    let toggle = visual.debug_bounds("outline-toggle").unwrap();
+    visual.simulate_click(toggle.center(), Default::default());
     visual.run_until_parked();
     visual.update(|window, cx| {
         window.draw(cx).clear(cx);
-        assert_eq!(
-            app.read(cx).session_state.outline_follow_cursor,
-            !initial_follow,
-            "the actual follow button must toggle the user's preference"
-        );
+        assert!(app.read(cx).session_state.outline_visible);
     });
+    // Removing the redundant locate control must not remove the independent header hide control.
+    assert!(visual.debug_bounds("outline-follow").is_none());
     // Dispatch a genuine mouse click while OutlinePanel still owns its listener context.
     let hide = visual.debug_bounds("outline-hide").unwrap();
     visual.simulate_click(hide.center(), Default::default());
@@ -48,4 +48,19 @@ fn native_outline_header_buttons_keep_window_alive(cx: &mut TestAppContext) {
         visual.debug_bounds("outline-hide").is_none(),
         "hiding the panel must remove its actual title controls while the window remains usable"
     );
+    // The footer window controls must restore the panel after its header has been hidden.
+    let group = visual.debug_bounds("plugin-windows-group").unwrap();
+    let toggle = visual.debug_bounds("outline-toggle").unwrap();
+    assert!(
+        group.contains(&toggle.center()),
+        "the outline toggle belongs inside the footer window control group"
+    );
+    visual.simulate_click(toggle.center(), Default::default());
+    visual.run_until_parked();
+    visual.update(|window, cx| {
+        window.draw(cx).clear(cx);
+        assert!(app.read(cx).session_state.outline_visible);
+    });
+    assert!(visual.debug_bounds("outline-hide").is_some());
+    assert!(visual.debug_bounds("outline-follow").is_none());
 }

@@ -31,6 +31,8 @@ file_icons! {
     "icons/explorer-locate.svg" => "../../assets/icons/explorer-locate.svg",
     "icons/explorer-collapse-all.svg" => "../../assets/icons/explorer-collapse-all.svg",
     "icons/explorer-expand-all.svg" => "../../assets/icons/explorer-expand-all.svg",
+    // The supplied outline artwork shares the window control group's theme color.
+    "icons/outline-panel.svg" => "../../assets/icons/outline-panel.svg",
     "file-icons/config.svg" => "../../assets/file-icons/config.svg",
     "file-icons/config_dark.svg" => "../../assets/file-icons/config_dark.svg",
     "file-icons/file.svg" => "../../assets/file-icons/file.svg",

@@ -1,5 +1,6 @@
 //! Two native toolbar groups route captured targets; all plugin functions and artwork stay in packages.
 use super::*;
+use crate::outline::ToggleOutline;
 use crate::ui::controls::menu::{MenuStyle, PopupMenu};
 
 /// Native toolbar focus retains this context; reopening a file or replacing a window invalidates it.
@@ -12,6 +13,8 @@ pub(crate) enum FunctionContext {
 #[derive(Clone)]
 enum Action {
     Explorer,
+    /// The built-in outline uses the same window controls and overflow behavior as other panels.
+    Outline,
     Window {
         key: String,
         epoch: u64,
@@ -119,7 +122,7 @@ impl EditorApp {
         self.function_context = file;
     }
 
-    /// Only real independent windows follow Explorer; center and auxiliary layouts have no window entry.
+    /// Built-in panel toggles precede independent plugin windows in the window control group.
     fn window_entries(&self, explorer: Icon, cx: &App) -> Vec<Entry> {
         let mut windows = self
             .extensions
@@ -152,6 +155,21 @@ impl EditorApp {
             disabled: false,
             action: Action::Explorer,
         }];
+        // Outline remains available when hidden, with selection reflecting its persisted visibility.
+        result.push(Entry {
+            id: "outline-toggle".into(),
+            label: t!("panel.outline").to_string(),
+            tooltip: t!(if self.session_state.outline_visible {
+                "outline.hide"
+            } else {
+                "outline.show"
+            })
+            .to_string(),
+            icon: Some(Icon::default().path("icons/outline-panel.svg")),
+            selected: self.session_state.outline_visible,
+            disabled: false,
+            action: Action::Outline,
+        });
         for (_, key) in windows {
             let Some(panel) = self.plugin_panels.get(&key) else {
                 continue;
@@ -250,6 +268,7 @@ impl EditorApp {
         }
         match &entry.action {
             Action::Explorer => self.toggle_explorer(cx),
+            Action::Outline => self.toggle_outline(&ToggleOutline, window, cx),
             Action::Window { key, epoch } => {
                 let Some(panel) = self.plugin_panels.get(key).cloned() else {
                     return;

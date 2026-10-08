@@ -177,6 +177,16 @@ impl EditorApp {
         if follow {
             let current = self.outline.current.clone();
             self.outline.tree.update(cx, |tree, cx| {
+                let roots = (0..)
+                    .map_while(|index| tree.entry(index))
+                    .filter(|entry| entry.is_root())
+                    .map(|entry| entry.item().clone())
+                    .collect::<Vec<_>>();
+                // Each cursor move replaces its temporary path; manual browsing remains untouched when follow is disabled.
+                for root in &roots {
+                    follow_expansion(root, current.as_deref(), true);
+                }
+                tree.set_items(roots, cx);
                 if let Some(id) = current {
                     tree.reveal_item(&id.clone().into(), ScrollStrategy::Center, cx);
                     tree.set_selected_index(tree.index_of(&id.into()), cx);
@@ -231,6 +241,16 @@ impl EditorApp {
     }
 }
 
+/// Roots expose level two by default; only ancestors of the current definition expose deeper levels.
+fn follow_expansion(item: &TreeItem, current: Option<&str>, root: bool) {
+    let prefix = format!("{}/", item.id);
+    let on_path = current.is_some_and(|id| id.starts_with(&prefix));
+    item.clone().expanded(root || on_path);
+    for child in &item.children {
+        follow_expansion(child, current, false);
+    }
+}
+
 /// Stable tree-path IDs are UI identities; source byte ranges remain the only navigation authority.
 fn rows(
     nodes: &[Node],
@@ -267,3 +287,6 @@ fn remember_expansion(item: &TreeItem, expansion: &mut BTreeMap<String, bool>) {
         remember_expansion(child, expansion);
     }
 }
+
+#[cfg(test)]
+mod tests;

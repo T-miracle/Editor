@@ -18,6 +18,27 @@ use std::{cell::RefCell, rc::Rc};
 /// Remove only the isolated workspace's generated session file, including on assertion failure.
 struct SessionFile(PathBuf);
 
+/// Fresh and legacy records hide Outline, while an explicit workspace choice survives save/reload.
+#[test]
+fn outline_visibility_defaults_hidden_and_preserves_saved_choice() {
+    let directory = tempfile::tempdir().unwrap();
+    let mut state = SessionState::for_workspace(directory.path());
+    let _cleanup = SessionFile(state.file_path().unwrap());
+    assert!(!state.outline_visible);
+    let mut legacy = serde_json::to_value(&state).unwrap();
+    legacy.as_object_mut().unwrap().remove("outline_visible");
+    let migrated: SessionState = serde_json::from_value(legacy).unwrap();
+    assert!(!migrated.outline_visible);
+    for visible in [true, false] {
+        state.outline_visible = visible;
+        state.save();
+        assert_eq!(
+            SessionState::load(directory.path()).outline_visible,
+            visible
+        );
+    }
+}
+
 /// A successful private write acknowledges one unchanged bundle, never newer or unrelated settings.
 #[test]
 fn legacy_display_import_preserves_future_and_unrelated_session_data() {
@@ -293,6 +314,8 @@ fn plugin_dock_layout_survives_delayed_startup(cx: &mut TestAppContext) {
         .replace("terminal/terminal", "me.terminal/terminal")
         .replace("terminal/tasks", "me.terminal/tasks");
     let mut legacy_session: SessionState = serde_json::from_str(&serialized).unwrap();
+    // This equal-split migration fixture explicitly restores a visible Outline rather than relying on its default.
+    legacy_session.outline_visible = true;
     legacy_session.disabled_plugins = vec!["me.uninstalled-test".into()];
     legacy_session.save();
     let slot = Rc::new(RefCell::new(None));
@@ -305,6 +328,7 @@ fn plugin_dock_layout_survives_delayed_startup(cx: &mut TestAppContext) {
     let restored = slot.borrow_mut().take().unwrap();
     visual.update(|_, cx| {
         let app = restored.read(cx);
+        assert!(app.session_state.outline_visible);
         assert_eq!(app.session_state.disabled_plugins, ["uninstalled-test"]);
         assert!(app.pending_dock_restore);
         assert_layout_eq(

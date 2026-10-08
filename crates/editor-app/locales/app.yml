@@ -365,9 +365,6 @@ panel.outline:
 outline.empty:
   en: "No outline for this file"
   zh-CN: "此文件暂无大纲"
-outline.follow_cursor:
-  en: "Follow cursor"
-  zh-CN: "跟随光标"
 outline.loading:
   en: "Loading outline…"
   zh-CN: "正在加载大纲…"

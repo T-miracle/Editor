@@ -481,16 +481,7 @@ impl Render for EditorApp {
                     .child(
                         StatusBar::new()
                             .left(self.render_plugin_toolbar(explorer_panel_icon(cx), window, cx))
-                            .left(self.render_outline_toggle(cx))
-                            .left(
-                                div()
-                                    .flex_1()
-                                    .min_w_0()
-                                    .max_w(px(320.))
-                                    .truncate()
-                                    .child(self.status.clone()),
-                            )
-                            // Keep error counts separate from temporary save/loading messages.
+                            // The footer shows controls and document indicators without transient status text.
                             .when(
                                 self.active_text_tab_index().is_some()
                                     && self
