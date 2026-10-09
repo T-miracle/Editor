@@ -91,12 +91,52 @@ fn local_comparison_observes_owner_replacement_disable_and_trust_loss(cx: &mut T
                     "failed preparation keeps the old owner's comparison"
                 );
             }
-            // Automatic cleanup cannot steal a separate dialog/control's keyboard ownership.
-            let unrelated_focus = visual.update(|window, cx| {
-                let focus = cx.focus_handle();
-                window.focus(&focus, cx);
-                focus
-            });
+            // Cover both focus owners in one lifecycle fixture: unrelated controls keep their
+            // keys, while an actually clicked pane must not retain focus after being unmounted.
+            let unrelated_focus = if transition == "trust loss" {
+                let bounds = visual.debug_bounds("document-diff-left").unwrap();
+                let click = bounds.origin + gpui_kit::point(gpui_kit::px(20.), gpui_kit::px(60.));
+                visual.simulate_mouse_down(click, gpui_kit::MouseButton::Left, Default::default());
+                visual.simulate_mouse_up(click, gpui_kit::MouseButton::Left, Default::default());
+                visual.update(|window, cx| {
+                    assert!(left_editor.read(cx).focus_handle(cx).is_focused(window));
+                });
+                // A new public comparison replaces the focused old pane through normal
+                // right-document activation; it must not leave the old left handle owning keys.
+                assert!(matches!(
+                    invoke_for(
+                        visual,
+                        &app,
+                        &mut manager,
+                        "generated-preview",
+                        json!({"kind":"compare_documents", "left":left.document, "right":right.document})
+                    )
+                    .unwrap(),
+                    api::EditorValue::DocumentsCompared { .. }
+                ));
+                visual.update(|window, cx| {
+                    window.draw(cx).clear(cx);
+                    assert!(
+                        app.read(cx)
+                            .editor
+                            .read(cx)
+                            .focus_handle(cx)
+                            .is_focused(window)
+                    );
+                });
+                visual.simulate_mouse_down(click, gpui_kit::MouseButton::Left, Default::default());
+                visual.simulate_mouse_up(click, gpui_kit::MouseButton::Left, Default::default());
+                visual.update(|window, cx| {
+                    assert!(left_editor.read(cx).focus_handle(cx).is_focused(window));
+                });
+                None
+            } else {
+                Some(visual.update(|window, cx| {
+                    let focus = cx.focus_handle();
+                    window.focus(&focus, cx);
+                    focus
+                }))
+            };
             match transition {
                 "replacement" => {
                     manager
@@ -121,14 +161,40 @@ fn local_comparison_observes_owner_replacement_disable_and_trust_loss(cx: &mut T
                     prior_readonly
                 );
                 assert_eq!(foreign_marks.get_ranges(cx), vec![0..3]);
-                assert!(
-                    unrelated_focus.is_focused(window),
-                    "automatic {transition} must preserve other focus"
-                );
+                if let Some(focus) = &unrelated_focus {
+                    assert!(
+                        focus.is_focused(window),
+                        "automatic {transition} must preserve other focus"
+                    );
+                } else {
+                    assert!(
+                        owner.editor.read(cx).focus_handle(cx).is_focused(window),
+                        "retiring the focused pane must return keys to the visible editor"
+                    );
+                }
             });
             assert!(visual.debug_bounds("document-diff-left").is_none());
             if transition == "disable" {
                 manager.enable("generated-preview").unwrap();
+            } else if transition == "trust loss" {
+                // Selection and input must follow real keyboard routing after automatic retirement.
+                visual.simulate_keystrokes("ctrl-a");
+                visual.update(|_, cx| {
+                    let editor = app.read(cx).editor.read(cx);
+                    assert_eq!(editor.selected_range(), 0..editor.text().len());
+                });
+                visual.simulate_input("自动清理后右侧输入😀");
+                visual.run_until_parked();
+                visual.update(|_, cx| {
+                    assert_eq!(
+                        app.read(cx).editor.read(cx).value().to_string(),
+                        "自动清理后右侧输入😀"
+                    );
+                    assert_eq!(
+                        left_editor.read(cx).value().to_string(),
+                        "另一份本地文本😀\r\n"
+                    );
+                });
             }
         }
         assert_eq!(std::fs::read_to_string(path).unwrap(), "original on disk");

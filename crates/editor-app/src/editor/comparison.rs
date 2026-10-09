@@ -193,10 +193,28 @@ impl EditorApp {
         })
     }
 
-    /// Invalidate before rendering whenever either identity, revision or authority changes.
-    pub(crate) fn sync_document_comparison(&mut self, cx: &mut Context<Self>) {
+    /// Invalidate changed versions/authority, returning keys only from a pane being unmounted.
+    pub(crate) fn sync_document_comparison(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if !self.document_comparison_is_current() {
+            // GPUI retains the old FocusHandle after unmounting; focus-lost alone does not
+            // give keys to the surviving editor. Leave dialogs and an already-visible
+            // editor alone, and never lend a background text entity to a binary tab.
+            let restore_focus = self.document_comparison.as_ref().is_some_and(|comparison| {
+                [&comparison.left_editor, &comparison.right_editor]
+                    .into_iter()
+                    .any(|editor| {
+                        editor != &self.editor
+                            && editor
+                                .read(cx)
+                                .focus_handle(cx)
+                                .contains_focused(window, cx)
+                    })
+            });
             self.close_document_comparison(cx);
+            if restore_focus && self.active_text_tab_index().is_some() {
+                self.editor
+                    .update(cx, |editor, cx| editor.focus(window, cx));
+            }
             return;
         }
         let colors = comparison_colors(cx);
@@ -308,8 +326,8 @@ impl EditorApp {
                             .accessibility_label(t!("editor.close_diff").to_string())
                             .on_click(cx.listener(|this, _, window, cx| {
                                 this.close_document_comparison(cx);
-                                // Only an explicit Close returns focus to the current document;
-                                // automatic invalidation must leave dialogs and other focus alone.
+                                // An explicit Close always returns keys to the current document;
+                                // automatic invalidation does so only for an unmounted focused pane.
                                 this.editor
                                     .update(cx, |editor, cx| editor.focus(window, cx));
                             })),

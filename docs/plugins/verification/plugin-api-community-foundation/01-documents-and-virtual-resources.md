@@ -1,6 +1,6 @@
 # 01：文档快照、事件与只读资源比较候选验收
 
-日期：2026-10-09。对应 [#93](https://github.com/T-miracle/Nanobug/issues/93) 与[工单 01](../../tickets/plugin-api-community-foundation/01-documents-and-virtual-resources.md)。状态：初轮双轴可操作问题已修复，候选门禁与针对性验证通过；受影响 Windows 原生路径已复核通过，双轴复审及推送读回尚未完成，不关闭工单。
+日期：2026-10-09。对应 [#93](https://github.com/T-miracle/Nanobug/issues/93) 与[工单 01](../../tickets/plugin-api-community-foundation/01-documents-and-virtual-resources.md)。状态：初轮双轴问题已修复并验证；Spec 复审追加的自动撤下聚焦窗格 P2 已修复，实际 SDK/GPUI 回归与三项仓库门禁通过。新分支的原生验收、相邻焦点变更双轴复审及推送读回尚未完成，不关闭工单。
 
 ## 固定范围与环境
 
@@ -8,7 +8,7 @@
 - 工作树：`C:/Users/Tmiracle/.codex/worktrees/plugin-api-community/Editor`，分支 `codex/plugin-api-community`。原始工作区的其他任务改动没有纳入。
 - 宿主及仓库 Cargo 检查统一使用 `CARGO_TARGET_DIR=C:/Users/Tmiracle/.codex/worktrees/plugin-api-community/target01`。访客使用宿主正式 `--plugin-cargo` 缓存，不复制 SDK 源码、不依赖仓库 crate 路径。
 - Rust `1.98.1 (48a229cea 2026-09-01)`，Cargo `1.98.1 (797e8a9bc 2026-08-05)`；宿主 `x86_64-pc-windows-msvc`，访客 `wasm32-wasip2`，debug 构建。没有安装或升级工具链。
-- 修复宿主 `target01/debug/editor-app.exe` SHA256：`95a3332aa41ef23eb8ad0437027144a73a0b852855b67bd27b2de6eeed30de83`；`target/community-review-fix-build.log` 记录构建成功，48.71 秒。原候选 `fc63…` 是初轮双轴与原生复核的对象，不用于替代本次焦点/退役复核。
+- 自动退役焦点修复宿主 `target01/debug/editor-app.exe` SHA256：`bbec2a401ae92fe94018730481f6b2cc660907f0e01d2458945dd719a49c0109`；`target/community-auto-focus-build.log` 记录构建成功，27.73 秒。前一修复宿主为 `95a3332aa41ef23eb8ad0437027144a73a0b852855b67bd27b2de6eeed30de83`（`target/community-review-fix-build.log`，48.71 秒）；其显式 Close 原生证据可按未改变路径复用，不替代新增自动退役分支验收。
 - 当前 SDK 内容摘要：`df7c52db8ecd3696a8cb4891af75d85d7e1b7a58e91fc8da7b7616375cb5e066`，SDK crate `0.2.0`、基础协议 7；初轮摘要为 `b9b4caa…`。文档能力 `1.1`，只读虚拟资源与比较能力各 `1.0`，均声明稳定核心及最低协商范围。
 
 ## 契约和接缝
@@ -21,7 +21,7 @@
 
 旧 `SubscribeDocuments`/`DocumentChange` 保持字段、最新 revision 合并与本地路径语义。新事件必须显式 `SubscribeDocumentEvents` opt-in，不因旧 SDK 的 `^1` 协商到 `1.1` 而自动发送新通知变体。`WillSave` 只观测保存，不承诺阻塞或拦截。事件入口及每订阅队列各 128 条，溢出产生终止失败；取消/回调内释放后不继续送事件。两种订阅共用每实例八个名额。
 
-比较只保留不可变版本、差异字节范围、自己的 decoration collection 与运行时颁发的只读 `EditorAuthority`。authority 在唯一的 State 请求构造接缝借用现有 `plugin_services.alive` 和完整 `Context.lifetimes`，没有新的存活标记、访客可构造字段或 mutator。它不绑定 transient request 的完成/超时；两份源都是本地文件时也受发起实例与委派链退役约束。左侧借用原有 EditorState 并临时只读；右侧本地文档保持正常编辑。实际左焦点的 Save/SaveAs、格式化与 Rename 经过只读门禁。任一源版本、活动右目标或 authority 变化撤销比较并仅清理自己的标记，恢复左侧原有 readonly 状态；显式 Close 把焦点返回右文档，自动清理保留其他对话框/控件焦点。
+比较只保留不可变版本、差异字节范围、自己的 decoration collection 与运行时颁发的只读 `EditorAuthority`。authority 在唯一的 State 请求构造接缝借用现有 `plugin_services.alive` 和完整 `Context.lifetimes`，没有新的存活标记、访客可构造字段或 mutator。它不绑定 transient request 的完成/超时；两份源都是本地文件时也受发起实例与委派链退役约束。左侧借用原有 EditorState 并临时只读；右侧本地文档保持正常编辑。实际左焦点的 Save/SaveAs、格式化与 Rename 经过只读门禁。任一源版本、活动右目标或 authority 变化撤销比较并仅清理自己的标记，恢复左侧原有 readonly 状态；显式 Close 把焦点返回右文档。自动清理仅在撤下的比较窗格仍包含焦点时聚焦可见文本编辑器，保留其他对话框/控件和已经可见编辑器的焦点；没有活动文本时不聚焦后台实体。
 
 新增只读 frame 的 palette、字体和字号映射收拢在 `ui/controls/editor.rs`；比较调用方只布局，主题变化只重着色自己的差异集合。右侧仍沿用已有普通 InputEditor 的渲染，后者会投影上游 editor style。原生 Dark 下两侧 gutter 颜色并不保证相同；本单避免左侧沿用浅色样式，没有扩大为普通编辑器控件迁移。
 
@@ -66,7 +66,7 @@
 | T02 | native 打开/关闭重开、编辑、Ctrl+S、活动、选区/视口送真实 Manager；顺序递增及 WillSave→DidSave；取消、溢出失败/补读/重新订阅；旧 SDK 订阅可继续使用 | 自动化通过 |
 | T03 | UTF-8/UTF-16 与 CRLF/non-BMP 对应；拒绝 surrogate/字符切分、越界、旧 revision、关闭旧 ID、外国虚拟资源、缺权限/应用实例；身份不授予权限 | 自动化通过 |
 | T04 | 两个 SDK 消费者菜单完成打开/刷新/定位/比较；两栏实际绘制；鼠标左焦点后真实键盘输入/Save 拒绝，不保存右 dirty；正常只读 Tab 不落临时文件/恢复；虚拟不扫描、不改提供者选择；实际 Close 后右焦点恢复 | 自动化通过；受影响原生复核见 native-01，待双轴复审 |
-| T05 | 显式资源释放、native Tab 关闭、插件禁用；失败候选保持旧文本/面板；重新打开产生新 ID；过期比较消失，其他 owner 标记保留；local-owner 替换/禁用/信任撤销清理与原 readonly/他人焦点保留 | 自动化通过；真正控制器 stop 原生复核见 native-01，待双轴复审 |
+| T05 | 显式资源释放、native Tab 关闭、插件禁用；失败候选保持旧文本/面板；重新打开产生新 ID；过期比较消失，其他 owner 标记保留；local-owner 替换/禁用/信任撤销清理与原 readonly/他人焦点保留；撤下聚焦左栏后右侧键盘选择/输入恢复 | 自动化通过；前一宿主真正控制器 stop 原生复核见 native-01；新增自动焦点分支待原生与双轴复审 |
 
 GPUI 夹具仅适配现有 worker 的发布与事件入口：正式包产生 `EditorRequest`，生产队列分派到真实应用，断言实际 EditorState/磁盘/可见 bounds。没有插件专用宿主测试 API。事件夹具按用户手势逐批送现有 actor 入口；不把停止消费后的 128 条合约溢出当作正常事件丢失。溢出单独在真实 Manager 用例验证。
 
@@ -110,7 +110,7 @@ cargo check --workspace
 | 轴 | 初轮可操作发现 | 修复与可复用证据 |
 | --- | --- | --- |
 | Spec | P2 两份本地源比较不跟随发起实例退役 | 保留运行时现有 owner/完整委派 lifetimes 的 opaque authority；单个 actual SDK/GPUI 场景验证失败候选保留、成功替换/禁用/信任撤销清理、恢复原 readonly、保留他人 marks/focus |
-| Spec | P2 显式 Close 后键盘焦点丢失 | 实际 Base Button callback 获取 Window 并聚焦右侧现有 EditorState；自动失效清理不移动焦点 |
+| Spec | P2 显式 Close 后键盘焦点丢失 | 实际 Base Button callback 获取 Window 并聚焦右侧现有 EditorState；当时自动失效清理不移动焦点，复审追加边界见末节 |
 | Spec | P3 SDK 公共政策提前宣称本单尚未提供的能力 | 删除具体能力名单，保留通用稳定/协商/弃用规则；各能力状态在对应页声明 |
 | Standards | P2 Close 焦点、P3 公共政策 | 与上述同一实现和证据共享，不重复整套测试 |
 | Standards | P3 读者页包含插件源码路径、构建命令与具体菜单 | 双语 documents 页只给通用 SDK 精确版本工作流；两包的 README 承担各自用法，正式 ZIP 打包 README，清单/Cargo 版本同步升为 0.1.1 |
@@ -143,3 +143,24 @@ cargo check --workspace
 根代理使用 Computer Use/Windows 输入在自有副本与隔离 `--profile` 中验收，日常 Nanobug 窗口未动。首轮已观察：双栏/只读标识、右栏未保存中文 emoji 输入触发比较失效、重新比较读到最新文本、左侧 Ctrl+S 明确拒绝且右侧仍 dirty、磁盘 hash 不变、左侧输入不改变历史文本。首轮同时发现路径扫描错误与左侧主题陈旧，不能据此判定 T04/C03 完成。
 
 `9d645…` 复核确认了主题和路径扫描修复、dirty 输入及只读保存，但继续发现新增比较区域没有基础辅助语义，因此不是最终通过。`fc63…` 随后通过来源/只读值/按钮的实际 UIA 观察与输入/保存门禁，仍在显式 Close 丢失焦点，初轮失败证据保留在 `native-01.md`。本次 `95a333…` 复核确认左侧只读与 UIA 仍成立；Close 后不重新点击编辑器，Ctrl+A 实际选中右文本，输入中文/emoji成功，磁盘 hash 不变。真正 TTY 控制器 `stop` 返回 0，自有进程/窗口消失。第一次遗漏 TTY 导致 stdin 关闭后的自有进程清理不计作正常退出；详见[原生记录](native-01.md)。仍需完成双轴复审、普通提交/推送读回后才关闭 #93。本候选不宣称其他工单或完整平台已验收。
+
+## 自动退役焦点复审与修复
+
+初轮修复提交为 `3ef99c5d8b82f946c7c2a2688ddae4a3ad8cfe7c`。其复审中 Standards 未解决项为 0；Spec 确认原三项修复，并追加 P2：自动撤下正在聚焦的左比较窗格后，GPUI 保留旧 FocusHandle，默认 focus-lost 通知没有把键盘所有权交还可见编辑器。父提交 `70358ff` 只补原生记录，不是这项修复。
+
+修复仅给 Shell 中两个比较同步调用传入已有 Window。在版本或 authority 失效时，先检查旧比较中不再是可见 `self.editor` 的实体是否包含焦点，再清理自有标记/原 readonly，且仅有活动文本目标时聚焦当前 EditorState。其他对话框、控件和仍可见的编辑器焦点不变，没有新增全局焦点管理器。新 Compare 替换旧比较仍复用现有 `activate_tab` 的右文档聚焦。
+
+实际 SDK/GPUI 的原生命周期用例保持 replacement/disable 的无关焦点检查，只在 trust loss 段增加真实鼠标点击左窗格。`target/community-auto-focus-red.log` 在撤销信任、重绘后失败于可见右编辑器没有焦点：0 passed、1 failed、0 ignored，121.26 秒（编译 48.95 秒），左 FocusHandle 与前两段生命周期检查此前均通过。没有把静态审查结论代替红测。
+
+`target/community-auto-focus-green.log` 最终为 1 passed、0 failed、0 ignored，117.18 秒（编译 41.84 秒）。同一用例同时确认左侧聚焦时新 Compare 重新聚焦右侧；再次真实点击左侧、撤销信任、重绘后，右 FocusHandle 持有焦点，实际 Ctrl+A 选区为全部文本，中文 emoji 输入只改右侧 EditorState。左文本、两个磁盘文件、foreign marks 与原 readonly 保留。第一次绿测编译因夹具的 bounds 变量遮蔽文档描述失败，已更名；失败日志单独保留在 `target/community-auto-focus-green-build-failed.log`。
+
+这次源码只影响比较失效时的焦点分支；SDK、两份正式 0.1.1 ZIP 及 WASM 字节均未变，不重新打包。前节 runtime 4、其余 GPUI 3、服务链 1、旧 SDK 1、SDK 导出 7 与站点 17 的结果按未改变路径复用，不宣称本轮重复执行。新宿主 SHA256 为 `bbec2a…`，正式两包的 ZIP SHA256 重新读取仍为 `793af3…` / `6adddb…`。
+
+| 本次命令/日志 | 实际结果 |
+| --- | --- |
+| `cargo fmt --check` / `target/community-auto-focus-fmt.log` | 通过 |
+| `cargo test --workspace --exclude editor-app` / `target/community-auto-focus-workspace-tests.log` | 224 passed、0 failed、185 ignored；ignored 未计为通过 |
+| `cargo check --workspace` / `target/community-auto-focus-workspace-check.log` | 通过，3.51 秒 |
+| `cargo build -p editor-app` / `target/community-auto-focus-build.log` | 通过，27.73 秒；使用同一 `target01`，未升级依赖或工具链 |
+
+自动退役的 Windows dev reload/真实输入复核及相邻焦点变更的双轴 follow-up 尚待根代理完成；`95a333…` 的显式 Close 证据不替代新分支验收。
