@@ -10,6 +10,7 @@
 - 批次固定基线：`452994e6d3d6da526803cc62db96ee722580e670`，只包含已批准方案、工单和发布映射。
 - 02 工作树：`C:/Users/Tmiracle/.codex/worktrees/plugin-api-interaction/Editor`，分支 `codex/plugin-api-interaction`，从相同基线开始。
 - 06 工作树：`C:/Users/Tmiracle/.codex/worktrees/plugin-api-cloud/Editor`，分支 `codex/plugin-api-cloud`，从已交付 02 的 `8506cc8f1f9baee3fca030d59b7d1d21b5227763` 开始。
+- 03 工作树：`C:/Users/Tmiracle/.codex/worktrees/plugin-api-transactions/Editor`，分支 `codex/plugin-api-transactions`；保持行为的预重构从普通整合候选 `ef6fa2d` 开始，最终公开事务交付需接入下述已修正整合点。
 - 原项目工作区已有其他任务的未提交改动，本批代码在独立工作树实施；这些已有改动不计入本批成果。
 
 ## 当前进度
@@ -18,15 +19,15 @@
 | --- | --- | --- | --- |
 | 01 文档与只读资源 | [#93](https://github.com/T-miracle/Nanobug/issues/93) | 已验收交付，议题已关闭 | `7b50045a78dacafacb2bb7a76f0694c91a1b755d` 已推送并核对远端；双轴未解决项均为 0 |
 | 02 命令与交互 | [#94](https://github.com/T-miracle/Nanobug/issues/94) | 已验收交付，议题已关闭 | `8506cc8f1f9baee3fca030d59b7d1d21b5227763` 已推送并核对远端；双轴未解决项均为 0 |
-| 03 工作区事务 | [#95](https://github.com/T-miracle/Nanobug/issues/95) | 依赖已交付，待整合后实施 | T11–T16 及共同完成条件 |
+| 03 工作区事务 | [#95](https://github.com/T-miracle/Nanobug/issues/95) | 实施中；预重构与 Atomic 行为回归已启动 | T11–T16 及共同完成条件，未验收不关闭 |
 | 04 诊断与语言 | [#96](https://github.com/T-miracle/Nanobug/issues/96) | 等待 03 | T17–T20 及共同完成条件 |
-| 05 树与装饰 | [#97](https://github.com/T-miracle/Nanobug/issues/97) | 依赖已交付，待整合后实施 | T21–T24 及共同完成条件 |
-| 06 网络与私有状态 | [#98](https://github.com/T-miracle/Nanobug/issues/98) | 实施中，02 依赖已满足 | T25–T30 及共同完成条件 |
+| 05 树与装饰 | [#97](https://github.com/T-miracle/Nanobug/issues/97) | 准备完成，修正整合点已就绪 | T21–T24 及共同完成条件 |
+| 06 网络与私有状态 | [#98](https://github.com/T-miracle/Nanobug/issues/98) | 修正候选 `d92f79c`；独立复审中 | T25–T30 与原生已执行，待双轴收敛及交付 |
 | 07 激活与兼容 | [#99](https://github.com/T-miracle/Nanobug/issues/99) | 等待 04、05、06 | T31–T35 及共同完成条件 |
 
 ## 证据与复用规则
 
-01 与 02 的[普通合并连接记录](01-02-integration.md)固定双方交付点，记录真实 SDK 菜单上下文与焦点回归、SDK / 包指纹及整合门禁。当前为本地候选，新增接线的双轴审查与原生复核待完成；03 / 05 仍等待这个整合点。
+01 与 02 的[普通合并连接记录](01-02-integration.md)固定双方交付点，记录真实 SDK 菜单上下文与焦点回归、SDK / 包指纹及整合门禁。`325c9d7` 修正本地左栏精确目标，`91b7e09` 配对澄清两语文档；双轴未解决项均为 0，[新增原生连接](native-integration.md)通过。后续 03 / 05 使用这个已修正整合点；批次其余工单没有因此标记完成。
 
 01 的[逐单验收与双轴结论](01-documents-and-virtual-resources.md)及 [01 主代理原生验收](native-01.md)已经交付；2026-10-09 07:22:13 UTC，按既有 Git 认证更新并读回 #93 为 `closed / completed`。初轮失败保留原始结果，修复候选分别复核；父设计议题 #92 未修改。02 的原生证据见 [02 主代理原生验收](native-02.md)。
 

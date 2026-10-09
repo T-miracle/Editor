@@ -134,3 +134,25 @@ Standards P3：英文选择建议规则改为禁止 slash、backslash、colon �
 同目录 `document-menu-reader-0.18.0.zip` SHA-256 为 **`4f04224a5eeabb6c4092a18bf7bf7de44fd5eef788cc3083675f691f005dd148`**，仅在新版 capability-example 的 manifest 加独立 ID 与只读菜单，直接归档；其 WASM SHA-256 与上表 capability-example 相同。新静态开发项目位于 `C:/Users/Tmiracle/.codex/worktrees/plugin-api-community/Editor/target/community-integration-native/history-project/`，资源来自新版 history ZIP，保留公开 `nanobug-plugin.json` 入口与预编译 WASM；可通过开发 reload 触发 owner 退役，无需再编译访客。
 
 新宿主绝对路径：`C:/Users/Tmiracle/.codex/worktrees/plugin-api-community/target01/debug/editor-app.exe`；SHA-256 **`ee95fa6057a1c50f29dfdcaebe92e362ddd645ddfee8224568984390ee971e4e`**。新增原生连接与两轴修正复审仍由主线程执行、另记结果；本代理未操作桌面，未推送或修改 issue。
+
+## 主线程收尾：双轴复审与原生连接
+
+生产代码固定候选为 `325c9d701ac46f2755349ab8f22cdce294efd8ef`，在普通 merge 历史上保留修正；随后 `91b7e092ffae3747ea26285a48bfcff0cc3b4914` 仅配对澄清两语 reader 文档。新增原生实际结果见[主代理原生记录](native-integration.md)：真实左栏选区、右键与行点击返回只读虚拟目标上下文；菜单 Down 导航后保持焦点，reload 退役撤下比较/虚拟标签/菜单；无需再次点击编辑区，Ctrl-A 和中文非 BMP 输入只修改右侧未保存文档。控制器正常 stop 退出 0，自有进程为 0，磁盘原始摘要保持。
+
+### Standards
+
+初审 `b2f20def...ef6fa2d` 的 **1 项 P3 硬性规范、0 项坏味道**保留为历史；英文名称规则语义问题已修正。独立复审 `ef6fa2d...325c9d7` 未发现代码规范或坏味道问题，但发现 **1 项新的流程 P3**：英文修正没有与中文在同次提交配对。普通双语提交 `91b7e09` 同时更新两语页面摘要并澄清中文“名称不能等于”规则；没有重写先前提交。独立窄复审 `325c9d7...91b7e09` 确认流程 P3 已解决，**新增硬性违规 0、判断性坏味道 0**。
+
+### Spec
+
+初审 `b2f20def...ef6fa2d` 的 **1 项 P2**保留为已修正历史。独立复审 `ef6fa2d...325c9d7` 确认完整 `DocumentVersion` 精确匹配 live Tab，本地绝对路径仅作描述元数据；虚拟目标无磁盘路径，过期保留原版本并由正式入口拒绝。新增缺失、部分实现、范围蔓延和错误实现均为 **0 项**。后续双语提交未改变产品行为。
+
+两轴最终未解决发现分别为 **Standards 0（坏味道 0）、Spec 0**，各轴无最严重问题。两单既有关闭状态未重开或改写，父设计 #92 未修改。
+
+### 配对文档检查与产物复用
+
+`91b7e09` 仅修改双语页面 description 与等价中文用语，Rust、WIT、访客、权限和 UI 源码没有变化。`npm run build` 重新通过 **17 passed / 0 failed / 0 skipped**（`target/community-01-02-paired-website.log`）；SDK 导出回归重新通过 **7 passed / 0 failed / 0 ignored，0.41 秒**（`target/community-01-02-paired-sdk-tests.log`）；`git diff --check` 通过。文档变更依仓库规则不重复无关 Rust 全量矩阵，生产实现阶段三门禁沿上节真实结果。
+
+宿主重新构建退出 0（`target/community-01-02-paired-build.log`），当前 EXE SHA256 **`5f9a059bd3f937fed92901d61a2309b69d7cb2462b65003363746927a3e10709`**。再次用公开 `--export-plugin-sdk target/community-01-02-paired-sdk` 导出，与 `target/community-01-02-review-sdk` 的 **60 个文件逐一 SHA256 比较，0 个变化**。English frontmatter 被现有 exporter 剥离，中文不进入英文 SDK；因此内容寻址 key 仍为 **`34b1ef263fbab5727e7d145de7b16d710a2fd5d9b093750b36a5e6355b4a0ead`**，五包和静态 history/menu WASM 复用上节准确字节，不重复编译。
+
+原生记录使用实际运行的 EE95 副本，不把新 5F9A 的嵌入站点元数据变化说成另一次桌面运行。新增交互生产源、导出 SDK、插件清单、WASM、工具链与参数均未变化；复用该实际连接证据。此整合点已满足后续 03、05 的公开接线依赖，主线程将正常推送并核对远端后继续后单。
