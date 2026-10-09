@@ -28,3 +28,17 @@
 - 后续候选源码、SDK 或包变化后记录新 hash，不能把本轮存在发现项的二进制当作最终通过。
 
 控制器已通过 `stop` 正常关闭其自有实例。后续原生输入使用新的隔离运行数据。
+
+## 修复候选复核
+
+- 宿主副本 `native-qa-01/bin/editor-app-final.exe` SHA256：`9d645c003758a3fed88effc94e7a7fed3102e2e6fbc6376dab5d58c715d94853`；SDK 仍为 `98b5137b113d5890ad0e63f26caa3d24587761ad1ce5bef3580fd4f2f2d16e4c`。
+- 新配置 `native-qa-01/profile-history-final`，新工作区 `native-qa-01/workspace-final`。当前 SDK 独立构建的 `history-preview` 开发候选：`5bba5b5a6b977d7bc6411ad258fbddb35be7f216ceb766d1a2c3cf3a4b0d1836`。
+- 初始本地文件为 UTF-8 中文、emoji、CRLF；操作前后磁盘 SHA256 均为 `ae9dfed7dac311fb8daa75098df7bf349baf13526e7d4b6aee58df111cb9c1e6`。
+
+1. 通过历史插件菜单打开双栏，左侧 Ctrl+S 显示“此文档为只读内容，无法保存”；没有写入磁盘或虚拟文件。
+2. 从浅色切换深色后，稳定画面中两侧行号、当前行、背景与差异标记均采用深色样式，左侧没有首轮的白色残留。
+3. 保持虚拟 Tab 打开，查看本次 History Preview 运行日志，仅见安装完成和忽略旧 UI 迟到回调；未再出现首轮 `os error 123`。真实 worker 对虚拟身份的负面回归另见逐单记录。
+4. 右栏 Ctrl+A 输入 `未保存的右侧文本😀` 和 `changed line` 后，本地 Tab 标记 dirty，原比较按 revision 失效关闭。执行 **Refresh historical content** 后重新比较，左栏显示“历史版本已刷新😀”，右栏显示最新未保存文本。
+5. UI Automation 在普通编辑画面能读到编辑节点，但比较打开时未暴露两侧区域、编辑节点或关闭按钮。该轮基础无障碍语义仍待修复与原生复核，不能将颜色通过当作 C03 全部完成。
+
+这一候选的控制器已正常 `stop`。后续只重验受修复影响的原生路径，并另行验证生成预览消费者；最终状态以候选指纹、逐单结果和双轴审查为准。

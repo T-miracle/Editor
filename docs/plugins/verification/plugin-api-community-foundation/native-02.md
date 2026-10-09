@@ -1,6 +1,6 @@
 # 02：主代理 Windows 原生交互记录
 
-日期：2026-10-09。状态：首轮完成，等待最终候选复核；不作为工单关闭依据。
+日期：2026-10-09。状态：最终候选原生交互复核通过；结合逐单自动验证和双轴审查判定交付，本文不单独代表工单已关闭。
 
 ## 首轮输入
 
@@ -27,3 +27,21 @@
 - 原生文件/目录/保存选择器、取消/退役清理以及最终 SDK 和三类旧消费者包，按工单记录补齐；本轮没有把尚未执行项标记通过。
 
 旧验收实例已关闭。新的候选在独立运行目录复核，源码或 SDK 变化后重新记录二进制和包 hash。
+
+## 最终候选复核
+
+- 宿主：隔离目录 `native-qa-02/bin/editor-app-final.exe`，SHA256 `e62ec53fba4d73da50658d0b2c175d3bbee5f8bd1b86c3ef1f1d5a9ec4d5b4ae`。
+- 内嵌 SDK：`22751a70f284b7363e30323353a4c2dff1b29464c3b94d6889bd68852f457062`。
+- `example` 0.4.0 开发候选：`127204c22e5304228f0ca9db09224b74142554427ba5d4b72cac3854cbdc8dc2`；运行配置 `profile-final`。
+- `capability-example` 开发候选：`58d05703c32e81b22ca6ba8816fcf8ed6dc15617fd08a30161f1a7c636683c49`；运行配置 `profile-selection`。
+- 两次均通过当前宿主 `--plugin-dev` 独立构建和激活。没有更改日常配置、用户文件或全局环境。
+
+1. 插件面板命令菜单显示在真实标题按钮下方；QuickPick 的两项公开辅助功能名称为“快速检查 / Quick”和“完整检查 / Full”。Down 改变可见选择，Return 进入 Input。
+2. 再次以物理按键 `n`、`i`、Space 通过 Windows 中文 IME 提交“你”，Return 后 Confirm 显示 `你 (brief)`。确认产生 50% 非模态 Progress，入口焦点恢复；取消后进度消失，插件显示 `cancelled / not_executed`。
+3. 原生文件选择器读取隔离工作区 `input.txt`，插件面板和通知均显示 `input.txt: 6490 bytes`，与磁盘 UTF-8 文件长度一致。
+4. 原生目录选择器选择本次创建、位于工作区外的 `selected-external`，插件显示 `selected-external: Directory intent`。
+5. 原生保存选择器默认显示 `report.txt`；选择 `selected-external/report.txt` 后插件显示 `report.txt: Save intent`。选择前后目标均不存在，证明选择只产生保存意图，不提前写入。
+6. 原生文件选择器在工作区外显示并选择 `外部😀.txt`，插件显示 `外部😀.txt: 28 bytes`，与 UTF-8 实际长度一致。夹具 SHA256 为 `970a7d933a987110ea38c3264edd507c787cea1b8c887e35e488fc914ff24ba0`。
+7. 再次打开原生文件选择器，点击系统“取消”；选择器关闭，插件明确返回 `Cancelled`、`reason: cancelled`、`effect: not_executed`，没有成功句柄。超出期限的另一轮请求返回 `timed_out / not_executed` 并关闭窗口。
+
+只读、跨插件转授、实例退役、授权撤销和 late result 等负面边界以逐单实际 SDK/Manager 自动用例为依据；本节不将一次成功的 UI 选择替代这些用例。最终仅测试/证据提交没有改变宿主、SDK 或插件输入时复用上述原生输入指纹；生产代码变化后重新评估影响。
