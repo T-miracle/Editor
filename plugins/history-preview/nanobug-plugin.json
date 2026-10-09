@@ -3,5 +3,5 @@
   "manifest": "manifest.json",
   "output": ".",
   "wasm": { "manifest": "Cargo.toml" },
-  "assets": []
+  "assets": [{ "source": "README.md", "destination": "README.md" }]
 }

@@ -23,6 +23,10 @@ pub(crate) fn readonly_editor(
     window: &mut Window,
     cx: &mut App,
 ) -> AnyElement {
+    // Keep the new readonly frame's palette and typography in the local control boundary.
+    // Layout callers provide only placement; EditorState still owns all text/input behavior.
+    synchronize_editor_appearance(editor, cx);
+    let appearance = component_styles(cx, ThemeComponent::Editor).base;
     let focus = editor.read(cx).focus_handle(cx);
     // Mirror the component's lazy accessibility value; ordinary painting need not clone text.
     let value =
@@ -41,6 +45,15 @@ pub(crate) fn readonly_editor(
         .flex()
         .size_full()
         .min_h_0()
+        .bg(appearance.background.unwrap_or(cx.theme().background))
+        .text_color(appearance.foreground.unwrap_or(cx.theme().foreground))
+        .font_family(cx.theme().mono_font_family.clone())
+        .text_size(
+            appearance
+                .font_size_px
+                .map(px)
+                .unwrap_or(cx.theme().mono_font_size),
+        )
         .child(BaseEditor::new(editor))
         .into_any_element()
 }

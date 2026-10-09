@@ -194,6 +194,7 @@ impl State {
             self.workspace.display().to_string(),
             self.data.clone(),
             timeout_ms,
+            self.plugin_services.alive.clone(),
             self.plugin_services.context.as_ref(),
         );
         if let Some(input) = image_input {

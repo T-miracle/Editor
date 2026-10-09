@@ -16,7 +16,7 @@ alternate: /en/sdk/
 
 最低宿主由其支持的传输/基础协议和必需能力版本确定，不猜测 Nanobug 产品版本号。当前 SDK 使用 `protocol = 7`、`api.base = ^1`，各能力页面给出额外最低范围。包、SDK、传输协议与能力版本分别管理；此政策不引入未来或历史传输协议的支持。
 
-破坏性变化必须提升能力 major。移除稳定 API 前公开弃用说明，列明受影响版本范围、替代接口、替代接口的最低能力与迁移步骤；当前 major 内仍保持兼容。稳定的 `plugin.commands`、`ui.interaction` 与 `files.selection` 1.0.0 契约目前均未弃用。
+破坏性变化必须提升能力 major。移除稳定 API 前公开弃用说明，列明受影响版本范围、替代接口、替代接口的最低能力与迁移步骤；当前 major 内仍保持兼容。
 
 跨插件协作、版本化契约、提供者选择及来源权限见 [SERVICES.md](/zh-cn/sdk/services/)。
 

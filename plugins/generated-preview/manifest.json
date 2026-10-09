@@ -1,7 +1,7 @@
 {
   "id": "generated-preview",
   "name": "Generated Preview",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "protocol": 7,
   "api": { "base": "^1", "required": { "ui.native": "^1", "editor.documents": "^1.1", "editor.virtual": "^1", "editor.diff": "^1" } },
   "component": "generated-preview.wasm",

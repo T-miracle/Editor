@@ -39,8 +39,7 @@ support for future or historical wire protocols.
 
 A breaking change requires a new capability major version. Before removing a stable API,
 publish its deprecation, affected version range, replacement, minimum replacement capability
-and migration steps; it remains compatible through its current major. The stable
-`plugin.commands`, `ui.interaction` and `files.selection` 1.0.0 contracts are not deprecated.
+and migration steps; it remains compatible through its current major.
 
 Cross-plugin collaboration, versioned contracts, provider selection and origin permissions
 are described in [Plugin services](/en/sdk/services/). Native services, interactive

@@ -609,8 +609,12 @@ fn delegated_resources_and_async_continuations_follow_the_original_source_lifeti
         .unwrap();
     assert!(request.begin());
     request.finish(Ok(api::EditorValue::Directory { path: "src".into() }));
+    let completed_authority = request.authority().clone();
     manager.poll();
     assert!(text(&manager, "provider-a").contains("PermissionDenied"));
+    // A completed native resource can survive its transient task deadline, but not its source.
+    request.expire(std::time::Instant::now() + std::time::Duration::from_secs(60));
+    assert!(completed_authority.is_live());
     call(&mut manager, "editor-continuation", json!(""), 30000);
     manager.poll();
     let request = manager
@@ -622,6 +626,10 @@ fn delegated_resources_and_async_continuations_follow_the_original_source_lifeti
         .unwrap();
     assert!(request.begin());
     manager.disable("service-consumer").unwrap();
+    assert!(
+        !completed_authority.is_live(),
+        "retiring the original caller revokes completed native resources"
+    );
     assert!(
         !request.enter_side_effect(),
         "revoked source cannot execute already-published editor work"
@@ -691,4 +699,30 @@ fn delegated_resources_and_async_continuations_follow_the_original_source_lifeti
     assert!(!request.enter_side_effect());
     manager.poll();
     assert_eq!(manager.live["provider-a"].resource_count(), resources);
+    // A fresh delegated request also retains the provider's own instance boundary.
+    command(
+        &mut manager,
+        "service-consumer",
+        "service-open",
+        json!("example.echo"),
+    );
+    call(&mut manager, "editor-continuation", json!(""), 30000);
+    manager.poll();
+    let request = manager
+        .live
+        .get_mut("provider-a")
+        .unwrap()
+        .take_editor_requests()
+        .pop()
+        .unwrap();
+    assert!(request.begin());
+    request.finish(Ok(api::EditorValue::Directory { path: "src".into() }));
+    let provider_authority = request.authority().clone();
+    manager.poll();
+    assert!(provider_authority.is_live());
+    manager.disable("provider-a").unwrap();
+    assert!(
+        !provider_authority.is_live(),
+        "retiring the provider revokes completed native resources"
+    );
 }

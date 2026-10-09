@@ -8,6 +8,8 @@ use plugin_runtime::plugin_protocol::api;
 
 /// Own only comparison decorations and the temporary left-pane input restriction.
 pub(crate) struct DocumentComparison {
+    /// Two local sources do not carry a virtual handle, so retain the caller's runtime authority.
+    authority: plugin_runtime::EditorAuthority,
     left: api::DocumentVersion,
     right: api::DocumentVersion,
     left_editor: Entity<EditorState>,
@@ -142,7 +144,7 @@ impl EditorApp {
             )
         })?;
         // Expensive pure comparison is cancellable until native focus/decorations actually change.
-        if !request.enter_side_effect() {
+        if !request.authority().is_live() || !request.enter_side_effect() {
             return Err(api::Failure::new(
                 api::ErrorCode::Cancelled,
                 "Comparison did not execute",
@@ -170,6 +172,7 @@ impl EditorApp {
             editor.create_range_decorations_collection(comparison_marks(&hunks, colors, false), cx)
         });
         self.document_comparison = Some(DocumentComparison {
+            authority: request.authority().clone(),
             left: left.clone(),
             right: right.clone(),
             left_editor,
@@ -226,7 +229,8 @@ impl EditorApp {
                         .is_none_or(|tab| tab.resource.is_live())
             })
         };
-        live(&comparison.left)
+        comparison.authority.is_live()
+            && live(&comparison.left)
             && live(&comparison.right)
             && self.active_tab_index().is_some_and(|index| {
                 self.plugin_document_version(index)
@@ -274,7 +278,6 @@ impl EditorApp {
         }
         let comparison = self.document_comparison.as_ref()?;
         let left = comparison.left_editor.clone();
-        crate::ui::controls::synchronize_editor_appearance(&left, cx);
         let left_title = comparison.left_title.clone();
         let right_title = comparison.right_title.clone();
         let left_label = format!(
@@ -291,7 +294,6 @@ impl EditorApp {
             window,
             cx,
         );
-        let style = component_styles(cx, ThemeComponent::Editor).base;
         let right = self.render_native_editor(window, cx);
         Some(
             div()
@@ -304,9 +306,13 @@ impl EditorApp {
                         Button::new("close-document-diff")
                             .label(t!("editor.close_diff").to_string())
                             .accessibility_label(t!("editor.close_diff").to_string())
-                            .on_click(
-                                cx.listener(|this, _, _, cx| this.close_document_comparison(cx)),
-                            ),
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                this.close_document_comparison(cx);
+                                // Only an explicit Close returns focus to the current document;
+                                // automatic invalidation must leave dialogs and other focus alone.
+                                this.editor
+                                    .update(cx, |editor, cx| editor.focus(window, cx));
+                            })),
                     ),
                 )
                 .child(
@@ -333,23 +339,7 @@ impl EditorApp {
                                     t!("editor.diff_left"),
                                     left_title
                                 )))
-                                .child(
-                                    div()
-                                        .flex_1()
-                                        .min_h_0()
-                                        .bg(style.background.unwrap_or(cx.theme().background))
-                                        .text_color(
-                                            style.foreground.unwrap_or(cx.theme().foreground),
-                                        )
-                                        .font_family(cx.theme().mono_font_family.clone())
-                                        .text_size(
-                                            style
-                                                .font_size_px
-                                                .map(px)
-                                                .unwrap_or(cx.theme().mono_font_size),
-                                        )
-                                        .child(left_input),
-                                ),
+                                .child(div().flex_1().min_h_0().child(left_input)),
                         )
                         .child(
                             div()

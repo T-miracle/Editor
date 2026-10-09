@@ -40,8 +40,8 @@ alternate: /en/sdk/documents/
 
 ## 比较与示例
 
-协商 `editor.diff ^1` 并声明 `editor.read`，用两个精确版本发送 `CompareDocuments { left, right }`。原生比较借用现有 EditorState，标记新增/删除/修改行，将左侧显示限制为只读，两侧独立滚动。左侧聚焦时保存不能误写活动右文件；右本地文档保留正常编辑与保存。任一源变化/关闭、离开活动右目标或提供者撤销后，比较和它自己拥有的装饰层被清理。
+协商 `editor.diff ^1` 并声明 `editor.read`，用两个精确版本发送 `CompareDocuments { left, right }`。原生比较借用现有 EditorState，标记新增/删除/修改行，将左侧显示限制为只读，两侧独立滚动。左侧聚焦时保存不能误写活动右文件；右本地文档保留正常编辑与保存。任一源变化/关闭、离开活动右目标，或发起实例及其委派调用方退役后，比较和它自己拥有的装饰层被清理；两份源都是本地文件时也遵守此归属。请求完成不会终止视图生命周期。关闭比较将键盘焦点返回右文档。
 
 比较每侧最多 1 MiB、2000 行，LCS 矩阵最多 4M 格，超限返回 `LimitExceeded`；不增加第二份可变文档、工具页或可写虚拟文件系统。
 
-独立项目 `plugins/history-preview` 展示固定历史内容，`plugins/generated-preview` 从当前未保存快照生成建议。使用宿主 `--plugin-package <项目> --output <目录>` 构建，类型来自 `--plugin-cargo` 使用的同一 SDK 缓存。插件命令菜单提供 **Compare historical content**、**Refresh historical content** 和 **Preview generated text**，重复运行可刷新只读资源并导航/比较新版本。
+展示历史文本或生成建议时，先枚举会话，以 `guest::read_document` 读取所选精确版本，派生不可变内容，再通过 `OpenVirtualDocument` 打开。用返回版本与源版本调用 `CompareDocuments`。刷新时，用当前拥有的版本调用 `RefreshVirtualDocument`，再把返回的新版本与重新读取的源版本进行比较。任一源变化后，需重新读取并显式请求新比较；旧比较不会自动跟随后续编辑。

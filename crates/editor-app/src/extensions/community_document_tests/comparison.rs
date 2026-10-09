@@ -9,7 +9,7 @@ fn community_consumers_compare_visible_panes_and_retire_resources(cx: &mut TestA
         let (_runtime, mut manager) = manager(path.parent().unwrap());
         let package = Package::read(
             &Path::new(env!("CARGO_MANIFEST_DIR"))
-                .join("../../target/community-api/generated-preview-0.1.0.zip"),
+                .join("../../target/community-api/generated-preview-0.1.1.zip"),
         )
         .unwrap();
         manager
@@ -220,6 +220,43 @@ fn community_consumers_compare_visible_panes_and_retire_resources(cx: &mut TestA
             assert_eq!(owner.status, t!("status.readonly_document").to_string());
         });
         assert_eq!(std::fs::read_to_string(path).unwrap(), "original on disk");
+        // Closing a focused readonly pane must return keyboard ownership to the live right session.
+        // Click the actual Base button hit region so a stale focus handle cannot pass this check.
+        let close = visual.update(|window, _| {
+            gpui_base::test_support::snapshots(window)
+                .into_iter()
+                .find(|node| {
+                    node.role() == Some(gpui_kit::Role::Button)
+                        && node.label() == Some(t!("editor.close_diff").as_ref())
+                        && node.visible()
+                })
+                .expect("visible comparison close button")
+                .bounds()
+                .center()
+        });
+        visual.simulate_mouse_down(close, gpui_kit::MouseButton::Left, Default::default());
+        visual.simulate_mouse_up(close, gpui_kit::MouseButton::Left, Default::default());
+        visual.run_until_parked();
+        visual.update(|window, cx| {
+            let owner = app.read(cx);
+            assert!(owner.document_comparison.is_none());
+            assert!(
+                owner.editor.read(cx).focus_handle(cx).is_focused(window),
+                "closing comparison must restore the current document's keyboard focus"
+            );
+            assert_eq!(foreign_marks.get_ranges(cx), vec![0..3]);
+        });
+        run_consumer(
+            visual,
+            &app,
+            &mut manager,
+            "history-preview",
+            "compare-history",
+        );
+        // Refresh replaces the readonly text and Base maps existing owner ranges with that change.
+        // Subsequent comparison disposal must retain those mapped ranges rather than old offsets.
+        let refreshed_marks = visual.update(|_, cx| foreign_marks.get_ranges(cx));
+        assert!(!refreshed_marks.is_empty());
         // A user edit on the right invalidates the comparison rather than leaving stale colors.
         let click = right.origin + gpui_kit::point(gpui_kit::px(20.), gpui_kit::px(60.));
         visual.simulate_mouse_down(click, gpui_kit::MouseButton::Left, Default::default());
@@ -232,7 +269,7 @@ fn community_consumers_compare_visible_panes_and_retire_resources(cx: &mut TestA
             visual.debug_bounds("document-diff-left").is_none(),
             "changed text must dismiss stale presentation"
         );
-        visual.update(|_, cx| assert_eq!(foreign_marks.get_ranges(cx), vec![0..3]));
+        visual.update(|_, cx| assert_eq!(foreign_marks.get_ranges(cx), refreshed_marks));
         run_consumer(
             visual,
             &app,
@@ -272,7 +309,7 @@ fn community_consumers_compare_visible_panes_and_retire_resources(cx: &mut TestA
         // A candidate that cannot instantiate must not revoke the previous provider or its view.
         let mut files = package.files.clone();
         let mut manifest: Json = serde_json::from_slice(&files["manifest.json"]).unwrap();
-        manifest["version"] = json!("0.1.1");
+        manifest["version"] = json!("0.1.2");
         files.insert(
             "manifest.json".into(),
             serde_json::to_vec(&manifest).unwrap(),

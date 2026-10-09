@@ -34,7 +34,7 @@ fn document_reader_can_request_live_document_enumeration() {
     let workspace = tempfile::tempdir().unwrap();
     let package = Package::read(
         &std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../target/community-api/history-preview-0.1.0.zip"),
+            .join("../../target/community-api/history-preview-0.1.1.zip"),
     )
     .unwrap();
     let mut manager = Manager::open(
@@ -72,7 +72,7 @@ fn document_reader_can_opt_in_to_ordered_events() {
     let workspace = tempfile::tempdir().unwrap();
     let package = Package::read(
         &std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../target/community-api/history-preview-0.1.0.zip"),
+            .join("../../target/community-api/history-preview-0.1.1.zip"),
     )
     .unwrap();
     let mut manager = Manager::open(
@@ -200,7 +200,7 @@ fn document_reader_can_opt_in_to_ordered_events() {
 fn document_reader_requires_permission_and_workspace_scope() {
     let package = Package::read(
         &std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../target/community-api/history-preview-0.1.0.zip"),
+            .join("../../target/community-api/history-preview-0.1.1.zip"),
     )
     .unwrap();
     for application in [false, true] {
