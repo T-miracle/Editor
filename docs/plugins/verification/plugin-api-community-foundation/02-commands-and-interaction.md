@@ -2,7 +2,7 @@
 
 日期：2026-10-09。对应 [工单 02 / GitHub #94](https://github.com/T-miracle/Nanobug/issues/94)、[实施正文](../../tickets/plugin-api-community-foundation/02-commands-and-interaction.md)与[总方案](../../specs/plugin-api-community-foundation.md)。
 
-状态：实现与本单自动验收已完成，根代理已记录原生候选复核，最终交付等待集成差异复核和 Standards / Spec 双轴审查；未推送、未关闭 issue。下文的 GPUI 测试与实际桌面观察分别记载，不能以编译或旧 exe 的观察冒充新指纹的物理验收。
+状态：实现、自动与原生行为验收、候选差异复核以及 Standards / Spec 双轴审查已完成。此记录的提交随后按既有工单授权推送并核对 #94 关闭；跟踪器实际状态由总进度入口另行记录。下文的 GPUI 测试与实际桌面观察分别记载，不能以编译或旧 exe 的观察冒充新指纹的物理验收。
 
 ## 原始构建与行为验收输入
 
@@ -102,7 +102,7 @@ cargo check --workspace
 
 同一最终 exe 的文件选择也经根代理实际操作：从编辑器菜单打开真正 Win32 picker，输入自有 `input.txt` 绝对路径并点击 Open；返回 panel 与 Notify 均显示 `input.txt:6490 bytes`，与磁盘 6490 字节一致，关闭通知正常。另一轮选择超过 60 秒后，系统 picker 实际自动关闭并回显 `timed_out / not_executed`。根代理集成提交 `586edb2` 的 `native-02.md` 已补齐目录、Save 意图不创建文件、工作区外 `外部😀.txt` 28 字节读取，以及系统取消关闭并返回 `Cancelled / cancelled / not_executed`；其观察指纹仍为 `e62ec53...`。四类菜单、缩放与退役边界结合上文对应的 GPUI / Manager 用例判定。
 
-工单 01 合入后的虚拟只读文档菜单需按资源身份适配 `path=None`，这是根代理后续集成回归，不能在本单独立树把虚拟资源伪装为磁盘路径。根代理已记录本单 C03 原生候选复核；审查修正后的差异复核与双轴审查尚待完成，此记录不授权提前关闭 #94。
+工单 01 合入后的虚拟只读文档菜单需按资源身份适配 `path=None`，这是根代理后续集成回归，不能在本单独立树把虚拟资源伪装为磁盘路径。根代理的完整 C03 观察已提交至集成分支 `586edb2` 的 [native-02.md](https://github.com/T-miracle/Nanobug/blob/586edb2fc495ea8ff376d702810e758d0fee7242/docs/plugins/verification/plugin-api-community-foundation/native-02.md)；本单后续审查修正的生产差异只涉及同参数转发删除、注释和 SDK 文档导出，不改变选择器或交互执行路径。候选差异复核与双轴审查结论见末节。
 
 ## 候选审查 P3 修正
 
@@ -152,3 +152,11 @@ Spec 复核确认两語命令页对 required / optional 的说明过于宽泛。
 | `target/plugin-api-test/example-0.4.0.zip` | `2b2ce9cadd9fcfddaf8a1dd2b2a40423aaad9e97f0087f3138335c2dea483877` |
 | `target/plugin-api-test/terminal-0.12.3.zip` | `9f21fdc0dde1d4ede4a401f6ec27e2548b7002ed4536b3ed7f4e6e27267a9639` |
 | `../target/interaction-provider-policy-candidate/editor-app.exe` | `349ae9a63d9f0a39bc8accdd0fca795e71b4307fa890e3b2654abd55244616a6` |
+
+## Standards 审查
+
+固定基线 `452994e6d3d6da526803cc62db96ee722580e670`，独立规范审查与 Spec 审查并行进行。初审指出转发包装方法与选择权限注释两项 P3，均在 `f222a4b` 修复；复核至 `abce948` 后未解决项为 **0**。最后 `e55689a` 仅调整双语 required 规则及验收记录，根代理核对其一致性与差异，未新增生产代码或扩大可见性。无 P0 / P1 / P2 留待交付。
+
+## Spec 审查
+
+同一固定基线的独立规格审查指出稳定政策和平台失败规则的 P2、资源释放示例的 P3，均在 `abce948` 修复。复核追加发现 typed 命令 / 菜单提供者 required 说明的 P3，在 `e55689a` 修复；独立复核确认 **未解决项为 0**。复核直接检查当前 SDK 缓存、三个包和宿主的实际摘要，以及网站 15 通过 / 2 跳过的日志；对未变化的选择、取消、焦点和原生控件路径采用上述明确的证据复用范围，没有冒称对新 exe 再做物理输入。01 合入后的新资源身份由集成阶段补验证。
