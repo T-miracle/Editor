@@ -33,7 +33,48 @@ impl State {
                 "Deadline must be between 1 and 300000 ms",
             ));
         }
+        // New local-resource and position operations are additive editor.documents 1.1 contracts.
+        if matches!(
+            &operation,
+            EditorOperation::OpenDocument {
+                resource: api::ResourceIdentity::Local { .. }
+            } | EditorOperation::LocateDocument { .. }
+                | EditorOperation::ListDocuments
+                | EditorOperation::ReadDocument { .. }
+        ) && self
+            .api
+            .capabilities
+            .get("editor.documents")
+            .is_none_or(|version| *version < semver::Version::new(1, 1, 0))
+        {
+            return Err(Failure::new(
+                ErrorCode::CapabilityUnavailable,
+                "Document resource operations require editor.documents 1.1",
+            ));
+        }
         let (capability, permission) = match &operation {
+            EditorOperation::OpenVirtualDocument { .. }
+            | EditorOperation::RefreshVirtualDocument { .. } => ("editor.virtual", "editor.read"),
+            EditorOperation::CompareDocuments { .. } => ("editor.diff", "editor.read"),
+            EditorOperation::OpenDocument {
+                resource: api::ResourceIdentity::Virtual { .. },
+            } => ("editor.virtual", "editor.read"),
+            EditorOperation::OpenDocument {
+                resource: api::ResourceIdentity::Local { path },
+            } => {
+                api::ResourceIdentity::Local { path: path.clone() }.validate()?;
+                if !self.permissions.contains("workspace.read") {
+                    return Err(Failure::new(
+                        ErrorCode::PermissionDenied,
+                        "Opening local documents requires workspace.read",
+                    ));
+                }
+                ("editor.documents", "editor.read")
+            }
+            EditorOperation::LocateDocument { .. } => ("editor.documents", "editor.read"),
+            EditorOperation::ListDocuments | EditorOperation::ReadDocument { .. } => {
+                ("editor.documents", "editor.read")
+            }
             EditorOperation::LocateViewport {
                 panel,
                 target,
@@ -140,6 +181,13 @@ impl State {
         let Value::Resource(handle) = self.roots.open(RootKind::EditorRequest)? else {
             unreachable!()
         };
+        let virtual_document = match self.prepare_virtual_document(&operation) {
+            Ok(resource) => resource,
+            Err(error) => {
+                self.roots.remove(&handle);
+                return Err(error);
+            }
+        };
         let mut call = EditorRequest::new(
             handle.clone(),
             operation,
@@ -152,6 +200,9 @@ impl State {
             self.mark_image_input_pending(&input.input.handle, handle.clone());
             call = call.with_image_input(input);
         }
+        if let Some(resource) = virtual_document {
+            call = call.with_virtual_document(resource);
+        }
         self.editor_requests.insert(
             handle.resource,
             PendingRequest {
@@ -162,6 +213,117 @@ impl State {
             },
         );
         Ok(Value::Accepted(handle))
+    }
+
+    /// Virtual access is direct, owned and bounded; service providers cannot borrow their caller's document.
+    fn prepare_virtual_document(
+        &mut self,
+        operation: &EditorOperation,
+    ) -> Result<Option<std::sync::Arc<crate::VirtualDocumentResource>>, Failure> {
+        let check = |document: &api::DocumentVersion| -> Result<Option<std::sync::Arc<crate::VirtualDocumentResource>>, Failure> {
+            if !document.path.starts_with("nanobug-virtual://") { return Ok(None); }
+            if self.plugin_services.context.is_some() {
+                return Err(Failure::new(ErrorCode::PermissionDenied, "Virtual documents are instance-owned"));
+            }
+            let resource = self.virtual_documents.values().find(|resource| resource.document().is_some_and(|bound| bound.id == document.id))
+                .ok_or_else(|| Failure::new(ErrorCode::PermissionDenied, "Virtual document is not owned by this instance"))?;
+            self.roots.resolve(resource.handle())?;
+            if !resource.is_live() { return Err(Failure::new(ErrorCode::InvalidHandle, "Virtual document was revoked")); }
+            if resource.document().as_ref() != Some(document) { return Err(Failure::new(ErrorCode::StaleRevision, "Virtual document revision changed")); }
+            Ok(Some(resource.clone()))
+        };
+        match operation {
+            EditorOperation::OpenVirtualDocument {
+                title,
+                language,
+                text,
+            } => {
+                if self.plugin_services.context.is_some() {
+                    return Err(Failure::new(
+                        ErrorCode::PermissionDenied,
+                        "Virtual providers require direct ownership",
+                    ));
+                }
+                if title.is_empty()
+                    || title.len() > 256
+                    || title.chars().any(char::is_control)
+                    || language.as_ref().is_some_and(|value| {
+                        value.len() > 128 || value.chars().any(char::is_control)
+                    })
+                {
+                    return Err(Failure::new(
+                        ErrorCode::InvalidRequest,
+                        "Invalid virtual document title or language",
+                    ));
+                }
+                if text.len() > 1024 * 1024 {
+                    return Err(Failure::new(
+                        ErrorCode::LimitExceeded,
+                        "Virtual content exceeds 1 MiB",
+                    ));
+                }
+                if self.virtual_documents.len() >= 32 {
+                    return Err(Failure::new(
+                        ErrorCode::LimitExceeded,
+                        "Virtual document quota exceeded",
+                    ));
+                }
+                let Value::Resource(handle) = self.roots.open(RootKind::VirtualDocument)? else {
+                    unreachable!()
+                };
+                let resource = std::sync::Arc::new(crate::VirtualDocumentResource::new(
+                    handle.clone(),
+                    self.plugin_services.alive.clone(),
+                ));
+                self.virtual_documents
+                    .insert(handle.resource, resource.clone());
+                Ok(Some(resource))
+            }
+            EditorOperation::OpenDocument {
+                resource: api::ResourceIdentity::Virtual { handle },
+            } => {
+                if self.plugin_services.context.is_some() {
+                    return Err(Failure::new(
+                        ErrorCode::PermissionDenied,
+                        "Virtual providers require direct ownership",
+                    ));
+                }
+                self.roots.resolve(handle)?;
+                let resource = self
+                    .virtual_documents
+                    .get(&handle.resource)
+                    .filter(|resource| resource.is_live())
+                    .ok_or_else(|| {
+                        Failure::new(ErrorCode::InvalidHandle, "Virtual document was revoked")
+                    })?;
+                Ok(Some(resource.clone()))
+            }
+            EditorOperation::RefreshVirtualDocument { document, text } => {
+                if text.len() > 1024 * 1024 {
+                    return Err(Failure::new(
+                        ErrorCode::LimitExceeded,
+                        "Virtual content exceeds 1 MiB",
+                    ));
+                }
+                check(document)?.map(Some).ok_or_else(|| {
+                    Failure::new(
+                        ErrorCode::UnsupportedOperation,
+                        "Only virtual documents can be refreshed",
+                    )
+                })
+            }
+            EditorOperation::ReadDocument { document, .. }
+            | EditorOperation::LocateDocument { document, .. }
+            | EditorOperation::SaveDocument { document }
+            | EditorOperation::ReadDocumentSelection { document }
+            | EditorOperation::ReplaceDocumentRange { document, .. } => check(document),
+            EditorOperation::CompareDocuments { left, right } => {
+                check(left)?;
+                check(right)?;
+                Ok(None)
+            }
+            _ => Ok(None),
+        }
     }
 }
 
@@ -214,6 +376,19 @@ impl Instance {
     }
     /// Terminal results release slots even if the guest fails while consuming its notification.
     pub(super) fn poll_editor_requests(&mut self) -> anyhow::Result<()> {
+        // A native tab close revokes its shared authority; release the persistent root before new work.
+        let revoked = self
+            .store
+            .data()
+            .virtual_documents
+            .iter()
+            .filter(|(_, resource)| !resource.is_live())
+            .map(|(slot, resource)| (*slot, resource.handle().clone()))
+            .collect::<Vec<_>>();
+        for (slot, handle) in revoked {
+            self.store.data_mut().virtual_documents.remove(&slot);
+            self.store.data_mut().roots.remove(&handle);
+        }
         let updates = self
             .store
             .data_mut()
@@ -240,6 +415,15 @@ impl Instance {
             }
             if update.is_terminal() {
                 if let Some(pending) = self.store.data_mut().editor_requests.remove(&slot) {
+                    if matches!(
+                        pending.call.operation(),
+                        EditorOperation::OpenVirtualDocument { .. }
+                    ) && !matches!(&update, api::RequestUpdate::Completed { result: Ok(_) })
+                    {
+                        if let Some(resource) = pending.call.virtual_document() {
+                            resource.revoke();
+                        }
+                    }
                     self.store
                         .data_mut()
                         .finish_image_input_request(&pending.call, &update);

@@ -250,6 +250,7 @@ impl EditorApp {
         self.file_watch.set_documents(
             self.tabs
                 .iter()
+                .filter(|tab| tab.virtual_document.is_none())
                 .map(|tab| WatchedFile {
                     path: tab.path().to_path_buf(),
                     text: tab.text.is_some(),
@@ -262,11 +263,17 @@ impl EditorApp {
         self.session_state.open_tabs = self
             .tabs
             .iter()
+            .filter(|tab| tab.virtual_document.is_none())
             .map(|tab| tab.path().to_string_lossy().into_owned())
             .collect();
         self.session_state.active_file = self
             .active_path
             .as_ref()
+            .filter(|path| {
+                self.tabs
+                    .iter()
+                    .any(|tab| tab.path() == path.as_path() && tab.virtual_document.is_none())
+            })
             .map(|path| path.to_string_lossy().into_owned());
         self.session_state.explorer_visible = self.explorer_visible;
         self.session_state.save();
@@ -322,6 +329,7 @@ impl EditorApp {
 
         if self.file_requires_readonly_view(&path, cx) {
             self.tabs.push(OpenTab {
+                virtual_document: None,
                 path,
                 file_id: NEXT_FILE_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
                 file_revision: 0,
@@ -344,98 +352,18 @@ impl EditorApp {
 
         match DocumentSession::open(&self.file_store, path.clone()) {
             Ok(opened) => {
-                let language = language_for_path(opened.session.path());
-                // Only the selected, permission-checked runtime service can attach to a document.
-                let server = self.language_servers.get(&language).cloned();
                 let document_path = opened.session.path().to_path_buf();
-                let contents = opened.contents;
-                let disk_digest = Sha256::digest(contents.as_bytes()).into();
-                let editor = cx.new(|cx| {
-                    EditorState::new(window, cx)
-                        // Keep the first render free of parser work while loading the file.
-                        .language("text")
-                        .line_number(true)
-                        .indent_guides(true)
-                        .folding(true)
-                        .tab_size(TabSize {
-                            tab_size: 4,
-                            hard_tabs: false,
-                        })
-                });
-                let app = cx.entity().downgrade();
-                editor.update(cx, |editor, cx| {
-                    editor.set_value(contents, window, cx);
-                });
-                if let Some(server) = server {
-                    // All tabs for a plugin language share its workspace server.
-                    attach_language_server(&editor, &document_path, server, app, cx);
-                }
-                // Definition markers use their own layer beside plugin syntax highlighting.
-                let definition_highlight = editor.update(cx, |editor, cx| {
-                    editor.create_decorations_collection(Vec::new(), cx)
-                });
-                let subscription =
-                    cx.subscribe(&editor, |this, changed_editor, event: &InputEvent, cx| {
-                        if matches!(event, InputEvent::Change) {
-                            // Handle typing, paste, undo and IME through the
-                            // document event, including edits without keydown.
-                            if this.editor.entity_id() == changed_editor.entity_id() {
-                                this.invalidate_editor_previews(cx);
-                                this.dismiss_pointer_hover(cx);
-                            }
-                            // Each tab keeps its own revision, including background edits.
-                            if let Some(index) = this
-                                .tabs
-                                .iter()
-                                .position(|tab| tab.owns_editor(&changed_editor))
-                            {
-                                let Some(tab) = this.tabs[index].text.as_mut() else {
-                                    return;
-                                };
-                                tab.capability_revision = tab.capability_revision.saturating_add(1);
-                                if tab.suppress_change {
-                                    return;
-                                }
-                                tab.session.note_edit();
-                                if this.editor.entity_id() == changed_editor.entity_id() {
-                                    this.status =
-                                        t!("status.modified", revision = tab.session.revision())
-                                            .to_string();
-                                }
-                            }
-                            this.refresh_syntax_diagnostics(changed_editor.entity_id(), cx);
-                            cx.notify();
-                        }
-                    });
-                // Host-owned popovers follow upstream menu and hover notifications.
-                let panel = self.editor_panel.downgrade();
-                let observer = cx.observe(&editor, move |this, changed_editor, cx| {
-                    if this.editor.entity_id() == changed_editor.entity_id() {
-                        let _ = panel.update(cx, |_, cx| cx.notify());
-                    }
-                });
+                let language = language_for_path(&document_path);
+                let text = self.create_native_text_tab(opened, window, cx);
                 self.tabs.push(OpenTab {
+                    virtual_document: None,
                     path: document_path,
                     file_id: NEXT_FILE_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
                     file_revision: 0,
                     opened_at: Instant::now(),
                     file_digest: None,
                     file_error: None,
-                    text: Some(TextTab {
-                        capability_revision: 0,
-                        session: opened.session,
-                        editor,
-                        disk_digest,
-                        last_saved_at: Instant::now(),
-                        disk_state: DiskState::Synced,
-                        suppress_change: false,
-                        overwrite_confirmed: false,
-                        definition_highlight,
-                        definition_highlight_generation: 0,
-                        diagnostics: Default::default(),
-                        _subscription: subscription,
-                        _observer: observer,
-                    }),
+                    text: Some(text),
                 });
                 self.sync_watched_documents();
                 self.activate_tab_with_navigation(
@@ -457,6 +385,7 @@ impl EditorApp {
                 if matches!(&error, editor_core::DocumentError::Read { source, .. } if source.kind() == std::io::ErrorKind::InvalidData)
                 {
                     self.tabs.push(OpenTab {
+                        virtual_document: None,
                         path,
                         file_id: NEXT_FILE_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
                         file_revision: 0,
@@ -777,11 +706,12 @@ impl EditorApp {
             return;
         };
         let path = tab.path().to_path_buf();
-        let language = language_for_path(&path);
-        let file_name = path
-            .file_name()
-            .map(|name| name.to_string_lossy().into_owned())
-            .unwrap_or_else(|| t!("editor.untitled").to_string());
+        let language = tab
+            .virtual_document
+            .as_ref()
+            .map(|virtual_tab| virtual_tab.language.clone())
+            .unwrap_or_else(|| language_for_path(&path));
+        let file_name = tab.title();
         let editor = tab.text.as_ref().map(|text| text.editor.clone());
         let file_id = tab.file_id;
 
@@ -849,6 +779,7 @@ impl EditorApp {
         }
         self.status = t!("status.opened", file_name = file_name, language = language).to_string();
         self.persist_session();
+        self.sync_plugin_documents(cx);
         cx.notify();
     }
 
@@ -899,7 +830,7 @@ impl EditorApp {
     }
 
     /// Saved close and approved discard share document ownership, language and focus cleanup.
-    fn remove_tab(
+    pub(super) fn remove_tab(
         &mut self,
         index: usize,
         path: PathBuf,
@@ -912,10 +843,15 @@ impl EditorApp {
             self.withdraw_bundled_request(cx);
         }
         self.close_language_document(&path, cx);
+        self.sync_plugin_documents(cx);
+        if let Some(virtual_tab) = &self.tabs[index].virtual_document {
+            virtual_tab.resource.revoke();
+        }
         self.tabs.remove(index);
         self.sync_watched_documents();
         if !was_active {
             self.persist_session();
+            self.sync_plugin_documents(cx);
             cx.notify();
             return;
         }
@@ -942,6 +878,7 @@ impl EditorApp {
             });
             self.status = t!("status.no_open_files").to_string();
             self.persist_session();
+            self.sync_plugin_documents(cx);
             // Dock panels cache their rendered content independently of the app shell.
             self.editor_panel.update(cx, |_, cx| cx.notify());
             cx.notify();
@@ -977,6 +914,15 @@ impl EditorApp {
             cx.notify();
             return;
         };
+        if self.tabs[index].virtual_document.is_some() {
+            self.report_host_message(
+                MessageLevel::Warning,
+                t!("status.readonly_document").to_string(),
+                cx,
+            );
+            cx.notify();
+            return;
+        }
         let Some(tab) = self.tabs[index].text.as_mut() else {
             return;
         };
@@ -1044,11 +990,24 @@ impl EditorApp {
             return;
         }
 
+        let save_path = tab.path().to_path_buf();
+        self.publish_document_save(index, None, cx);
+        let tab = self.tabs[index]
+            .text
+            .as_mut()
+            .expect("save target remains open");
         let value = self.editor.read(cx).value().to_string();
         if let Some(history) = &self.history {
-            let _ = history.snapshot_file(tab.path());
+            let _ = history.snapshot_file(&save_path);
         }
-        match tab.session.save(&self.file_store, &value) {
+        let saved = tab.session.save(&self.file_store, &value);
+        let event_result = saved.as_ref().map(|_| ()).map_err(|error| {
+            plugin_runtime::plugin_protocol::api::Failure::new(
+                plugin_runtime::plugin_protocol::api::ErrorCode::OperationFailed,
+                error.to_string(),
+            )
+        });
+        match saved {
             Ok(()) => {
                 tab.disk_digest = Sha256::digest(value.as_bytes()).into();
                 tab.last_saved_at = Instant::now();
@@ -1067,6 +1026,7 @@ impl EditorApp {
                 );
             }
         }
+        self.publish_document_save(index, Some(event_result), cx);
         cx.notify();
     }
 }

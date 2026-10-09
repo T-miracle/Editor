@@ -318,6 +318,8 @@ impl EditorApp {
             .tabs
             .iter()
             .position(|tab| tab.owns_editor(&self.editor))
+            // First-use discovery canonicalizes a local file; a virtual URI names no filesystem entry.
+            .filter(|index| self.tabs[*index].virtual_document.is_none())
             .and_then(|index| self.plugin_document_version(index).ok())
             .zip(self.active_path.clone())
             .map(|(document, file)| Source {

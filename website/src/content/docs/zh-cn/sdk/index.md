@@ -8,6 +8,16 @@ alternate: /en/sdk/
 
 # 插件 SDK
 
+## 稳定性与能力兼容
+
+各能力页面明确版本及稳定或实验状态。稳定能力在同一个 major 内保持既有操作的数据形状和语义兼容，minor 可添加功能。插件使用后续新增功能时，需声明该功能的最低能力版本并检查协商结果。实验能力显式标记，不承诺稳定接口的兼容规则；权限、实例归属与资源清理规则仍然适用。
+
+未知、不可用或版本不匹配的 `api.required` 能力在激活前拒绝包。不可用的 `api.optional` 能力不进入 Prepare 协商结果，包括未知的可选能力 ID；插件需禁用相应功能或自行降级。可选协商不授予权限，也不会使未支持的操作变为可调用。
+
+最低宿主由其支持的传输/基础协议和必需能力版本确定，不猜测 Nanobug 产品版本号。当前 SDK 使用 `protocol = 7`、`api.base = ^1`，各能力页面给出额外最低范围。包、SDK、传输协议与能力版本分别管理；此政策不引入未来或历史传输协议的支持。
+
+破坏性变化必须提升能力 major。移除稳定 API 前公开弃用说明，列明受影响版本范围、替代接口、替代接口的最低能力与迁移步骤；当前 major 内仍保持兼容。稳定的 `plugin.commands`、`ui.interaction` 与 `files.selection` 1.0.0 契约目前均未弃用。
+
 跨插件协作、版本化契约、提供者选择及来源权限见 [SERVICES.md](/zh-cn/sdk/services/)。
 
 原生服务、交互式进程、权限与回收契约见 [PROCESSES.md](/zh-cn/sdk/processes/)。
@@ -98,3 +108,5 @@ Rust SDK 0.2.0 删除旧 Message/Event/Reply/Request、Scene/Widget 与 CanvasCo
 
 旧协议 1–6 的包拒绝安装和执行，保留安装记录以展示更新/卸载与启用偏好。仅保留有限的历史 ID、私有数据与布局导入；数据导入不会恢复旧代码执行能力。热更新和迁移详情见 [MIGRATION.md](/zh-cn/sdk/migration/)。
 [语义视口](/zh-cn/sdk/viewport/)、[链接与导航](/zh-cn/sdk/navigation/)和[只读代码高亮](/zh-cn/sdk/code-highlighting/)增加版本化原生预览交互，不建立另一份可变文档。
+
+[文档与只读资源](/zh-cn/sdk/documents/)介绍未保存快照、顺序元数据订阅、实例拥有的虚拟 Tab 和原生比较。

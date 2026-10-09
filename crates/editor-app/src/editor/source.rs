@@ -10,6 +10,7 @@ impl EditorApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> gpui_kit::AnyElement {
+        crate::ui::controls::synchronize_editor_appearance(&self.editor, cx);
         let style = component_styles(cx, ThemeComponent::Editor).base;
         // Modal surfaces own the window until dismissed; ordinary floating
         // panels can remain below the raised definition details layer.

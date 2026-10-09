@@ -1,0 +1,16 @@
+[package]
+name = "history-preview-guest"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.95"
+license = "MIT"
+
+# This is an independent consumer of the host's exported SDK.
+[workspace]
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+plugin-protocol = { version = "=0.2.0", features = ["guest"] }
+serde_json = "1.0"

@@ -5,7 +5,7 @@ use protocol::api::{self, EditorOperation as Op, EditorValue, RequestUpdate};
 
 /// Read selection and save the exact requested revision through the real GPUI document path.
 #[gpui::test]
-#[ignore = "build with scripts/build-capability-example.ps1 first"]
+#[ignore = "package capability-example with host --plugin-package into target/plugin-api-test/capability-example.zip first"]
 fn typed_editor_requests_read_selection_and_save_without_switching_documents(
     cx: &mut TestAppContext,
 ) {
@@ -44,6 +44,19 @@ fn typed_editor_requests_read_selection_and_save_without_switching_documents(
         Root::new(app, window, cx)
     });
     let app = slot.borrow_mut().take().unwrap();
+    // This solo-panel fixture measures the plugin panel's width. Default-visible messages
+    // share its right dock and legitimately retain that region when only the plugin is hidden.
+    // Remove this unrelated native leaf through Base's public layout API rather than changing
+    // production shared-dock policy or assuming that a hidden peer has no retained identity.
+    cx.update(|window, cx| {
+        app.update(cx, |owner, cx| {
+            let messages = owner.messages.clone();
+            messages.update(cx, |panel, cx| panel.set_visible(false, cx));
+            owner
+                .dock_area
+                .update(cx, |area, cx| area.remove_panel(messages, window, cx));
+        });
+    });
     cx.simulate_resize(size(px(1200.), px(800.)));
     cx.run_until_parked();
     cx.update(|window, cx| {

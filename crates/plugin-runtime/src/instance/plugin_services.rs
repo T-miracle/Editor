@@ -280,6 +280,17 @@ impl State {
                 "workspace.read"
             }
             api::Operation::Editor { operation, .. } => match operation {
+                api::EditorOperation::OpenDocument {
+                    resource: api::ResourceIdentity::Local { .. },
+                } => {
+                    if !context.permissions.contains("editor.read") {
+                        return Err(Failure::new(
+                            ErrorCode::PermissionDenied,
+                            "Service source did not delegate editor.read",
+                        ));
+                    }
+                    "workspace.read"
+                }
                 api::EditorOperation::NavigateDocument { target, .. } => {
                     // A service source must delegate both base editor access and the target grant.
                     // External navigation remains unavailable through the current service whitelist.

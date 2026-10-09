@@ -1,0 +1,16 @@
+[package]
+name = "generated-preview-guest"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.95"
+license = "MIT"
+
+# Independent builds use the SDK supplied by the host --plugin-cargo entry point.
+[workspace]
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+plugin-protocol = { version = "=0.2.0", features = ["guest"] }
+serde_json = "1.0"

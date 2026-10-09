@@ -63,7 +63,10 @@ describe('documentation links', () => {
     for (const page of pages) {
       for (const link of collectLinks(page)) {
         if (isExternal(link.url) || link.url.startsWith('#')) continue;
-        const target = `${basePrefix}${link.url.startsWith('/') ? link.url : `/${link.url}`}`;
+        // A fragment names a heading inside a page, not another published route.
+        // The following check verifies that heading separately against the same target.
+        const path = link.url.split('#', 1)[0];
+        const target = `${basePrefix}${path.startsWith('/') ? path : `/${path}`}`;
         if (!routes.has(target)) {
           failures.push(`${page.id}:${link.line} -> ${link.url}`);
         }

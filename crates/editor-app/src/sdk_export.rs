@@ -14,6 +14,16 @@ use std::process::Command;
 use std::{borrow::Cow, io::Write};
 
 const SDK_FILES: &[(&str, &[u8])] = &[
+    // The reader-facing document contract is exported verbatim with these Rust types.
+    (
+        "DOCUMENTS.md",
+        include_bytes!("../../../website/src/content/docs/en/sdk/documents.md"),
+    ),
+    // Document contracts ship in the exact same SDK used by the host consumer.
+    (
+        "src/api/documents.rs",
+        include_bytes!("../../plugin-protocol/src/api/documents.rs"),
+    ),
     // The shared project format is shipped beside the public contract for independent authors.
     (
         "PACKAGING.md",
@@ -360,6 +370,7 @@ fn exported_bytes<'a>(relative: &str, bytes: &'a [u8]) -> Cow<'a, [u8]> {
         ("ui", "UI.md"),
         ("processes", "PROCESSES.md"),
         ("languages", "LANGUAGES.md"),
+        ("documents", "DOCUMENTS.md"),
         ("", "README.md"),
     ] {
         let route = if route.is_empty() {
@@ -470,6 +481,26 @@ mod tests {
     }
 
     /// Exported Markdown must be navigable from the SDK directory without a running website.
+    #[test]
+    fn documents_sdk_exports_stable_contract_and_policy_link() {
+        let root = tempfile::tempdir().unwrap();
+        export(root.path()).unwrap();
+        let readme = std::fs::read_to_string(root.path().join("README.md")).unwrap();
+        let documents = std::fs::read_to_string(root.path().join("DOCUMENTS.md")).unwrap();
+        assert!(
+            readme.contains("](DOCUMENTS.md)"),
+            "README must link to the embedded document contract"
+        );
+        assert_eq!(
+            documents.lines().next(),
+            Some("# Documents and readonly resources")
+        );
+        assert!(documents.contains("are stable core"));
+        assert!(documents.contains("](README.md#stability-and-capability-compatibility)"));
+        assert!(readme.contains("## Stability and capability compatibility"));
+    }
+
+    /// All independently exported pages resolve to the same immutable SDK bundle.
     #[test]
     fn exported_reader_documents_resolve_all_local_links() {
         let root = tempfile::tempdir().unwrap();

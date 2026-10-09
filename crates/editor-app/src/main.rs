@@ -213,6 +213,15 @@ struct EditorApp {
     /// Last published open identities allow versioned close notifications without retaining document text.
     plugin_documents:
         std::collections::BTreeMap<String, plugin_runtime::plugin_protocol::api::DocumentVersion>,
+    /// Immutable metadata watermarks contain no second mutable text or undo model.
+    plugin_document_metadata:
+        std::collections::BTreeMap<String, plugin_runtime::plugin_protocol::api::DocumentInfo>,
+    /// Active changes are observed independently of text revisions.
+    plugin_active_document: Option<plugin_runtime::plugin_protocol::api::DocumentVersion>,
+    /// Sequence numbers preserve ordered source observations across worker publication.
+    plugin_document_sequence: u64,
+    /// A comparison borrows existing native document entities and owns only its decoration layers.
+    document_comparison: Option<editor::comparison::DocumentComparison>,
     plugin_popup: Option<(PluginPopupKind, Point<Pixels>)>,
     /// A native file context menu captures the opened identity before presenting provider choices.
     file_view_menu: Option<Entity<ui::controls::menu::PopupMenu>>,
@@ -509,6 +518,10 @@ impl EditorApp {
             image_drag: None,
             plugin_saves: Default::default(),
             plugin_documents: Default::default(),
+            plugin_document_metadata: Default::default(),
+            plugin_active_document: None,
+            plugin_document_sequence: 0,
+            document_comparison: None,
             plugin_popup: None,
             file_view_menu: None,
             function_context: None,
@@ -638,6 +651,10 @@ impl EditorApp {
     }
 
     fn on_save_action(&mut self, _: &SaveDocument, window: &mut Window, cx: &mut Context<Self>) {
+        // Native focus chooses the readonly source; the active right tab must not borrow a left save.
+        if self.reject_readonly_document_action(window, cx) {
+            return;
+        }
         // The optional formatter must finish for this revision before the existing disk-save path runs.
         self.save_document_with_formatting(window, cx);
     }

@@ -69,6 +69,15 @@ impl EditorApp {
     }
     /// The same file type shares one selection in this private workspace session.
     fn file_provider_type(&self) -> Option<String> {
+        // File providers and their remembered choices describe local files, never provider-owned URIs.
+        if self
+            .tabs
+            .get(self.active_tab_index()?)?
+            .virtual_document
+            .is_some()
+        {
+            return None;
+        }
         Some(
             self.active_path
                 .as_ref()?

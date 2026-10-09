@@ -1,0 +1,20 @@
+{
+  "id": "history-preview",
+  "name": "History Preview",
+  "version": "0.1.0",
+  "protocol": 7,
+  "api": {
+    "base": "^1",
+    "required": { "ui.native": "^1", "editor.documents": "^1.1", "editor.virtual": "^1", "editor.diff": "^1" }
+  },
+  "component": "history-preview.wasm",
+  "permissions": ["editor.read", "ui.panels"],
+  "panels": [{ "id": "history", "title": "History Preview", "position": "right" }],
+  "commands": [
+    { "id": "probe", "title": "Inspect document contract" },
+    { "id": "events", "title": "Inspect document events" },
+    { "id": "refresh-history", "title": "Refresh historical content", "menu": true },
+    { "id": "compare-history", "title": "Compare historical content", "menu": true }
+  ],
+  "storage_limit": 4096
+}

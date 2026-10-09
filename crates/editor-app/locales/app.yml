@@ -1,4 +1,19 @@
 _version: 2
+editor.readonly_label:
+  en: "Read-only"
+  zh-CN: "只读"
+status.readonly_document:
+  en: "This document is read-only and cannot be saved"
+  zh-CN: "此文档为只读内容，无法保存"
+editor.diff_left:
+  en: "Previous / generated"
+  zh-CN: "历史 / 生成内容"
+editor.diff_right:
+  en: "Current document"
+  zh-CN: "当前文档"
+editor.close_diff:
+  en: "Close comparison"
+  zh-CN: "关闭比较"
 shortcuts.global_tab:
   en: "Global shortcuts"
   zh-CN: "全局快捷键"

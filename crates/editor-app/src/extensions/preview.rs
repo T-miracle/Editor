@@ -250,6 +250,7 @@ impl EditorApp {
         let selected = self.active_editor_preview(cx);
         let version = self
             .active_tab_index()
+            .filter(|index| self.tabs[*index].virtual_document.is_none())
             .and_then(|index| self.plugin_document_version(index).ok());
         let expected_file = self
             .active_tab_index()
@@ -257,6 +258,7 @@ impl EditorApp {
             .map(|file| file.version);
         let context = self
             .active_text_tab_index()
+            .filter(|index| self.tabs[*index].virtual_document.is_none())
             .and_then(|index| self.text_tab(index))
             .map(|text| (text.path().to_path_buf(), text.session.revision()));
         for panel in self.plugin_panels.values() {
@@ -488,6 +490,13 @@ impl EditorApp {
         let file = self.tabs.get(index).ok_or_else(|| {
             protocol::api::Failure::new(protocol::api::ErrorCode::NotFound, "File is closed")
         })?;
+        // Legacy file previews promise a local FileVersion; only new resource APIs opt into virtual text.
+        if file.virtual_document.is_some() {
+            return Err(protocol::api::Failure::new(
+                protocol::api::ErrorCode::UnsupportedOperation,
+                "Virtual resources have no local FileContext",
+            ));
+        }
         let relative = file
             .path()
             .strip_prefix(self.workspace.root())

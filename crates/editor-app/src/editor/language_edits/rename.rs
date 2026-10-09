@@ -9,6 +9,9 @@ impl EditorApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.reject_readonly_document_action(window, cx) {
+            return;
+        }
         if self.wait_for_native_input(DocumentAction::Rename, window, cx) {
             return;
         }

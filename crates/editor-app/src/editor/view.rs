@@ -318,11 +318,11 @@ impl EditorApp {
                 .text
                 .as_ref()
                 .map_or(DiskState::Synced, |text| text.disk_state);
-            let name = tab
-                .path()
-                .file_name()
-                .map(|name| name.to_string_lossy().into_owned())
-                .unwrap_or_else(|| t!("editor.untitled").to_string());
+            let name = if tab.virtual_document.is_some() {
+                format!("{} · {}", tab.title(), t!("editor.readonly_label"))
+            } else {
+                tab.title()
+            };
             let icon = file_icon(&path, false, &theme::active_theme(self.dark_theme));
             let activate_path = path.clone();
             let context_path = path.clone();
@@ -681,7 +681,9 @@ impl EditorApp {
                 .child(body)
                 .into_any_element();
         }
-        let body = if let Some(preview) = self.active_editor_preview(cx) {
+        let body = if let Some(comparison) = self.render_document_comparison(window, cx) {
+            comparison
+        } else if let Some(preview) = self.active_editor_preview(cx) {
             self.render_editor_preview_body(preview, window, cx)
         } else {
             self.render_native_editor(window, cx)

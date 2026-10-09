@@ -4,6 +4,8 @@ mod bundled;
 mod capability_tests;
 mod commands;
 #[cfg(test)]
+mod community_document_tests;
+#[cfg(test)]
 pub(crate) mod composable_tests;
 pub(crate) mod contributions;
 #[cfg(test)]
@@ -720,7 +722,18 @@ impl ExtensionPanel {
             // Defer until this ExtensionPanel borrow ends before reading the shared publication.
             let parent = self.parent.clone();
             cx.defer(move |cx| {
-                let _ = parent.update(cx, |app, cx| app.sync_shortcut_plugins(cx));
+                let _ = parent.update(cx, |app, cx| {
+                    app.sync_shortcut_plugins(cx);
+                    // Explicit resource release may leave package contributions unchanged. Wake the
+                    // native shell so revoked readonly tabs cannot outlive their retained authority.
+                    if app.tabs.iter().any(|tab| {
+                        tab.virtual_document
+                            .as_ref()
+                            .is_some_and(|virtual_tab| !virtual_tab.resource.is_live())
+                    }) {
+                        cx.notify();
+                    }
+                });
             });
         }
         if changed {

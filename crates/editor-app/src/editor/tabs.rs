@@ -12,6 +12,8 @@ pub(crate) static NEXT_FILE_ID: std::sync::atomic::AtomicU64 = std::sync::atomic
 
 /// A file tab owns its identity independently of native text editing resources.
 pub(crate) struct OpenTab {
+    /// Virtual identities carry revocable ownership and never represent a backing disk file.
+    pub(crate) virtual_document: Option<VirtualTab>,
     pub(crate) path: PathBuf,
     pub(crate) file_id: u64,
     pub(crate) file_revision: u64,
@@ -25,6 +27,19 @@ pub(crate) struct OpenTab {
 }
 
 impl OpenTab {
+    /// Native presentation uses the provider's title independently of the opaque resource URI.
+    pub(crate) fn title(&self) -> String {
+        self.virtual_document
+            .as_ref()
+            .map(|virtual_tab| virtual_tab.title.clone())
+            .unwrap_or_else(|| {
+                self.path
+                    .file_name()
+                    .unwrap_or_default()
+                    .to_string_lossy()
+                    .into_owned()
+            })
+    }
     /// File navigation does not require consulting a text editing session.
     pub(crate) fn path(&self) -> &Path {
         &self.path
@@ -46,6 +61,20 @@ impl OpenTab {
         self.text
             .as_ref()
             .is_some_and(|text| text.editor.entity_id() == id)
+    }
+}
+
+/// Provider metadata contains authority and display hints, never a second mutable document value.
+pub(crate) struct VirtualTab {
+    pub(crate) resource: std::sync::Arc<plugin_runtime::VirtualDocumentResource>,
+    pub(crate) title: String,
+    pub(crate) language: String,
+}
+
+impl Drop for VirtualTab {
+    /// Window/workspace teardown seals authority even without an explicit user close operation.
+    fn drop(&mut self) {
+        self.resource.revoke();
     }
 }
 

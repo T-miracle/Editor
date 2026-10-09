@@ -132,6 +132,34 @@ pub fn editor(operation: EditorOperation, timeout_ms: u32) -> Result<ResourceHan
     }
 }
 
+/// Observe ordered document metadata with an eight-subscription, 128-event budget.
+/// Release with close_resource; a terminal SubscriptionFailed requires enumerating and resubscribing.
+/// WillSave is observational and cannot intercept or delay the host's save.
+pub fn subscribe_document_events() -> Result<ResourceHandle, Failure> {
+    match request(Operation::SubscribeDocumentEvents)? {
+        Value::Resource(handle) => Ok(handle),
+        _ => Err(wire_error("Expected detailed document subscription")),
+    }
+}
+
+/// Start a bounded live-document enumeration; consume its Documents result with EditorTask::update.
+pub fn list_documents(timeout_ms: u32) -> Result<EditorTask, Failure> {
+    EditorTask::start(EditorOperation::ListDocuments, timeout_ms)
+}
+
+/// Read current unsaved text at an exact revision, optionally in strict UTF-8/UTF-16 coordinates.
+/// Completed snapshots are immutable; stale or closed targets fail with StaleRevision.
+pub fn read_document(
+    document: DocumentVersion,
+    range: Option<DocumentRange>,
+    timeout_ms: u32,
+) -> Result<EditorTask, Failure> {
+    EditorTask::start(
+        EditorOperation::ReadDocument { document, range },
+        timeout_ms,
+    )
+}
+
 /// Correlation IDs are transport details; callers receive typed values or failures.
 pub fn request(operation: Operation) -> Result<Value, Failure> {
     let id = NEXT_ID.with(|next| {

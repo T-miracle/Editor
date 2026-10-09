@@ -8,6 +8,8 @@ pub trait DocumentStore {
 
 #[derive(Debug, Error)]
 pub enum DocumentError {
+    #[error("document is readonly: {0}")]
+    ReadOnly(PathBuf),
     #[error("document has no file name: {0}")]
     MissingFileName(PathBuf),
     #[error("failed to read {path}: {source}")]
@@ -36,6 +38,8 @@ pub struct DocumentSession {
     path: PathBuf,
     revision: u64,
     saved_revision: u64,
+    /// Readonly session identities are never interpreted as filesystem save destinations.
+    readonly: bool,
 }
 
 impl DocumentSession {
@@ -50,6 +54,7 @@ impl DocumentSession {
                 path,
                 revision: 0,
                 saved_revision: 0,
+                readonly: false,
             },
             contents,
         })
@@ -57,6 +62,23 @@ impl DocumentSession {
 
     pub fn path(&self) -> &Path {
         &self.path
+    }
+    /// Construct metadata for host-owned readonly text; the native editor still owns its value.
+    /// The identity may be a non-file URI and must never be passed to a DocumentStore.
+    pub fn readonly_resource(identity: impl Into<PathBuf>, contents: String) -> OpenedDocument {
+        OpenedDocument {
+            session: Self {
+                path: identity.into(),
+                revision: 0,
+                saved_revision: 0,
+                readonly: true,
+            },
+            contents,
+        }
+    }
+    /// Callers must offer explicit read/edit/save abilities rather than assuming a disk file.
+    pub fn is_readonly(&self) -> bool {
+        self.readonly
     }
 
     /// Preserve the editor revision when a paired filesystem rename moves this file.
@@ -80,10 +102,13 @@ impl DocumentSession {
     }
 
     pub fn note_edit(&mut self) {
+        if self.readonly {
+            return;
+        }
         self.revision = self.revision.saturating_add(1);
     }
 
-    /// A user-confirmed disk reload becomes the new saved revision without writing editor text to disk.
+    /// A host-confirmed replacement (disk reload or readonly provider refresh) becomes the saved baseline.
     /// Call only after replacing the editor value, including an explicit discard of unsaved content.
     pub fn accept_disk_reload(&mut self) {
         self.revision = self.revision.saturating_add(1);
@@ -95,6 +120,9 @@ impl DocumentSession {
         store: &impl DocumentStore,
         current_editor_text: &str,
     ) -> Result<(), DocumentError> {
+        if self.readonly {
+            return Err(DocumentError::ReadOnly(self.path.clone()));
+        }
         store.write_utf8(&self.path, current_editor_text)?;
         self.saved_revision = self.revision;
         Ok(())
@@ -143,5 +171,24 @@ mod tests {
 
         assert!(!session.is_dirty());
         assert_eq!(session.revision(), 1);
+    }
+
+    /// Readonly URI sessions never call a file writer, including after provider refresh.
+    #[test]
+    fn readonly_resource_cannot_be_saved_as_a_file() {
+        let store = MemoryStore::default();
+        let mut session =
+            DocumentSession::readonly_resource("nanobug-virtual://instance/1", "preview".into())
+                .session;
+        session.note_edit();
+        assert!(!session.is_dirty());
+        session.accept_disk_reload();
+        assert_eq!(session.revision(), 1);
+        assert!(!session.is_dirty());
+        assert!(matches!(
+            session.save(&store, "updated"),
+            Err(DocumentError::ReadOnly(_))
+        ));
+        assert!(store.0.borrow().is_empty());
     }
 }

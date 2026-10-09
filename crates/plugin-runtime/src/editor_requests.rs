@@ -17,6 +17,8 @@ pub struct EditorRequest {
     completion: Completion<EditorValue>,
     /// Only native-offered bytes can back an image save; the JSON operation contains an opaque handle.
     image_input: Option<std::sync::Arc<crate::ImageInputResource>>,
+    /// Persistent authority is distinct from this transient completion handle.
+    virtual_document: Option<std::sync::Arc<crate::VirtualDocumentResource>>,
 }
 impl EditorRequest {
     /// Construction follows authority checks in the instance; only typed owned data crosses threads.
@@ -37,6 +39,7 @@ impl EditorRequest {
             data_root,
             completion,
             image_input: None,
+            virtual_document: None,
         }
     }
     pub fn handle(&self) -> &ResourceHandle {
@@ -44,6 +47,18 @@ impl EditorRequest {
     }
     pub fn operation(&self) -> &EditorOperation {
         &self.operation
+    }
+    /// Native virtual opens require runtime-issued owned authority.
+    pub fn virtual_document(&self) -> Option<&std::sync::Arc<crate::VirtualDocumentResource>> {
+        self.virtual_document.as_ref()
+    }
+    /// Attach after the instance admits ownership, permissions and quota.
+    pub(crate) fn with_virtual_document(
+        mut self,
+        resource: std::sync::Arc<crate::VirtualDocumentResource>,
+    ) -> Self {
+        self.virtual_document = Some(resource);
+        self
     }
     /// The native writer borrows immutable authorized pixels and the original document/selection binding.
     pub fn image_input(&self) -> Option<&crate::ImageInputResource> {
@@ -65,6 +80,17 @@ impl EditorRequest {
         &self.data_root
     }
     pub fn begin(&self) -> bool {
+        if self
+            .virtual_document
+            .as_ref()
+            .is_some_and(|resource| !resource.is_live())
+        {
+            self.completion.finish(Err(Failure::new(
+                ErrorCode::InvalidHandle,
+                "Virtual resource was revoked",
+            )));
+            return false;
+        }
         self.completion.begin()
     }
     pub fn finish(&self, result: Result<EditorValue, Failure>) {

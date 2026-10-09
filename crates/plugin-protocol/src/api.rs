@@ -3,7 +3,12 @@ use semver::{Version, VersionReq};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
+mod documents;
 mod navigation;
+pub use documents::{
+    DocumentAccess, DocumentEncoding, DocumentEol, DocumentEvent, DocumentEventKind, DocumentInfo,
+    DocumentRange, DocumentSnapshot, ResourceIdentity, TextPosition, VisibleRows,
+};
 pub use navigation::{
     NavigationTarget, decode_uri_component, document_relative_path, is_windows_device_segment,
 };
@@ -216,6 +221,8 @@ pub enum Operation {
         operation: crate::process::Operation,
     },
     SubscribeDocuments,
+    /// Opt into ordered metadata notifications; requires editor.documents 1.1 and editor.read.
+    SubscribeDocumentEvents,
     CancelRequest {
         handle: ResourceHandle,
         mode: CancelMode,
@@ -364,6 +371,11 @@ pub enum Notification {
         subscription: ResourceHandle,
         change: DocumentChange,
     },
+    /// Only explicitly opted-in subscriptions receive this richer versioned stream.
+    DocumentEvent {
+        subscription: ResourceHandle,
+        event: DocumentEvent,
+    },
     SubscriptionFailed {
         subscription: ResourceHandle,
         error: Failure,
@@ -497,6 +509,41 @@ pub struct DocumentChange {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum EditorOperation {
+    /// Open an existing workspace text resource; local opens also require workspace.read.
+    OpenDocument {
+        resource: ResourceIdentity,
+    },
+    /// Create readonly instance-owned content; requires editor.virtual and editor.read.
+    OpenVirtualDocument {
+        title: String,
+        #[serde(default)]
+        language: Option<String>,
+        text: String,
+    },
+    /// Refresh owned readonly content at its exact revision without a user edit or undo entry.
+    RefreshVirtualDocument {
+        document: DocumentVersion,
+        text: String,
+    },
+    /// Reveal a strict zero-based UTF-16 position, including in readonly content.
+    LocateDocument {
+        document: DocumentVersion,
+        position: TextPosition,
+    },
+    /// Compare two exact versions in native panes; requires editor.diff and editor.read.
+    CompareDocuments {
+        left: DocumentVersion,
+        right: DocumentVersion,
+    },
+    /// Enumerate up to 128 currently open readable text sessions; requires editor.documents 1.1.
+    ListDocuments,
+    /// Read up to 256 KiB from this exact open identity/revision; omitted range reads the full text.
+    /// Requires editor.documents 1.1 and editor.read. Large documents can be read in bounded ranges.
+    ReadDocument {
+        document: DocumentVersion,
+        #[serde(default)]
+        range: Option<DocumentRange>,
+    },
     /// Locate a viewport in the exact active source/UI scene; requires editor.viewport and editor.read.
     /// Nonzero origins identify programmatic movement so a guest cannot create a feedback loop.
     LocateViewport {
@@ -559,6 +606,24 @@ pub enum EditorOperation {
 /// Values describe the actual document and revision observed or saved, rather than an acknowledgement.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum EditorValue {
+    /// Open/refresh returns current metadata; EditorState retains the only live text.
+    DocumentOpened(DocumentInfo),
+    /// Navigation returns the version validated before the native selection.
+    DocumentLocated {
+        document: DocumentVersion,
+    },
+    /// Both visible comparison sources remain bound to these exact versions.
+    DocumentsCompared {
+        left: DocumentVersion,
+        right: DocumentVersion,
+    },
+    /// A complete bounded enumeration; large tab sets fail explicitly instead of silently truncating.
+    Documents {
+        documents: Vec<DocumentInfo>,
+        active: Option<DocumentVersion>,
+    },
+    /// Immutable current native text; the range is expressed in UTF-8 bytes after strict conversion.
+    DocumentSnapshot(DocumentSnapshot),
     /// Actual identity/version opened by a controlled relative navigation, for optional follow-up anchors.
     Opened {
         document: DocumentVersion,

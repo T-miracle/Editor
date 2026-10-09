@@ -16,8 +16,28 @@ pub(crate) fn workspace_key(workspace: &str) -> String {
 }
 
 impl Manager {
+    /// Publish ordered metadata only to the current trusted workspace's explicitly opted-in streams.
+    pub fn document_event(&mut self, event: api::DocumentEvent) {
+        if self.trusted && self.workspace_open {
+            for instance in self.live.values_mut() {
+                instance.document_event(event.clone());
+            }
+        }
+    }
+
+    /// Source overflow terminates the rich stream independently of legacy revision subscriptions.
+    pub fn document_stream_failed(&mut self, error: api::Failure) {
+        for instance in self.live.values_mut() {
+            instance.document_stream_failed(error.clone());
+        }
+    }
+
     /// Only the selected trusted workspace can publish document events to its owners.
     pub fn document_changed(&mut self, change: api::DocumentChange) {
+        // Legacy SDK subscriptions know only local workspace-relative paths.
+        if change.document.path.starts_with("nanobug-virtual://") {
+            return;
+        }
         self.invalidate_document_images(&change);
         if self.trusted && self.workspace_open {
             for instance in self.live.values_mut() {

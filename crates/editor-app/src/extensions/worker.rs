@@ -354,6 +354,8 @@ pub(super) struct Published {
     pub configuration_revision: u64,
     /// UI document ingress is bounded independently of the worker's command channel.
     pub document_events: plugin_runtime::DocumentEvents,
+    /// Ordered metadata is opt-in and must not be merged with legacy version coalescing.
+    pub document_stream: plugin_runtime::DocumentStream,
     /// Bounded typed work has a completion gate that survives queue transfer and rejects stale callbacks.
     pub editor_requests: Vec<(String, plugin_runtime::EditorRequest)>,
     pub entries: Vec<Installed>,

@@ -7,6 +7,7 @@ use plugin_runtime::{
     },
 };
 
+mod documents;
 mod edits;
 mod images;
 mod navigation;
@@ -34,9 +35,13 @@ impl EditorApp {
     pub(crate) fn sync_plugin_documents(&mut self, cx: &mut Context<Self>) {
         if !self.session_state.workspace_trusted {
             self.plugin_documents.clear();
+            self.plugin_document_metadata.clear();
+            self.plugin_active_document = None;
             return;
         }
+        self.sync_plugin_document_metadata(cx);
         let current = (0..self.tabs.len())
+            .filter(|index| self.tabs[*index].virtual_document.is_none())
             .filter_map(|index| self.plugin_document_version(index).ok())
             .map(|document| (document.id.clone(), document))
             .collect::<BTreeMap<_, _>>();
@@ -72,6 +77,19 @@ impl EditorApp {
                 "File has no text editing capability",
             )
         })?;
+        if let Some(virtual_tab) = &tab.virtual_document {
+            if !virtual_tab.resource.is_live() {
+                return Err(Failure::new(
+                    ErrorCode::InvalidHandle,
+                    "Virtual document was revoked",
+                ));
+            }
+            return Ok(DocumentVersion {
+                id: format!("{:?}", text.editor.entity_id()),
+                path: virtual_tab.resource.uri(),
+                revision: text.capability_revision,
+            });
+        }
         // OpenTab already stores its resolved path. Disk deletion does not end the editor entity's lifetime.
         let path = tab
             .path()
@@ -110,6 +128,35 @@ impl EditorApp {
             )));
             return;
         }
+        if let Err(error) = self.check_virtual_request(&request) {
+            request.finish(Err(error));
+            return;
+        }
+        // Legacy selection/navigation consumers understand workspace paths only. New document
+        // reads explicitly opt into ResourceIdentity and never lend a virtual provider's text.
+        if self
+            .active_tab_index()
+            .is_some_and(|index| self.tabs[index].virtual_document.is_some())
+            && matches!(
+                request.operation(),
+                Op::ReadSelection
+                    | Op::ActiveDirectory
+                    | Op::ReadDocumentSelection { .. }
+                    | Op::NavigateDocument { .. }
+                    | Op::LocateViewport { .. }
+                    | Op::SaveImageInput { .. }
+            )
+        {
+            request.finish(Err(Failure::new(
+                ErrorCode::UnsupportedOperation,
+                "Use the resource-aware document API for virtual content",
+            )));
+            return;
+        }
+        if matches!(request.operation(), Op::RefreshVirtualDocument { .. }) {
+            self.refresh_plugin_virtual(request, window, cx);
+            return;
+        }
         if let Op::SaveDocument { document } = request.operation() {
             self.save_plugin_document(document.clone(), request, cx);
             return;
@@ -131,6 +178,52 @@ impl EditorApp {
             return;
         }
         let result = (|| match request.operation() {
+            Op::OpenDocument { resource } => {
+                self.open_plugin_resource(resource, &request, window, cx)
+            }
+            Op::OpenVirtualDocument {
+                title,
+                language,
+                text,
+            } => self.open_plugin_virtual(title, language.as_deref(), text, &request, window, cx),
+            Op::LocateDocument { document, position } => {
+                self.locate_plugin_resource(document, *position, &request, window, cx)
+            }
+            Op::CompareDocuments { left, right } => {
+                self.compare_plugin_documents(left, right, &request, window, cx)
+            }
+            Op::ReadDocument { document, range } => self.read_plugin_document(document, *range, cx),
+            Op::ListDocuments => {
+                let documents = (0..self.tabs.len())
+                    .filter(|index| {
+                        self.tabs[*index]
+                            .virtual_document
+                            .as_ref()
+                            .is_none_or(|virtual_tab| {
+                                virtual_tab.resource.handle().instance == request.handle().instance
+                            })
+                    })
+                    .filter_map(|index| self.plugin_document_info(index, cx).ok())
+                    .collect::<Vec<_>>();
+                if documents.len() > 128 {
+                    return Err(Failure::new(
+                        ErrorCode::LimitExceeded,
+                        "Open document enumeration exceeds 128 documents",
+                    ));
+                }
+                let active = self
+                    .active_tab_index()
+                    .filter(|index| {
+                        self.tabs[*index]
+                            .virtual_document
+                            .as_ref()
+                            .is_none_or(|virtual_tab| {
+                                virtual_tab.resource.handle().instance == request.handle().instance
+                            })
+                    })
+                    .and_then(|index| self.plugin_document_version(index).ok());
+                Ok(Value::Documents { documents, active })
+            }
             Op::OpenDataFile { path } => {
                 // The owning runtime supplies this root. Resolve aliases again immediately before opening.
                 let root = request
@@ -253,6 +346,7 @@ impl EditorApp {
                 })
             }
             Op::SaveDocument { .. }
+            | Op::RefreshVirtualDocument { .. }
             | Op::ReplaceDocumentRange { .. }
             | Op::SaveImageInput { .. }
             | Op::NavigateDocument { .. }
@@ -285,6 +379,13 @@ impl EditorApp {
             )));
             return;
         };
+        if tab.session.is_readonly() {
+            request.finish(Err(Failure::new(
+                ErrorCode::PermissionDenied,
+                "Readonly documents cannot be saved",
+            )));
+            return;
+        }
         let path = tab.path().to_path_buf();
         if let Err(error) = self.check_plugin_save_path(&path) {
             request.finish(Err(error));
@@ -377,14 +478,22 @@ impl EditorApp {
         if !request.enter_side_effect() {
             return Err(Failure::new(ErrorCode::Cancelled, "Save did not execute"));
         }
-        tab.session
+        self.publish_document_save(index, None, cx);
+        let tab = self.text_tab_mut(index).expect("validated save target");
+        let saved = tab
+            .session
             .save(&prepared, prepared.contents())
-            .map_err(|e| Failure::new(ErrorCode::OperationFailed, e.to_string()))?;
+            .map_err(|e| Failure::new(ErrorCode::OperationFailed, e.to_string()));
+        if let Err(error) = saved {
+            self.publish_document_save(index, Some(Err(error.clone())), cx);
+            return Err(error);
+        }
         tab.disk_digest = Sha256::digest(prepared.contents().as_bytes()).into();
         tab.disk_state = DiskState::Synced;
         tab.last_saved_at = Instant::now();
         tab.overwrite_confirmed = false;
         self.notify_language_document_saved(&path, prepared.contents().to_owned(), cx);
+        self.publish_document_save(index, Some(Ok(())), cx);
         Ok(Value::Saved {
             document: document.clone(),
         })

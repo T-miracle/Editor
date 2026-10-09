@@ -48,6 +48,11 @@ struct State {
     /// Auxiliary tools never gain authority to publish the whole file layout.
     declared_layout_panels: BTreeSet<String>,
     subscriptions: std::collections::BTreeMap<u64, crate::document_events::Subscription>,
+    /// Rich events require a separate opt-in handle so older SDKs never see unknown variants.
+    document_streams: std::collections::BTreeMap<u64, crate::document_stream::Subscription>,
+    /// Persistent readonly authority survives request completion but not instance retirement.
+    virtual_documents:
+        std::collections::BTreeMap<u64, std::sync::Arc<crate::VirtualDocumentResource>>,
     preference_subscriptions: std::collections::BTreeMap<u64, preferences::Subscription>,
     wasi: WasiCtx,
     table: ResourceTable,
@@ -324,6 +329,8 @@ impl Instance {
             editor_requests: Default::default(),
             image_inputs: Default::default(),
             subscriptions: Default::default(),
+            document_streams: Default::default(),
+            virtual_documents: Default::default(),
             preference_subscriptions: Default::default(),
             declared_panels: manifest
                 .panels
@@ -613,6 +620,11 @@ impl Instance {
         self.store.data_mut().retire_native_processes();
         self.store.data_mut().plugin_services.clear();
         self.store.data_mut().subscriptions.clear();
+        self.store.data_mut().document_streams.clear();
+        for resource in self.store.data_mut().virtual_documents.values() {
+            resource.revoke();
+        }
+        self.store.data_mut().virtual_documents.clear();
         self.store.data_mut().preference_subscriptions.clear();
         for request in self.store.data_mut().editor_requests.values() {
             request.call.retire();
@@ -674,6 +686,7 @@ impl Instance {
         self.poll_service_requests()?;
         self.poll_editor_requests()?;
         self.poll_document_events()?;
+        self.poll_document_streams()?;
         let preferences_changed = self.poll_preferences()?;
         let events = self.store.data_mut().poll_processes()?;
         let changed = revoked || preferences_changed || !events.is_empty();

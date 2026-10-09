@@ -55,6 +55,7 @@ impl State {
                 "editor",
                 "cancel_request",
                 "subscribe_documents",
+                "subscribe_document_events",
                 "process",
                 "service",
             ]
@@ -142,6 +143,7 @@ impl State {
                 api::Operation::Service { operation } => self.service_request(operation),
                 api::Operation::Process { operation } => self.process_request(operation),
                 api::Operation::SubscribeDocuments => self.subscribe_documents(),
+                api::Operation::SubscribeDocumentEvents => self.subscribe_document_stream(),
                 api::Operation::CancelRequest { handle, mode } => {
                     self.roots.resolve(&handle)?;
                     if let Some(request) = self.plugin_services.pending.get(&handle.resource) {
