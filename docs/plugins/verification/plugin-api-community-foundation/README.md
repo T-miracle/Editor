@@ -9,23 +9,26 @@
 - 集成工作树：`C:/Users/Tmiracle/.codex/worktrees/plugin-api-community/Editor`，分支 `codex/plugin-api-community`。
 - 批次固定基线：`452994e6d3d6da526803cc62db96ee722580e670`，只包含已批准方案、工单和发布映射。
 - 02 工作树：`C:/Users/Tmiracle/.codex/worktrees/plugin-api-interaction/Editor`，分支 `codex/plugin-api-interaction`，从相同基线开始。
+- 06 工作树：`C:/Users/Tmiracle/.codex/worktrees/plugin-api-cloud/Editor`，分支 `codex/plugin-api-cloud`，从已交付 02 的 `8506cc8f1f9baee3fca030d59b7d1d21b5227763` 开始。
 - 原项目工作区已有其他任务的未提交改动，本批代码在独立工作树实施；这些已有改动不计入本批成果。
 
 ## 当前进度
 
 | 工单 | 议题 | 当前状态 | 交付条件 |
 | --- | --- | --- | --- |
-| 01 文档与只读资源 | [#93](https://github.com/T-miracle/Nanobug/issues/93) | 实施中 | T01–T05、C01–C06、双轴审查、推送及议题读回 |
-| 02 命令与交互 | [#94](https://github.com/T-miracle/Nanobug/issues/94) | 实施中 | T06–T10、C01–C06、双轴审查、推送及议题读回 |
+| 01 文档与只读资源 | [#93](https://github.com/T-miracle/Nanobug/issues/93) | 候选审查及原生焦点修复中 | T01–T05、C01–C06、双轴审查、推送及议题读回 |
+| 02 命令与交互 | [#94](https://github.com/T-miracle/Nanobug/issues/94) | 已验收交付，议题已关闭 | `8506cc8f1f9baee3fca030d59b7d1d21b5227763` 已推送并核对远端；双轴未解决项均为 0 |
 | 03 工作区事务 | [#95](https://github.com/T-miracle/Nanobug/issues/95) | 等待 01、02 | T11–T16 及共同完成条件 |
 | 04 诊断与语言 | [#96](https://github.com/T-miracle/Nanobug/issues/96) | 等待 03 | T17–T20 及共同完成条件 |
 | 05 树与装饰 | [#97](https://github.com/T-miracle/Nanobug/issues/97) | 等待 01、02 | T21–T24 及共同完成条件 |
-| 06 网络与私有状态 | [#98](https://github.com/T-miracle/Nanobug/issues/98) | 等待 02 | T25–T30 及共同完成条件 |
+| 06 网络与私有状态 | [#98](https://github.com/T-miracle/Nanobug/issues/98) | 实施中，02 依赖已满足 | T25–T30 及共同完成条件 |
 | 07 激活与兼容 | [#99](https://github.com/T-miracle/Nanobug/issues/99) | 等待 04、05、06 | T31–T35 及共同完成条件 |
 
 ## 证据与复用规则
 
 原生窗口初轮记录见 [01 主代理原生验收](native-01.md)和 [02 主代理原生验收](native-02.md)。其中失败项保留原始结果，修复后的候选另行复核，不能用局部通过代替工单交付。
+
+02 的[逐单验收与双轴结论](https://github.com/T-miracle/Nanobug/blob/8506cc8f1f9baee3fca030d59b7d1d21b5227763/docs/plugins/verification/plugin-api-community-foundation/02-commands-and-interaction.md)已经发布到独立分支，随后与 01 集成。2026-10-09 06:01:59 UTC，GitHub connector 更新返回 403；按既有工单授权改用既有 Git 认证直接更新，随即读回 #94 为 `closed / completed`。没有输出凭据或修改父设计议题。
 
 每单记录自己的实际源码版本、工具链、SDK、包版本与 hash、测试命令和结果、原生操作、审查结论及未验证部分。协议准入或某个子用例通过不等于整项验收通过，默认跳过的 ignored 测试也不计为通过。
 

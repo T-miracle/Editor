@@ -42,3 +42,17 @@
 5. UI Automation 在普通编辑画面能读到编辑节点，但比较打开时未暴露两侧区域、编辑节点或关闭按钮。该轮基础无障碍语义仍待修复与原生复核，不能将颜色通过当作 C03 全部完成。
 
 这一候选的控制器已正常 `stop`。后续只重验受修复影响的原生路径，并另行验证生成预览消费者；最终状态以候选指纹、逐单结果和双轴审查为准。
+
+## 无障碍候选与生成预览
+
+候选源码 `3a0d34561a3a4d60928ac66185ca3b4b17059429`，宿主副本 `native-qa-01/bin/editor-app-accessible.exe` SHA256 `fc63bcaca64a55d55111ce0671493395ead47fbc412051f09a27fc5d07311b27`；内嵌 SDK `b9b4caa36115776248eaf7c2e213a9a720fb4f056388927b6f3a637f996baea3`。正式包分别为 history-preview 0.1.0 `85ac2463994f7812785f9622e6ec234c46e12aadff477d91c510e18a65c03897` 和 generated-preview 0.1.0 `29634b6cc753c97ea65c8ad50441dc15bc5541514dbb8abe0a8298e1ccb504aa`。
+
+直接执行宿主 `--plugin-dev plugins/generated-preview --profile ../native-qa-01/profile-generated-final --workspace ../native-qa-01/workspace-final --grant editor.read --grant ui.panels --grant workspace.read`，开发候选 `716fbb0d7d7c1a2aef96ef4e4702ab3a74f7b202a0c3739348ce5ebc7e199fab`。使用新的独立配置；测试文件与上一轮工作区相同，磁盘 hash 保持 `ae9dfed7dac311fb8daa75098df7bf349baf13526e7d4b6aee58df111cb9c1e6`。
+
+1. 在当前原生编辑器输入未保存的“未保存的生成预览😀”及英文 `unsaved generated line`，Tab 标为 dirty。通过插件菜单执行 **Preview generated text**，左栏显示“生成的建议内容”、同一未保存中文与 `UNSAVED GENERATED LINE`，右栏保持原始未保存文本；没有把磁盘内容当作插件快照。
+2. Windows UI Automation 实际返回左侧 `Document` 节点：名称含“历史 / 生成内容 · 生成文本预览 · 只读”，Value 含完整建议内容；未声明 settable。右侧为带“当前文档 · current.txt”来源区域的 settable Edit，关闭按钮名为“关闭比较”。这修复了上一轮比较画面不暴露节点的问题。
+3. 点击左栏后输入“只读输入应被拒绝”，文本与 Value 均未改变；Ctrl+S 明确提示“此文档为只读内容，无法保存”，右栏仍 dirty、磁盘 hash 未改变。
+4. 从浅色切换深色后，稳定左栏行号、当前行、背景和差异均使用深色，没有首轮白色残留。右栏的近黑行号背景与当前行在关闭比较后的普通原生编辑器中同样存在，属于现有右栏样式；本单不把两栏像素完全相同列为已验收结果。
+5. **尚未通过：** 左栏焦点下点击“关闭比较”可移除双栏和差异标记，但后续 Ctrl+A 不选择当前文本，UIA 焦点落在窗口。这暴露了关闭按钮未把键盘焦点还给当前编辑器；已准备真实按钮点击回归，修复后需用新候选重验，不提前关闭工单。
+
+本轮控制器已通过 `stop` 正常结束自有开发实例。已通过的文本、只读和辅助技术观察仅对应上面的候选指纹；最终焦点和退役结论另行追加。
