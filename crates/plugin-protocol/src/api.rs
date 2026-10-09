@@ -214,6 +214,10 @@ pub struct SdkDescriptor {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "method", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Operation {
+    /// Typed calls preserve caller ownership through the shared request completion gate.
+    Commands {
+        operation: crate::commands::Operation,
+    },
     Service {
         operation: crate::service::Operation,
     },
@@ -282,6 +286,7 @@ pub struct Request {
 /// Result variants carry structured values, never JSON hidden inside a string result.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum Value {
+    Commands(Vec<crate::commands::Descriptor>),
     Preference(PreferenceRead),
     /// process 1.6: an existing native executable, never an execution grant or process handle.
     ResolvedProgram {
@@ -326,6 +331,18 @@ pub enum Input {
 /// Native UI notifications contain no legacy canvas or character-grid fields.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum Notification {
+    /// Commands with a negotiated signature receive a result-bearing callback and their own reply slot.
+    CommandInvocation(crate::commands::Invocation),
+    /// Provider-local deferred work must stop under its original sealed source authority.
+    CommandCancelled {
+        request: ResourceHandle,
+        reason: Failure,
+    },
+    /// Only the original caller receives its own typed command request updates.
+    CommandRequest {
+        handle: ResourceHandle,
+        update: RequestUpdate<serde_json::Value>,
+    },
     /// A selected file provider receives a host-issued file identity, independent of text editing.
     /// Requires `editor.files` and `editor.read`; clearing the context revokes its resource access.
     FilePreview {
@@ -397,6 +414,9 @@ pub enum Notification {
     Command {
         id: String,
         arguments: Option<serde_json::Value>,
+        /// Native menu metadata remains descriptive and does not change one-way command semantics.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        context: Option<crate::commands::Context>,
     },
     Focus(bool),
     Resize {
@@ -544,6 +564,12 @@ pub enum EditorOperation {
         #[serde(default)]
         range: Option<DocumentRange>,
     },
+    /// Stable host-owned interaction, admitted according to the selected variant.
+    /// `Select` requires the `files.selection` capability and `files.select` installation grant;
+    /// all other variants require the `ui.interaction` capability and installation grant.
+    Interaction {
+        operation: crate::interaction::Operation,
+    },
     /// Locate a viewport in the exact active source/UI scene; requires editor.viewport and editor.read.
     /// Nonzero origins identify programmatic movement so a guest cannot create a feedback loop.
     LocateViewport {
@@ -624,6 +650,8 @@ pub enum EditorValue {
     },
     /// Immutable current native text; the range is expressed in UTF-8 bytes after strict conversion.
     DocumentSnapshot(DocumentSnapshot),
+    /// The user's actual confirmed choice; dismissal returns Cancelled through the completion gate.
+    Interaction(crate::interaction::Value),
     /// Actual identity/version opened by a controlled relative navigation, for optional follow-up anchors.
     Opened {
         document: DocumentVersion,
@@ -733,7 +761,7 @@ pub struct Output {
     /// Accepted only from the corresponding negotiated pure structure callback.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub language_structure: Option<crate::structure::Proposal>,
-    /// Only a service invocation may return this contract-validated result.
+    /// Only a service or typed command invocation may return this contract-validated result.
     #[serde(default)]
     pub service_reply: Option<Result<serde_json::Value, Failure>>,
     #[serde(default)]

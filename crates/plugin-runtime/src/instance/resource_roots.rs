@@ -8,6 +8,7 @@ use std::collections::BTreeMap;
 pub(super) enum RootKind {
     Workspace,
     Data,
+    Selected,
     EditorRequest,
     ImageInput,
     /// Readonly text never grants file-root authority.
@@ -142,6 +143,7 @@ impl State {
         let (capability, permission, root) = match kind {
             RootKind::EditorRequest
             | RootKind::VirtualDocument
+            | RootKind::Selected
             | RootKind::ImageInput
             | RootKind::ServiceReference
             | RootKind::ServiceRequest
@@ -223,6 +225,9 @@ impl State {
             }
             api::Operation::ReadFile { handle, path } => {
                 let kind = self.roots.resolve(&handle)?;
+                if matches!(kind, RootKind::Selected) {
+                    return self.read_selection(&handle, &path).map(Value::Bytes);
+                }
                 let root = self.file_authority(kind, false)?;
                 data_files::read(root, &path, &self.staged_writes).map(Value::Bytes)
             }
@@ -232,6 +237,13 @@ impl State {
                 bytes,
             } => {
                 let kind = self.roots.resolve(&handle)?;
+                if matches!(kind, RootKind::Selected) {
+                    self.check_selection_authority()?;
+                    return Err(Failure::new(
+                        ErrorCode::UnsupportedOperation,
+                        "Selected writes require the host document transaction capability",
+                    ));
+                }
                 let root = self.file_authority(kind, true)?.to_path_buf();
                 data_files::write(
                     &root,
@@ -244,6 +256,10 @@ impl State {
             }
             api::Operation::CloseResource { handle } => {
                 self.roots.resolve(&handle)?;
+                if matches!(self.roots.resolve(&handle)?, RootKind::Selected) {
+                    self.check_selection_authority()?;
+                    self.selected_resources.remove(&handle.resource);
+                }
                 // Process termination still needs the original context for its native receipt.
                 if let RootKind::Process(_) = self.roots.resolve(&handle)? {
                     return self
@@ -277,6 +293,7 @@ impl State {
                 Ok(Value::Unit)
             }
             api::Operation::ReadAsset { .. }
+            | api::Operation::Commands { .. }
             | api::Operation::DescribeSdk
             | api::Operation::Service { .. }
             | api::Operation::Process { .. }

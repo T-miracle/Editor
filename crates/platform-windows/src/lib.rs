@@ -12,6 +12,7 @@ mod staged;
 pub use staged::PreparedFileStore;
 mod attachments;
 pub use attachments::{NewWorkspaceFileStore, create_document_attachment};
+pub mod file_picker;
 
 #[derive(Debug, Default, Clone, Copy)]
 pub struct NativeFileStore;

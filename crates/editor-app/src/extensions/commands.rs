@@ -86,6 +86,7 @@ impl ExtensionPanel {
                     &command,
                     serde_json::Value::Null,
                     Some(expected_epoch),
+                    None,
                 );
                 match accepted {
                     Err(error) => {
@@ -109,18 +110,19 @@ impl ExtensionPanel {
         command: &str,
         arguments: serde_json::Value,
     ) -> Result<(), String> {
-        self.enqueue_command(plugin, command, arguments, None)
+        self.enqueue_command(plugin, command, arguments, None, None)
             .map(|_| ())
     }
 
     /// Validate and enqueue under one publication lock; an explicit owner is never recaptured.
     /// Ordinary host commands capture the current owner here instead of borrowing a UI snapshot.
-    fn enqueue_command(
+    pub(super) fn enqueue_command(
         &self,
         plugin: &str,
         command: &str,
         arguments: serde_json::Value,
         expected_epoch: Option<u64>,
+        context: Option<protocol::commands::Context>,
     ) -> Result<u64, String> {
         let state = self.worker.state.lock().unwrap();
         let current = state.command_epoch(plugin, command);
@@ -147,6 +149,7 @@ impl ExtensionPanel {
                 plugin: plugin.into(),
                 command: command.into(),
                 arguments,
+                context,
                 expected_epoch: epoch,
             })
             .map_err(|_| "插件后台服务不可用".to_owned())?;
@@ -187,13 +190,13 @@ impl EditorApp {
         let epoch = self
             .extensions
             .read(cx)
-            .enqueue_command(plugin, command, arguments, None)?;
+            .enqueue_command(plugin, command, arguments, None, None)?;
         self.reveal_plugin_command_panel(plugin, command, epoch, window, cx);
         Ok(())
     }
 
     /// Reveal only after command admission, sharing the ordinary command layout and visibility path.
-    fn reveal_plugin_command_panel(
+    pub(super) fn reveal_plugin_command_panel(
         &mut self,
         plugin: &str,
         command: &str,

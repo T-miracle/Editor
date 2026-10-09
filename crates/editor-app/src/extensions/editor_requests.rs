@@ -10,13 +10,33 @@ use plugin_runtime::{
 mod documents;
 mod edits;
 mod images;
+mod interaction;
 mod navigation;
 mod viewport;
 
 impl EditorApp {
     /// Drain requests in effect order so each edit's native Change event advances its revision first.
     pub(crate) fn dispatch_editor_requests(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        // Closed prompts release their input state and subscriptions, and only their own focus lease.
+        self.plugin_interactions
+            .retain(|entity| entity.update(cx, |prompt, cx| !prompt.prune(window, cx)));
         if self.editor_request_dispatch_scheduled || self.pending_editor_requests.is_empty() {
+            return;
+        }
+        if matches!(
+            self.pending_editor_requests[0].1.operation(),
+            Op::Interaction {
+                operation: plugin_runtime::plugin_protocol::interaction::Operation::Input { .. }
+                    | plugin_runtime::plugin_protocol::interaction::Operation::QuickPick { .. }
+                    | plugin_runtime::plugin_protocol::interaction::Operation::Confirm { .. }
+                    | plugin_runtime::plugin_protocol::interaction::Operation::Select { .. }
+            }
+        ) && (self.plugin_picker_pending
+            || self
+                .plugin_interactions
+                .iter()
+                .any(|entity| entity.read(cx).is_modal()))
+        {
             return;
         }
         // A redraw may occur while effects are queued. Keep it from executing a second stale request.
@@ -159,6 +179,27 @@ impl EditorApp {
         }
         if let Op::SaveDocument { document } = request.operation() {
             self.save_plugin_document(document.clone(), request, cx);
+            return;
+        }
+        if let Op::Interaction { .. } = request.operation() {
+            if matches!(
+                request.operation(),
+                Op::Interaction {
+                    operation: plugin_runtime::plugin_protocol::interaction::Operation::Select { .. }
+                }
+            ) {
+                self.select_plugin_resource(plugin, request, window, cx);
+                return;
+            }
+            self.plugin_interactions.push(cx.new(|cx| {
+                crate::ui::controls::interaction::HostInteraction::new(
+                    plugin.to_owned(),
+                    request,
+                    window,
+                    cx,
+                )
+            }));
+            cx.notify();
             return;
         }
         if matches!(request.operation(), Op::ReplaceDocumentRange { .. }) {
@@ -347,6 +388,7 @@ impl EditorApp {
             }
             Op::SaveDocument { .. }
             | Op::RefreshVirtualDocument { .. }
+            | Op::Interaction { .. }
             | Op::ReplaceDocumentRange { .. }
             | Op::SaveImageInput { .. }
             | Op::NavigateDocument { .. }

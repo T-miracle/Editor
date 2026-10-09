@@ -675,6 +675,7 @@ impl Worker {
                             plugin,
                             command,
                             arguments,
+                            context,
                             expected_epoch,
                         }) => {
                             // Release publication ownership before entering WASM; guest execution
@@ -686,8 +687,11 @@ impl Worker {
                                 &command,
                                 expected_epoch,
                             );
-                            admission
-                                .and_then(|()| manager.invoke_command(&plugin, &command, arguments))
+                            admission.and_then(|()| {
+                                manager.invoke_command_with_context(
+                                    &plugin, &command, arguments, context,
+                                )
+                            })
                         }
                         None => Ok(()),
                     }

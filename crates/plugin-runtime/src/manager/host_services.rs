@@ -1121,6 +1121,9 @@ pub(crate) fn host_method_call(
         resource: 0,
     };
     let context = CallContext {
+        native_waits: Vec::new(),
+        menu: None,
+        origin: crate::plugin_services::InvocationOrigin::Delegated,
         lifetimes: vec![alive],
         caller: caller.clone(),
         ancestry: Vec::new(),
@@ -1176,6 +1179,9 @@ impl Manager {
     pub fn start_execution(&mut self, request: RunRequest) -> anyhow::Result<HostExecution> {
         let caller = host_caller(&self.host_scope());
         let context = CallContext {
+            native_waits: Vec::new(),
+            menu: None,
+            origin: crate::plugin_services::InvocationOrigin::Delegated,
             lifetimes: vec![self.host_alive.clone()],
             permissions: caller.permissions.clone(),
             caller,
@@ -1192,6 +1198,9 @@ impl Manager {
     ) -> anyhow::Result<HostExecution> {
         let caller = host_caller(&self.host_scope());
         let context = CallContext {
+            native_waits: Vec::new(),
+            menu: None,
+            origin: crate::plugin_services::InvocationOrigin::Delegated,
             lifetimes: vec![self.host_alive.clone()],
             permissions: caller.permissions.clone(),
             caller,
@@ -1610,6 +1619,9 @@ mod tests {
         .unwrap();
         let scope = manager.host_scope().to_owned();
         let context = CallContext {
+            native_waits: Vec::new(),
+            menu: None,
+            origin: crate::plugin_services::InvocationOrigin::Delegated,
             caller: host_caller(&scope),
             permissions: host_caller(&scope).permissions,
             lifetimes: vec![manager.host_alive.clone()],

@@ -9,7 +9,7 @@ fn community_consumers_compare_visible_panes_and_retire_resources(cx: &mut TestA
         let (_runtime, mut manager) = manager(path.parent().unwrap());
         let package = Package::read(
             &Path::new(env!("CARGO_MANIFEST_DIR"))
-                .join("../../target/community-api/generated-preview-0.1.1.zip"),
+                .join("../../target/community-api/generated-preview-0.1.2.zip"),
         )
         .unwrap();
         manager
@@ -309,7 +309,7 @@ fn community_consumers_compare_visible_panes_and_retire_resources(cx: &mut TestA
         // A candidate that cannot instantiate must not revoke the previous provider or its view.
         let mut files = package.files.clone();
         let mut manifest: Json = serde_json::from_slice(&files["manifest.json"]).unwrap();
-        manifest["version"] = json!("0.1.2");
+        manifest["version"] = json!("0.1.3");
         files.insert(
             "manifest.json".into(),
             serde_json::to_vec(&manifest).unwrap(),

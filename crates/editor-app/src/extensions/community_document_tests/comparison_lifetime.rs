@@ -9,7 +9,7 @@ fn local_comparison_observes_owner_replacement_disable_and_trust_loss(cx: &mut T
         let root = tempfile::tempdir().unwrap();
         let package = Package::read(
             &Path::new(env!("CARGO_MANIFEST_DIR"))
-                .join("../../target/community-api/generated-preview-0.1.1.zip"),
+                .join("../../target/community-api/generated-preview-0.1.2.zip"),
         )
         .unwrap();
         let mut manager = Manager::open(
@@ -48,7 +48,7 @@ fn local_comparison_observes_owner_replacement_disable_and_trust_loss(cx: &mut T
         });
         let mut files = package.files.clone();
         let mut manifest: Json = serde_json::from_slice(&files["manifest.json"]).unwrap();
-        manifest["version"] = json!("0.1.2");
+        manifest["version"] = json!("0.1.3");
         files.insert(
             "manifest.json".into(),
             serde_json::to_vec(&manifest).unwrap(),

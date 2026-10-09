@@ -158,7 +158,8 @@ impl Generator {
                 let _ = api::guest::subscribe_document_events()?;
             }
             api::Input::Event {
-                event: api::Notification::Command { id, arguments },
+                // Native menu metadata never substitutes for this probe's explicit arguments.
+                event: api::Notification::Command { id, arguments, .. },
                 ..
             } if id == "probe" => {
                 let result = arguments

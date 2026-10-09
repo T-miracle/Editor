@@ -24,6 +24,7 @@ impl State {
             .capabilities
             .get("plugin.services")
             .is_some_and(|version| *version >= semver::Version::new(1, 1, 0))
+            && !self.api.capabilities.contains_key("plugin.commands")
         {
             return Err(Failure::new(
                 ErrorCode::CapabilityUnavailable,
@@ -74,6 +75,8 @@ impl Instance {
         &mut self,
         call: &Call,
     ) -> Result<Option<serde_json::Value>, Failure> {
+        let mut native_context = call.context.clone();
+        native_context.native_waits.push(call.completion.clone());
         let reply = {
             let state = self.store.data_mut();
             if !state
@@ -81,6 +84,11 @@ impl Instance {
                 .capabilities
                 .get("plugin.services")
                 .is_some_and(|version| *version >= semver::Version::new(1, 1, 0))
+                && !(call
+                    .reference
+                    .contract
+                    .starts_with(plugin_protocol::commands::CONTRACT_PREFIX)
+                    && state.api.capabilities.contains_key("plugin.commands"))
             {
                 return Err(Failure::new(
                     ErrorCode::CapabilityUnavailable,
@@ -106,23 +114,35 @@ impl Instance {
             state
                 .plugin_services
                 .resources
-                .insert(handle.resource, (handle.clone(), call.context.clone()));
+                .insert(handle.resource, (handle.clone(), native_context.clone()));
             state.plugin_services.invoking = true;
-            state.plugin_services.context = Some(call.context.clone());
+            state.plugin_services.context = Some(native_context);
             handle
         };
         let mut caller = call.context.caller.clone();
         caller.permissions = call.context.permissions.clone();
-        let result = self.call(api::Input::Event {
-            panel: None,
-            event: api::Notification::Service(service::Notification::Invoke(service::Invocation {
+        let event = if call
+            .reference
+            .contract
+            .starts_with(plugin_protocol::commands::CONTRACT_PREFIX)
+        {
+            api::Notification::CommandInvocation(plugin_protocol::commands::Invocation {
+                id: call.reference.contract.rsplit('/').next().unwrap().into(),
+                arguments: call.arguments.clone(),
+                context: call.context.menu.clone(),
+                caller,
+                reply: reply.clone(),
+            })
+        } else {
+            api::Notification::Service(service::Notification::Invoke(service::Invocation {
                 caller,
                 contract: call.reference.contract.clone(),
                 method: call.method.clone(),
                 arguments: call.arguments.clone(),
                 reply: Some(reply.clone()),
-            })),
-        });
+            }))
+        };
+        let result = self.call(api::Input::Event { panel: None, event });
         // Restore private authority even if the guest traps. Returning None preserves the original
         // completion gate; its deadline and source chain continue to govern the deferred reply.
         self.store.data_mut().plugin_services.context = None;
@@ -173,10 +193,15 @@ impl Instance {
                     incoming.handle.clone(),
                     incoming.call.context.clone(),
                     reason,
+                    incoming
+                        .call
+                        .reference
+                        .contract
+                        .starts_with(plugin_protocol::commands::CONTRACT_PREFIX),
                 ))
             })
             .collect::<Vec<_>>();
-        for (request, context, reason) in ended {
+        for (request, context, reason, command) in ended {
             let state = self.store.data_mut();
             state.plugin_services.incoming.remove(&request.resource);
             state.plugin_services.resources.remove(&request.resource);
@@ -186,10 +211,14 @@ impl Instance {
                 context,
                 api::Input::Event {
                     panel: None,
-                    event: api::Notification::Service(service::Notification::InvocationCancelled {
-                        request,
-                        reason,
-                    }),
+                    event: if command {
+                        api::Notification::CommandCancelled { request, reason }
+                    } else {
+                        api::Notification::Service(service::Notification::InvocationCancelled {
+                            request,
+                            reason,
+                        })
+                    },
                 },
             )?;
         }

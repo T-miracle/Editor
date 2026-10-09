@@ -222,6 +222,8 @@ struct EditorApp {
     plugin_document_sequence: u64,
     /// A comparison borrows existing native document entities and owns only its decoration layers.
     document_comparison: Option<editor::comparison::DocumentComparison>,
+    /// Comparison commands capture their own target through the existing local popup control.
+    document_command_menu: Option<extensions::command_menus::DocumentCommandMenu>,
     plugin_popup: Option<(PluginPopupKind, Point<Pixels>)>,
     /// A native file context menu captures the opened identity before presenting provider choices.
     file_view_menu: Option<Entity<ui::controls::menu::PopupMenu>>,
@@ -233,6 +235,12 @@ struct EditorApp {
     tool_overflow: Option<Entity<ui::controls::menu::PopupMenu>>,
     /// An immutable summary boundary separates reminder confirmation from visible-record reading.
     plugin_popup_snapshot: Option<PluginPopupSnapshot>,
+    /// Native prompts retain the runtime gate and are discarded once their owner retires.
+    plugin_interactions: Vec<Entity<ui::controls::interaction::HostInteraction>>,
+    /// Serialize OS picker ownership with native modal prompts; late picker results cannot grant access.
+    plugin_picker_pending: bool,
+    /// Dropping the window's sole controller actively closes its owned native selection dialog.
+    plugin_file_picker: Option<platform_windows::file_picker::FilePickerControl>,
     dark_theme: bool,
     session_state: SessionState,
     /// Saved run configurations and the sessions this editor launched from them.
@@ -522,12 +530,16 @@ impl EditorApp {
             plugin_active_document: None,
             plugin_document_sequence: 0,
             document_comparison: None,
+            document_command_menu: None,
             plugin_popup: None,
             file_view_menu: None,
             function_context: None,
             toolbar_focus: cx.focus_handle(),
             tool_overflow: None,
             plugin_popup_snapshot: None,
+            plugin_interactions: Vec::new(),
+            plugin_picker_pending: false,
+            plugin_file_picker: None,
             dark_theme: false,
             session_state,
             run_controls,

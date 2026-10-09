@@ -12,7 +12,7 @@ fn manager(workspace: &Path) -> (tempfile::TempDir, Manager) {
     let root = tempfile::tempdir().unwrap();
     let package = Package::read(
         &Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../target/community-api/history-preview-0.1.1.zip"),
+            .join("../../target/community-api/history-preview-0.1.2.zip"),
     )
     .unwrap();
     let mut manager = Manager::open(
@@ -194,5 +194,6 @@ fn deliver_native_events(
 
 mod comparison;
 mod comparison_lifetime;
+mod menus;
 mod snapshots;
 mod virtual_documents;

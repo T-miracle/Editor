@@ -179,6 +179,13 @@ impl EditorApp {
             ROOT_COMMANDS
         };
         let owner = cx.entity().downgrade();
+        let plugin_target =
+            self.plugin_menu_target(target.as_deref().unwrap_or(self.workspace.root()));
+        let plugin_rows = self.plugin_menu_entries(
+            &plugin_target,
+            &[plugin_runtime::plugin_protocol::commands::Location::Explorer],
+            cx,
+        );
         // Capture values before building the popup: the app is already exclusively borrowed here.
         let history = [
             (
@@ -194,14 +201,15 @@ impl EditorApp {
             .focused(cx)
             .unwrap_or_else(|| self.editor.focus_handle(cx));
         let popup = KitPopupMenu::build(window, cx, |menu, window, cx| {
-            build_menu(
+            let menu = build_menu(
                 menu.min_w(px(MENU_WIDTH)).action_context(previous_focus),
                 commands,
-                owner,
+                owner.clone(),
                 &history,
                 window,
                 cx,
-            )
+            );
+            extensions::command_menus::append(menu, plugin_rows, plugin_target, owner)
         });
         let popup_id = popup.entity_id();
         let dismiss = cx.subscribe(&popup, move |this, _, _: &DismissEvent, cx| {

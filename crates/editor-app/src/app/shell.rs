@@ -340,10 +340,12 @@ impl Render for EditorApp {
         // Open plugin-owned settings through the normal editor document path.
         self.sync_plugin_panels(window, cx);
         self.sync_virtual_documents(window, cx);
+        self.sync_plugin_document_menu(window, cx);
         self.sync_document_comparison(window, cx);
         self.sync_plugin_documents(cx);
         self.sync_run_controls(window, cx);
         self.dispatch_editor_requests(window, cx);
+        self.sync_plugin_document_menu(window, cx);
         self.sync_document_comparison(window, cx);
         self.sync_outline(window, cx);
         if let Some(path) = self.pending_plugin_file.take() {
@@ -517,6 +519,9 @@ impl Render for EditorApp {
             .child(self.render_run_menu(window, cx))
             .child(self.render_plugin_popup(window, cx))
             .child(self.render_explorer_menu(window, cx))
+            .when_some(self.render_plugin_document_menu(cx), |shell, menu| {
+                shell.child(menu)
+            })
             .when_some(self.file_view_menu.as_ref(), |body, menu| {
                 body.child(menu.clone())
             })
@@ -526,6 +531,30 @@ impl Render for EditorApp {
             .child(self.render_explorer_edit(cx))
             .child(self.render_explorer_delete(cx))
             .child(self.render_file_transfer(cx))
+            .child(
+                div()
+                    .id("plugin-notice-stack")
+                    .absolute()
+                    .bottom(px(36.))
+                    .right(px(12.))
+                    .max_h(px(420.))
+                    .overflow_y_scroll()
+                    .flex()
+                    .flex_col()
+                    .gap_2()
+                    .children(
+                        self.plugin_interactions
+                            .iter()
+                            .filter(|prompt| !prompt.read(cx).is_modal())
+                            .cloned(),
+                    ),
+            )
+            .children(
+                self.plugin_interactions
+                    .iter()
+                    .filter(|prompt| prompt.read(cx).is_modal())
+                    .cloned(),
+            )
             .when_some(self.notification.as_ref(), |this, notification| {
                 // Center the card near the top, keeping a margin when the window is narrow.
                 let width = px(380.).min((window.viewport_size().width - px(24.)).max(px(0.)));

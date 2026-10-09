@@ -1,5 +1,7 @@
 # Capability Example
 
+0.18.0 adds public typed commands, native context contributions and restricted selection. “选择文件并显示信息” appears in the editor/selection, explorer and Tab menus; select any accessible file, including outside the workspace, to read its byte count through its temporary file grant. Directory selection returns a subtree-read intent. Save selection returns an exact-target intent and does not write a file. Cancel and expiry remain cancelled results; the plugin closes returned handles after use. The `echo` command demonstrates a checked string parameter/result. No package ID is recognized by the host.
+
 0.17.0 adds an independently packaged `language.structure` provider probe with arbitrary
 definition types, UTF-8 source ranges, package artwork and separate folds. Actual SDK-built
 fixtures exercise stale metadata, malformed replies, denied IO, worker traps and retirement;
@@ -52,13 +54,13 @@ SDK `MIGRATION.md` 说明私有数据版本、隔离权限、最终副本与中�
 发送类型化操作。`process-events` 按序号查看有界事件记录，`close-on-output` 演示在首个
 输出回调中释放进程。普通示例包默认不申请原生执行权限。
 
-安装时需要批准 assets.read（读取包资源）、workspace.read（读取所属工作区）、storage（读写实例私有文件）、clipboard（类型化剪贴板读写）、editor.read（选区和文档事件）、editor.write（保存已打开文档）与 ui.panels（自身面板显隐）。不申请进程或网络权限。菜单命令“检查类型化错误”验证未知操作、错误参数与路径越界的明确返回。
+安装时需要批准 assets.read（读取包资源）、workspace.read（读取所属工作区）、storage（读写实例私有文件）、clipboard（类型化剪贴板读写）、editor.read（选区和文档事件）、editor.write（保存已打开文档）、ui.interaction（原生输入及消息）、files.select（用户选择限定目标）、commands.call（类型化命令调用）与 ui.panels（自身面板显隐）。不申请进程或网络权限。菜单命令“检查类型化错误”验证未知操作、错误参数与路径越界的明确返回。
 
 scope-write / scope-read 将工作区的 source.txt 与私有 value.txt 一起显示；scope-probe 接收公开 Operation JSON，并将 SDK 的类型化结果显示为文本。替换文本或剪贴板写入操作可追加 `repeat_text` 整数，在 guest 内重复请求文本，结果最多 1 MiB + 1 字节，以验证文本配额；命令参数、WASM fuel 和内存限额保持不变。诊断命令验证跨实例句柄拒绝、应用级实例不具有工作区权限，以及显式释放后的句柄失效。
 
 SDK 提供 open_workspace、open_data、read_file、write_file、close_resource；句柄由宿主签发，不应持久化。workspace.files 1.0 只读，storage.private 1.0 支持私有根目录直接子文件的原子写入，每文件最多 1 MiB，累计受清单 storage_limit 约束。用户设置、其他工作区数据及宿主快照均不在可读根目录内。
 
-通过宿主 `editor-app.exe --plugin-package plugins/capability-example` 完整构建并封装 ZIP，默认输出为插件项目根部的 `capability-example-0.17.0.zip`。项目描述在 `nanobug-plugin.json`，也可使用宿主“插件打包”配置选择输出位置；不调用归档脚本。底层独立构建仍可使用宿主 `--plugin-cargo` 入口和内嵌 SDK，不引用宿主业务源码路径。
+通过宿主 `editor-app.exe --plugin-package plugins/capability-example` 完整构建并封装 ZIP，默认输出为插件项目根部的 `capability-example-0.18.0.zip`。项目描述在 `nanobug-plugin.json`，也可使用宿主“插件打包”配置选择输出位置；不调用归档脚本。底层独立构建仍可使用宿主 `--plugin-cargo` 入口和内嵌 SDK，不引用宿主业务源码路径。
 
 ## 编辑器请求与事件
 

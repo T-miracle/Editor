@@ -49,10 +49,7 @@ impl ExtensionPanel {
             let owner = cx.entity().downgrade();
             // Retained popups belong to the instance which supplied their items.
             let epoch = self.instance_epoch;
-            let position = point(
-                (self.bounds.right() - px(230.)).max(px(8.)),
-                self.bounds.top().max(px(8.)),
-            );
+            let position = self.bounds.bottom_left();
             self.command_popup = Some(cx.new(|cx| {
                 PopupMenu::new(
                     items,
@@ -74,6 +71,10 @@ impl ExtensionPanel {
                     cx,
                 )
             }));
+        }
+        // New and retained popups share the measured trigger; the menu owns width and clamping.
+        if let Some(popup) = &self.command_popup {
+            popup.update(cx, |popup, cx| popup.anchor_to(self.bounds, cx));
         }
         self.command_popup.clone()
     }

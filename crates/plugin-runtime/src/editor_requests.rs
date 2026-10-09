@@ -48,6 +48,12 @@ pub struct EditorRequest {
     image_input: Option<std::sync::Arc<crate::ImageInputResource>>,
     /// Persistent authority is distinct from this transient completion handle.
     virtual_document: Option<std::sync::Arc<crate::VirtualDocumentResource>>,
+    /// Source wait cancellation closes pending UI, while successful calls may retain owned work.
+    parents: Vec<Completion<serde_json::Value>>,
+    /// Native paths never cross the guest transport; the instance issues grants only at delivery.
+    selection: std::sync::Arc<std::sync::Mutex<Option<Vec<std::path::PathBuf>>>>,
+    /// Replaceable presentation belongs to this one request, never a second cancellable task.
+    progress: std::sync::Arc<std::sync::Mutex<(String, Option<u8>)>>,
 }
 impl EditorRequest {
     /// Construction follows authority checks in the instance; only typed owned data crosses threads.
@@ -62,6 +68,10 @@ impl EditorRequest {
     ) -> Self {
         let mut completion = Completion::new(timeout_ms);
         completion.lifetimes = context.map_or_else(Vec::new, |context| context.lifetimes.clone());
+        let parents = context.map_or_else(Vec::new, |context| context.native_waits.clone());
+        completion
+            .lifetimes
+            .extend(parents.iter().map(Completion::wait_lifetime));
         Self {
             handle,
             operation,
@@ -75,6 +85,9 @@ impl EditorRequest {
             },
             image_input: None,
             virtual_document: None,
+            parents,
+            selection: Default::default(),
+            progress: Default::default(),
         }
     }
     pub fn handle(&self) -> &ResourceHandle {
@@ -120,6 +133,7 @@ impl EditorRequest {
         &self.data_root
     }
     pub fn begin(&self) -> bool {
+        self.expire_parents();
         if self
             .virtual_document
             .as_ref()
@@ -134,6 +148,21 @@ impl EditorRequest {
         self.completion.begin()
     }
     pub fn finish(&self, result: Result<EditorValue, Failure>) {
+        self.expire_parents();
+        // A normal completion cannot fabricate selected handles or bypass the trusted picker seam.
+        if matches!(
+            self.operation,
+            EditorOperation::Interaction {
+                operation: plugin_protocol::interaction::Operation::Select { .. }
+            }
+        ) && result.is_ok()
+        {
+            self.completion.finish(Err(Failure::new(
+                ErrorCode::InvalidRequest,
+                "Selection requires native paths",
+            )));
+            return;
+        }
         let result = if let (
             EditorOperation::SaveImageInput { input, name },
             Some(resource),
@@ -155,20 +184,88 @@ impl EditorRequest {
         };
         self.completion.finish(result);
     }
+    /// Complete a native selection with user-chosen paths. No guest-supplied path is accepted here.
+    /// Cancellation, timeout and retirement win over a late callback. The worker validates paths
+    /// and allocates instance-owned handles before delivering the final result to the guest.
+    pub fn finish_selection(&self, paths: Vec<std::path::PathBuf>) {
+        self.expire_parents();
+        if !matches!(
+            self.operation,
+            EditorOperation::Interaction {
+                operation: plugin_protocol::interaction::Operation::Select { .. }
+            }
+        ) {
+            self.completion.finish(Err(Failure::new(
+                ErrorCode::InvalidRequest,
+                "Not a selection request",
+            )));
+            return;
+        }
+        let mut selection = self.selection.lock().unwrap();
+        if selection.is_some() || self.completion.status().is_terminal() {
+            return;
+        }
+        *selection = Some(paths);
+        self.completion.finish(Ok(EditorValue::Unit));
+    }
+    /// Consume trusted picker data once, while the owning instance is delivering this completion.
+    pub(crate) fn take_selection(&self) -> Option<Vec<std::path::PathBuf>> {
+        self.selection.lock().unwrap().take()
+    }
     pub fn status(&self) -> RequestUpdate {
+        self.expire_parents();
         self.completion.status()
     }
+    /// Native progress reads the latest bounded state without locking a WASM instance.
+    pub fn progress(&self) -> (String, Option<u8>) {
+        self.progress.lock().unwrap().clone()
+    }
+    /// Replace visible progress only while its original pending lifetime is still valid.
+    pub(crate) fn update_progress(
+        &self,
+        message: String,
+        percent: Option<u8>,
+    ) -> Result<(), Failure> {
+        if self.status().is_terminal()
+            || !matches!(
+                self.operation,
+                EditorOperation::Interaction {
+                    operation: plugin_protocol::interaction::Operation::Progress { .. }
+                }
+            )
+        {
+            return Err(Failure::new(
+                ErrorCode::InvalidHandle,
+                "Progress task ended or has another kind",
+            ));
+        }
+        *self.progress.lock().unwrap() = (message, percent);
+        Ok(())
+    }
+    /// A native user dismissal seals this wait; it never claims to undo an entered side effect.
+    pub fn cancel_from_host(&self, mode: CancelMode) {
+        let _ = self.completion.cancel(mode, ErrorCode::Cancelled);
+    }
     pub(crate) fn update(&self) -> (u64, RequestUpdate) {
+        self.expire_parents();
         self.completion.update()
     }
     pub(crate) fn retire(&self) {
         self.completion.retire();
     }
     pub fn enter_side_effect(&self) -> bool {
+        self.expire_parents();
         self.completion.enter_side_effect()
     }
     pub fn expire(&self, now: Instant) {
+        self.expire_parents();
         self.completion.expire(now);
+    }
+    /// Observe parent deadlines before checking their cancellation token on a native thread.
+    fn expire_parents(&self) {
+        for parent in &self.parents {
+            parent.status();
+        }
     }
     pub(crate) fn cancel(
         &self,

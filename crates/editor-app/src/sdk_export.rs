@@ -24,6 +24,25 @@ const SDK_FILES: &[(&str, &[u8])] = &[
         "src/api/documents.rs",
         include_bytes!("../../plugin-protocol/src/api/documents.rs"),
     ),
+    // Author-facing contract pages ship with the identical independent guest interface.
+    (
+        "COMMANDS.md",
+        include_bytes!("../../../website/src/content/docs/en/sdk/commands.md"),
+    ),
+    (
+        "INTERACTION.md",
+        include_bytes!("../../../website/src/content/docs/en/sdk/interaction.md"),
+    ),
+    // Typed commands and native menu declarations share the actual independent guest SDK.
+    (
+        "src/commands.rs",
+        include_bytes!("../../plugin-protocol/src/commands.rs"),
+    ),
+    // Independent guests receive the identical native interaction types as the runtime.
+    (
+        "src/interaction.rs",
+        include_bytes!("../../plugin-protocol/src/interaction.rs"),
+    ),
     // The shared project format is shipped beside the public contract for independent authors.
     (
         "PACKAGING.md",
@@ -353,6 +372,9 @@ fn exported_bytes<'a>(relative: &str, bytes: &'a [u8]) -> Cow<'a, [u8]> {
             .to_owned();
     }
     for (route, file) in [
+        // Capability pages must precede the SDK root fallback to retain local exported links.
+        ("commands", "COMMANDS.md"),
+        ("interaction", "INTERACTION.md"),
         ("packaging", "PACKAGING.md"),
         ("configurations", "CONFIGURATIONS.md"),
         ("debug", "DEBUG.md"),

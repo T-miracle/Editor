@@ -5,11 +5,15 @@ use std::collections::BTreeSet;
 
 /// Capability-based lifecycle, notifications and correlated host operations.
 pub mod api;
+/// Typed command composition and stable native menu locations.
+pub mod commands;
 /// Public command-template, native-form and validation service contract.
 pub mod configurations;
 pub mod debug;
 pub mod dependencies;
 pub mod execution;
+/// Native host dialogs and instance-bound user-selected file authority.
+pub mod interaction;
 pub mod language;
 pub mod process;
 pub mod service;
@@ -137,6 +141,12 @@ pub struct Command {
     pub shortcut: Option<String>,
     #[serde(default)]
     pub menu: bool,
+    /// Opt-in typed result contract; absent signatures preserve the existing one-way event behavior.
+    #[serde(default)]
+    pub signature: Option<service::Method>,
+    /// Native contribution points are independent of plugin-owned footer tools.
+    #[serde(default)]
+    pub menus: Vec<commands::Menu>,
 }
 
 /// Opaque plugin-owned data; the host never interprets or migrates its contents.

@@ -1,13 +1,37 @@
 //! Local notification cards own their appearance, dismissal and lifetime without modal focus.
 
 use super::{Button, Icon};
-use gpui_kit::component::{ActiveTheme as _, IconName, StyledExt as _, h_flex, v_flex};
+use gpui_kit::component::{ActiveTheme as _, IconName, StyledExt as _, v_flex};
 use gpui_kit::{
     Context, InteractiveElement as _, IntoElement, MouseButton, ParentElement, Render,
     SharedString, StatefulInteractiveElement as _, Styled, Window, div, px,
 };
 use rust_i18n::t;
 use std::time::Duration;
+
+/// Host and plugin-attributed notices share appearance and pointer boundaries; owners keep their lifetimes.
+pub(crate) fn message_card(
+    id: impl Into<gpui_kit::ElementId>,
+    cx: &gpui_kit::App,
+) -> gpui_kit::Stateful<gpui_kit::Div> {
+    div()
+        .id(id)
+        .role(gpui_kit::Role::Status)
+        .occlude()
+        .w_full()
+        .items_start()
+        .gap_2()
+        .p_3()
+        .rounded(px(8.))
+        .border_1()
+        .border_color(cx.theme().border)
+        .bg(cx.theme().popover)
+        .text_color(cx.theme().popover_foreground)
+        .shadow_lg()
+        .on_any_mouse_down(|_, _, cx| cx.stop_propagation())
+        .on_mouse_up(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+        .on_scroll_wheel(|_, _, cx| cx.stop_propagation())
+}
 
 /// One replaceable informational card; it never takes focus from the editor or blocks other panels.
 pub(crate) struct Notification {
@@ -59,25 +83,9 @@ impl Render for Notification {
         if self.dismissed {
             return div().into_any_element();
         }
-        h_flex()
-            .id("local-notification")
+        message_card("local-notification", cx)
+            .flex()
             .debug_selector(|| "local-notification".into())
-            .role(gpui_kit::Role::Status)
-            .occlude()
-            .w_full()
-            .items_start()
-            .gap_2()
-            .p_3()
-            .rounded(px(8.))
-            .border_1()
-            .border_color(cx.theme().border)
-            .bg(cx.theme().popover)
-            .text_color(cx.theme().popover_foreground)
-            .shadow_lg()
-            // Only the card consumes pointer events; the surrounding editor remains usable.
-            .on_any_mouse_down(|_, _, cx| cx.stop_propagation())
-            .on_mouse_up(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-            .on_scroll_wheel(|_, _, cx| cx.stop_propagation())
             .child(
                 Icon::new(IconName::Info)
                     .small()

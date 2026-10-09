@@ -449,6 +449,9 @@ impl Package {
                     "editor.read",
                     "editor.write",
                     "ui.panels",
+                    "ui.interaction",
+                    "files.select",
+                    "commands.call",
                     "services.call",
                     "process.exec",
                     "dependencies.prepare",
@@ -538,11 +541,47 @@ impl Package {
         }
         ids.clear();
         for command in &manifest.commands {
+            command.validate().map_err(anyhow::Error::msg)?;
             anyhow::ensure!(
-                !command.id.is_empty() && command.id.len() <= 128 && ids.insert(command.id.clone()),
+                !command.id.is_empty()
+                    && command.id.len() <= 128
+                    && !command.id.contains('/')
+                    && ids.insert(command.id.clone()),
                 "Invalid or duplicate command ID"
             );
+            if let Some(signature) = &command.signature {
+                anyhow::ensure!(
+                    manifest.component.is_some()
+                        && manifest
+                            .api
+                            .as_ref()
+                            .is_some_and(|api| api.required.contains_key("plugin.commands")),
+                    "Typed command declarations require a component and plugin.commands"
+                );
+                anyhow::ensure!(
+                    signature.permissions.is_subset(&manifest.permissions),
+                    "Command signature cannot grant undeclared permissions"
+                );
+            }
+            anyhow::ensure!(
+                command.menus.is_empty()
+                    || (manifest.component.is_some()
+                        && manifest
+                            .api
+                            .as_ref()
+                            .is_some_and(|api| api.required.contains_key("plugin.commands"))),
+                "Native menu contributions require a component and plugin.commands"
+            );
         }
+        anyhow::ensure!(
+            !manifest
+                .plugin_services
+                .provides
+                .keys()
+                .chain(manifest.plugin_services.requires.keys())
+                .any(|id| id.starts_with(plugin_protocol::commands::CONTRACT_PREFIX)),
+            "Command transport contracts are reserved"
+        );
         Ok(Self {
             manifest,
             files,

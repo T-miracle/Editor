@@ -10,7 +10,7 @@ use std::rc::Rc;
 #[cfg(test)]
 mod tests;
 
-#[derive(Clone)]
+#[derive(Clone, PartialEq)]
 pub(crate) struct MenuStyle {
     pub surface: Hsla,
     pub foreground: Hsla,
@@ -121,6 +121,16 @@ pub(crate) struct PopupMenu {
     sink: Rc<dyn Fn(Action, &mut Window, &mut App)>,
 }
 impl PopupMenu {
+    /// Align a dropdown with the trigger's lower-right corner in window coordinates.
+    /// Call on measured layout changes as well as opening, so dock moves do not leave a stale popup.
+    pub(crate) fn anchor_to(&mut self, trigger: gpui_kit::Bounds<Pixels>, cx: &mut Context<Self>) {
+        let position = point(trigger.right() - px(self.width), trigger.bottom());
+        if self.position != position || !self.below_anchor {
+            self.position = position;
+            self.below_anchor = true;
+            cx.notify();
+        }
+    }
     pub fn new(
         items: Vec<MenuItem>,
         style: MenuStyle,
@@ -161,6 +171,14 @@ impl PopupMenu {
         (self.sink)(action, window, cx);
         cx.emit(gpui_kit::DismissEvent);
         cx.notify();
+    }
+    /// Retire an owned popup through its normal dismissal gate. Restore the origin only
+    /// while this popup owns focus; external lifecycle cleanup must not steal a modal's keys.
+    pub(crate) fn dismiss(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.focus.contains_focused(window, cx) {
+            self.previous = None;
+        }
+        self.finish(Action::Dismiss, window, cx);
     }
     /// Configure width without duplicating popup focus, scroll or button behavior in callers.
     pub fn width(mut self, width: f32) -> Self {

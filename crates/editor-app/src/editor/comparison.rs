@@ -150,6 +150,7 @@ impl EditorApp {
                 "Comparison did not execute",
             ));
         }
+        self.close_plugin_document_menu(window, cx);
         self.close_document_comparison(cx);
         self.activate_tab(ri, window, cx);
         // Activating a tab can settle linked input. Never attach a pre-activation diff
@@ -196,6 +197,9 @@ impl EditorApp {
     /// Invalidate changed versions/authority, returning keys only from a pane being unmounted.
     pub(crate) fn sync_document_comparison(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if !self.document_comparison_is_current() {
+            // Dismiss the popup while its previous left focus is still mounted, then reuse
+            // the same selective repair as direct keyboard focus on the retired pane.
+            self.close_plugin_document_menu(window, cx);
             // GPUI retains the old FocusHandle after unmounting; focus-lost alone does not
             // give keys to the surviving editor. Leave dialogs and an already-visible
             // editor alone, and never lend a background text entity to a binary tab.
@@ -313,6 +317,8 @@ impl EditorApp {
             cx,
         );
         let right = self.render_native_editor(window, cx);
+        let menu_target = self.plugin_menu_target(Path::new(&comparison.left.path));
+        let left_focus = left.clone();
         Some(
             div()
                 .flex()
@@ -325,6 +331,7 @@ impl EditorApp {
                             .label(t!("editor.close_diff").to_string())
                             .accessibility_label(t!("editor.close_diff").to_string())
                             .on_click(cx.listener(|this, _, window, cx| {
+                                this.close_plugin_document_menu(window, cx);
                                 this.close_document_comparison(cx);
                                 // An explicit Close always returns keys to the current document;
                                 // automatic invalidation does so only for an unmounted focused pane.
@@ -346,6 +353,23 @@ impl EditorApp {
                                 .debug_selector(|| "document-diff-left".into())
                                 // Admit host document shortcuts even inside the panel's PluginSurface.
                                 .key_context("NativeEditorSource")
+                                .capture_any_mouse_down(cx.listener(
+                                    move |this, event: &MouseDownEvent, window, cx| {
+                                        if event.button == MouseButton::Right {
+                                            // The actual left gesture owns focus/selection; active right-tab
+                                            // state is never substituted for its captured resource version.
+                                            left_focus
+                                                .update(cx, |editor, cx| editor.focus(window, cx));
+                                            this.open_plugin_document_menu(
+                                                menu_target.clone(),
+                                                event.position,
+                                                window,
+                                                cx,
+                                            );
+                                            cx.stop_propagation();
+                                        }
+                                    },
+                                ))
                                 .flex()
                                 .flex_col()
                                 .flex_1()

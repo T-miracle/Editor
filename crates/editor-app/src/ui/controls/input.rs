@@ -4,8 +4,8 @@ use gpui_base::StyledExt as _;
 use gpui_base::input::{Input as BaseInput, InputState};
 use gpui_kit::component::ActiveTheme as _;
 use gpui_kit::{
-    App, Entity, InteractiveElement, IntoElement, ParentElement, RenderOnce, StyleRefinement,
-    Styled, Window, div, prelude::FluentBuilder as _, px,
+    App, Entity, InteractiveElement, IntoElement, ParentElement, RenderOnce, SharedString,
+    StyleRefinement, Styled, Window, div, prelude::FluentBuilder as _, px,
 };
 
 #[derive(IntoElement)]
@@ -15,6 +15,8 @@ pub(crate) struct Input {
     appearance: bool,
     bordered: bool,
     focus_bordered: bool,
+    /// The native input publishes its semantic name independently of the placeholder text.
+    accessibility_label: Option<SharedString>,
 }
 
 impl Input {
@@ -25,11 +27,17 @@ impl Input {
             appearance: true,
             bordered: true,
             focus_bordered: true,
+            accessibility_label: None,
         }
     }
 
     pub(crate) fn appearance(mut self, appearance: bool) -> Self {
         self.appearance = appearance;
+        self
+    }
+    /// Expose an explicit native accessibility label without changing shared editing behavior.
+    pub(crate) fn accessibility_label(mut self, label: impl Into<SharedString>) -> Self {
+        self.accessibility_label = Some(label.into());
         self
     }
 
@@ -75,7 +83,14 @@ impl RenderOnce for Input {
             .when(self.focus_bordered && self.appearance, |this| {
                 this.in_focus(|style| style.border_color(palette.ring))
             })
-            .child(BaseInput::new(&self.state))
+            .child(
+                gpui_base::input::InputBase::new(("local-input", self.state.entity_id()))
+                    .size_full()
+                    .when_some(self.accessibility_label, |frame, label| {
+                        frame.accessibility_label(label)
+                    })
+                    .child(BaseInput::new(&self.state)),
+            )
             .refine_style(&self.style)
     }
 }

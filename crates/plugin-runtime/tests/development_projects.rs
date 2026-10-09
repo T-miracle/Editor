@@ -30,6 +30,7 @@ fn real_directory_reload_preserves_state_and_rolls_back_failed_component() {
             None,
             api::Notification::Command {
                 id: "increment".into(),
+                context: None,
                 arguments: None,
             },
         )

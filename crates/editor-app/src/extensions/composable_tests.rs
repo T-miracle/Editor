@@ -610,6 +610,7 @@ pub(super) fn pump_recording_all(
                 plugin,
                 command,
                 arguments,
+                context,
                 expected_epoch,
             } => {
                 // Use the actor's real-instance admission after any earlier lifecycle work in
@@ -632,7 +633,12 @@ pub(super) fn pump_recording_all(
                 if !accepted {
                     continue;
                 }
-                let result = manager.invoke_command(plugin, command, arguments.clone());
+                let result = manager.invoke_command_with_context(
+                    plugin,
+                    command,
+                    arguments.clone(),
+                    context.clone(),
+                );
                 // Fault acceptance still uses the ordinary typed callback and published failure.
                 if let Err(error) = result {
                     assert!(

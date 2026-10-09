@@ -26,6 +26,8 @@
 
 ## 证据与复用规则
 
+01 与 02 的[普通合并连接记录](01-02-integration.md)固定双方交付点，记录真实 SDK 菜单上下文与焦点回归、SDK / 包指纹及整合门禁。当前为本地候选，新增接线的双轴审查与原生复核待完成；03 / 05 仍等待这个整合点。
+
 01 的[逐单验收与双轴结论](01-documents-and-virtual-resources.md)及 [01 主代理原生验收](native-01.md)已经交付；2026-10-09 07:22:13 UTC，按既有 Git 认证更新并读回 #93 为 `closed / completed`。初轮失败保留原始结果，修复候选分别复核；父设计议题 #92 未修改。02 的原生证据见 [02 主代理原生验收](native-02.md)。
 
 02 的[逐单验收与双轴结论](https://github.com/T-miracle/Nanobug/blob/8506cc8f1f9baee3fca030d59b7d1d21b5227763/docs/plugins/verification/plugin-api-community-foundation/02-commands-and-interaction.md)已经发布到独立分支，随后与 01 集成。2026-10-09 06:01:59 UTC，GitHub connector 更新返回 403；按既有工单授权改用既有 Git 认证直接更新，随即读回 #94 为 `closed / completed`。没有输出凭据或修改父设计议题。

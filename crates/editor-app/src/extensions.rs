@@ -2,6 +2,7 @@
 mod bundled;
 #[cfg(test)]
 mod capability_tests;
+pub(crate) mod command_menus;
 mod commands;
 #[cfg(test)]
 mod community_document_tests;
@@ -24,6 +25,8 @@ mod hot_update_tests;
 mod installation;
 #[cfg(test)]
 mod installer_tests;
+#[cfg(test)]
+mod interaction_tests;
 #[cfg(test)]
 pub(crate) mod language_tests;
 #[cfg(test)]
@@ -165,6 +168,7 @@ pub struct ExtensionPanel {
     focus: FocusHandle,
     /// Keep the footer control's keyboard focus stable when source toolbars change the render tree.
     footer_focus: FocusHandle,
+    /// Actual command trigger bounds in window coordinates, refreshed during native prepaint.
     bounds: Bounds<Pixels>,
     /// Keyed native controls own text editing, canvas input and composition.
     native_ui: Option<Entity<crate::ui::plugin::PluginView>>,
@@ -807,6 +811,7 @@ impl ExtensionPanel {
         self.send(PluginEvent::Command {
             id,
             arguments: None,
+            context: None,
         });
     }
     pub fn focus(&self, window: &mut Window, cx: &mut App) {
@@ -996,9 +1001,11 @@ impl dock::BasePanel for ExtensionPanel {
 impl DockPanel for ExtensionPanel {
     /// Native window chrome remains generic; domain functions are drawn from the plugin's live tools.
     fn title(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        use gpui_base::ElementExt as _;
         let title = self.panel_title.clone();
         let icon = self.panel_icon(cx.theme().is_dark());
         let controls = h_flex().items_center();
+        let command_owner = cx.entity().downgrade();
         h_flex()
             .w_full()
             .justify_between()
@@ -1012,16 +1019,28 @@ impl DockPanel for ExtensionPanel {
             .child(
                 controls
                     .child(
-                        Button::new("plugin-command-menu")
-                            .icon(Icon::default().path("icons/menu.svg"))
-                            .tooltip(t!("plugins.command_menu").to_string())
-                            .small()
-                            .compact()
-                            .ghost()
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                this.commands_open = !this.commands_open;
-                                cx.notify();
-                            })),
+                        div()
+                            .id("plugin-command-menu-anchor")
+                            .on_prepaint(move |bounds, _, cx| {
+                                let _ = command_owner.update(cx, |this, cx| {
+                                    this.bounds = bounds;
+                                    if let Some(popup) = &this.command_popup {
+                                        popup.update(cx, |popup, cx| popup.anchor_to(bounds, cx));
+                                    }
+                                });
+                            })
+                            .child(
+                                Button::new("plugin-command-menu")
+                                    .icon(Icon::default().path("icons/menu.svg"))
+                                    .tooltip(t!("plugins.command_menu").to_string())
+                                    .small()
+                                    .compact()
+                                    .ghost()
+                                    .on_click(cx.listener(|this, _, _, cx| {
+                                        this.commands_open = !this.commands_open;
+                                        cx.notify();
+                                    })),
+                            ),
                     )
                     .child(
                         Button::new("plugin-hide")
