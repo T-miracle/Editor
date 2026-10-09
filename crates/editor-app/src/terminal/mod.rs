@@ -13,6 +13,7 @@ pub(crate) mod task_view;
 mod tasks;
 #[cfg(test)]
 pub(crate) mod tests;
+pub(crate) mod upgrade;
 mod view;
 
 use crate::*;
@@ -97,6 +98,11 @@ pub(crate) struct TerminalPanel {
 }
 
 impl TerminalPanel {
+    /// Preserve an interrupted import's destinations until startup can resume its durable write plan.
+    pub(crate) fn upgrade_failed(&mut self, error: String) {
+        self.report_error(FailureKind::Restore, error);
+        self.persistence_blocked = true;
+    }
     fn report_error(&mut self, kind: FailureKind, details: impl std::fmt::Display) {
         let key = match kind {
             FailureKind::Restore => "terminal.error.restore",
@@ -297,7 +303,7 @@ impl TerminalPanel {
         let prompt = shell::default_prompt(&session.profile, &session.cwd);
         session
             .engine
-            .begin_process(cfg!(windows) && session.restored, prompt.as_deref());
+            .begin_process(cfg!(windows), prompt.as_deref());
         let launch = NativeLaunch {
             program: session.profile.program.clone(),
             args: shell::arguments(&session.profile),

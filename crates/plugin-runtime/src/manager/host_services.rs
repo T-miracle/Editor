@@ -1549,16 +1549,15 @@ mod tests {
     /// A mismatch would be reported to the user as an unavailable capability, so the drift is caught
     /// here instead of after a release.
     #[test]
-    fn host_execution_dependency_matches_the_maintained_provider_manifest() {
-        let manifest: Value =
-            serde_json::from_str(include_str!("../../../../plugins/terminal/manifest.json"))
-                .unwrap();
-        let declared = &manifest["plugin_services"]["provides"][EXECUTION_CONTRACT];
-        let contract: plugin_protocol::service::Contract =
-            serde_json::from_value(declared.clone()).unwrap();
+    fn host_execution_dependency_matches_the_builtin_provider() {
+        let provider = super::super::native_execution::provider(
+            "workspace",
+            std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true)),
+        );
+        let contract = &provider.contracts[EXECUTION_CONTRACT];
         let dependency = execution_dependency().unwrap();
         assert!(
-            dependency.matches(&contract),
+            dependency.matches(contract),
             "host execution dependency drifted from the maintained provider declaration"
         );
     }

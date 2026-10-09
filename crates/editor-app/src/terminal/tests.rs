@@ -8,6 +8,7 @@ mod lifecycle;
 mod restore;
 #[cfg(windows)]
 mod tasks;
+mod upgrade;
 
 /// Observe the actual native Canvas projection rather than private parser flags or mocked output.
 pub(crate) fn painted(app: &Entity<EditorApp>, visual: &mut VisualTestContext) -> String {

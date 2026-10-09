@@ -15,7 +15,38 @@ pub(crate) fn workspace_key(workspace: &str) -> String {
     format!("{:x}", Sha256::digest(path.to_string_lossy().as_bytes()))
 }
 
+/// Offline migrations and admitted live instances share one source-of-truth layout calculation.
+fn scoped_files(root: &Path, manifest: &Manifest, workspace: &str) -> PathBuf {
+    let root = root.join("data").join(&manifest.id);
+    match manifest.scope {
+        api::InstanceScope::Application => root.join("application/files"),
+        api::InstanceScope::Workspace => root
+            .join("workspaces")
+            .join(workspace_key(workspace))
+            .join("files"),
+    }
+}
+
 impl Manager {
+    /// Resolve an installation's persisted files without activating a component or granting access.
+    /// `root` is the host's plugin store; `workspace` uses the same canonical identity as live instances.
+    /// Invalid path-component identities are rejected. The result is metadata, not a guest capability.
+    pub fn persisted_data_directory(
+        root: &Path,
+        manifest: &Manifest,
+        workspace: &str,
+    ) -> anyhow::Result<PathBuf> {
+        anyhow::ensure!(
+            !manifest.id.is_empty()
+                && !matches!(manifest.id.as_str(), "." | "..")
+                && manifest
+                    .id
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || b"-_.".contains(&byte)),
+            "Invalid plugin identity"
+        );
+        Ok(scoped_files(root, manifest, workspace))
+    }
     /// Only the selected trusted workspace can publish document events to its owners.
     pub fn document_changed(&mut self, change: api::DocumentChange) {
         self.invalidate_document_images(&change);
@@ -81,14 +112,7 @@ impl Manager {
         manifest: &Manifest,
         environment: &Environment,
     ) -> PathBuf {
-        let root = self.root.join("data").join(&manifest.id);
-        let root = match manifest.scope {
-            api::InstanceScope::Application => root.join("application"),
-            api::InstanceScope::Workspace => root
-                .join("workspaces")
-                .join(workspace_key(&environment.workspace)),
-        };
-        root.join("files")
+        scoped_files(&self.root, manifest, &environment.workspace)
     }
 
     /// Switch the published workspace without discarding other logical workspace owners.

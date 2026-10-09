@@ -175,7 +175,6 @@ pub(crate) fn fixture<'a>(
     .unwrap();
     let repo = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
     for path in [
-        repo.join("dist/plugins/terminal.zip"),
         repo.join("target/run-config-plugin-tree/configuration-alpha.zip"),
         repo.join("target/run-config-plugin-tree/configuration-beta.zip"),
     ] {
@@ -252,7 +251,7 @@ pub(crate) fn click_at(
 
 /// Baseline failure protection and single-row Apply are delivered with the first usable slice.
 #[gpui::test]
-#[ignore = "build configuration examples and terminal package with the public SDK first"]
+#[ignore = "package configuration examples through the public SDK first"]
 fn plugin_configuration_apply_cancel_invalid_save_and_duplicate_templates(cx: &mut TestAppContext) {
     let root = tempfile::tempdir().unwrap();
     let (mut manager, app, cx) = fixture(cx, root.path());
@@ -358,7 +357,7 @@ fn plugin_configuration_apply_cancel_invalid_save_and_duplicate_templates(cx: &m
 
 /// A real local filesystem failure retains the editable window and does not advance committed data.
 #[gpui::test]
-#[ignore = "build configuration examples and terminal package with the public SDK first"]
+#[ignore = "package configuration examples through the public SDK first"]
 fn plugin_configuration_failed_write_keeps_the_draft(cx: &mut TestAppContext) {
     let root = tempfile::tempdir().unwrap();
     let (mut manager, app, cx) = fixture(cx, root.path());
@@ -419,7 +418,7 @@ pub(crate) fn probe(root: &Path) {
 
 /// C01/C02/C04-C08/C27: two plugin identities/layouts, editable literal argv, durable reopen and execution.
 #[gpui::test]
-#[ignore = "build configuration examples and terminal package with the public SDK first"]
+#[ignore = "package configuration examples through the public SDK first"]
 fn plugin_configuration_packages_edit_save_reopen_and_execute(cx: &mut TestAppContext) {
     let root = tempfile::tempdir().unwrap();
     probe(root.path());

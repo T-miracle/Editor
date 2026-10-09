@@ -8,7 +8,7 @@ fn host_sdk_completes_terminal_from_editor_workspace() {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
     let (_storage, _manager, server) = installed_rust_server(&root);
     server.prepare_until_ready().unwrap();
-    let path = root.join("plugins/terminal/src/controls.rs");
+    let path = root.join("plugins/capability-example/src/lib.rs");
     let uri = file_uri(&path.canonicalize().unwrap()).unwrap();
     for name in [
         "Action",
@@ -33,7 +33,7 @@ fn host_sdk_completes_terminal_from_editor_workspace() {
             "missing {name}: {items:?}"
         );
     }
-    assert!(!root.join("plugins/terminal/sdk").exists());
+    assert!(!root.join("plugins/capability-example/sdk").exists());
 }
 
 /// Resolve completion and definition through the host cache for an excluded, SDK-free guest.

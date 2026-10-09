@@ -18,9 +18,25 @@ use std::{
     time::{Duration, Instant},
 };
 
-fn terminal() -> Package {
-    Package::read(&Path::new(env!("CARGO_MANIFEST_DIR")).join("../../dist/plugins/terminal.zip"))
-        .unwrap()
+/// Independent SDK provider exercises contract routing without terminal-specific guest state.
+fn executor() -> Package {
+    packages::provider("fixture-runner")
+}
+
+/// Pin the installed example; the native provider is the application's normal default.
+fn select_example(manager: &mut Manager) {
+    // Debug-only admission tests deliberately have no execution example to select.
+    if !manager.installed.contains_key("fixture-runner") {
+        return;
+    }
+    manager
+        .set_service_provider(
+            plugin_protocol::api::InstanceScope::Workspace,
+            plugin_protocol::settings::Scope::Project,
+            CONTRACT,
+            Some("fixture-runner"),
+        )
+        .unwrap();
 }
 
 /// Cancelling a creation wait after a native effect must retain the program and its eventual identity.
@@ -33,6 +49,15 @@ fn cancelling_a_creation_wait_keeps_the_already_created_program_manageable() {
     let package = packages::provider("async-runner");
     manager
         .install(&package, package.manifest.permissions.clone())
+        .unwrap();
+    // This test exercises the deferred guest receipt, rather than the default native provider.
+    manager
+        .set_service_provider(
+            plugin_protocol::api::InstanceScope::Workspace,
+            plugin_protocol::settings::Scope::Project,
+            CONTRACT,
+            Some("async-runner"),
+        )
         .unwrap();
     manager
         .live
@@ -163,7 +188,7 @@ fn wait_until<T>(
 
 /// Answer the provider's ordinary native panel request so its session becomes visible.
 fn reveal_panel(manager: &mut Manager) -> usize {
-    reveal_panel_for(manager, "terminal")
+    reveal_panel_for(manager, "fixture-runner")
 }
 
 /// The same panel answer for whichever provider owns the session being presented.
@@ -204,13 +229,14 @@ fn reveal_panel_for(manager: &mut Manager, plugin: &str) -> usize {
 
 /// A repeat launch must locate the retained session instead of creating a second program.
 #[test]
-#[ignore = "build terminal and capability-example through the public SDK first"]
+#[ignore = "package capability-example through the current public SDK first"]
 fn host_controls_start_once_and_locate_the_retained_session() {
     let root = tempfile::tempdir().unwrap();
     let mut manager = manager(root.path());
-    let package = terminal();
+    let package = executor();
     let grants = package.manifest.permissions.clone();
     manager.install(&package, grants).unwrap();
+    select_example(&mut manager);
     let request = RunRequest {
         program: "powershell.exe".into(),
         args: vec![
@@ -223,7 +249,7 @@ fn host_controls_start_once_and_locate_the_retained_session() {
         env: Vec::new(),
     };
     let session = manager.start_execution(request.clone()).unwrap();
-    assert_eq!(session.plugin(), "terminal");
+    assert_eq!(session.plugin(), "fixture-runner");
     // A queued request is not an answer: nothing claims the program is running yet.
     assert_eq!(session.snapshot().state, ExecutionState::Starting);
     let active = wait_until(
@@ -233,7 +259,7 @@ fn host_controls_start_once_and_locate_the_retained_session() {
     );
     assert_eq!(active, ExecutionState::Running);
     let snapshot = manager.execution(session.id()).unwrap().snapshot();
-    assert_eq!(snapshot.plugin, "terminal");
+    assert_eq!(snapshot.plugin, "fixture-runner");
     assert!(
         snapshot.provider_session.is_some(),
         "the provider's own session identity is reported without being reinterpreted"
@@ -255,7 +281,7 @@ fn host_controls_start_once_and_locate_the_retained_session() {
     assert_eq!(located.id(), session.id());
     // The session outlives its provider only as a visible result: the program it started is no
     // longer managed here, so it is reported as failed rather than as still running.
-    manager.disable("terminal").unwrap();
+    manager.disable("fixture-runner").unwrap();
     let ended = wait_until(
         &mut manager,
         |manager| manager.execution(session.id()).unwrap().snapshot().state,
@@ -270,7 +296,8 @@ fn host_controls_start_once_and_locate_the_retained_session() {
             .provider_session
             .is_some()
     );
-    // A missing provider is reported instead of being replaced by an unrelated command.
+    // A deliberately selected but disabled provider remains an unavailable choice; the host must
+    // not silently route this launch to its native default.
     let missing = manager
         .start_execution(RunRequest {
             program: "powershell.exe".into(),
@@ -281,36 +308,55 @@ fn host_controls_start_once_and_locate_the_retained_session() {
         })
         .unwrap_err()
         .to_string();
-    assert!(missing.contains(CONTRACT), "{missing}");
+    assert!(missing.contains("CapabilityUnavailable"), "{missing}");
 }
 
 /// The host lists every provider that declares the execution contract, with why one is unusable.
 #[test]
-#[ignore = "build terminal and capability-example through the public SDK first"]
+#[ignore = "package capability-example through the current public SDK first"]
 fn host_lists_execution_providers_with_their_reasons() {
     let root = tempfile::tempdir().unwrap();
     let mut manager = manager(root.path());
-    let terminal = terminal();
+    let terminal = executor();
     let grants = terminal.manifest.permissions.clone();
     manager.install(&terminal, grants).unwrap();
+    select_example(&mut manager);
 
     // The installed provider is listed and is the one a launch would use.
     let providers = manager.execution_providers();
-    assert_eq!(providers.len(), 1, "{providers:?}");
-    assert_eq!(providers[0].plugin, "terminal");
-    assert!(
-        providers[0].selected,
-        "the only provider is the selected one"
+    assert_eq!(providers.len(), 2, "{providers:?}");
+    assert_eq!(
+        providers
+            .iter()
+            .find(|candidate| candidate.plugin == "fixture-runner")
+            .unwrap()
+            .plugin,
+        "fixture-runner"
     );
-    assert!(providers[0].unavailable.is_none());
+    assert!(
+        providers
+            .iter()
+            .find(|candidate| candidate.plugin == "fixture-runner")
+            .unwrap()
+            .selected,
+        "the explicitly chosen example is selected alongside the native default"
+    );
+    assert!(
+        providers
+            .iter()
+            .find(|candidate| candidate.plugin == "fixture-runner")
+            .unwrap()
+            .unavailable
+            .is_none()
+    );
 
     // A disabled provider is still listed, with the reason a user would act on: hiding it would
     // make an incomplete choice look like the only one.
-    manager.disable("terminal").unwrap();
+    manager.disable("fixture-runner").unwrap();
     let providers = manager.execution_providers();
     let disabled = providers
         .iter()
-        .find(|candidate| candidate.plugin == "terminal")
+        .find(|candidate| candidate.plugin == "fixture-runner")
         .expect("a disabled provider is still listed");
     assert!(
         disabled.unavailable.is_some(),
@@ -322,36 +368,40 @@ fn host_lists_execution_providers_with_their_reasons() {
 
 /// Two independent providers serve the same contract, and the host treats them alike.
 ///
-/// The same consumer path starts, locates, presents and stops a program through the real terminal
-/// package and through a separately packaged provider with a different id. Nothing in the host
+/// The same consumer path starts, locates, presents and stops a program through two separately
+/// packaged SDK providers with different ids. Nothing in the host
 /// branches on which one answered: the session belongs to whichever provider started it, and a
 /// switch of the default applies to later launches only.
 #[test]
-#[ignore = "build terminal and capability-example through the public SDK first"]
+#[ignore = "package capability-example through the current public SDK first"]
 fn two_independent_providers_serve_one_consumer_the_same_way() {
     let root = tempfile::tempdir().unwrap();
     let mut manager = manager(root.path());
-    for package in [terminal(), packages::provider("alt-runner")] {
+    for package in [executor(), packages::provider("alt-runner")] {
         let grants = package.manifest.permissions.clone();
         manager.install(&package, grants).unwrap();
+        select_example(&mut manager);
     }
-    // Both providers are offered, and neither is chosen yet: an ambiguous contract has no single
-    // owner, so the host reports that rather than guessing one.
+    // Both examples and the native default are listed; an explicit preference selects the fixture.
     let providers = manager.execution_providers();
     let listed = providers
         .iter()
         .map(|candidate| candidate.plugin.as_str())
         .collect::<Vec<_>>();
-    assert_eq!(listed, vec!["alt-runner", "terminal"], "{providers:?}");
+    assert_eq!(
+        listed,
+        vec!["alt-runner", "fixture-runner", "nanobug.execution"],
+        "{providers:?}"
+    );
     assert!(
         providers
             .iter()
             .all(|candidate| candidate.unavailable.is_none()),
-        "both providers are usable: {providers:?}"
+        "all providers are usable: {providers:?}"
     );
 
     let mut sessions = Vec::new();
-    for provider in ["terminal", "alt-runner"] {
+    for provider in ["fixture-runner", "alt-runner"] {
         manager
             .set_service_provider(
                 plugin_protocol::api::InstanceScope::Workspace,
@@ -393,9 +443,8 @@ fn two_independent_providers_serve_one_consumer_the_same_way() {
             .execution_for(&request, Some(&root.path().display().to_string()))
             .expect("a repeat launch locates the retained session");
         assert_eq!(located.id(), session.id());
-        // The program the provider delegated is a real process, counted by its owner. A provider may
-        // also keep processes of its own — the terminal keeps its private shell — so the count is
-        // kept as that provider's own baseline rather than compared with an absolute number.
+        // Count actual delegated processes by their provider; stopping one must release its own
+        // process without changing the independently running provider.
         let baseline = manager.live[provider].process_count();
         assert!(baseline >= 1, "{provider} owns a real program");
         sessions.push((provider, session.id(), baseline));
@@ -418,7 +467,7 @@ fn two_independent_providers_serve_one_consumer_the_same_way() {
             plugin_protocol::api::InstanceScope::Workspace,
             plugin_protocol::settings::Scope::Project,
             CONTRACT,
-            Some("terminal"),
+            Some("fixture-runner"),
         )
         .unwrap();
     for (provider, id, _) in &sessions {
@@ -460,7 +509,7 @@ fn two_independent_providers_serve_one_consumer_the_same_way() {
         // proof that a stop reaches the provider that owns the session. The separately packaged
         // provider is held to the contract it declares: it accepts the stop and answers for its own
         // session, while ending a program it delegated is that package's own behaviour.
-        if *provider == "terminal" {
+        if *provider == "fixture-runner" {
             assert!(
                 manager.live[*provider].process_count() < baseline,
                 "the terminal stopped the program it started: {baseline} then, {} now",
@@ -477,41 +526,17 @@ fn two_independent_providers_serve_one_consumer_the_same_way() {
             None,
         )
         .unwrap();
-    let missing = manager
+    let fallback = manager
         .start_execution(RunRequest {
             program: "powershell.exe".into(),
             args: vec!["-NoProfile".into()],
             cwd: None,
             name: None,
-            env: Vec::new(),
+            env: vec![],
         })
-        .expect_err("an ambiguous contract has no single owner to route to");
-    assert!(
-        !missing.to_string().is_empty(),
-        "the refusal explains itself: {missing}"
-    );
-}
-
-/// The text a provider painted into its own panel.
-fn panel_text(manager: &Manager, plugin: &str) -> String {
-    let Some(view) = manager
-        .live
-        .get(plugin)
-        .and_then(|instance| instance.views.get("terminal"))
-    else {
-        return String::new();
-    };
-    let mut text = String::new();
-    view.as_ref().root.visit(&mut |node| {
-        if let plugin_runtime::plugin_protocol::ui::Kind::Canvas(canvas) = &node.kind {
-            for paint in &canvas.paint {
-                if let plugin_runtime::plugin_protocol::Paint::Text { text: painted, .. } = paint {
-                    text.push_str(painted);
-                }
-            }
-        }
-    });
-    text
+        .unwrap();
+    assert_eq!(fallback.plugin(), "nanobug.execution");
+    manager.shutdown();
 }
 
 /// The environment a launch asks for reaches the program, and nothing else is substituted.
@@ -520,19 +545,20 @@ fn panel_text(manager: &Manager, plugin: &str) -> String {
 /// them without reading them. A program that prints the value is the only honest evidence that the
 /// override arrived, so this checks the value the program itself reported.
 #[test]
-#[ignore = "build terminal and capability-example through the public SDK first"]
+#[ignore = "package capability-example through the current public SDK first"]
 fn the_environment_a_launch_asks_for_reaches_the_program() {
     let root = tempfile::tempdir().unwrap();
     let mut manager = manager(root.path());
-    let package = terminal();
+    let package = executor();
     let grants = package.manifest.permissions.clone();
     manager.install(&package, grants).unwrap();
+    select_example(&mut manager);
     let request = RunRequest {
         program: "powershell.exe".into(),
         args: vec![
             "-NoProfile".into(),
             "-Command".into(),
-            "[Console]::Write('MARKER=' + $env:ME_RUN_MARKER); Start-Sleep -Seconds 60".into(),
+            "[IO.File]::WriteAllText('received.txt', 'MARKER=' + $env:ME_RUN_MARKER); Start-Sleep -Seconds 60".into(),
         ],
         cwd: Some(root.path().display().to_string()),
         name: None,
@@ -552,7 +578,7 @@ fn the_environment_a_launch_asks_for_reaches_the_program() {
     // The program's own output carries the value the launch asked for.
     let shown = wait_until(
         &mut manager,
-        |manager| panel_text(manager, "terminal"),
+        |_| std::fs::read_to_string(root.path().join("received.txt")).unwrap_or_default(),
         |shown| shown.contains("carried-through"),
     );
     assert!(
@@ -576,7 +602,7 @@ fn the_environment_a_launch_asks_for_reaches_the_program() {
 /// a value containing `&`, which I confirmed with a separate probe before writing this. So the check
 /// uses a program that cannot re-parse: it writes `std::env::args` as it received them, one per line.
 #[test]
-#[ignore = "build terminal and capability-example through the public SDK first"]
+#[ignore = "package capability-example through the current public SDK first"]
 fn arguments_with_spaces_quotes_and_chinese_reach_the_program_unchanged() {
     let root = tempfile::tempdir().unwrap();
     // Compiled here from a source string, so the check carries its own instrument rather than
@@ -586,9 +612,10 @@ fn arguments_with_spaces_quotes_and_chinese_reach_the_program_unchanged() {
         return;
     };
     let mut manager = manager(root.path());
-    let package = terminal();
+    let package = executor();
     let grants = package.manifest.permissions.clone();
     manager.install(&package, grants).unwrap();
+    select_example(&mut manager);
     let out = root.path().join("arguments.txt");
     let request = RunRequest {
         program: echo.display().to_string(),
@@ -656,19 +683,20 @@ fn build_argument_echo(directory: &std::path::Path) -> Option<std::path::PathBuf
 
 /// A Chinese environment value reaches the program, so the path is not only correct for ASCII.
 #[test]
-#[ignore = "build terminal and capability-example through the public SDK first"]
+#[ignore = "package capability-example through the current public SDK first"]
 fn a_chinese_environment_value_reaches_the_program() {
     let root = tempfile::tempdir().unwrap();
     let mut manager = manager(root.path());
-    let package = terminal();
+    let package = executor();
     let grants = package.manifest.permissions.clone();
     manager.install(&package, grants).unwrap();
+    select_example(&mut manager);
     let request = RunRequest {
         program: "powershell.exe".into(),
         args: vec![
             "-NoProfile".into(),
             "-Command".into(),
-            "[Console]::Write('TEXT=' + $env:ME_RUN_TEXT); Start-Sleep -Seconds 60".into(),
+            "[IO.File]::WriteAllText('received.txt', 'TEXT=' + $env:ME_RUN_TEXT); Start-Sleep -Seconds 60".into(),
         ],
         cwd: Some(root.path().display().to_string()),
         name: None,
@@ -687,7 +715,7 @@ fn a_chinese_environment_value_reaches_the_program() {
     assert!(reveal_panel(&mut manager) >= 1);
     let shown = wait_until(
         &mut manager,
-        |manager| panel_text(manager, "terminal"),
+        |_| std::fs::read_to_string(root.path().join("received.txt")).unwrap_or_default(),
         |shown| shown.contains("中文环境值"),
     );
     assert!(
@@ -704,13 +732,14 @@ fn a_chinese_environment_value_reaches_the_program() {
 /// isolate which step ends it — a provider's instance owns what it started, so both the explicit
 /// stop and the instance teardown below end it — but that the property holds is what a user needs.
 #[test]
-#[ignore = "build terminal and capability-example through the public SDK first"]
+#[ignore = "package capability-example through the current public SDK first"]
 fn closing_the_window_leaves_no_program_running() {
     let root = tempfile::tempdir().unwrap();
     let mut manager = manager(root.path());
-    let package = terminal();
+    let package = executor();
     let grants = package.manifest.permissions.clone();
     manager.install(&package, grants).unwrap();
+    select_example(&mut manager);
     let session = manager
         .start_execution(RunRequest {
             program: "powershell.exe".into(),
@@ -733,7 +762,7 @@ fn closing_the_window_leaves_no_program_running() {
     assert!(reveal_panel(&mut manager) >= 1);
     // The program is real and owned by the provider before the window closes.
     assert!(
-        manager.live["terminal"].process_count() >= 2,
+        manager.live["fixture-runner"].process_count() >= 1,
         "the provider owns the delegated program and its own shell"
     );
 
@@ -807,7 +836,7 @@ fn powershell_processes() -> usize {
 /// program count is read from the machine by a second process, so the check is about what is really
 /// running rather than about the host's own bookkeeping.
 #[test]
-#[ignore = "build terminal and capability-example through the public SDK first"]
+#[ignore = "package capability-example through the current public SDK first"]
 fn closing_while_a_launch_is_still_preparing_leaves_no_program_running() {
     /// Written into the launched program's command line, so only this check's program can match it.
     const MARKER: &str = "RDB_PREPARING_CLOSE_CHECK";
@@ -831,12 +860,10 @@ fn closing_while_a_launch_is_still_preparing_leaves_no_program_running() {
             },
         )
         .unwrap();
-        let package = Package::read(
-            &Path::new(env!("CARGO_MANIFEST_DIR")).join("../../dist/plugins/terminal.zip"),
-        )
-        .unwrap();
+        let package = executor();
         let grants = package.manifest.permissions.clone();
         manager.install(&package, grants).unwrap();
+        select_example(&mut manager);
         let session = manager
             .start_execution(RunRequest {
                 program: "powershell.exe".into(),
@@ -874,7 +901,7 @@ fn closing_while_a_launch_is_still_preparing_leaves_no_program_running() {
 }
 
 #[test]
-#[ignore = "build terminal and capability-example through the public SDK first"]
+#[ignore = "package capability-example through the current public SDK first"]
 fn shutdown_with_no_sessions_is_immediate() {
     let root = tempfile::tempdir().unwrap();
     let mut manager = manager(root.path());
@@ -888,7 +915,7 @@ fn shutdown_with_no_sessions_is_immediate() {
 
 /// A package's declared abilities are read from its own declaration, never assumed from its presence.
 #[test]
-#[ignore = "build terminal and capability-example through the public SDK first"]
+#[ignore = "package capability-example through the current public SDK first"]
 fn a_debug_package_offers_exactly_what_it_declares() {
     let root = tempfile::tempdir().unwrap();
     let mut manager = manager(root.path());
@@ -899,6 +926,7 @@ fn a_debug_package_offers_exactly_what_it_declares() {
     ] {
         let grants = package.manifest.permissions.clone();
         manager.install(&package, grants).unwrap();
+        select_example(&mut manager);
     }
 
     // Both are debug providers, because a session can exist without stepping or inspecting: a missing
@@ -957,13 +985,14 @@ fn a_debug_package_offers_exactly_what_it_declares() {
 /// the programs are no longer claimed to be running, the retired identity cannot stop anything, and
 /// the provider that replaced it is a new instance that does not inherit the old sessions.
 #[test]
-#[ignore = "build terminal and capability-example through the public SDK first"]
+#[ignore = "package capability-example through the current public SDK first"]
 fn losing_a_provider_fails_its_sessions_without_reviving_them() {
     let root = tempfile::tempdir().unwrap();
     let mut manager = manager(root.path());
-    let package = terminal();
+    let package = executor();
     let grants = package.manifest.permissions.clone();
     manager.install(&package, grants).unwrap();
+    select_example(&mut manager);
     let program = |marker: &str| RunRequest {
         program: "powershell.exe".into(),
         args: vec![
@@ -988,12 +1017,15 @@ fn losing_a_provider_fails_its_sessions_without_reviving_them() {
         assert_eq!(state, ExecutionState::Running, "session {session}");
         assert!(manager.execution(session).unwrap().stoppable());
     }
-    let processes = manager.live["terminal"].process_count();
-    assert!(processes >= 3, "two programs and the provider's own shell");
+    let processes = manager.live["fixture-runner"].process_count();
+    assert_eq!(
+        processes, 2,
+        "the example owns exactly the two delegated programs"
+    );
 
     // The provider goes away: every session it served is failed, and none of them is claimed to be
     // stoppable through a provider that is no longer there.
-    manager.disable("terminal").unwrap();
+    manager.disable("fixture-runner").unwrap();
     for session in [first.id(), second.id()] {
         let failed = wait_until(
             &mut manager,
@@ -1003,7 +1035,7 @@ fn losing_a_provider_fails_its_sessions_without_reviving_them() {
         assert_eq!(failed, ExecutionState::Failed, "session {session}");
         let snapshot = manager.execution(session).unwrap().snapshot();
         assert_eq!(
-            snapshot.plugin, "terminal",
+            snapshot.plugin, "fixture-runner",
             "the failure names the provider that went away"
         );
         assert!(
@@ -1015,7 +1047,7 @@ fn losing_a_provider_fails_its_sessions_without_reviving_them() {
 
     // The retired identity cannot be reused: bringing the provider back gives a new instance that
     // does not inherit the old sessions, and the old sessions are not revived.
-    manager.enable("terminal").unwrap();
+    manager.enable("fixture-runner").unwrap();
     for session in [first.id(), second.id()] {
         assert_eq!(
             manager.execution(session).unwrap().snapshot().state,
@@ -1059,13 +1091,14 @@ fn losing_a_provider_fails_its_sessions_without_reviving_them() {
 /// program starts because a guest was rebuilt. The machine's own process table is what decides
 /// whether anything was replayed.
 #[test]
-#[ignore = "build terminal and capability-example through the public SDK first"]
+#[ignore = "package capability-example through the current public SDK first"]
 fn restarting_a_provider_replays_no_program() {
     let root = tempfile::tempdir().unwrap();
     let mut manager = manager(root.path());
-    let package = terminal();
+    let package = executor();
     let grants = package.manifest.permissions.clone();
     manager.install(&package, grants).unwrap();
+    select_example(&mut manager);
     let program = RunRequest {
         program: "powershell.exe".into(),
         args: vec![
@@ -1085,20 +1118,20 @@ fn restarting_a_provider_replays_no_program() {
     );
     assert_eq!(state, ExecutionState::Running);
     assert!(reveal_panel(&mut manager) >= 1);
-    // One delegated program, plus the provider's own shell.
-    assert!(manager.live["terminal"].process_count() >= 2);
+    // One delegated program, with no private startup shell.
+    assert!(manager.live["fixture-runner"].process_count() >= 1);
     let before = powershell_processes();
 
     // Disable and restart the provider: the guest is rebuilt from the committed checkpoint.
-    manager.disable("terminal").unwrap();
+    manager.disable("fixture-runner").unwrap();
     let failed = wait_until(
         &mut manager,
         |manager| manager.execution(session.id()).unwrap().snapshot().state,
         |state| *state == ExecutionState::Failed,
     );
     assert_eq!(failed, ExecutionState::Failed);
-    manager.enable("terminal").unwrap();
-    manager.restart_plugin("terminal").unwrap();
+    manager.enable("fixture-runner").unwrap();
+    manager.restart_plugin("fixture-runner").unwrap();
     // Give a replay every chance to happen before deciding it did not.
     for _ in 0..25 {
         manager.poll();
@@ -1115,7 +1148,7 @@ fn restarting_a_provider_replays_no_program() {
         powershell_processes()
     );
     assert!(
-        manager.live["terminal"].process_count() <= 1,
+        manager.live["fixture-runner"].process_count() == 0,
         "the rebuilt provider owns no program of its own"
     );
 
@@ -1134,13 +1167,14 @@ fn restarting_a_provider_replays_no_program() {
 
 /// A session's end is observed through its provider, never predicted from elapsed time.
 #[test]
-#[ignore = "build terminal and capability-example through the public SDK first"]
+#[ignore = "package capability-example through the current public SDK first"]
 fn host_observes_a_program_exit_through_its_provider() {
     let root = tempfile::tempdir().unwrap();
     let mut manager = manager(root.path());
-    let package = terminal();
+    let package = executor();
     let grants = package.manifest.permissions.clone();
     manager.install(&package, grants).unwrap();
+    select_example(&mut manager);
     // A program that ends on its own, so the observation is of a real exit rather than a stop.
     let request = RunRequest {
         program: "powershell.exe".into(),
@@ -1194,13 +1228,14 @@ fn host_observes_a_program_exit_through_its_provider() {
 /// The request names the session the provider returned; the host never borrows the provider's
 /// private process handle, and an acknowledgement is not treated as proof that the program exited.
 #[test]
-#[ignore = "build terminal and capability-example through the public SDK first"]
+#[ignore = "package capability-example through the current public SDK first"]
 fn host_controls_stop_the_program_a_session_owns() {
     let root = tempfile::tempdir().unwrap();
     let mut manager = manager(root.path());
-    let package = terminal();
+    let package = executor();
     let grants = package.manifest.permissions.clone();
     manager.install(&package, grants).unwrap();
+    select_example(&mut manager);
     let request = RunRequest {
         program: "powershell.exe".into(),
         args: vec![
@@ -1221,19 +1256,19 @@ fn host_controls_stop_the_program_a_session_owns() {
     assert_eq!(running, ExecutionState::Running);
     assert!(manager.execution(session.id()).unwrap().stoppable());
     // A delegated program and the provider's own private shell are both alive here.
-    assert_eq!(manager.live["terminal"].process_count(), 2);
+    assert_eq!(manager.live["fixture-runner"].process_count(), 1);
     assert!(reveal_panel(&mut manager) >= 1);
 
     // Stopping is accepted by the exact incarnation that started the program.
     manager.stop_execution(session.id()).unwrap();
     let deadline = Instant::now() + Duration::from_secs(30);
-    while manager.live["terminal"].process_count() > 1 && Instant::now() < deadline {
+    while manager.live["fixture-runner"].process_count() > 0 && Instant::now() < deadline {
         manager.poll();
         std::thread::sleep(Duration::from_millis(20));
     }
-    // The owned program is gone while the provider's private session remains.
-    assert_eq!(manager.live["terminal"].process_count(), 1);
-    // Contract 1.3 can observe a terminal status. Wait for that answer rather than deriving exit
+    // The owned program is gone while no additional private process remains.
+    assert_eq!(manager.live["fixture-runner"].process_count(), 0);
+    // Contract 2.0 can observe a terminal status. Wait for that answer rather than deriving exit
     // from the process count or from the preceding stop acknowledgement.
     wait_until(
         &mut manager,
@@ -1248,11 +1283,11 @@ fn host_controls_stop_the_program_a_session_owns() {
 
 /// Default selection affects the next start while a real existing program stays owned by its provider.
 #[test]
-#[ignore = "build terminal and capability-example through the public SDK first"]
+#[ignore = "package capability-example through the current public SDK first"]
 fn switching_the_default_keeps_existing_execution_controls_pinned() {
     let root = tempfile::tempdir().unwrap();
     let mut manager = manager(root.path());
-    let first = terminal();
+    let first = executor();
     manager
         .install(&first, first.manifest.permissions.clone())
         .unwrap();
@@ -1273,7 +1308,7 @@ fn switching_the_default_keeps_existing_execution_controls_pinned() {
             )
             .unwrap()
     };
-    select(&mut manager, "terminal");
+    select(&mut manager, "fixture-runner");
     let session = manager
         .start_execution(RunRequest {
             program: "powershell.exe".into(),
@@ -1292,7 +1327,7 @@ fn switching_the_default_keeps_existing_execution_controls_pinned() {
         |manager| manager.execution(session.id()).unwrap().snapshot().state,
         |state| *state == ExecutionState::Running,
     );
-    assert_eq!(manager.live["terminal"].process_count(), 2);
+    assert_eq!(manager.live["fixture-runner"].process_count(), 1);
     select(&mut manager, "alternative-terminal");
     // Both query and stop remain bound to the original incarnation, despite the changed revision.
     let query = manager.query_execution(session.id()).unwrap();
@@ -1307,8 +1342,8 @@ fn switching_the_default_keeps_existing_execution_controls_pinned() {
         |manager| manager.execution(session.id()).unwrap().snapshot().state,
         |state| *state == ExecutionState::Exited,
     );
-    assert_eq!(manager.live["terminal"].process_count(), 1);
-    assert_eq!(manager.live["alternative-terminal"].process_count(), 1);
+    assert_eq!(manager.live["fixture-runner"].process_count(), 0);
+    assert_eq!(manager.live["alternative-terminal"].process_count(), 0);
     let next = manager.start_execution(session.request().clone()).unwrap();
     assert_eq!(next.plugin(), "alternative-terminal");
     manager.shutdown();

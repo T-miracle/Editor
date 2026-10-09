@@ -309,13 +309,23 @@ impl EditorApp {
                 })
                 .placeholder(t!("editor.select_file").to_string())
         });
-        let session_state = SessionState::load(workspace.root());
+        // Finite import must finish before runtime activation or local configuration/layout restoration.
+        let terminal_upgrade_error = terminal::upgrade::prepare(workspace.root())
+            .err()
+            .map(|error| format!("{error:#}"));
+        let mut session_state = SessionState::load(workspace.root());
         // Plugin configurations are host-local per workspace; project settings do not supply run data.
         // A malformed local store is reported rather than silently replaced.
-        let run_controls = run::RunControls::load_plugin_configurations(
+        let mut run_controls = run::RunControls::load_plugin_configurations(
             &workspace.root().display().to_string(),
             editor_core::default_root(),
         );
+        if let Some(error) = &terminal_upgrade_error {
+            // All journal destinations stay immutable during this failed startup, including valid
+            // layout/configuration files that still await the same durable conversion transaction.
+            session_state.block_persistence();
+            run_controls.block_persistence(error.clone());
+        }
         let tree_state = cx.new(|cx| TreeState::new(cx));
         let tree_subscription = cx.subscribe(&tree_state, |this, _, event: &TreeEvent, cx| {
             let id = match event {
@@ -401,6 +411,9 @@ impl EditorApp {
             )
         });
         terminal.update(cx, |panel, cx| {
+            if let Some(error) = terminal_upgrade_error.clone() {
+                panel.upgrade_failed(error);
+            }
             panel.set_visible(session_state.native_terminal_visible, cx)
         });
         dock_area.update(cx, |area, cx| {
@@ -619,6 +632,11 @@ impl EditorApp {
             }
         })
         .detach();
+        if let Some(error) = terminal_upgrade_error {
+            // File restoration can replace ordinary status text; retain the startup diagnostic in
+            // the first visible frame even when the user has kept the terminal panel hidden.
+            this.status = t!("terminal.error.restore", details = error).to_string();
+        }
         this
     }
 

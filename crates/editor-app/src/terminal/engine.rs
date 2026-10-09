@@ -27,6 +27,8 @@ use std::{
     rc::Rc,
 };
 
+mod recovery;
+
 #[cfg(test)]
 mod tests;
 
@@ -77,6 +79,10 @@ pub(super) struct Engine {
     /// Only ConPTY's first inheritance query may reuse an empty restored prompt.
     bootstrap: Option<Vec<u8>>,
     bootstrap_line_start: bool,
+    /// ConPTY owns a fresh screen; historical rows must not be pulled into it during resize.
+    conpty_screen: bool,
+    /// Explicit history scrolling pauses following; user input or returning to the bottom resumes it.
+    follow_screen: bool,
     metadata_parser: alacritty_terminal::vte::Parser,
     metadata: super::shell::Metadata,
 }
@@ -92,6 +98,17 @@ pub(super) struct Colors {
 }
 
 impl Engine {
+    /// Styled spaces, wide-glyph spacers and wrap metadata belong to retained output too.
+    fn has_content(cell: &Cell) -> bool {
+        cell != &Cell::default()
+    }
+
+    /// Translate a visible cell to native screen coordinates, rejecting retained history rows.
+    pub fn mouse_position(&self, row: usize, column: usize) -> Option<(usize, usize)> {
+        let row = row.checked_sub(self.offset())?;
+        (row < self.term.screen_lines() && column < self.term.columns()).then_some((row, column))
+    }
+
     pub fn new(size: GridSize, history: usize) -> Self {
         let listener = Listener::default();
         let config = Config {
@@ -109,6 +126,8 @@ impl Engine {
             history_limit: history,
             bootstrap: None,
             bootstrap_line_start: false,
+            conpty_screen: false,
+            follow_screen: true,
             metadata_parser: alacritty_terminal::vte::Parser::new(),
             metadata: Default::default(),
         }
@@ -123,10 +142,9 @@ impl Engine {
                 return vec![];
             }
             if initial.starts_with(QUERY) {
-                self.listener.send_event(Event::PtyWrite(format!(
-                    "\x1b[{};1R",
-                    self.term.grid().cursor.point.line.0 + 1
-                )));
+                let start = self.start_restored_screen();
+                self.listener
+                    .send_event(Event::PtyWrite(format!("\x1b[{};1R", start.0 + 1)));
                 self.bootstrap_line_start = true;
                 Some(initial.split_off(QUERY.len()))
             } else {
@@ -137,32 +155,43 @@ impl Engine {
         };
         let bytes = buffered.as_deref().unwrap_or(bytes);
         if self.bootstrap_line_start && !bytes.is_empty() {
-            self.parser.advance(&mut self.term, b"\r");
+            // ConPTY redraw starts at the logical prompt's first row, not its last wrapped row.
+            // Measurement may have reflowed rows while native startup was pending. Resolve the
+            // current start again rather than retaining a stale pre-resize screen coordinate.
+            let start = self.visible_prompt_start();
+            let cursor = &mut self.term.grid_mut().cursor;
+            cursor.point = Point::new(start, Column(0));
+            cursor.input_needs_wrap = false;
             self.bootstrap_line_start = false;
         }
         self.parser.advance(&mut self.term, bytes);
         self.metadata_parser.advance(&mut self.metadata, bytes);
+        self.reveal_native_screen();
         self.listener.0.borrow_mut().drain(..).collect()
-    }
-    /// Reuse only a recognized empty prompt; pending input/custom prompts remain historical data.
-    pub fn begin_process(&mut self, windows: bool, prompt: Option<&str>) {
-        let grid = self.term.grid();
-        let line = &grid[grid.cursor.point.line];
-        let text = (0..grid.columns())
-            .map(|column| line[Column(column)].c)
-            .collect::<String>();
-        self.bootstrap = (windows
-            && prompt.is_some_and(|prompt| text.trim_end() == prompt.trim_end()))
-        .then(Vec::new);
-        self.bootstrap_line_start = false;
     }
     /// Directory metadata never changes the grid and cannot execute a program itself.
     pub fn take_cwd(&mut self) -> Option<String> {
         self.metadata.cwd.take()
     }
     pub fn resize(&mut self, size: GridSize) {
+        if self.conpty_screen
+            && self.bootstrap.is_none()
+            && !self.term.mode().contains(TermMode::ALT_SCREEN)
+        {
+            self.resize_conpty_screen(size);
+            return;
+        }
         self.term.resize(size);
     }
+
+    /// Once native EOF is observed, no future redraw can restore clipped screen cells. Ended tabs
+    /// therefore return to Alacritty's full logical reflow before any subsequent geometry change.
+    pub fn end_process(&mut self) {
+        self.conpty_screen = false;
+        self.bootstrap = None;
+        self.bootstrap_line_start = false;
+    }
+
     /// History settings update Alacritty's limit without resetting the active screen or mode.
     pub fn set_history(&mut self, history: usize) {
         self.history_limit = history;
@@ -186,8 +215,10 @@ impl Engine {
     }
     pub fn scroll(&mut self, lines: i32) {
         self.term.scroll_display(Scroll::Delta(lines));
+        self.follow_screen = self.offset() == 0;
     }
     pub fn set_offset(&mut self, offset: usize) {
+        self.follow_screen = offset == 0;
         self.term
             .scroll_display(Scroll::Delta(offset as i32 - self.offset() as i32));
     }
@@ -248,12 +279,21 @@ impl Engine {
         );
         let history = saved.lines.len() - saved.rows;
         let grid = self.term.grid_mut();
+        // A snapshot replaces cells rather than overlaying trimmed rows on a previous screen.
+        // Construct history with the default rendition: scroll_up also initializes blank suffixes
+        // in history. Restoring the live template earlier would tint old rows with the new SGR.
+        // Keep live rendition/saved cursor for subsequent output, after all saved cells are copied.
+        let template = grid.cursor.template.clone();
+        let saved_cursor = grid.saved_cursor.clone();
+        grid.reset();
         grid.scroll_up::<Color>(&(Line(0)..Line(saved.rows as i32)), history);
         for (row, cells) in saved.lines.into_iter().enumerate() {
             for (column, cell) in cells.into_iter().enumerate() {
                 grid[Point::new(Line(row as i32 - history as i32), Column(column))] = cell;
             }
         }
+        grid.cursor.template = template;
+        grid.saved_cursor = saved_cursor;
         grid.cursor.point = Point::new(Line(saved.cursor.0), Column(saved.cursor.1));
         grid.cursor.input_needs_wrap = saved.input_needs_wrap;
         grid.scroll_display(Scroll::Delta(saved.offset.min(history) as i32));
@@ -413,11 +453,18 @@ impl Engine {
                 });
             }
         }
-        if self.offset() == 0 && self.term.mode().contains(TermMode::SHOW_CURSOR) {
-            let cursor = self.term.grid().cursor.point;
+        // The restored prefix can be visible above the new native screen. Map its caret to the
+        // viewport without altering the coordinates sent to the PTY.
+        if self.term.mode().contains(TermMode::SHOW_CURSOR)
+            && let Some(cursor) = alacritty_terminal::term::point_to_viewport(
+                self.offset(),
+                self.term.grid().cursor.point,
+            )
+            && cursor.line < self.term.screen_lines()
+        {
             let caret = rect(
                 8. + cursor.column.0 as f32 * cell_width,
-                8. + cursor.line.0 as f32 * cell_height,
+                8. + cursor.line as f32 * cell_height,
                 1.5,
                 cell_height,
             );

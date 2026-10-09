@@ -278,7 +278,7 @@ fn native_debug_stdin_reaches_the_target_and_inspection_stays_inside_its_tab(
 
 /// A real guest budget trap is shown by the native error card while an unrelated program stays live.
 #[gpui::test]
-#[ignore = "build terminal and capability-example through the current public SDK first"]
+#[ignore = "package capability-example through the current public SDK first"]
 fn real_wasm_fault_paints_its_native_error_and_preserves_unrelated_work(cx: &mut TestAppContext) {
     let root = tempfile::tempdir().unwrap();
     let (mut manager, app, cx) = fixture(

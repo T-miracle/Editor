@@ -2,7 +2,7 @@
 
 日期：2026-10-09
 
-状态：2026-10-09 用户批准并要求逐步执行全部工单。[01](../../verification/builtin-terminal-01-2026-10-09.md)、[02](../../verification/builtin-terminal-02-2026-10-09.md)、[03](../../verification/builtin-terminal-03-2026-10-09.md) 已完成阶段验收，随后执行 04。规格 [#87](https://github.com/T-miracle/Nanobug/issues/87) 与工单 [#88](https://github.com/T-miracle/Nanobug/issues/88)–[#91](https://github.com/T-miracle/Nanobug/issues/91) 的真实映射及依赖见 [publication.json](publication.json)。这不代表旧用户迁移或整批发行已经完成。
+状态：2026-10-09 用户要求的四张工单已按依赖完成实施与验收：[01](../../verification/builtin-terminal-01-2026-10-09.md)、[02](../../verification/builtin-terminal-02-2026-10-09.md)、[03](../../verification/builtin-terminal-03-2026-10-09.md)、[04 与最终证据汇总](../../verification/builtin-terminal-04-2026-10-09.md)。Windows 原生升级、系统输入法、交互输入及混合任务组合通过；其他平台与历史夹具限制见验收记录，未发布安装器或版本。规格 [#87](https://github.com/T-miracle/Nanobug/issues/87) 与工单 [#88](https://github.com/T-miracle/Nanobug/issues/88)–[#91](https://github.com/T-miracle/Nanobug/issues/91) 的真实映射及依赖见 [publication.json](publication.json)，父规格议题保持不变。
 
 依据：[总方案](../../specs/builtin-terminal-run-debug.md)，稳定标识 `builtin-terminal-run-debug`。目标跟踪器为 T-miracle/Nanobug GitHub Issues，发布标签为 `ready-for-agent`。本地编号不是 GitHub issue 编号。
 

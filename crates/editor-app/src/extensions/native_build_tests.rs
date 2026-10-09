@@ -1,7 +1,7 @@
 //! The vertical acceptance for ordered preparation: build actions and pre-launch steps.
 //!
 //! Every assertion is about something a user can observe: which programs ran, in which order, what a
-//! failure stopped, and whether a program was started at all. The real terminal package and the
+//! failure stopped, and whether a program was started at all. Native execution and the
 //! worker's own work items are used, so no test-only host API is introduced.
 #![cfg(windows)]
 use super::composable_tests::{publish_frame, publish_with_launches, pump_recording};
@@ -43,7 +43,7 @@ fn configuration(
     }
 }
 
-/// Install the real terminal package on a fresh runtime for one workspace.
+/// Use built-in native execution on a fresh runtime for one workspace.
 fn runtime(root: &std::path::Path) -> plugin_runtime::Manager {
     let mut manager = plugin_runtime::Manager::open(
         root.join("runtime"),
@@ -54,12 +54,6 @@ fn runtime(root: &std::path::Path) -> plugin_runtime::Manager {
         },
     )
     .unwrap();
-    let terminal = Package::read(
-        &PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../dist/plugins/terminal.zip"),
-    )
-    .unwrap();
-    let grants = terminal.manifest.permissions.clone();
-    manager.install(&terminal, grants).unwrap();
     manager
 }
 
@@ -132,7 +126,7 @@ fn editor_loaded<'a>(
     (app, cx)
 }
 
-/// Install the real terminal package and open the editor on one configuration with these steps.
+/// Use built-in native execution and open the editor on one configuration with these steps.
 fn fixture<'a>(
     cx: &'a mut TestAppContext,
     root: &std::path::Path,
@@ -258,7 +252,7 @@ fn shut_down(
 
 /// Two preparation steps run in order, then the program — and each step is its own session.
 #[gpui::test]
-#[ignore = "build terminal and capability-example through the public SDK first"]
+#[ignore = "real native preparation and process acceptance"]
 fn a_launch_prepares_each_step_in_order_before_the_program(cx: &mut TestAppContext) {
     let root = tempfile::tempdir().unwrap();
     let first = root.path().join("first.txt");
@@ -359,7 +353,7 @@ fn a_launch_prepares_each_step_in_order_before_the_program(cx: &mut TestAppConte
 
 /// A failing step stops the sequence: no later step and no program are started.
 #[gpui::test]
-#[ignore = "build terminal and capability-example through the public SDK first"]
+#[ignore = "real native preparation and process acceptance"]
 fn a_failing_step_blocks_every_later_step_and_the_program(cx: &mut TestAppContext) {
     let root = tempfile::tempdir().unwrap();
     let later = root.path().join("later.txt");
@@ -392,7 +386,7 @@ fn a_failing_step_blocks_every_later_step_and_the_program(cx: &mut TestAppContex
 
 /// Build runs the build actions only: no pre-launch step and no program.
 #[gpui::test]
-#[ignore = "build terminal and capability-example through the public SDK first"]
+#[ignore = "real native preparation and process acceptance"]
 fn build_runs_only_the_build_actions(cx: &mut TestAppContext) {
     let root = tempfile::tempdir().unwrap();
     let produced = root.path().join("built.txt");
@@ -477,7 +471,7 @@ fn build_runs_only_the_build_actions(cx: &mut TestAppContext) {
 
 /// Stopping during preparation stops the step and never starts the program.
 #[gpui::test]
-#[ignore = "build terminal and capability-example through the public SDK first"]
+#[ignore = "real native preparation and process acceptance"]
 fn stopping_during_preparation_never_starts_the_program(cx: &mut TestAppContext) {
     let root = tempfile::tempdir().unwrap();
     let (mut manager, app, id, cx) = fixture(
@@ -528,7 +522,12 @@ fn stopping_during_preparation_never_starts_the_program(cx: &mut TestAppContext)
         manager.execution(stopped_session).unwrap().snapshot().state,
         plugin_runtime::ExecutionState::Exited,
     );
-    assert_eq!(manager.live["terminal"].process_count(), 1);
+    assert!(
+        manager
+            .executions()
+            .iter()
+            .all(|session| !session.snapshot().state.is_active())
+    );
     let reason = cx.update(|_, cx| app.read(cx).run_controls.preparation_blocked(&id));
     assert!(
         reason.as_deref().is_some_and(|reason| {
@@ -547,7 +546,7 @@ fn stopping_during_preparation_never_starts_the_program(cx: &mut TestAppContext)
 /// A step that names another configuration runs that configuration's build as it is now, not as a
 /// copy: editing the referenced build changes what the next launch does.
 #[gpui::test]
-#[ignore = "build terminal and capability-example through the public SDK first"]
+#[ignore = "real native preparation and process acceptance"]
 fn a_step_that_references_a_build_tracks_its_current_definition(cx: &mut TestAppContext) {
     let root = tempfile::tempdir().unwrap();
     let mut manager = runtime(root.path());

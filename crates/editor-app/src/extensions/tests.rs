@@ -563,14 +563,8 @@ fn terminal_theme_icons_render_in_opposite_colors() {
     use gpui_kit::{Image, ImageFormat, SvgRenderer};
 
     for (bytes, expected) in [
-        (
-            include_bytes!("../../../../plugins/terminal/icons/terminal_light.svg").as_slice(),
-            0,
-        ),
-        (
-            include_bytes!("../../../../plugins/terminal/icons/terminal_dark.svg").as_slice(),
-            255,
-        ),
+        (include_bytes!("../terminal/icon_light.svg").as_slice(), 0),
+        (include_bytes!("../terminal/icon_dark.svg").as_slice(), 255),
     ] {
         let image = Image::from_bytes(ImageFormat::Svg, bytes.to_vec());
         let rendered = image
@@ -613,14 +607,12 @@ fn incompatible_plugin_details_keep_preferences_and_update_uninstall_actions(
         let owner = app.read(cx).extensions.clone();
         owner.update(cx, |owner, cx| {
             let mut old: protocol::Manifest =
-                serde_json::from_str(include_str!("../../../../plugins/terminal/manifest.json"))
-                    .unwrap();
+                serde_json::from_str(include_str!("fixtures/panel-contract.json")).unwrap();
             // Keep a genuinely legacy installed fixture after the delivered package migrates.
             old.protocol = 5;
             // Same-version SDK repacks must still offer an update for an incompatible installed protocol.
-            let current = crate::extensions::test_manifest(include_str!(
-                "../../../../plugins/terminal/manifest.json"
-            ));
+            let current =
+                crate::extensions::test_manifest(include_str!("fixtures/panel-contract.json"));
             owner.manager_selected = Some(old.id.clone());
             owner.manager_packages = vec![Package {
                 manifest: current,

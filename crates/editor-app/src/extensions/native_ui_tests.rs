@@ -4,7 +4,7 @@ use gpui_kit::{TestAppContext, gpui};
 
 /// A real host command reveals a hidden component panel and preserves its argument in rendered output.
 #[gpui::test]
-#[ignore = "build the real SDK fixture with scripts/build-capability-example.ps1 first"]
+#[ignore = "build and package capability-example through the current public SDK first"]
 fn host_command_reveals_real_panel_and_preserves_arguments(cx: &mut TestAppContext) {
     crate::tests::with_shortcut_editor(cx, false, vec![], |visual, app, path| {
         let workspace = path.parent().unwrap();
@@ -113,9 +113,8 @@ fn plugin_hide_requests_are_scoped_and_reclaim_the_empty_dock(cx: &mut TestAppCo
     let owner = cx.update(|window, cx| {
         let owner = app.read(cx).extensions.clone();
         owner.update(cx, |owner, cx| {
-            let mut manifest: protocol::Manifest = crate::extensions::test_manifest(include_str!(
-                "../../../../plugins/terminal/manifest.json"
-            ));
+            let mut manifest: protocol::Manifest =
+                crate::extensions::test_manifest(include_str!("fixtures/panel-contract.json"));
             manifest.panels[0].default_visible = true;
             let mut state = owner.worker.state.lock().unwrap();
             for plugin in ["terminal", "peer"] {
@@ -278,9 +277,8 @@ fn canvas_controls_sidebar_routes_ui_without_canvas_pointer_events(cx: &mut Test
         Root::new(app, window, cx)
     });
     let app = slot.borrow_mut().take().unwrap();
-    let mut manifest: protocol::Manifest = crate::extensions::test_manifest(include_str!(
-        "../../../../plugins/terminal/manifest.json"
-    ));
+    let mut manifest: protocol::Manifest =
+        crate::extensions::test_manifest(include_str!("fixtures/panel-contract.json"));
     manifest.panels[0].default_visible = true;
     // The collection is an ordinary tree node; canvas routing remains a separate keyed target.
     let scene = protocol::ui::Document::new(

@@ -98,7 +98,8 @@ fn editor_for<'a>(
         },
     )
     .unwrap();
-    for name in ["terminal", "rust", "run-target-example"] {
+    // Discovery/build rules remain plugins; the terminal is provided by the native application.
+    for name in ["rust", "run-target-example"] {
         let package = Package::read(
             &PathBuf::from(env!("CARGO_MANIFEST_DIR"))
                 .join(format!("../../dist/plugins/{name}.zip")),
@@ -222,7 +223,7 @@ fn rust_project(root: &Path, name: &str) {
 }
 
 #[gpui::test]
-#[ignore = "build terminal, rust and run-target-example through the current public SDK first"]
+#[ignore = "build rust and run-target-example through the current public SDK first"]
 fn a_real_rust_project_is_discovered_built_and_run(cx: &mut TestAppContext) {
     let root = tempfile::tempdir().unwrap();
     rust_project(root.path(), "delivery-target");
@@ -348,7 +349,7 @@ fn a_real_rust_project_is_discovered_built_and_run(cx: &mut TestAppContext) {
 
 /// Rename/repair preserves edits; an independent plugin's defaults are staged and explicitly saved.
 #[gpui::test]
-#[ignore = "build terminal, rust and run-target-example through the current public SDK first"]
+#[ignore = "build rust and run-target-example through the current public SDK first"]
 fn a_discovered_project_is_confirmed_built_run_and_offered_for_debugging(cx: &mut TestAppContext) {
     let root = tempfile::tempdir().unwrap();
     rust_project(root.path(), "original-target");

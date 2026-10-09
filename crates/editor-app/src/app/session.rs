@@ -22,6 +22,9 @@ pub(crate) enum FileProviderChoice {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct SessionState {
+    /// Startup failures must not replace damaged data or targets of an unfinished migration.
+    #[serde(skip)]
+    persistence_blocked: bool,
     /// This private workspace record namespaces choices by lowercase file type.
     #[serde(default)]
     pub file_view_providers: std::collections::BTreeMap<String, FileProviderChoice>,
@@ -128,6 +131,7 @@ impl SessionState {
 
     pub fn for_workspace(workspace: &Path) -> Self {
         Self {
+            persistence_blocked: false,
             file_view_providers: Default::default(),
             workspace: workspace.to_string_lossy().into_owned(),
             // Preserve the editor's existing trust default; users can restrict a workspace locally.
@@ -157,7 +161,8 @@ impl SessionState {
         }
     }
 
-    fn file_path(&self) -> Option<PathBuf> {
+    /// Host-only migrations resolve the exact profile file without repeating its workspace digest.
+    pub(crate) fn file_path(&self) -> Option<PathBuf> {
         let mut hasher = DefaultHasher::new();
         self.workspace.hash(&mut hasher);
         Some(
@@ -172,7 +177,7 @@ impl SessionState {
     pub fn load(workspace: &Path) -> Self {
         let mut state = Self::for_workspace(workspace);
         if let Some(path) = state.file_path() {
-            if let Ok(contents) = fs::read_to_string(path) {
+            if let Ok(contents) = fs::read_to_string(&path) {
                 if let Ok(saved) = serde_json::from_str::<Self>(&contents) {
                     if saved.workspace == state.workspace {
                         state = saved;
@@ -180,8 +185,14 @@ impl SessionState {
                         state.window_height = state.window_height.clamp(500., 4320.);
                         state.explorer_width = state.explorer_width.clamp(220., 520.);
                         state.extension_height = state.extension_height.clamp(140., 1200.);
+                    } else {
+                        state.block_persistence();
                     }
+                } else {
+                    state.block_persistence();
                 }
+            } else if path.exists() {
+                state.block_persistence();
             }
         }
         state.migrate_plugin_ids();
@@ -226,6 +237,9 @@ impl SessionState {
     }
 
     pub fn save(&self) {
+        if self.persistence_blocked {
+            return;
+        }
         let Some(path) = self.file_path() else { return };
         let Some(parent) = path.parent() else { return };
         if fs::create_dir_all(parent).is_ok() {
@@ -236,6 +250,11 @@ impl SessionState {
                 }
             }
         }
+    }
+
+    /// Keep automatic layout saves away from a failed import until the next successful startup.
+    pub(crate) fn block_persistence(&mut self) {
+        self.persistence_blocked = true;
     }
 }
 

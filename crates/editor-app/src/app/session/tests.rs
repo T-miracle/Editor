@@ -18,6 +18,21 @@ use std::{cell::RefCell, rc::Rc};
 /// Remove only the isolated workspace's generated session file, including on assertion failure.
 struct SessionFile(PathBuf);
 
+/// Automatic saves after a malformed load preserve the exact original layout for repair.
+#[test]
+fn malformed_session_is_not_overwritten_by_automatic_save() {
+    let directory = tempfile::tempdir().unwrap();
+    let source = SessionState::for_workspace(directory.path());
+    let path = source.file_path().unwrap();
+    let _cleanup = SessionFile(path.clone());
+    fs::create_dir_all(path.parent().unwrap()).unwrap();
+    fs::write(&path, b"damaged layout").unwrap();
+    let mut loaded = SessionState::load(directory.path());
+    loaded.window_width = 1000.;
+    loaded.save();
+    assert_eq!(fs::read(path).unwrap(), b"damaged layout");
+}
+
 /// Fresh and legacy records hide Outline, while an explicit workspace choice survives save/reload.
 #[test]
 fn outline_visibility_defaults_hidden_and_preserves_saved_choice() {
@@ -229,8 +244,10 @@ fn plugin_dock_layout_survives_delayed_startup(cx: &mut TestAppContext) {
             .unwrap(),
     );
     let mut manifest: Manifest = crate::extensions::test_manifest(include_str!(
-        "../../../../../plugins/terminal/manifest.json"
+        "../../extensions/fixtures/panel-contract.json"
     ));
+    // Generic delayed panel restoration must not use the retired terminal migration identity.
+    manifest.id = "panel-contract".into();
     manifest.panels[0].default_visible = true;
     let mut second_panel = manifest.panels[0].clone();
     second_panel.id = "tasks".into();
@@ -271,8 +288,9 @@ fn plugin_dock_layout_survives_delayed_startup(cx: &mut TestAppContext) {
             let explorer = crate::dock::panel_handle(app.explorer_panel.clone());
             let editor = crate::dock::panel_handle(app.editor_panel.clone());
             let terminal =
-                crate::dock::panel_handle(app.plugin_panels["terminal/terminal"].clone());
-            let tasks = crate::dock::panel_handle(app.plugin_panels["terminal/tasks"].clone());
+                crate::dock::panel_handle(app.plugin_panels["panel-contract/terminal"].clone());
+            let tasks =
+                crate::dock::panel_handle(app.plugin_panels["panel-contract/tasks"].clone());
             app.dock_area.update(cx, |area, cx| {
                 area.remove_dock(DockPlacement::Bottom, window, cx);
                 area.set_center(
@@ -311,8 +329,8 @@ fn plugin_dock_layout_survives_delayed_startup(cx: &mut TestAppContext) {
     let legacy_session = visual.update(|_, cx| first.read(cx).session_state.clone());
     let serialized = serde_json::to_string(&legacy_session)
         .unwrap()
-        .replace("terminal/terminal", "me.terminal/terminal")
-        .replace("terminal/tasks", "me.terminal/tasks");
+        .replace("panel-contract/terminal", "me.panel-contract/terminal")
+        .replace("panel-contract/tasks", "me.panel-contract/tasks");
     let mut legacy_session: SessionState = serde_json::from_str(&serialized).unwrap();
     // This equal-split migration fixture explicitly restores a visible Outline rather than relying on its default.
     legacy_session.outline_visible = true;
@@ -363,7 +381,7 @@ fn plugin_dock_layout_survives_delayed_startup(cx: &mut TestAppContext) {
                 .panels()
                 .any(|id| id == PanelId::from(app.messages.entity_id()))
         );
-        for key in ["terminal/terminal", "terminal/tasks"] {
+        for key in ["panel-contract/terminal", "panel-contract/tasks"] {
             let id = PanelId::from(app.plugin_panels[key].entity_id());
             assert!(
                 app.dock_area.read(cx).panel(id).is_some(),

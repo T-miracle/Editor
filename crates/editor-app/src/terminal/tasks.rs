@@ -274,6 +274,11 @@ impl TerminalPanel {
             return;
         }
         if message.update.locate {
+            if task.execution != Some(message.execution) {
+                // Each preparation/program child owns a fresh native screen. Retain earlier
+                // step cells in history before its absolute cursor/redraw sequences arrive.
+                session.engine.begin_process(cfg!(windows), None);
+            }
             task.execution = Some(message.execution);
             // Locate also applies to ended histories; it must not manufacture a live input target.
             task.process_alive = !session.exited;

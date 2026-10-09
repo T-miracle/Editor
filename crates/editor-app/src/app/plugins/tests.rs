@@ -103,7 +103,7 @@ fn incompatible_installed_plugin_preserves_data_without_starting(cx: &mut TestAp
     let root = directory.path().join(".runtime-plugin-test");
     std::fs::create_dir_all(&root).unwrap();
     let mut manifest = serde_json::from_str::<plugin_runtime::plugin_protocol::Manifest>(
-        include_str!("../../../../../plugins/terminal/manifest.json"),
+        include_str!("../../extensions/fixtures/panel-contract.json"),
     )
     .unwrap();
     // Replay a real pre-rename installation through editor startup, not a migration-private API.

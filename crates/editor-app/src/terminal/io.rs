@@ -49,6 +49,7 @@ impl TerminalPanel {
                 }
             }
             Update::Exited { .. } | Update::Terminated => {
+                session.engine.end_process();
                 if let Some(task) = &mut session.task {
                     task.process_alive = false;
                 } else {
@@ -79,6 +80,7 @@ impl TerminalPanel {
                         && launch
                     {
                         tab.exited = true;
+                        tab.engine.end_process();
                     }
                 }
                 NativeProcessEvent::Update { session, update } => {

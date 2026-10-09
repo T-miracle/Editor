@@ -16,7 +16,8 @@ pub use run::{
     RunBreakpoints, RunConfig, RunConfigError, RunConfigReadiness, RunConfigSet, RunConfigSource,
     RunStep, RunStoreError, RunTarget, SHARED_CONFIG_VERSION, SharedConfig, SharedSet,
     SharedStoreError, StackFrame, StepTarget, WORKSPACE_TOKEN, clear_legacy_configurations,
-    configuration_for, default_root, launch_environment, legacy_configuration_paths, load,
-    load_shared, merge, project_path, reconcile, repair, save, save_shared, storage_path,
+    configuration_for, configuration_path, default_root, launch_environment,
+    legacy_configuration_paths, load, load_shared, merge, project_path, reconcile, repair, save,
+    save_shared, storage_path,
 };
 pub use workspace::{Workspace, WorkspaceError, WorkspaceFile, WorkspaceSnapshot};

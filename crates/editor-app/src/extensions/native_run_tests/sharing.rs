@@ -4,7 +4,7 @@ use std::time::{Duration, Instant};
 
 /// Each isolated project records its own literal argv/cwd/environment through the public terminal.
 #[gpui::test]
-#[ignore = "build the current terminal package through the public SDK first"]
+#[ignore = "requires a native rustc instrument; no terminal package is used"]
 fn native_shared_configuration_runs_in_two_isolated_projects(cx: &mut TestAppContext) {
     let roots = tempfile::tempdir().unwrap();
     let first = roots.path().join("first");
@@ -204,7 +204,7 @@ fn wait_for_file(
                 .iter()
                 .map(|session| (session.id(), session.state(), session.snapshot().failure))
                 .collect::<Vec<_>>(),
-            painted_text(manager)
+            painted_text(app, cx)
         );
         std::thread::sleep(Duration::from_millis(10));
     }

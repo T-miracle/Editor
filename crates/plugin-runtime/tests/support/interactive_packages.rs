@@ -190,7 +190,7 @@ pub fn debug_provides(omit: &[&str]) -> Value {
     for name in omit {
         methods.as_object_mut().unwrap().remove(*name);
     }
-    json!({DEBUG_CONTRACT: {"version": "1.1.0", "methods": methods}})
+    json!({DEBUG_CONTRACT: {"version": plugin_runtime::plugin_protocol::debug::declaration().version.to_string(), "methods": methods}})
 }
 
 /// An independently packaged debug provider that declares the host's own shape.

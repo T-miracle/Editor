@@ -11,8 +11,18 @@ PowerShell/Python 脚本只在本机 Codex 工作区存档，打包不得调用�
 `dist/editor/licenses/`。通过主程序 `--plugin-package` 按各项目的 `nanobug-plugin.json` 独立构建
 并自动生成 `dist/editor/plugins/<id>-<version>.zip`。不要把编译器、宿主源码或脚本放入运行目录。
 
-有组件的默认包为 terminal、example、svg、rust、rust-debugger、markdown、xml；组件 Cargo 名称分别
-为 terminal-guest、example-guest、svg-guest、rust-language-guest、rust-debugger-guest、markdown-guest、xml-language-guest。
+终端、上游 Alacritty 核心及默认主题编译进宿主，无独立终端 ZIP 或 WASM。旧终端安装记录仅用于有限数据导入，原始数据和备份保留。
+
+内置终端的 Apache 许可证随编辑器发行，从已核对上游版本的资源直接复制：
+
+```powershell
+# 安装器收录整个 licenses 目录；不再从已退役的终端包提取许可证。
+New-Item -ItemType Directory -Force -Path dist/editor/licenses | Out-Null
+Copy-Item -LiteralPath crates/editor-app/assets/licenses/alacritty-terminal-LICENSE-APACHE -Destination dist/editor/licenses/
+```
+
+有组件的默认包为 example、svg、rust、rust-debugger、markdown、xml；组件 Cargo 名称分别
+为 example-guest、svg-guest、rust-language-guest、rust-debugger-guest、markdown-guest、xml-language-guest。
 资源包为 toml、html、javascript、run-target-example。每包保留根目录 `manifest.json` 与 `README.md`，
 存在时还包含 `plugin.toml`、`icons.json`、grammar、queries、icons、run-targets 等运行资源。
 只收录清单引用资源，不归档 src、Cargo 缓存或 target 目录。
@@ -20,12 +30,12 @@ PowerShell/Python 脚本只在本机 Codex 工作区存档，打包不得调用�
 ```powershell
 # 项目描述负责 SDK、原生桥、资源、摘要和 ZIP；显式指定安装目录中的插件输出位置。
 $hostExe = (Resolve-Path .\target\release\editor-app.exe).Path
-& $hostExe --plugin-package plugins/terminal plugins/example plugins/svg plugins/rust plugins/rust-debugger plugins/markdown plugins/xml plugins/toml plugins/html plugins/javascript plugins/run-target-example --output dist/editor/plugins
+& $hostExe --plugin-package plugins/example plugins/svg plugins/rust plugins/rust-debugger plugins/markdown plugins/xml plugins/toml plugins/html plugins/javascript plugins/run-target-example --output dist/editor/plugins
 if ($LASTEXITCODE -ne 0) { throw 'Plugin packaging failed' }
 ```
 
 宿主把 WASM 映射到清单规定的包内路径，原生桥摘要写入分发清单，不修改源占位。
-terminal 项目描述收录终端核心与 VTE 许可；markdown 将 `src/pulldown-cmark-LICENSE`
+宿主许可目录应收录 Alacritty 和 VTE 的许可；markdown 将 `src/pulldown-cmark-LICENSE`
 映射到 `licenses/pulldown-cmark-LICENSE`。完整包校验通过后才原子替换 ZIP。
 
 自动 ZIP 的包根不会多套一层文件夹。首次提供索引 `plugins/bundle-defaults.json` 使用 version 1；

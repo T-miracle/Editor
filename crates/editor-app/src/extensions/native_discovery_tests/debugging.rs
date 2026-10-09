@@ -5,7 +5,7 @@ mod packages;
 
 /// Native controls must route to one selected configuration and preserve unrelated target lifetimes.
 #[gpui::test]
-#[ignore = "build terminal/rust/rust-debugger and verify the pinned CodeLLDB dependency first"]
+#[ignore = "build rust/rust-debugger and verify the pinned CodeLLDB dependency first; no terminal package"]
 fn cargo_artifacts_debug_in_parallel_and_retire_through_native_management(cx: &mut TestAppContext) {
     let root = tempfile::tempdir().unwrap();
     rust_project(root.path(), "parallel-debug");

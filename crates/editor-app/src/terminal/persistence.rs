@@ -3,25 +3,25 @@
 use super::*;
 
 #[derive(Serialize, Deserialize)]
-struct SavedSession {
-    id: u64,
-    name: String,
-    profile: Profile,
-    cwd: String,
-    exited: bool,
-    grid: engine::SavedGrid,
+pub(super) struct SavedSession {
+    pub(super) id: u64,
+    pub(super) name: String,
+    pub(super) profile: Profile,
+    pub(super) cwd: String,
+    pub(super) exited: bool,
+    pub(super) grid: engine::SavedGrid,
     /// Only logical task identity survives; executable receipts and commands are never replayed.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    task: Option<tasks::Task>,
+    pub(super) task: Option<tasks::Task>,
 }
 #[derive(Serialize, Deserialize)]
-struct Saved {
-    version: u32,
-    settings: Settings,
-    active: Option<u64>,
-    next_id: u64,
-    tab_width: f32,
-    sessions: Vec<SavedSession>,
+pub(super) struct Saved {
+    pub(super) version: u32,
+    pub(super) settings: Settings,
+    pub(super) active: Option<u64>,
+    pub(super) next_id: u64,
+    pub(super) tab_width: f32,
+    pub(super) sessions: Vec<SavedSession>,
 }
 
 pub(super) fn directory(workspace: &Path) -> PathBuf {
@@ -150,25 +150,7 @@ impl TerminalPanel {
                 })
                 .collect(),
         };
-        let mut bytes = serde_json::to_vec(&saved)?;
-        // Storage quota discards oldest history, never visible cells, names, settings or active identity.
-        while bytes.len() > 8 * 1024 * 1024 {
-            let mut reduced = false;
-            for session in &mut saved.sessions {
-                let history = session.grid.lines.len().saturating_sub(session.grid.rows);
-                if history > 0 {
-                    session.grid.lines.drain(..history.div_ceil(2));
-                    session.grid.offset = session
-                        .grid
-                        .offset
-                        .min(session.grid.lines.len() - session.grid.rows);
-                    reduced = true;
-                }
-            }
-            anyhow::ensure!(reduced, t!("terminal.storage_quota"));
-            bytes = serde_json::to_vec(&saved)?;
-        }
-        anyhow::ensure!(bytes.len() <= 8 * 1024 * 1024, t!("terminal.storage_quota"));
+        let bytes = bounded_bytes(&mut saved)?;
         std::fs::create_dir_all(&self.storage)?;
         let mut temporary = tempfile::NamedTempFile::new_in(&self.storage)?;
         std::io::Write::write_all(&mut temporary, &bytes)?;
@@ -177,4 +159,28 @@ impl TerminalPanel {
         self.dirty = false;
         Ok(())
     }
+}
+
+/// Live checkpoints and one-time imports apply the same bound, retaining visible cells and metadata.
+pub(super) fn bounded_bytes(saved: &mut Saved) -> anyhow::Result<Vec<u8>> {
+    let mut bytes = serde_json::to_vec(&*saved)?;
+    // Storage quota discards oldest history, never visible cells, names, settings or active identity.
+    while bytes.len() > 8 * 1024 * 1024 {
+        let mut reduced = false;
+        for session in &mut saved.sessions {
+            let history = session.grid.lines.len().saturating_sub(session.grid.rows);
+            if history > 0 {
+                session.grid.lines.drain(..history.div_ceil(2));
+                session.grid.offset = session
+                    .grid
+                    .offset
+                    .min(session.grid.lines.len() - session.grid.rows);
+                reduced = true;
+            }
+        }
+        anyhow::ensure!(reduced, t!("terminal.storage_quota"));
+        bytes = serde_json::to_vec(&*saved)?;
+    }
+    anyhow::ensure!(bytes.len() <= 8 * 1024 * 1024, t!("terminal.storage_quota"));
+    Ok(bytes)
 }

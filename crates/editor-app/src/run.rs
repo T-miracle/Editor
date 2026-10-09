@@ -197,6 +197,8 @@ pub struct RunControls {
     step_requests: BTreeMap<u64, (String, usize)>,
     /// Storage directory used for host-local configuration files.
     root: Option<std::path::PathBuf>,
+    /// A failed startup transaction freezes configuration writes until a repaired restart.
+    storage_blocked: Option<String>,
     /// Workspace directory holding this project's shared file, when the workspace has one.
     project: Option<std::path::PathBuf>,
     /// The project's shared entries as the file currently holds them.
@@ -433,6 +435,7 @@ impl Default for RunControls {
             polls: Vec::new(),
             step_requests: BTreeMap::new(),
             root: None,
+            storage_blocked: None,
             project: None,
             shared: editor_core::SharedSet::default(),
             discovered: Vec::new(),
@@ -462,6 +465,11 @@ impl Default for RunControls {
 }
 
 impl RunControls {
+    /// Preserve all pending migration targets instead of letting form validation rewrite their hashes.
+    pub(crate) fn block_persistence(&mut self, message: String) {
+        self.error = Some(message.clone());
+        self.storage_blocked = Some(message);
+    }
     /// Load the configurations stored for one workspace, reporting an unreadable file.
     #[cfg(test)]
     pub fn load(workspace: &str, root: Option<std::path::PathBuf>) -> Self {
@@ -616,12 +624,15 @@ impl RunControls {
         self.configs.clone()
     }
 
-    /// Commit one local snapshot atomically; failed writes do not change the baseline.
+    /// Commit one local snapshot atomically; migration protection and failed writes retain the baseline.
     pub(crate) fn commit_configuration_set(
         &mut self,
         set: RunConfigSet,
         workspace: &str,
     ) -> Result<(), String> {
+        if let Some(message) = &self.storage_blocked {
+            return Err(message.clone());
+        }
         let bytes = set.to_json().map_err(|error| error.to_string())?;
         let set = RunConfigSet::from_json(&bytes).map_err(|error| error.to_string())?;
         let root = self
@@ -782,6 +793,9 @@ impl RunControls {
     /// shared is the project's file: a shared entry's portable half is read from there on every load,
     /// so this copy cannot drift the configuration that actually runs.
     fn persist_local(&mut self, workspace: &str) -> Result<(), String> {
+        if let Some(message) = &self.storage_blocked {
+            return Err(message.clone());
+        }
         let Some(root) = self.root.clone() else {
             return Ok(());
         };
@@ -800,6 +814,9 @@ impl RunControls {
 
     /// Write the project's shared file, creating it only when something is actually shared.
     fn persist_shared(&mut self, shared: &editor_core::SharedSet) -> Result<(), String> {
+        if let Some(message) = &self.storage_blocked {
+            return Err(message.clone());
+        }
         let Some(project) = self.project.clone() else {
             return Ok(());
         };

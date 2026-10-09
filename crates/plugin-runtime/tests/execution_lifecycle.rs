@@ -1,6 +1,6 @@
-//! Real execution lifecycles entered through an installed provider and the public host session API.
+//! Real execution lifecycles entered through the built-in provider and the public host session API.
 #![cfg(windows)]
-use plugin_runtime::{ExecutionState, Manager, Package, RunRequest, plugin_protocol::Environment};
+use plugin_runtime::{ExecutionState, Manager, RunRequest, plugin_protocol::Environment};
 use std::{
     path::Path,
     time::{Duration, Instant},
@@ -78,7 +78,7 @@ fn wait(manager: &mut Manager, done: impl Fn(&Manager) -> bool) {
 
 /// Stop must permit the program's cleanup instead of immediately killing its owned process tree.
 #[test]
-#[ignore = "build the terminal package with the current public SDK first"]
+#[ignore = "requires native rustc lifecycle instruments; no terminal package is used"]
 fn a_normal_stop_allows_the_program_to_finish_cleanup() {
     let root = tempfile::tempdir().unwrap();
     let program = probe(root.path());
@@ -91,13 +91,6 @@ fn a_normal_stop_allows_the_program_to_finish_cleanup() {
         },
     )
     .unwrap();
-    let package = Package::read(
-        &Path::new(env!("CARGO_MANIFEST_DIR")).join("../../dist/plugins/terminal.zip"),
-    )
-    .unwrap();
-    manager
-        .install(&package, package.manifest.permissions.clone())
-        .unwrap();
     let session = manager
         .start_execution(RunRequest {
             program: program.display().to_string(),
@@ -132,7 +125,7 @@ fn a_normal_stop_allows_the_program_to_finish_cleanup() {
 
 /// Ignoring a supported interrupt must eventually force termination instead of leaking the program.
 #[test]
-#[ignore = "build the terminal package with the current public SDK first"]
+#[ignore = "requires native rustc lifecycle instruments; no terminal package is used"]
 fn an_ignored_normal_stop_is_upgraded_to_forceful_termination() {
     let root = tempfile::tempdir().unwrap();
     let program = probe(root.path());
@@ -145,13 +138,6 @@ fn an_ignored_normal_stop_is_upgraded_to_forceful_termination() {
         },
     )
     .unwrap();
-    let package = Package::read(
-        &Path::new(env!("CARGO_MANIFEST_DIR")).join("../../dist/plugins/terminal.zip"),
-    )
-    .unwrap();
-    manager
-        .install(&package, package.manifest.permissions.clone())
-        .unwrap();
     let session = manager
         .start_execution(RunRequest {
             program: program.display().to_string(),
@@ -161,13 +147,11 @@ fn an_ignored_normal_stop_is_upgraded_to_forceful_termination() {
             env: vec![],
         })
         .unwrap();
-    // The provider's own interactive shell is unrelated to this managed execution and must survive.
-    let baseline = manager.live["terminal"].process_count();
+    // The public session remains active until real exit; no terminal package or private Shell is used.
     wait(&mut manager, |_| root.path().join("ready").exists());
     manager.stop_execution(session.id()).unwrap();
     wait(&mut manager, |manager| {
-        manager.live["terminal"].process_count() == baseline
-            && session.snapshot().state == ExecutionState::Exited
+        session.snapshot().state == ExecutionState::Exited
     });
     assert!(
         !root.path().join("cleanup").exists(),
@@ -186,7 +170,7 @@ fn an_ignored_normal_stop_is_upgraded_to_forceful_termination() {
 
 /// Window shutdown must allow bounded cleanup before revoking the provider's native resources.
 #[test]
-#[ignore = "build the terminal package with the current public SDK first"]
+#[ignore = "requires native rustc lifecycle instruments; no terminal package is used"]
 fn leaving_waits_for_normal_cleanup_before_retiring_the_provider() {
     let root = tempfile::tempdir().unwrap();
     let program = probe(root.path());
@@ -199,13 +183,6 @@ fn leaving_waits_for_normal_cleanup_before_retiring_the_provider() {
         },
     )
     .unwrap();
-    let package = Package::read(
-        &Path::new(env!("CARGO_MANIFEST_DIR")).join("../../dist/plugins/terminal.zip"),
-    )
-    .unwrap();
-    manager
-        .install(&package, package.manifest.permissions.clone())
-        .unwrap();
     manager
         .start_execution(RunRequest {
             program: program.display().to_string(),
@@ -244,7 +221,7 @@ fn process_alive(pid: u32) -> bool {
 
 /// Force bypasses the configured grace period and releases both the target and its descendant.
 #[test]
-#[ignore = "build the terminal package with the current public SDK first"]
+#[ignore = "requires native rustc lifecycle instruments; no terminal package is used"]
 fn immediate_termination_releases_the_actual_owned_process_tree() {
     let root = tempfile::tempdir().unwrap();
     let program = probe(root.path());
@@ -257,14 +234,6 @@ fn immediate_termination_releases_the_actual_owned_process_tree() {
         },
     )
     .unwrap();
-    let package = Package::read(
-        &Path::new(env!("CARGO_MANIFEST_DIR")).join("../../dist/plugins/terminal.zip"),
-    )
-    .unwrap();
-    manager
-        .install(&package, package.manifest.permissions.clone())
-        .unwrap();
-    let baseline = manager.live["terminal"].process_count();
     let session = manager
         .start_execution(RunRequest {
             program: program.display().to_string(),
@@ -295,10 +264,7 @@ fn immediate_termination_releases_the_actual_owned_process_tree() {
         )
         .unwrap();
     wait(&mut manager, |manager| {
-        !process_alive(parent)
-            && !process_alive(child)
-            && manager.live["terminal"].process_count() == baseline
-            && session.state() == ExecutionState::Exited
+        !process_alive(parent) && !process_alive(child) && session.state() == ExecutionState::Exited
     });
     assert!(
         start.elapsed() < Duration::from_secs(5),
@@ -309,7 +275,7 @@ fn immediate_termination_releases_the_actual_owned_process_tree() {
 
 /// Stopping before creation revokes this launch only and prevents a delayed native start from escaping.
 #[test]
-#[ignore = "build the terminal package with the current public SDK first"]
+#[ignore = "requires native rustc lifecycle instruments; no terminal package is used"]
 fn a_starting_execution_can_be_stopped_without_leaving_a_late_program() {
     let root = tempfile::tempdir().unwrap();
     let program = probe(root.path());
@@ -322,14 +288,6 @@ fn a_starting_execution_can_be_stopped_without_leaving_a_late_program() {
         },
     )
     .unwrap();
-    let package = Package::read(
-        &Path::new(env!("CARGO_MANIFEST_DIR")).join("../../dist/plugins/terminal.zip"),
-    )
-    .unwrap();
-    manager
-        .install(&package, package.manifest.permissions.clone())
-        .unwrap();
-    let baseline = manager.live["terminal"].process_count();
     let session = manager
         .start_execution(RunRequest {
             program: program.display().to_string(),
@@ -354,13 +312,13 @@ fn a_starting_execution_can_be_stopped_without_leaving_a_late_program() {
         std::thread::sleep(Duration::from_millis(10));
     }
     assert_eq!(session.state(), ExecutionState::Failed);
-    assert_eq!(manager.live["terminal"].process_count(), baseline);
+    assert!(!session.state().is_active());
     assert!(!root.path().join("ready").exists());
 }
 
 /// Changing projects completes old programs' cleanup before parking their plugin instances.
 #[test]
-#[ignore = "build the terminal package with the current public SDK first"]
+#[ignore = "requires native rustc lifecycle instruments; no terminal package is used"]
 fn switching_workspaces_cleans_the_old_program_before_leaving_its_scope() {
     let root = tempfile::tempdir().unwrap();
     let next = tempfile::tempdir().unwrap();
@@ -374,13 +332,6 @@ fn switching_workspaces_cleans_the_old_program_before_leaving_its_scope() {
         },
     )
     .unwrap();
-    let package = Package::read(
-        &Path::new(env!("CARGO_MANIFEST_DIR")).join("../../dist/plugins/terminal.zip"),
-    )
-    .unwrap();
-    manager
-        .install(&package, package.manifest.permissions.clone())
-        .unwrap();
     let session = manager
         .start_execution(RunRequest {
             program: program.display().to_string(),

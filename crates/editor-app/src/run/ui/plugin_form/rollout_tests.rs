@@ -127,7 +127,7 @@ fn add(
 }
 
 #[gpui::test]
-#[ignore = "build the actual rust/terminal packages and configuration examples via public SDK"]
+#[ignore = "build the actual rust packages and configuration examples via public SDK"]
 fn plugin_configuration_rollout_cargo_and_local_shell_execute(cx: &mut TestAppContext) {
     let root = tempfile::tempdir().unwrap();
     project(
@@ -224,7 +224,7 @@ fn plugin_configuration_rollout_cargo_and_local_shell_execute(cx: &mut TestAppCo
 
 /// Applicability is actual guest policy; a catalog lookup must not run a Cargo or Shell process.
 #[gpui::test]
-#[ignore = "build real rust/terminal packages and independent configuration examples first"]
+#[ignore = "build real rust packages and independent configuration examples first"]
 fn plugin_configuration_rollout_templates_filter_tools_without_execution(cx: &mut TestAppContext) {
     let root = tempfile::tempdir().unwrap();
     let (mut manager, app, cx) = fixture(cx, root.path());
@@ -294,7 +294,7 @@ fn plugin_configuration_rollout_templates_filter_tools_without_execution(cx: &mu
 }
 
 #[gpui::test]
-#[ignore = "build real rust/terminal/rust-debugger packages and verify the pinned CodeLLDB archive"]
+#[ignore = "build real rust/rust-debugger packages and verify the pinned CodeLLDB archive; terminal is built in"]
 fn plugin_configuration_rollout_real_cargo_debug_pause_inspect_step_and_stop(
     cx: &mut TestAppContext,
 ) {
@@ -382,7 +382,7 @@ fn plugin_configuration_rollout_real_cargo_debug_pause_inspect_step_and_stop(
 /// Actual guest panels keep visible actions and literal multiline input across both translations,
 /// both themes and the supported font-size endpoints; this does not simulate an OS IME candidate.
 #[gpui::test]
-#[ignore = "build actual rust/terminal packages and configuration examples via public SDK"]
+#[ignore = "build actual rust packages and configuration examples via public SDK"]
 fn plugin_configuration_rollout_locales_themes_and_font_sizes(cx: &mut TestAppContext) {
     let root = tempfile::tempdir().unwrap();
     project(root.path(), "// Layout fixture only.\nfn main() {}\n");

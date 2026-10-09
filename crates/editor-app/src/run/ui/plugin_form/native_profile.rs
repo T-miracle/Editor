@@ -5,7 +5,7 @@ use plugin_runtime::{Manager, Package, plugin_protocol as protocol};
 
 /// Seed a persistent, isolated runtime plus a long tree/form for real IME, theme and scroll checks.
 #[test]
-#[ignore = "build actual rust/terminal packages first; prepares a dedicated native acceptance profile"]
+#[ignore = "build actual rust packages first; prepares a dedicated native acceptance profile"]
 fn prepare_native_configuration_profile() {
     let repo = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("../..")
@@ -34,7 +34,7 @@ fn prepare_native_configuration_profile() {
         },
     )
     .unwrap();
-    for name in ["rust", "terminal"] {
+    for name in ["rust"] {
         let package = Package::read(&repo.join(format!("dist/plugins/{name}.zip"))).unwrap();
         manager
             .install(&package, package.manifest.permissions.clone())

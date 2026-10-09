@@ -21,9 +21,8 @@ fn native_dock_drag_preserves_canvas_viewport_and_saved_size(cx: &mut TestAppCon
         Root::new(app, window, cx)
     });
     let app = slot.borrow_mut().take().unwrap();
-    let mut manifest: protocol::Manifest = crate::extensions::test_manifest(include_str!(
-        "../../../../plugins/terminal/manifest.json"
-    ));
+    let mut manifest: protocol::Manifest =
+        crate::extensions::test_manifest(include_str!("fixtures/panel-contract.json"));
     // This test explicitly opens the dock; the packaged terminal now starts hidden.
     manifest.panels[0].default_visible = true;
     let scene = protocol::ui::Document::new(

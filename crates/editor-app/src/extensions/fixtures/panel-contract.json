@@ -1,7 +1,7 @@
 {
   "id": "terminal",
-  "name": "终端",
-  "version": "0.12.2",
+  "name": "Panel contract fixture",
+  "version": "1.0.0",
   "protocol": 7,
   "api": {
     "base": "^1",
@@ -446,7 +446,7 @@
       }
     }
   },
-  "component": "terminal.wasm",
+  "component": "capability-example.wasm",
   "permissions": [
     "process.exec",
     "workspace.read",

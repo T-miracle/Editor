@@ -111,6 +111,10 @@ impl TerminalPanel {
             return false;
         }
         let newly_bound = task.presentation.is_none();
+        if newly_bound && projection.interactive {
+            // The target PTY and adapter diagnostics have distinct screen coordinates.
+            session.engine.begin_process(cfg!(windows), None);
+        }
         task.presentation = Some(projection.handle);
         task.presentation_input = projection.interactive;
         if !projection

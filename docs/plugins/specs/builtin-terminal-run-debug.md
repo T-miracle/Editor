@@ -4,7 +4,7 @@
 
 稳定标识：`builtin-terminal-run-debug`
 
-状态：2026-10-09 用户确认产品范围、测试接缝和四张工单拆分，并要求逐步执行全部工单；正在发布与实施准备。
+状态：2026-10-09 四张工单已按用户授权逐步实施与验收；终端内置、统一运行/调试面板及旧用户迁移的实际结果见 [最终验收](../verification/builtin-terminal-04-2026-10-09.md)。Windows 原生操作及系统输入法已验证，其他平台与历史测试夹具限制另有记录；未发布软件版本，父规格议题保持不变。
 
 目标跟踪器：T-miracle/Nanobug GitHub Issues。发布完整规格及[四张实施工单与测试安排](../tickets/builtin-terminal-run-debug/README.md)，应用 `ready-for-agent`；按直接依赖顺序实施、验收与交付。
 

@@ -1,0 +1,1 @@
+This metadata-only fixture exercises generic panel registration and native UI contracts. It carries no terminal code or executable. Its distinct version/component do not match the finite retired-terminal importer. Actual WASM integration uses the public capability-example package.

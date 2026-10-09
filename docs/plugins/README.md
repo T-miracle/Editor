@@ -2,9 +2,10 @@
 
 本目录索引实际维护的插件资料。跨插件平台方案放在本目录的 specs、tickets 与 verification；插件自身的历史专题资料保留在对应包内，不复制正文或继承其他任务的完成状态。
 
-- [内置终端与运行、调试统一面板方案](specs/builtin-terminal-run-debug.md)、[四张工单与测试安排](tickets/builtin-terminal-run-debug/README.md)：2026-10-09 范围、拆分和测试接缝已批准并发布为 #87–#91，按 01 → 04 执行中。恢复上游 Alacritty、终端迁入宿主、构建和调试统一面板；语言与调试器仍由插件提供，旧数据迁移与发行退役由 04 负责。
-- [内置终端 02 验收](verification/builtin-terminal-02-2026-10-09.md)：统一构建/运行任务、真实公开消费者、关闭与复用及 Windows 插件开发操作已验证；后续调试和旧用户迁移仍在实施。
-- [内置终端 03 验收](verification/builtin-terminal-03-2026-10-09.md)：唯一真实调试目标的输入、同面板检查、诊断归组和停止清理已验证；旧用户迁移由 04 承接。
+- [内置终端与运行、调试统一面板方案](specs/builtin-terminal-run-debug.md)、[四张工单与测试安排](tickets/builtin-terminal-run-debug/README.md)：2026-10-09 范围、拆分和测试接缝已批准并发布为 #87–#91，四张工单已逐步完成验收。上游 Alacritty、内置终端、构建和调试统一面板及旧用户迁移已接通；语言与调试器仍由插件提供，平台与历史测试夹具限制见最终记录。
+- [内置终端 02 验收](verification/builtin-terminal-02-2026-10-09.md)：统一构建/运行任务、真实公开消费者、关闭与复用及 Windows 插件开发操作的阶段证据。
+- [内置终端 03 验收](verification/builtin-terminal-03-2026-10-09.md)：唯一真实调试目标的输入、同面板检查、诊断归组和停止清理的阶段证据。
+- [内置终端 04 与最终验收](verification/builtin-terminal-04-2026-10-09.md)：有限旧数据迁移、发行退役、当前包消费者与实际 Windows 组合操作，逐项汇总 N01–N26 和未验证部分。
 
 - [插件打包与隔离开发运行](specs/plugin-development-packaging.md)、[本次验收](verification/plugin-development-packaging.md)：宿主模板与 CLI 共享项目描述，自动 ZIP、输出选择和无 ZIP 的独立开发运行。
 - [插件开发工作区整合主工作区改动](verification/plugin-development-main-integration.md)：2026-10-08 用户授权整合全部未提交改动，包含两侧备份、冲突处理与重新验证；未提交或推送。
@@ -101,7 +102,7 @@ Markdown 插件：[总方案](../../plugins/markdown/docs/spec.md)、[工单目�
 
 ## 插件包说明
 
-- [终端](../../plugins/terminal/README.md)
+- [内置终端、运行与调试](specs/builtin-terminal-run-debug.md)：终端不再独立发行插件包；语言规则和调试器仍通过通用插件接口接入。
 - [示例](../../plugins/example/README.md)
 - [SVG](../../plugins/svg/README.md)
 - [Rust](../../plugins/rust/README.md)

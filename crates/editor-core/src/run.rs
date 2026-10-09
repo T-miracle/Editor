@@ -35,7 +35,9 @@ pub use shared::{
 };
 /// Reading and writing the project's shared file, named so it cannot be confused with the local one.
 pub use shared::{load as load_shared, save as save_shared};
-pub use store::{RunStoreError, default_root, load, save, storage_path};
+pub use store::{
+    RunStoreError, default_root, file_for as configuration_path, load, save, storage_path,
+};
 #[cfg(test)]
 mod configuration_tree_tests;
 #[cfg(test)]

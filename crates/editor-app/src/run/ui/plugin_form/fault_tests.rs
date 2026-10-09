@@ -53,7 +53,7 @@ fn saved(
 
 /// C20/C21: actual form errors retain unacknowledged input, recover on reopen, and persist timeouts.
 #[gpui::test]
-#[ignore = "build independent configuration examples and terminal package with the public SDK first"]
+#[ignore = "build independent configuration examples with the public SDK first"]
 fn plugin_configuration_faults_preserve_input_recover_and_timeout(cx: &mut TestAppContext) {
     let root = tempfile::tempdir().unwrap();
     let (mut manager, app, cx) = fixture(cx, root.path());
@@ -161,7 +161,7 @@ fn plugin_configuration_faults_preserve_input_recover_and_timeout(cx: &mut TestA
 
 /// C23/C25/C26: changed environment is rechecked for all execution intents; a retired receipt cannot launch.
 #[gpui::test]
-#[ignore = "build independent configuration examples and terminal package with the public SDK first"]
+#[ignore = "build independent configuration examples with the public SDK first"]
 fn plugin_configuration_execution_rechecks_environment_and_rejects_retired_receipts(
     cx: &mut TestAppContext,
 ) {
@@ -288,7 +288,7 @@ fn plugin_configuration_execution_rechecks_environment_and_rejects_retired_recei
 
 /// C24/C26: saving a failed configuration keeps its real process stoppable; missing grants stay missing.
 #[gpui::test]
-#[ignore = "build independent configuration examples and terminal package with the public SDK first"]
+#[ignore = "build independent configuration examples with the public SDK first"]
 fn plugin_configuration_invalid_edit_keeps_owned_stop_and_permissions(cx: &mut TestAppContext) {
     let root = tempfile::tempdir().unwrap();
     probe(root.path());

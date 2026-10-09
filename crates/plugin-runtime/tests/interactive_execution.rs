@@ -3,7 +3,7 @@
 
 /// The public input method reaches a retained PTY, and ordered output is readable without panel internals.
 #[test]
-#[ignore = "build terminal and capability-example through the current public SDK first"]
+#[ignore = "package capability-example through the current public SDK first"]
 fn execution_input_and_incremental_output_are_public_and_source_owned() {
     let root = tempfile::tempdir().unwrap();
     let mut manager = Manager::open(
@@ -15,7 +15,7 @@ fn execution_input_and_incremental_output_are_public_and_source_owned() {
         },
     )
     .unwrap();
-    install(&mut manager, &terminal());
+    install(&mut manager, &executor());
     install(&mut manager, &fixture("execution-client", false, true));
     assert_eq!(open(&mut manager, "execution-client"), "Service opened");
     execute(
@@ -93,42 +93,34 @@ use plugin_runtime::{
     plugin_protocol::{Environment, api, ui::Kind},
 };
 use serde_json::{Value, json};
-use std::{
-    path::Path,
-    time::{Duration, Instant},
-};
+use std::time::{Duration, Instant};
 
+/// Install a real SDK package, explicitly selecting the independent execution implementation.
 fn install(manager: &mut Manager, package: &Package) {
     manager
         .install(package, package.manifest.permissions.clone())
         .unwrap();
+    if package.manifest.id == "fixture-runner" {
+        manager
+            .set_service_provider(
+                api::InstanceScope::Workspace,
+                plugin_runtime::plugin_protocol::settings::Scope::User,
+                CONTRACT,
+                Some("fixture-runner"),
+            )
+            .unwrap();
+    }
 }
-fn terminal() -> Package {
-    Package::read(&Path::new(env!("CARGO_MANIFEST_DIR")).join("../../dist/plugins/terminal.zip"))
-        .unwrap()
+/// Unlike the retired terminal this generic provider owns no private Shell or terminal UI.
+fn executor() -> Package {
+    packages::provider("fixture-runner")
 }
+/// Observe the example's published operation receipts through its regular native document.
 fn text(manager: &Manager, id: &str) -> String {
     let Kind::Text { text } = &manager.live[id].views["welcome"].as_ref().root.kind else {
-        panic!("native status expected")
+        panic!("SDK status expected")
     };
     text.clone()
-}
-/// Grid paint uses individual cells; concatenate displayed glyphs instead of searching serialized JSON.
-fn output(manager: &Manager) -> String {
-    let mut result = String::new();
-    manager.live["terminal"].views["terminal"]
-        .as_ref()
-        .root
-        .visit(&mut |node| {
-            if let Kind::Canvas(canvas) = &node.kind {
-                for paint in &canvas.paint {
-                    if let plugin_runtime::plugin_protocol::Paint::Text { text, .. } = paint {
-                        result.push_str(text);
-                    }
-                }
-            }
-        });
-    result
 }
 fn command(manager: &mut Manager, id: &str, command: &str, args: Value) -> String {
     manager.invoke_command(id, command, args).unwrap();
@@ -203,7 +195,7 @@ fn native_execution_two_consumers_have_isolated_input_and_retirement() {
     for id in ["native-client-a", "native-client-b"] {
         install(&mut manager, &session_consumer(id));
     }
-    assert!(!manager.installed.contains_key("terminal"));
+    assert!(!manager.installed.contains_key("fixture-runner"));
     let mut sessions = Vec::new();
     for client in ["native-client-a", "native-client-b"] {
         let created = session_call(
@@ -311,9 +303,9 @@ fn native_execution_two_consumers_have_isolated_input_and_retirement() {
 
 /// One consumer uses input, output/state subscription, locate and unsubscribe with two independent providers.
 #[test]
-#[ignore = "build terminal and capability-example through the current public SDK first"]
+#[ignore = "package capability-example through the current public SDK first"]
 fn a_consumer_subscribes_to_output_and_state_without_borrowing_provider_resources() {
-    for package in [terminal(), packages::provider("independent-executor")] {
+    for package in [executor(), packages::provider("independent-executor")] {
         let root = tempfile::tempdir().unwrap();
         let mut manager = Manager::open(
             root.path().join("plugins"),
@@ -438,7 +430,7 @@ fn a_consumer_subscribes_to_output_and_state_without_borrowing_provider_resource
 
 /// Configuration identity keeps equal commands independent and locates an edited active configuration.
 #[test]
-#[ignore = "build terminal and capability-example through the current public SDK first"]
+#[ignore = "package capability-example through the current public SDK first"]
 fn configuration_identity_controls_deduplication_across_the_public_host_gateway() {
     let root = tempfile::tempdir().unwrap();
     let mut manager = Manager::open(
@@ -450,7 +442,7 @@ fn configuration_identity_controls_deduplication_across_the_public_host_gateway(
         },
     )
     .unwrap();
-    install(&mut manager, &terminal());
+    install(&mut manager, &executor());
     install(&mut manager, &session_consumer("session-client"));
     let mut request = json!({"configuration":"first", "program":"powershell.exe","args":["-NoProfile","-Command","Start-Sleep -Seconds 60"]});
     let first = session_call(&mut manager, "session-client", "start", request.clone());
@@ -471,7 +463,7 @@ fn configuration_identity_controls_deduplication_across_the_public_host_gateway(
 
 /// Cancelling the forwarded wait before the provider tick must not deliver queued input.
 #[test]
-#[ignore = "build terminal and capability-example through the current public SDK first"]
+#[ignore = "package capability-example through the current public SDK first"]
 fn cancelled_forwarded_input_never_reaches_the_program() {
     let root = tempfile::tempdir().unwrap();
     let marker = root.path().join("input.txt");
@@ -593,96 +585,9 @@ fn wait(manager: &mut Manager, ready: impl Fn(&Manager) -> bool) {
     assert!(ready(manager), "expected service/process completion");
 }
 
-/// Started means a real program was acquired; output appears in its ordinary declared native panel.
-#[test]
-#[ignore = "build terminal and capability-example through the public SDK first"]
-fn consumer_executes_argv_in_a_visible_terminal_session() {
-    let root = tempfile::tempdir().unwrap();
-    let mut manager = Manager::open(
-        root.path().join("plugins"),
-        Environment {
-            workspace: root.path().display().to_string(),
-            os: "windows".into(),
-            ..Default::default()
-        },
-    )
-    .unwrap();
-    install(&mut manager, &terminal());
-    install(&mut manager, &fixture("execution-client", false, true));
-    assert_eq!(open(&mut manager, "execution-client"), "Service opened");
-    assert_eq!(
-        execute(
-            &mut manager,
-            "execution-client",
-            json!({
-            "program":"powershell.exe", "args":["-NoProfile","-Command","[Console]::Write('SERVICE_ARGV_OK'); Start-Sleep -Seconds 60"],
-                    "cwd":root.path(),"name":"构建输出"
-                })
-        ),
-        "Accepted"
-    );
-    manager.poll();
-    assert!(
-        text(&manager, "execution-client").contains("started"),
-        "{}",
-        text(&manager, "execution-client")
-    );
-    let requests = manager
-        .live
-        .get_mut("terminal")
-        .unwrap()
-        .take_editor_requests();
-    assert_eq!(requests.len(), 1);
-    assert!(
-        matches!(requests[0].operation(), api::EditorOperation::SetPanelVisibility { panel, visible:true } if panel == "terminal")
-    );
-    for request in requests {
-        assert!(request.begin());
-        request.finish(Ok(api::EditorValue::PanelVisibility {
-            panel: "terminal".into(),
-            visible: true,
-        }));
-    }
-    wait(&mut manager, |manager| {
-        output(manager).contains("SERVICE_ARGV_OK")
-    });
-    assert!(
-        serde_json::to_string(
-            &manager.live["terminal"]
-                .views
-                .values()
-                .next()
-                .map(|document| document.as_ref())
-        )
-        .unwrap()
-        .contains("构建输出")
-    );
-    assert_eq!(manager.live["terminal"].process_count(), 2);
-    // Source retirement must terminate delegated work while retaining the terminal's private shell.
-    manager.disable("execution-client").unwrap();
-    manager.poll();
-    assert_eq!(manager.live["terminal"].process_count(), 1);
-    let mut exited = false;
-    manager.live["terminal"].views["terminal"]
-        .as_ref()
-        .root
-        .visit(&mut |node| {
-            if let Kind::SideTabs(tabs) = &node.kind {
-                exited = tabs
-                    .items
-                    .iter()
-                    .any(|tab| tab.label == "构建输出" && tab.status.as_deref() == Some("已退出"));
-            }
-        });
-    assert!(
-        exited,
-        "source retirement must update the visible session lifecycle"
-    );
-}
-
 /// Selection changes package ownership without changing consumer code or the native host's business logic.
 #[test]
-#[ignore = "build terminal and capability-example through the public SDK first"]
+#[ignore = "package capability-example through the current public SDK first"]
 fn execution_contract_switches_to_an_independent_provider() {
     let root = tempfile::tempdir().unwrap();
     let mut manager = Manager::open(
@@ -695,11 +600,11 @@ fn execution_contract_switches_to_an_independent_provider() {
     )
     .unwrap();
     install(&mut manager, &fixture("execution-client", false, true));
-    assert!(open(&mut manager, "execution-client").contains("CapabilityUnavailable"));
-    install(&mut manager, &terminal());
+    assert_eq!(open(&mut manager, "execution-client"), "Service opened");
+    install(&mut manager, &executor());
     assert_eq!(open(&mut manager, "execution-client"), "Service opened");
     install(&mut manager, &fixture("alternative-executor", true, true));
-    assert!(open(&mut manager, "execution-client").contains("Conflict"));
+    assert_eq!(open(&mut manager, "execution-client"), "Service opened");
     manager
         .set_service_provider(
             api::InstanceScope::Workspace,
@@ -727,7 +632,7 @@ fn execution_contract_switches_to_an_independent_provider() {
         text(&manager, "execution-client")
     );
     assert_eq!(manager.live["alternative-executor"].process_count(), 1);
-    assert_eq!(manager.live["terminal"].process_count(), 1);
+    assert_eq!(manager.live["fixture-runner"].process_count(), 0);
     assert!(text(&manager, "alternative-executor").contains("started"));
     let requests = manager
         .live
@@ -754,7 +659,11 @@ fn execution_contract_switches_to_an_independent_provider() {
     );
     manager.disable("alternative-executor").unwrap();
     manager.poll();
-    assert!(text(&manager, "execution-client").contains("invalid_handle"));
+    assert!(
+        text(&manager, "execution-client").contains("invalid_handle"),
+        "{}",
+        text(&manager, "execution-client")
+    );
     assert!(
         execute(
             &mut manager,
@@ -767,7 +676,7 @@ fn execution_contract_switches_to_an_independent_provider() {
 
 /// Grants, cancellation and replacement constrain actual side effects rather than only method names.
 #[test]
-#[ignore = "build terminal and capability-example through the public SDK first"]
+#[ignore = "package capability-example through the current public SDK first"]
 fn execution_authority_and_hot_update_never_replay_delegated_programs() {
     let root = tempfile::tempdir().unwrap();
     let mut manager = Manager::open(
@@ -779,7 +688,7 @@ fn execution_authority_and_hot_update_never_replay_delegated_programs() {
         },
     )
     .unwrap();
-    let package = terminal();
+    let package = executor();
     install(&mut manager, &package);
     let consumer = fixture("execution-client", false, true);
     let mut denied = consumer.manifest.permissions.clone();
@@ -815,7 +724,7 @@ fn execution_authority_and_hot_update_never_replay_delegated_programs() {
         .contains("NotExecuted")
     );
     manager.poll();
-    assert_eq!(manager.live["terminal"].process_count(), 1);
+    assert_eq!(manager.live["fixture-runner"].process_count(), 0);
     assert!(!root.path().join("runs.txt").exists());
     assert!(text(&manager, "execution-client").contains("not_executed"));
 
@@ -826,10 +735,10 @@ fn execution_authority_and_hot_update_never_replay_delegated_programs() {
     );
     manager.poll();
     assert!(text(&manager, "execution-client").contains("operation_failed"));
-    assert_eq!(manager.live["terminal"].process_count(), 1);
+    assert_eq!(manager.live["fixture-runner"].process_count(), 0);
     execute(&mut manager, "execution-client", args.clone());
     wait(&mut manager, |manager| {
-        output(manager).contains("STARTED_ONCE")
+        root.path().join("runs.txt").exists()
     });
     assert_eq!(
         std::fs::read_to_string(root.path().join("runs.txt")).unwrap(),
@@ -845,7 +754,7 @@ fn execution_authority_and_hot_update_never_replay_delegated_programs() {
         )
         .contains("InvalidHandle")
     );
-    assert_eq!(manager.live["terminal"].process_count(), 2);
+    assert_eq!(manager.live["fixture-runner"].process_count(), 1);
     execute(&mut manager, "execution-client", args);
     let mut manifest: Value = serde_json::from_slice(&package.files["manifest.json"]).unwrap();
     // Advance from the built package so this remains a real update after SDK releases.
@@ -854,18 +763,20 @@ fn execution_authority_and_hot_update_never_replay_delegated_programs() {
     candidate_version.patch += 1;
     manifest["version"] = json!(candidate_version.to_string());
     install(&mut manager, &packages::archive(package.files, manifest));
-    manager.poll();
-    assert!(text(&manager, "execution-client").contains("invalid_handle"));
+    // Revoking the old instance completes delegated calls asynchronously; observe that receipt
+    // before asserting its visible error, rather than racing the worker with a single poll.
+    wait(&mut manager, |manager| {
+        text(manager, "execution-client").contains("invalid_handle")
+    });
     assert_eq!(
-        manager.live["terminal"].process_count(),
-        1,
-        "only the private shell may restart"
+        manager.live["fixture-runner"].process_count(),
+        0,
+        "updating the SDK provider never starts a private program"
     );
     assert_eq!(
         std::fs::read_to_string(root.path().join("runs.txt")).unwrap(),
         "once"
     );
-    assert!(output(&manager).contains("STARTED_ONCE"));
     assert!(
         execute(
             &mut manager,
@@ -884,7 +795,7 @@ fn execution_authority_and_hot_update_never_replay_delegated_programs() {
 /// `Manager::executions`, which is what the title bar renders, knows the session the consumer
 /// created, and that repeating the same launch locates that session instead of adding another.
 #[test]
-#[ignore = "build terminal and capability-example through the public SDK first"]
+#[ignore = "package capability-example through the current public SDK first"]
 fn a_consumer_session_started_through_the_host_is_the_one_the_title_bar_sees() {
     let root = tempfile::tempdir().unwrap();
     let mut manager = Manager::open(
@@ -896,7 +807,7 @@ fn a_consumer_session_started_through_the_host_is_the_one_the_title_bar_sees() {
         },
     )
     .unwrap();
-    install(&mut manager, &terminal());
+    install(&mut manager, &executor());
     install(&mut manager, &session_consumer("session-client"));
     let program = json!({
         "program": "powershell.exe",
@@ -924,7 +835,7 @@ fn a_consumer_session_started_through_the_host_is_the_one_the_title_bar_sees() {
         1,
         "the consumer's session is in the host's table: {sessions:?}"
     );
-    assert_eq!(sessions[0].snapshot().plugin, "terminal");
+    assert_eq!(sessions[0].snapshot().plugin, "fixture-runner");
     let first = sessions[0].id();
 
     // The same launch, asked again by the consumer, locates that session instead of starting another.
@@ -965,7 +876,7 @@ fn a_consumer_session_started_through_the_host_is_the_one_the_title_bar_sees() {
 /// covers creating one and locating it on a repeat; this one covers the other two, so the criterion is
 /// read rather than assumed to follow from `start`.
 #[test]
-#[ignore = "build terminal and capability-example through the public SDK first"]
+#[ignore = "package capability-example through the current public SDK first"]
 fn a_consumer_queries_and_stops_its_session_through_the_host() {
     let root = tempfile::tempdir().unwrap();
     let mut manager = Manager::open(
@@ -977,7 +888,7 @@ fn a_consumer_queries_and_stops_its_session_through_the_host() {
         },
     )
     .unwrap();
-    install(&mut manager, &terminal());
+    install(&mut manager, &executor());
     install(&mut manager, &session_consumer("session-client"));
     // A program that stays up, so there is a session to query and to stop.
     let program = json!({
@@ -1077,7 +988,7 @@ fn text_of(manager: &Manager, id: &str) -> String {
 
 /// A real SDK consumer cannot use the host gateway to borrow execution authority it never received.
 #[test]
-#[ignore = "build terminal and capability-example through the public SDK first"]
+#[ignore = "package capability-example through the current public SDK first"]
 fn the_session_gateway_refuses_a_consumer_without_execution_permission() {
     let root = tempfile::tempdir().unwrap();
     let mut manager = Manager::open(
@@ -1089,7 +1000,7 @@ fn the_session_gateway_refuses_a_consumer_without_execution_permission() {
         },
     )
     .unwrap();
-    install(&mut manager, &terminal());
+    install(&mut manager, &executor());
     let package = session_consumer("unprivileged-client");
     let mut manifest = serde_json::to_value(&package.manifest).unwrap();
     manifest["permissions"] = json!(["assets.read", "services.call", "ui.panels"]);
@@ -1106,7 +1017,7 @@ fn the_session_gateway_refuses_a_consumer_without_execution_permission() {
     methods.remove("stop");
     methods.remove("input");
     install(&mut manager, &packages::archive(package.files, manifest));
-    let before = manager.live["terminal"].process_count();
+    let before = manager.live["fixture-runner"].process_count();
     let answer = command(
         &mut manager,
         "unprivileged-client",
@@ -1120,12 +1031,12 @@ fn the_session_gateway_refuses_a_consumer_without_execution_permission() {
     assert!(answer.contains("UnsupportedOperation"), "{answer}");
     manager.poll();
     assert!(manager.executions().is_empty());
-    assert_eq!(manager.live["terminal"].process_count(), before);
+    assert_eq!(manager.live["fixture-runner"].process_count(), before);
 }
 
 /// A consumer's retirement revokes the real program delegated through the host gateway.
 #[test]
-#[ignore = "build terminal and capability-example through the public SDK first"]
+#[ignore = "package capability-example through the current public SDK first"]
 fn retiring_a_session_consumer_releases_its_program() {
     let root = tempfile::tempdir().unwrap();
     let mut manager = Manager::open(
@@ -1137,9 +1048,9 @@ fn retiring_a_session_consumer_releases_its_program() {
         },
     )
     .unwrap();
-    install(&mut manager, &terminal());
+    install(&mut manager, &executor());
     install(&mut manager, &session_consumer("session-client"));
-    let before = manager.live["terminal"].process_count();
+    let before = manager.live["fixture-runner"].process_count();
     let answer = command(
         &mut manager,
         "session-client",
@@ -1158,10 +1069,10 @@ fn retiring_a_session_consumer_releases_its_program() {
             .is_some_and(|entry| entry.snapshot().state == ExecutionState::Running)
     });
     let session = manager.executions()[0].id();
-    assert!(manager.live["terminal"].process_count() > before);
+    assert!(manager.live["fixture-runner"].process_count() > before);
     manager.disable("session-client").unwrap();
     manager.poll();
-    assert_eq!(manager.live["terminal"].process_count(), before);
+    assert_eq!(manager.live["fixture-runner"].process_count(), before);
     assert_eq!(
         manager.execution(session).unwrap().snapshot().state,
         ExecutionState::Failed
@@ -1170,9 +1081,9 @@ fn retiring_a_session_consumer_releases_its_program() {
 
 /// Natural exits are observed even when a consumer uses only the public session gateway.
 #[test]
-#[ignore = "build terminal and capability-example through the public SDK first"]
+#[ignore = "package capability-example through the current public SDK first"]
 fn public_sessions_observe_exits_and_release_capacity() {
-    for provider in [terminal(), packages::provider("independent-executor")] {
+    for provider in [executor(), packages::provider("independent-executor")] {
         let root = tempfile::tempdir().unwrap();
         let mut manager = Manager::open(
             root.path().join("plugins"),
@@ -1263,94 +1174,9 @@ fn public_sessions_observe_exits_and_release_capacity() {
     }
 }
 
-/// Hiding a managed tab preserves its program and its public identity until explicitly stopped.
-#[test]
-#[ignore = "build terminal and capability-example through the public SDK first"]
-fn closing_a_managed_terminal_tab_keeps_its_session_and_locate_restores_it() {
-    let root = tempfile::tempdir().unwrap();
-    let mut manager = Manager::open(
-        root.path().join("plugins"),
-        Environment {
-            workspace: root.path().display().to_string(),
-            os: "windows".into(),
-            ..Default::default()
-        },
-    )
-    .unwrap();
-    install(&mut manager, &terminal());
-    install(&mut manager, &session_consumer("session-client"));
-    let start = json!({
-        "contract": "session.host", "method": "start", "value": {
-            "program": "powershell.exe", "args": ["-NoProfile", "-Command", "Start-Sleep -Seconds 60"]
-        }
-    });
-    assert_eq!(
-        command(
-            &mut manager,
-            "session-client",
-            "service-call-contract",
-            start.clone()
-        ),
-        "Accepted"
-    );
-    wait(&mut manager, |manager| {
-        manager
-            .executions()
-            .last()
-            .is_some_and(|entry| entry.snapshot().state == ExecutionState::Running)
-    });
-    let session = manager.executions().last().unwrap().id();
-    manager
-        .invoke_command("terminal", "terminal.close", Value::Null)
-        .unwrap();
-    manager.poll();
-    assert_eq!(
-        manager.execution(session).unwrap().state(),
-        ExecutionState::Running
-    );
-    let receipt = manager
-        .execution(session)
-        .unwrap()
-        .snapshot()
-        .provider_session
-        .unwrap();
-    let selected = |manager: &Manager| {
-        let mut selected = None;
-        manager.live["terminal"].views["terminal"]
-            .root
-            .visit(&mut |node| {
-                if let Kind::SideTabs(tabs) = &node.kind {
-                    selected = tabs.selected.clone();
-                }
-            });
-        selected
-    };
-    assert_ne!(selected(&manager).as_deref(), Some(receipt.as_str()));
-    let location = manager.locate_execution(session).unwrap();
-    manager.poll_request(&location);
-    assert!(matches!(
-        location.status(),
-        api::RequestUpdate::Completed { result: Ok(_) }
-    ));
-    assert_eq!(selected(&manager).as_deref(), Some(receipt.as_str()));
-    // Repeating the same configuration locates the retained program rather than creating a duplicate.
-    assert_eq!(
-        command(
-            &mut manager,
-            "session-client",
-            "service-call-contract",
-            start
-        ),
-        "Accepted"
-    );
-    manager.poll();
-    assert_eq!(manager.executions().len(), 1);
-    assert_eq!(manager.executions()[0].id(), session);
-    manager.shutdown();
-}
 /// Public guest bytes cannot forge host authority, and subscription quotas reclaim only their owner.
 #[test]
-#[ignore = "build terminal and capability-example through the current public SDK first"]
+#[ignore = "package capability-example through the current public SDK first"]
 fn forged_host_handles_and_bounded_subscriptions_are_refused_through_the_public_sdk() {
     let root = tempfile::tempdir().unwrap();
     let mut manager = Manager::open(
@@ -1362,14 +1188,14 @@ fn forged_host_handles_and_bounded_subscriptions_are_refused_through_the_public_
         },
     )
     .unwrap();
-    install(&mut manager, &terminal());
+    install(&mut manager, &executor());
     let clients = (0..5)
         .map(|index| format!("bounded-client-{index}"))
         .collect::<Vec<_>>();
     for client in &clients {
         install(&mut manager, &session_consumer(client));
     }
-    let before = manager.live["terminal"].process_count();
+    let before = manager.live["fixture-runner"].process_count();
     let forged = command(
         &mut manager,
         &clients[0],
@@ -1380,7 +1206,7 @@ fn forged_host_handles_and_bounded_subscriptions_are_refused_through_the_public_
         forged.contains("InvalidHandle"),
         "public handle forgery must be rejected: {forged}"
     );
-    assert_eq!(manager.live["terminal"].process_count(), before);
+    assert_eq!(manager.live["fixture-runner"].process_count(), before);
     assert!(manager.executions().is_empty());
     let mut sessions = Vec::new();
     let mut subscriptions = Vec::new();

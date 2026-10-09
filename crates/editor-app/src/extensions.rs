@@ -9,8 +9,6 @@ pub(crate) mod contributions;
 #[cfg(test)]
 mod dependency_tests;
 mod editor_requests;
-#[cfg(test)]
-mod execution_service_tests;
 mod image_input;
 use crate::ui::plugin::images;
 #[cfg(test)]
@@ -95,6 +93,24 @@ pub use worker::{HostRunSnapshot, RunStatus, Work as HostWork};
 use worker::{LifecycleAction, OperationProgress, Work, Worker};
 
 actions!(extensions, [ToggleExtensions, QuitEditor]);
+/// Every startup reader shares the same host-selected runtime root, including offline upgrades.
+pub(crate) fn runtime_root(workspace: &Path) -> PathBuf {
+    #[cfg(test)]
+    {
+        workspace.join(".runtime-plugin-test")
+    }
+    #[cfg(not(test))]
+    {
+        let _ = workspace;
+        std::env::var_os("ME_EDITOR_PLUGIN_HOME")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| {
+                dirs::config_dir()
+                    .unwrap_or_else(std::env::temp_dir)
+                    .join("MeEditor/runtime-plugins")
+            })
+    }
+}
 /// Opens plugin management independently of plugin-owned panel visibility.
 pub fn init(cx: &mut App) {
     cx.bind_keys([KeyBinding::new(
@@ -277,17 +293,8 @@ impl ExtensionPanel {
         trusted: bool,
         cx: &mut Context<Self>,
     ) -> Self {
-        #[cfg(not(test))]
-        let root = std::env::var_os("ME_EDITOR_PLUGIN_HOME")
-            .map(PathBuf::from)
-            .unwrap_or_else(|| {
-                dirs::config_dir()
-                    .unwrap_or_else(std::env::temp_dir)
-                    .join("MeEditor/runtime-plugins")
-            });
+        let root = runtime_root(&workspace);
         let environment = environment(&workspace, cx);
-        #[cfg(test)]
-        let root = workspace.join(".runtime-plugin-test");
         // Installed declarations are available before restored editor tabs are opened.
         crate::language::providers::configure(&root, &workspace);
         if trusted {

@@ -1,6 +1,24 @@
 //! Launch decisions and session bookkeeping keep one meaning for visible run state.
 use super::*;
 
+/// A failed migration blocks even an otherwise valid configuration edit, retaining pending bytes.
+#[test]
+fn startup_migration_failure_blocks_configuration_writes() {
+    let root = tempfile::tempdir().unwrap();
+    let workspace = "C:/isolated-migration";
+    let mut controls = RunControls::load(workspace, Some(root.path().into()));
+    controls
+        .upsert(config("existing", "Existing"), workspace)
+        .unwrap();
+    let path = editor_core::configuration_path(root.path(), workspace);
+    let before = std::fs::read(&path).unwrap();
+    controls.block_persistence("migration needs repair".into());
+    assert!(controls.upsert(config("new", "New"), workspace).is_err());
+    let draft = controls.configuration_set();
+    assert!(controls.commit_configuration_set(draft, workspace).is_err());
+    assert_eq!(std::fs::read(path).unwrap(), before);
+}
+
 /// Controls backed by a real host-local directory so persistence is exercised, not bypassed.
 fn controls() -> RunControls {
     let root = tempfile::tempdir().unwrap().keep();

@@ -32,12 +32,25 @@ editable. Missing Cargo or a root Cargo project leaves these ordinary templates 
 with a reason. Debug uses a real Cargo artifact, supports dev/debug and release profiles,
 and asks for explicit `--package`/`--bin` when more than one binary applies.
 
-The terminal plugin offers Shell templates for the current operating system and installed
-interpreters only. Its read-only interpreter, editable arguments and multiline script belong
-to the plugin. Working directory and environment overrides live under **More settings**.
-Unsupported debugging is reported by the Shell provider. The simplified configuration
-window has no local/shared selector. Older fixed-form configurations are not imported;
-after an explicitly authorized cutover, create new configurations from plugin templates.
+The built-in terminal offers Shell templates for the current operating system and installed
+interpreters only. Its interpreter is read-only, with editable arguments and a multiline script.
+Working directory and environment overrides live under **More settings**. Shell templates do not
+support debugging. Existing configurations created by the retired terminal plugin are migrated
+with their values and execution references; no terminal package is required.
+
+Open Terminal from the second bottom-bar icon. An empty panel creates a Shell tab; closing its
+last tab hides the panel. Tabs can be renamed by double-clicking, saved with Enter or focus loss,
+and dragged to reorder. Terminal settings control the sidebar side/width, font, history and theme
+colors. Ctrl+C copies selected text, Ctrl+V pastes, Ctrl+Shift+T adds a Shell, Ctrl+Shift+W closes
+the active tab, and Shift+PageUp/PageDown scrolls history. The context menu offers Copy (only with
+a selection), Paste and Clear buffer. The scrollbar appears only for scrollable history and fades
+one second after scrolling stops.
+
+Upgrading from the terminal plugin backs up settings, names, order, directories, output and layout
+before importing them. A trusted workspace restarts a fresh Shell over the saved logical display;
+old tasks remain stopped and no commands rerun automatically. Import failures preserve original
+data, show an error and block automatic writes; repair the reported source and reopen the editor
+to retry. The existing MeEditor profile directories remain in use.
 
 The left toolbar offers Add, Delete, Copy and Add folder as icons with tooltips. Folders are virtual groups. Add creates a child of the selected folder, a sibling of the selected configuration, or a root entry when nothing is selected. Click empty tree space to select the root. Rename a folder with F2 or a double click; click its disclosure arrow to expand or collapse it.
 

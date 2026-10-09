@@ -134,7 +134,7 @@ fn drag_to(cx: &mut gpui_kit::VisualTestContext, source: &str, target: &str) {
 
 /// Moving folders, category order and root drops are verified through real pointer interaction.
 #[gpui::test]
-#[ignore = "build configuration examples and terminal package with the public SDK first"]
+#[ignore = "build configuration examples with the public SDK first"]
 fn plugin_configuration_tree_native_drag_reorder_and_cycle_rejection(cx: &mut TestAppContext) {
     let root = tempfile::tempdir().unwrap();
     let (mut manager, app, cx) = fixture(cx, root.path());
@@ -216,7 +216,7 @@ fn plugin_configuration_tree_native_drag_reorder_and_cycle_rejection(cx: &mut Te
 
 /// Multi-record edits and virtual folders obey the Apply baseline, independent-copy and Cancel rules.
 #[gpui::test]
-#[ignore = "build configuration examples and terminal package with the public SDK first"]
+#[ignore = "build configuration examples with the public SDK first"]
 fn plugin_configuration_tree_apply_copy_cancel_and_save_all(cx: &mut TestAppContext) {
     let root = tempfile::tempdir().unwrap();
     let (mut manager, app, cx) = fixture(cx, root.path());
@@ -306,7 +306,7 @@ fn plugin_configuration_tree_apply_copy_cancel_and_save_all(cx: &mut TestAppCont
 
 /// Deletion remains staged, and X/Escape offer Save, Discard and Continue instead of silently losing edits.
 #[gpui::test]
-#[ignore = "build configuration examples and terminal package with the public SDK first"]
+#[ignore = "build configuration examples with the public SDK first"]
 fn plugin_configuration_tree_delete_and_three_way_close(cx: &mut TestAppContext) {
     let root = tempfile::tempdir().unwrap();
     let (mut manager, app, cx) = fixture(cx, root.path());

@@ -165,8 +165,18 @@ impl TerminalPanel {
         let Some(index) = self.active_index() else {
             return;
         };
-        let column = ((x - 8.) / self.cell_width).floor().max(0.) as usize + 1;
-        let row = ((y - 8.) / self.cell_height).floor().max(0.) as usize + 1;
+        let column = ((x - 8.) / self.cell_width).floor().max(0.) as usize;
+        let row = ((y - 8.) / self.cell_height).floor().max(0.) as usize;
+        let session = &self.sessions[index];
+        let Some((row, column)) = session.engine.mouse_position(row, column) else {
+            // Retained history has no corresponding cell in this child's screen.
+            return;
+        };
+        if !session.launched || session.exited {
+            return;
+        }
+        let (row, column) = (row + 1, column + 1);
+        let id = session.id;
         let sgr = self.sessions[index]
             .engine
             .mode()
@@ -189,7 +199,9 @@ impl TerminalPanel {
         } else {
             return;
         };
-        self.write(bytes, cx);
+        // Mouse input must not scroll the viewport like explicit typing; that would move the
+        // live row underneath the pointer after encoding its native coordinates.
+        self.send_input(id, bytes, cx);
     }
 
     fn copy(&self, cx: &mut App) {
