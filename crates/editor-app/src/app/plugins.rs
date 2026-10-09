@@ -59,6 +59,9 @@ impl EditorApp {
         self.persist_session();
         self.extensions
             .update(cx, |panel, cx| panel.set_workspace_trusted(trusted, cx));
+        // Native processes have the same workspace authority and must be revoked immediately.
+        self.terminal
+            .update(cx, |panel, cx| panel.set_trusted(trusted, cx));
         // The editor window (not the settings dialog) owns dock and editor synchronization.
         self.pending_contribution_sync = true;
         self.refresh_dialog(cx);

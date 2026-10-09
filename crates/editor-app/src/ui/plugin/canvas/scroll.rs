@@ -12,6 +12,7 @@ struct State {
     range: Option<ScrollRange>,
     offset: f32,
     pending: Option<f32>,
+    dragging: bool,
 }
 impl CanvasScroll {
     /// Drawing-only frames retain the local drag preview until the guest acknowledges a new range.
@@ -25,6 +26,10 @@ impl CanvasScroll {
     }
     pub(super) fn take_offset(&self) -> Option<f32> {
         self.0.borrow_mut().pending.take()
+    }
+    /// A visibility wrapper must keep the upstream scrollbar present while its pointer is captured.
+    pub(super) fn dragging(&self) -> bool {
+        self.0.borrow().dragging
     }
 }
 impl ScrollbarHandle for CanvasScroll {
@@ -49,6 +54,10 @@ impl ScrollbarHandle for CanvasScroll {
             state.pending = Some(state.offset);
         }
     }
-    fn start_drag(&self) {}
-    fn end_drag(&self) {}
+    fn start_drag(&self) {
+        self.0.borrow_mut().dragging = true;
+    }
+    fn end_drag(&self) {
+        self.0.borrow_mut().dragging = false;
+    }
 }

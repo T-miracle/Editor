@@ -10,6 +10,8 @@ mod plugin_development;
 /// Run controls own saved configurations and the sessions launched from them.
 mod run;
 mod sdk_export;
+/// Native terminal state and presentation are independent from the installed plugin registry.
+mod terminal;
 #[cfg(test)]
 mod tests;
 mod ui;
@@ -141,6 +143,9 @@ struct EditorApp {
     /// Host-owned message history is independent from plugin resources and runtime logs.
     messages: Entity<ui::messages::MessagePanel>,
     _messages_subscription: Subscription,
+    /// One bottom dock owns ordinary shells and, subsequently, project task sessions.
+    terminal: Entity<terminal::TerminalPanel>,
+    _terminal_subscription: Subscription,
     /// Saved plugin leaves are restored after the startup registry becomes available.
     pending_dock_restore: bool,
     /// Generic runtime plugin dock; packages own all feature behavior.
@@ -385,6 +390,18 @@ impl EditorApp {
         });
         let messages =
             cx.new(|cx| ui::messages::MessagePanel::new(session_state.messages_visible, cx));
+        let terminal = cx.new(|cx| {
+            terminal::TerminalPanel::new(
+                parent.clone(),
+                workspace.root().to_owned(),
+                session_state.workspace_trusted,
+                window,
+                cx,
+            )
+        });
+        terminal.update(cx, |panel, cx| {
+            panel.set_visible(session_state.native_terminal_visible, cx)
+        });
         dock_area.update(cx, |area, cx| {
             // Explorer and the editor share the center; plugin management has its own window.
             area.set_center(
@@ -431,6 +448,13 @@ impl EditorApp {
             this.persist_session();
             cx.notify();
         });
+        let terminal_subscription = cx.subscribe(&terminal, |this, _, _: &PanelEvent, cx| {
+            this.session_state.native_terminal_visible = this.terminal.read(cx).visible();
+            this.dock_area.update(cx, |_, cx| cx.notify());
+            this.capture_dock_layout(cx);
+            this.persist_session();
+            cx.notify();
+        });
         let dock_subscription = cx.subscribe(&dock_area, |this, _, event, cx| {
             if matches!(event, DockEvent::LayoutChanged) {
                 this.capture_dock_layout(cx);
@@ -466,6 +490,8 @@ impl EditorApp {
             explorer_panel,
             messages,
             _messages_subscription: messages_subscription,
+            terminal,
+            _terminal_subscription: terminal_subscription,
             pending_dock_restore: session_state.dock_layout.is_some(),
             extensions,
             plugin_panels: HashMap::new(),
@@ -535,6 +561,7 @@ impl EditorApp {
             _activation_subscription: None,
         };
         this.restore_dock_layout(window, cx);
+        this.ensure_terminal_dock(window, cx);
         this.refresh_files(cx);
 
         let saved_tabs = this.session_state.open_tabs.clone();

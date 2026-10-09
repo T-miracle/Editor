@@ -10,6 +10,7 @@ mod shortcuts;
 mod shortcuts_controls;
 mod shortcuts_editing;
 mod tag_editing;
+mod terminal;
 mod xml_formatting;
 mod xml_language_tools;
 pub(crate) use language_fixture::declared_language_service;

@@ -54,6 +54,9 @@ pub struct SessionState {
     pub extension_height: f32,
     #[serde(default = "default_true", alias = "terminal_visible")]
     pub extensions_visible: bool,
+    /// Native terminal visibility is independent from the historical plugin-manager flag.
+    #[serde(default)]
+    pub native_terminal_visible: bool,
     /// Native dock dimensions and panel visibility are generic host presentation state.
     #[serde(default)]
     pub plugin_dock_sizes: std::collections::BTreeMap<String, f32>,
@@ -140,6 +143,7 @@ impl SessionState {
             explorer_reveal_on_tab_switch: false,
             extension_height: default_extension_height(),
             extensions_visible: true,
+            native_terminal_visible: false,
             plugin_dock_sizes: Default::default(),
             plugin_panel_visibility: Default::default(),
             legacy_preview_modes: Default::default(),

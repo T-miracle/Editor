@@ -77,12 +77,14 @@ impl EditorApp {
             "Editor".to_owned(),
             "HostMessages".to_owned(),
             "Outline".to_owned(),
+            "NativeTerminal".to_owned(),
         ]);
         // Explorer can have moved outside the center, so retain its entity independently.
         bind_panel("Explorer", &self.explorer_panel, cx);
         bind_panel("Editor", &self.editor_panel, cx);
         bind_panel("Outline", &self.outline_panel, cx);
         bind_panel("HostMessages", &self.messages, cx);
+        bind_panel("NativeTerminal", &self.terminal, cx);
         for (key, panel) in &self.plugin_panels {
             // File-scoped previews belong to the editor's inner split, never to the outer layout.
             if panel.read(cx).is_editor_preview() {
@@ -120,6 +122,7 @@ impl EditorApp {
                 )
             });
         }
+        self.ensure_terminal_dock(window, cx);
         // An older saved layout has no outline. Add one beside its surviving Explorer without
         // replacing the user's other split sizes or keeping a second persisted layout tree.
         let outline = dock::panel_handle(self.outline_panel.clone());

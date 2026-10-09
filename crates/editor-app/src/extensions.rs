@@ -1283,6 +1283,12 @@ impl EditorApp {
         // File workers and their private backups may outlive the platform's 200 ms quit grace.
         // Share the native close gate's cleanup and prevent new file commands while it runs.
         let file_cleanup = self.shutdown_file_transfers(cx);
+        let native_cleanup = self.terminal.update(cx, |panel, _| panel.shutdown());
+        let native_cleanup = cx.background_executor().spawn(async move {
+            if let Ok(receiver) = native_cleanup {
+                let _ = receiver.recv();
+            }
+        });
         cx.notify();
         let (tx, rx) = futures::channel::oneshot::channel();
         let _ = self
@@ -1293,6 +1299,7 @@ impl EditorApp {
             .send(Work::Shutdown(Some(tx)));
         cx.spawn(async move |_, cx| {
             file_cleanup.await;
+            native_cleanup.await;
             let _ = rx.await;
             let _ = cx.update(|cx| cx.quit());
         })

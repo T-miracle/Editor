@@ -10,7 +10,7 @@ use std::rc::Rc;
 #[cfg(test)]
 mod tests;
 
-#[derive(Clone)]
+#[derive(Clone, PartialEq)]
 pub(crate) struct MenuStyle {
     pub surface: Hsla,
     pub foreground: Hsla,

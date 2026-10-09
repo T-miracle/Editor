@@ -2,6 +2,8 @@
 mod atlas;
 pub(crate) mod bitmap;
 mod canvas;
+// Native host features use the same keyed canvas directly, without a guest Document or dispatch.
+pub(crate) use canvas::CanvasView;
 mod code;
 mod containers;
 pub(crate) mod controls;

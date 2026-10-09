@@ -13,14 +13,14 @@ use plugin_runtime::plugin_protocol::{
 use std::ops::Range;
 mod scroll;
 
-pub(super) struct CanvasView {
-    pub(super) drawing: Canvas,
+pub(crate) struct CanvasView {
+    pub(crate) drawing: Canvas,
     /// Optional guest-supplied visual projection; ordinary canvases retain their existing coordinates.
     pub(super) viewport: Option<protocol::ui::VisualViewport>,
-    pub(super) font: protocol::FontStyle,
+    pub(crate) font: protocol::FontStyle,
     pub(super) enabled: bool,
     pub(super) revision: u64,
-    pub(super) foreground: u32,
+    pub(crate) foreground: u32,
     pub(super) images: Option<std::sync::Arc<Vec<Option<super::images::VectorImage>>>>,
     focus: FocusHandle,
     bounds: Bounds<Pixels>,
@@ -29,6 +29,10 @@ pub(super) struct CanvasView {
     selection: Range<usize>,
     drag: Option<MouseButton>,
     scroll: scroll::CanvasScroll,
+    /// Optional native visibility cap; Base's theme supplies motion for ordinary plugin canvases.
+    pub(crate) scrollbar_idle: Option<std::time::Duration>,
+    scrollbar_visible: bool,
+    scrollbar_hold: Option<gpui_kit::Task<()>>,
     sink: Rc<dyn Fn(CanvasEvent, u64, &mut App)>,
     _subscriptions: Vec<Subscription>,
 }
@@ -53,10 +57,10 @@ impl CanvasView {
             .unwrap_or(rect)
     }
     /// Sibling native controls return keyboard input to the addressed canvas after their action.
-    pub(super) fn focus_handle(&self) -> FocusHandle {
+    pub(crate) fn focus_handle(&self) -> FocusHandle {
         self.focus.clone()
     }
-    pub(super) fn new(
+    pub(crate) fn new(
         drawing: Canvas,
         sink: impl Fn(CanvasEvent, u64, &mut App) + 'static,
         window: &mut Window,
@@ -88,6 +92,9 @@ impl CanvasView {
             selection: 0..0,
             drag: None,
             scroll: Default::default(),
+            scrollbar_idle: None,
+            scrollbar_visible: false,
+            scrollbar_hold: None,
             sink: Rc::new(sink),
             _subscriptions: subscriptions,
         }
@@ -108,8 +115,35 @@ impl CanvasView {
         self.drag = None;
     }
     /// A rejected deferred callback or reactivation must retry its current native geometry.
-    pub(super) fn invalidate_measurement(&mut self) {
+    pub(crate) fn invalidate_measurement(&mut self) {
         self.measured = None;
+    }
+    /// Base exposes motion globally; this bounded wrapper permits a shorter per-canvas idle hold.
+    /// Its native scrollbar still owns drag, hover, hit testing and appearance.
+    pub(crate) fn hold_scrollbar(&mut self, cx: &mut Context<Self>) {
+        let Some(idle) = self.scrollbar_idle else {
+            return;
+        };
+        self.scrollbar_visible = true;
+        self.scrollbar_hold = Some(cx.spawn(async move |view, cx| {
+            loop {
+                cx.background_executor().timer(idle).await;
+                let keep = view
+                    .update(cx, |view, cx| {
+                        if view.scroll.dragging() {
+                            return true;
+                        }
+                        view.scrollbar_visible = false;
+                        cx.notify();
+                        false
+                    })
+                    .unwrap_or(false);
+                if !keep {
+                    break;
+                }
+            }
+        }));
+        cx.notify();
     }
     fn pointer(
         &self,
@@ -138,6 +172,7 @@ impl CanvasView {
         self.bounds = bounds;
         self.scroll.update(bounds, self.drawing.scroll.clone());
         if let Some(offset) = self.scroll.take_offset() {
+            self.hold_scrollbar(cx);
             self.emit(CanvasEvent::Scroll { offset }, cx);
         }
         let grid = self.drawing.grid.then(|| {
@@ -471,7 +506,10 @@ impl Render for CanvasView {
                 .size_full(),
             );
         // The overlay must paint after the guest canvas, which may fill its entire bounds.
-        if self.enabled && self.drawing.scroll.is_some() {
+        if self.enabled
+            && self.drawing.scroll.is_some()
+            && (self.scrollbar_idle.is_none() || self.scrollbar_visible)
+        {
             element = element.child(crate::ui::controls::vertical_viewport_scrollbar(
                 &self.scroll,
                 cx,

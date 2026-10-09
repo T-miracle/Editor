@@ -2,6 +2,8 @@
 
 本目录索引实际维护的插件资料。跨插件平台方案放在本目录的 specs、tickets 与 verification；插件自身的历史专题资料保留在对应包内，不复制正文或继承其他任务的完成状态。
 
+- [内置终端与运行、调试统一面板方案](specs/builtin-terminal-run-debug.md)、[四张工单与测试安排](tickets/builtin-terminal-run-debug/README.md)：2026-10-09 范围、拆分和测试接缝已批准并发布为 #87–#91，按 01 → 04 执行中。恢复上游 Alacritty、终端迁入宿主、构建和调试统一面板；语言与调试器仍由插件提供，旧数据迁移与发行退役由 04 负责。
+
 - [插件打包与隔离开发运行](specs/plugin-development-packaging.md)、[本次验收](verification/plugin-development-packaging.md)：宿主模板与 CLI 共享项目描述，自动 ZIP、输出选择和无 ZIP 的独立开发运行。
 - [插件开发工作区整合主工作区改动](verification/plugin-development-main-integration.md)：2026-10-08 用户授权整合全部未提交改动，包含两侧备份、冲突处理与重新验证；未提交或推送。
 - [缺失项目描述修复与主工作区 Release 交付](verification/plugin-development-main-delivery.md)：截图错误的回归测试、主工作区整合与 Release 启动证据。

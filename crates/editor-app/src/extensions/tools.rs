@@ -13,6 +13,8 @@ pub(crate) enum FunctionContext {
 #[derive(Clone)]
 enum Action {
     Explorer,
+    /// Native sessions stay available without an installed terminal package.
+    Terminal,
     /// The built-in outline uses the same window controls and overflow behavior as other panels.
     Outline,
     Window {
@@ -155,6 +157,15 @@ impl EditorApp {
             disabled: false,
             action: Action::Explorer,
         }];
+        result.push(Entry {
+            id: "terminal-toggle".into(),
+            label: t!("terminal.title").to_string(),
+            tooltip: t!("terminal.title").to_string(),
+            icon: Some(crate::terminal::icon(cx)),
+            selected: self.terminal_visible(cx),
+            disabled: false,
+            action: Action::Terminal,
+        });
         // Outline remains available when hidden, with selection reflecting its persisted visibility.
         result.push(Entry {
             id: "outline-toggle".into(),
@@ -268,6 +279,7 @@ impl EditorApp {
         }
         match &entry.action {
             Action::Explorer => self.toggle_explorer(cx),
+            Action::Terminal => self.toggle_terminal(window, cx),
             Action::Outline => self.toggle_outline(&ToggleOutline, window, cx),
             Action::Window { key, epoch } => {
                 let Some(panel) = self.plugin_panels.get(key).cloned() else {

@@ -1,4 +1,70 @@
 _version: 2
+terminal.title:
+  en: "Terminal"
+  zh-CN: "终端"
+terminal.error.restore:
+  en: "Could not restore terminal data: %{details}"
+  zh-CN: "恢复终端数据失败：%{details}"
+terminal.error.save:
+  en: "Could not save terminal data: %{details}"
+  zh-CN: "保存终端数据失败：%{details}"
+terminal.error.settings:
+  en: "Could not apply terminal settings: %{details}"
+  zh-CN: "应用终端设置失败：%{details}"
+terminal.error.process:
+  en: "Terminal process failed: %{details}"
+  zh-CN: "终端进程操作失败：%{details}"
+terminal.invalid_profiles:
+  en: "Use 1–32 shell profiles and a font name of at most 256 bytes"
+  zh-CN: "请配置 1–32 个 Shell，字体名称不得超过 256 个字节"
+terminal.invalid_font_size:
+  en: "Font size must be between 8 and 32"
+  zh-CN: "字号必须在 8 到 32 之间"
+terminal.invalid_default_profile:
+  en: "The default profile does not identify a shell"
+  zh-CN: "默认配置没有指向有效的 Shell"
+terminal.invalid_history:
+  en: "History must be at most 100000 lines"
+  zh-CN: "历史记录最多保留 100000 行"
+terminal.invalid_font_family:
+  en: "Font family cannot be empty"
+  zh-CN: "字体名称不能为空"
+terminal.invalid_profile:
+  en: "Shell profile exceeds the accepted size or contains invalid characters"
+  zh-CN: "Shell 配置超出长度限制或包含非法字符"
+terminal.empty_profile:
+  en: "Shell name and program cannot be empty"
+  zh-CN: "Shell 名称和程序路径不能为空"
+terminal.invalid_color:
+  en: "Invalid color %{color}; use #RRGGBB"
+  zh-CN: "无效颜色 %{color}，请使用 #RRGGBB"
+terminal.invalid_snapshot:
+  en: "Terminal snapshot is invalid or unsupported; original data was preserved"
+  zh-CN: "终端快照损坏或版本不支持，已保留原数据"
+terminal.storage_quota:
+  en: "Terminal data exceeds the storage limit"
+  zh-CN: "终端数据超出存储容量限制"
+terminal.new:
+  en: "New terminal"
+  zh-CN: "新建终端"
+terminal.menu:
+  en: "Terminal actions"
+  zh-CN: "终端操作"
+terminal.exited:
+  en: "Exited"
+  zh-CN: "已退出"
+terminal.session_limit:
+  en: "The terminal session limit has been reached. Close an unused tab first."
+  zh-CN: "已达到终端会话上限，请先关闭不用的 Tab。"
+terminal.clear:
+  en: "Clear buffer"
+  zh-CN: "清空缓冲区"
+terminal.interrupt:
+  en: "Interrupt"
+  zh-CN: "中断"
+terminal.settings:
+  en: "Terminal settings"
+  zh-CN: "终端设置"
 shortcuts.global_tab:
   en: "Global shortcuts"
   zh-CN: "全局快捷键"

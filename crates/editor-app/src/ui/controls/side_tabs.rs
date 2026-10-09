@@ -18,7 +18,7 @@ use std::{cell::Cell, rc::Rc};
 /// Keep row layout, reorder hit testing and the selected border on the same vertical grid.
 const TAB_HEIGHT: f32 = 32.;
 
-#[derive(Clone)]
+#[derive(Clone, PartialEq)]
 pub(crate) struct SideTabsStyle {
     pub background: Hsla,
     pub border: Hsla,

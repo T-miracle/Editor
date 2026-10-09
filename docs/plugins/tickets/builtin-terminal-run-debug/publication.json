@@ -1,0 +1,13 @@
+{
+  "repository": "T-miracle/Nanobug",
+  "published_at": "2026-10-09",
+  "spec": { "number": 87, "id": 5772071609, "url": "https://github.com/T-miracle/Nanobug/issues/87" },
+  "tickets": [
+    { "key": "t01", "number": 88, "id": 5772071846, "url": "https://github.com/T-miracle/Nanobug/issues/88", "blocked_by": [] },
+    { "key": "t02", "number": 89, "id": 5772072162, "url": "https://github.com/T-miracle/Nanobug/issues/89", "blocked_by": [88] },
+    { "key": "t03", "number": 90, "id": 5772072614, "url": "https://github.com/T-miracle/Nanobug/issues/90", "blocked_by": [89] },
+    { "key": "t04", "number": 91, "id": 5772073275, "url": "https://github.com/T-miracle/Nanobug/issues/91", "blocked_by": [90] }
+  ],
+  "verified": { "bodies": true, "labels": true, "native_dependencies": true },
+  "connector_fallback": "The GitHub connector returned 403; authenticated REST publication and read-back succeeded."
+}

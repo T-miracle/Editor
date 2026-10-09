@@ -7,6 +7,10 @@ license.workspace = true
 
 [dependencies]
 anyhow.workspace = true
+# The native terminal uses the upstream core, independent of guest WASM restrictions.
+alacritty_terminal = "=0.26.0"
+# Decode bounded nonprinting working-directory metadata from optional shell integration.
+base64 = "0.22"
 # Use the already-locked date library to render receipt dates in the user's system timezone.
 chrono = { version = "0.4.45", default-features = false, features = ["clock"] }
 editor-core = { path = "../editor-core" }

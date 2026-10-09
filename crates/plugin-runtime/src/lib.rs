@@ -31,6 +31,8 @@ mod structure;
 pub use structure::{StructureProvider, StructureSnapshot};
 mod manager;
 mod migration;
+/// Trusted native host features share the runtime's bounded process-tree supervisor.
+pub mod native_processes;
 mod package;
 mod plugin_services;
 mod process;
