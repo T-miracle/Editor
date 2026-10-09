@@ -52,10 +52,10 @@ impl Manager {
             .filter_map(Instance::service_provider)
             .collect();
         let scope = self.host_scope().to_owned();
-        let host = vec![super::host_services::session_provider(
-            &scope,
-            self.host_alive.clone(),
-        )];
+        let host = vec![
+            super::native_execution::provider(&scope, self.host_alive.clone()),
+            super::host_services::session_provider(&scope, self.host_alive.clone()),
+        ];
         self.plugin_services
             .lock()
             .unwrap()
@@ -180,6 +180,14 @@ impl Manager {
         }
     }
     fn dispatch_service(&mut self, call: &Call) -> Result<Option<serde_json::Value>, api::Failure> {
+        let native = super::native_execution::provider(&self.host_scope(), self.host_alive.clone());
+        if call.reference.provider.caller.instance == native.caller.instance {
+            return self.native_executions.answer(
+                call,
+                &self.environment.workspace,
+                self.trusted && self.workspace_open,
+            );
+        }
         // The host is a participant like any provider, so a call addressed to its session contract is
         // answered here instead of being searched for among the running instances. The identity is
         // compared exactly, so a plugin cannot reach the host's session surface by naming it.

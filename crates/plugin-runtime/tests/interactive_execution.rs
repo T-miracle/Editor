@@ -186,6 +186,129 @@ fn session_result(
     panic!("consumer did not receive its actual provider result");
 }
 
+/// Two separately installed real WASM callers share the native default without sharing authority.
+#[test]
+#[ignore = "package capability-example with the current host SDK into target/plugin-api-test first"]
+fn native_execution_two_consumers_have_isolated_input_and_retirement() {
+    let root = tempfile::tempdir().unwrap();
+    let mut manager = Manager::open(
+        root.path().join("plugins"),
+        Environment {
+            workspace: root.path().display().to_string(),
+            os: "windows".into(),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    for id in ["native-client-a", "native-client-b"] {
+        install(&mut manager, &session_consumer(id));
+    }
+    assert!(!manager.installed.contains_key("terminal"));
+    let mut sessions = Vec::new();
+    for client in ["native-client-a", "native-client-b"] {
+        let created = session_call(
+            &mut manager,
+            client,
+            "start",
+            json!({"program":"powershell.exe","args":["-NoProfile","-Command", "[Console]::InputEncoding=[Text.UTF8Encoding]::new(); [Console]::OutputEncoding=[Text.UTF8Encoding]::new(); Write-Output 'NATIVE_READY'; $line=[Console]::ReadLine(); Write-Output ('NATIVE_ANSWER:'+$line); Start-Sleep -Seconds 60"]}),
+        );
+        sessions.push(created["session"].as_str().unwrap().to_owned());
+        // session.host acknowledges a queued launch before native creation. Only a public status
+        // receipt permits subsequent stdin/locate operations; Starting is not a running process.
+        let deadline = Instant::now() + Duration::from_secs(30);
+        loop {
+            let state = session_call(
+                &mut manager,
+                client,
+                "status",
+                json!({"session":sessions.last().unwrap()}),
+            );
+            if state["state"] == "running" {
+                break;
+            }
+            assert_eq!(
+                state["state"], "starting",
+                "unexpected native creation result: {state}"
+            );
+            assert!(Instant::now() < deadline, "native creation did not finish");
+            std::thread::sleep(Duration::from_millis(20));
+        }
+    }
+    assert_ne!(sessions[0], sessions[1]);
+    let error = session_result(
+        &mut manager,
+        "native-client-b",
+        "input",
+        json!({"session":sessions[0],"bytes":b"FOREIGN\r\n".to_vec()}),
+    )
+    .unwrap_err();
+    assert_eq!(error.code, api::ErrorCode::InvalidHandle);
+    let subscribed = session_call(
+        &mut manager,
+        "native-client-a",
+        "subscribe",
+        json!({"session":sessions[0]}),
+    );
+    let subscription = subscribed["subscription"].as_str().unwrap();
+    session_call(
+        &mut manager,
+        "native-client-a",
+        "locate",
+        json!({"session":sessions[0]}),
+    );
+    session_call(
+        &mut manager,
+        "native-client-a",
+        "input",
+        json!({"session":sessions[0],"bytes":"中文 NATIVE\r\n".as_bytes().to_vec()}),
+    );
+    let mut bytes = Vec::new();
+    let deadline = Instant::now() + Duration::from_secs(15);
+    while Instant::now() < deadline {
+        let next = session_call(
+            &mut manager,
+            "native-client-a",
+            "next",
+            json!({"subscription":subscription,"limit":16}),
+        );
+        for event in next["events"].as_array().unwrap() {
+            if let Some(chunk) = event.get("bytes") {
+                bytes.extend(serde_json::from_value::<Vec<u8>>(chunk.clone()).unwrap());
+            }
+        }
+        if String::from_utf8_lossy(&bytes).contains("NATIVE_ANSWER:中文 NATIVE") {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    assert!(
+        String::from_utf8_lossy(&bytes).contains("NATIVE_ANSWER:中文 NATIVE"),
+        "{}",
+        String::from_utf8_lossy(&bytes)
+    );
+    session_call(
+        &mut manager,
+        "native-client-a",
+        "unsubscribe",
+        json!({"subscription":subscription}),
+    );
+    session_call(
+        &mut manager,
+        "native-client-a",
+        "stop",
+        json!({"session":sessions[0],"mode":"force"}),
+    );
+    manager.disable("native-client-b").unwrap();
+    wait(&mut manager, |manager| {
+        manager
+            .executions()
+            .iter()
+            .all(|execution| !execution.snapshot().state.is_active())
+    });
+    manager.shutdown();
+    assert_eq!(manager.resource_count(), 0);
+}
+
 /// One consumer uses input, output/state subscription, locate and unsubscribe with two independent providers.
 #[test]
 #[ignore = "build terminal and capability-example through the current public SDK first"]

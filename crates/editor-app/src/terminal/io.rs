@@ -3,11 +3,69 @@
 use super::*;
 
 impl TerminalPanel {
+    /// Alacritty parses once for both Shell and tasks, and replies follow the same resource that produced output.
+    pub(super) fn apply_update(&mut self, id: u64, update: Update, cx: &mut Context<Self>) {
+        let colors = self.colors(cx);
+        let size = alacritty_terminal::event::WindowSize {
+            num_lines: self.grid_size().rows as u16,
+            num_cols: self.grid_size().columns as u16,
+            cell_width: self.cell_width as u16,
+            cell_height: self.cell_height as u16,
+        };
+        let Some(session) = self.sessions.iter_mut().find(|session| session.id == id) else {
+            return;
+        };
+        let mut replies = vec![];
+        match update {
+            Update::Output { bytes, .. } => {
+                for event in session.engine.process(&bytes) {
+                    use alacritty_terminal::event::Event;
+                    match event {
+                        Event::PtyWrite(text) => replies.push(text.into_bytes()),
+                        Event::ColorRequest(index, format) => {
+                            let color = session.engine.color_index(index, &colors);
+                            replies.push(
+                                format(alacritty_terminal::vte::ansi::Rgb {
+                                    r: (color >> 16) as u8,
+                                    g: (color >> 8) as u8,
+                                    b: color as u8,
+                                })
+                                .into_bytes(),
+                            );
+                        }
+                        Event::TextAreaSizeRequest(format) => {
+                            replies.push(format(size).into_bytes())
+                        }
+                        // Task output has process authority only. OSC52 must not bypass the
+                        // clipboard capability; explicit user Copy remains available in the view.
+                        Event::ClipboardStore(_, text) if session.task.is_none() => {
+                            cx.write_to_clipboard(ClipboardItem::new_string(text))
+                        }
+                        _ => {}
+                    }
+                }
+                if let Some(cwd) = session.engine.take_cwd() {
+                    session.cwd = cwd;
+                }
+            }
+            Update::Exited { .. } | Update::Terminated => {
+                if let Some(task) = &mut session.task {
+                    task.process_alive = false;
+                } else {
+                    session.exited = true;
+                }
+            }
+        }
+        for bytes in replies {
+            self.send_input(id, bytes, cx);
+        }
+        self.dirty = true;
+        cx.notify();
+    }
     /// Output parsing and reply dispatch stay on the same view thread as selection and painting.
     pub(super) fn poll(&mut self, cx: &mut Context<Self>) {
         let events = self.supervisor.poll();
         let mut changed = !events.is_empty();
-        let colors = self.colors(cx);
         for event in events {
             match event {
                 NativeProcessEvent::Started { .. } => {}
@@ -24,63 +82,7 @@ impl TerminalPanel {
                     }
                 }
                 NativeProcessEvent::Update { session, update } => {
-                    let Some(tab) = self.sessions.iter_mut().find(|tab| tab.id == session) else {
-                        continue;
-                    };
-                    match update {
-                        Update::Output { bytes, .. } => {
-                            for event in tab.engine.process(&bytes) {
-                                match event {
-                                    alacritty_terminal::event::Event::PtyWrite(text) => {
-                                        let _ = self.supervisor.write(session, text.into_bytes());
-                                    }
-                                    alacritty_terminal::event::Event::ColorRequest(
-                                        index,
-                                        format,
-                                    ) => {
-                                        let color = tab.engine.color_index(index, &colors);
-                                        let rgb = alacritty_terminal::vte::ansi::Rgb {
-                                            r: (color >> 16) as u8,
-                                            g: (color >> 8) as u8,
-                                            b: color as u8,
-                                        };
-                                        let _ = self
-                                            .supervisor
-                                            .write(session, format(rgb).into_bytes());
-                                    }
-                                    alacritty_terminal::event::Event::TextAreaSizeRequest(
-                                        format,
-                                    ) => {
-                                        let size = alacritty_terminal::event::WindowSize {
-                                            num_lines: ((self.height - 16.) / self.cell_height)
-                                                .floor()
-                                                .clamp(1., 500.)
-                                                as u16,
-                                            num_cols: ((self.width - 16.) / self.cell_width)
-                                                .floor()
-                                                .clamp(2., 1000.)
-                                                as u16,
-                                            cell_width: self.cell_width as u16,
-                                            cell_height: self.cell_height as u16,
-                                        };
-                                        let _ = self
-                                            .supervisor
-                                            .write(session, format(size).into_bytes());
-                                    }
-                                    // OSC clipboard reads are never silently granted to a program.
-                                    alacritty_terminal::event::Event::ClipboardStore(_, text) => {
-                                        cx.write_to_clipboard(ClipboardItem::new_string(text))
-                                    }
-                                    _ => {}
-                                }
-                            }
-                            if let Some(cwd) = tab.engine.take_cwd() {
-                                tab.cwd = cwd;
-                            }
-                        }
-                        Update::Exited { .. } | Update::Terminated => tab.exited = true,
-                    }
-                    self.dirty = true;
+                    self.apply_update(session, update, cx)
                 }
             }
         }

@@ -138,7 +138,7 @@ impl Manager {
     }
 
     /// All operations retain the original resource owner and provider; later preferences cannot retarget them.
-    fn execution_operation(
+    pub(in crate::manager) fn execution_operation(
         &mut self,
         session: u64,
         method: &str,
@@ -162,7 +162,13 @@ impl Manager {
                 "Program creation has no receipt yet",
             )
         })?;
-        let dependency = execution_dependency()?;
+        let mut dependency = execution_dependency()?;
+        if method == "resize" {
+            // Geometry is additive in 2.1: only callers that need it require the exact extra shape.
+            dependency
+                .methods
+                .insert("resize".into(), plugin_protocol::execution::resize_method());
+        }
         self.refresh_services();
         let reference = self.plugin_services.lock().unwrap().resolve_pinned(
             &execution.origin.caller,

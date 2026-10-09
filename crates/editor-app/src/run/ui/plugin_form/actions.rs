@@ -160,8 +160,8 @@ impl EditorApp {
             }
             let mut arguments = self.configuration_arguments(&snapshot);
             arguments["intent"] = "save".into();
-            if snapshot.provider == crate::plugin_development::configuration::PROVIDER {
-                let result = crate::plugin_development::configuration::validate(&arguments);
+            if host_templates::owns(&snapshot.provider) {
+                let result = host_templates::invoke(&snapshot.provider, "validate", &arguments);
                 self.accept_plugin_commit(form.entity_id(), &id, snapshot, result, cx);
                 continue;
             }
@@ -361,6 +361,25 @@ impl EditorApp {
             Execution::Debug => "debug",
         }
         .into();
+        if host_templates::owns(&snapshot.provider) {
+            // Built-in policy has no guest incarnation; it still validates the latest saved values
+            // under the same trust gate and projects the exact public literal-command envelope.
+            let result = host_templates::invoke(&snapshot.provider, "validate", &arguments);
+            let (data, configuration) = validated(snapshot, id, result);
+            if let Some(configuration) = configuration {
+                if let Err(error) = self
+                    .run_controls
+                    .accept_configuration_projection(configuration, data)
+                {
+                    self.status = error;
+                    return true;
+                }
+                return false;
+            }
+            self.status = validation_reason(&data.validation);
+            cx.notify();
+            return true;
+        }
         let request = self.plugin_configuration_bridge.reserve(
             Purpose::Execute {
                 id: id.into(),

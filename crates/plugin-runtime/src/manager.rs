@@ -16,6 +16,8 @@ mod host_services;
 mod image_input;
 mod images;
 mod language;
+mod native_execution;
+pub use native_execution::NativeExecutionUpdate;
 mod plugin_services;
 mod preferences;
 mod preparation;
@@ -113,6 +115,8 @@ pub struct Manager {
     retired_image_sources: BTreeMap<String, api::ContentVersion>,
     /// Host-owned execution sessions started through the public service contract.
     host_sessions: HostSessions,
+    /// Public native execution participates in the broker without borrowing any plugin's authority.
+    native_executions: native_execution::Executions,
     /// Debug targets retain the provider incarnation and a distinct revocable native-resource root.
     debug_sessions: debug_services::Sessions,
     /// Retired with this runtime so a queued start cannot outlive the window that requested it.
@@ -211,6 +215,7 @@ impl Manager {
             image_input_budget: Default::default(),
             retired_image_sources: BTreeMap::new(),
             host_sessions: HostSessions::new(host_alive.clone()),
+            native_executions: native_execution::Executions::new(trusted),
             debug_sessions: Default::default(),
             host_alive,
         };
@@ -665,6 +670,7 @@ impl Manager {
         )
     }
     pub fn poll(&mut self) {
+        self.native_executions.poll(&self.plugin_services);
         self.route_services();
         self.poll_parked();
         // Host sessions end when their pinned provider incarnation is gone, without replaying work.
@@ -675,8 +681,14 @@ impl Manager {
             .filter_map(Instance::instance_id)
             .map(str::to_owned)
             .collect::<BTreeSet<_>>();
-        self.host_sessions
-            .retire_absent_providers(&|instance| present.contains(instance));
+        self.host_sessions.retire_absent_providers(&|instance| {
+            present.contains(instance)
+                || instance
+                    == format!(
+                        "native-execution@{}",
+                        scopes::workspace_key(&self.environment.workspace)
+                    )
+        });
         for (id, instance) in &mut self.live {
             if let Err(error) = instance.poll() {
                 instance.stop();

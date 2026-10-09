@@ -9,6 +9,19 @@ pub(super) struct ProviderPreparationView {
     pub snapshot: plugin_runtime::PreparationSnapshot,
 }
 impl RunControls {
+    /// Presentation reads all bounded preparation outputs for one configuration, never only the selected one.
+    pub fn preparation_snapshots(&self, config: &str) -> Vec<(String, String)> {
+        self.provider_preparations
+            .iter()
+            .filter(|(_, view)| view.config == config)
+            .map(|(request, view)| {
+                (
+                    format!("preparation:{request}"),
+                    view.snapshot.output.clone(),
+                )
+            })
+            .collect()
+    }
     /// Stop/force addresses an active owned receipt after its sequence has already been sealed.
     pub fn provider_preparation_request(&self, config: &str) -> Option<u64> {
         self.provider_preparations

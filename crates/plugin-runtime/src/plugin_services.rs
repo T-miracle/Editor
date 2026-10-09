@@ -108,6 +108,8 @@ pub(crate) struct Broker {
     completed: VecDeque<(Call, Result<Value, Failure>)>,
     pub preferences: Preferences,
     selections: BTreeMap<(String, String), Selection>,
+    /// Host participants supply deterministic defaults; persisted user/project choices take precedence.
+    host_defaults: BTreeMap<(String, String), String>,
 }
 impl Broker {
     /// Reply admission validates unchanged source authority, original shape and the 64 KiB bound.
@@ -170,6 +172,22 @@ impl Broker {
     /// through this one list, so a consumer's selection and this registry cannot disagree about who
     /// offers a contract.
     pub fn reconcile(&mut self, guests: Vec<Provider>, host: Vec<Provider>) {
+        let mut defaults = BTreeMap::<(String, String), BTreeSet<String>>::new();
+        for provider in &host {
+            for contract in provider.contracts.keys() {
+                defaults
+                    .entry((provider.caller.scope.clone(), contract.clone()))
+                    .or_default()
+                    .insert(provider.caller.plugin.clone());
+            }
+        }
+        // Several host providers for one contract require explicit selection too; order is never authority.
+        self.host_defaults = defaults
+            .into_iter()
+            .filter_map(|(key, choices)| {
+                (choices.len() == 1).then(|| (key, choices.into_iter().next().unwrap()))
+            })
+            .collect();
         self.providers = guests
             .into_iter()
             .chain(host)
@@ -225,6 +243,7 @@ impl Broker {
             .get(scope)
             .and_then(|map| map.get(contract))
             .or_else(|| self.preferences.user.get(&choice_key(scope, contract)))
+            .or_else(|| self.host_defaults.get(&(scope.into(), contract.into())))
     }
     /// Package identity of the provider a start in this scope would use; descriptive, never routing.
     pub fn selected_provider(&self, scope: &str, contract: &str) -> Option<String> {
@@ -383,6 +402,16 @@ impl Broker {
     pub fn take_batch(&mut self) -> Vec<Call> {
         let count = self.queue.len().min(32);
         self.queue.drain(..count).collect()
+    }
+    /// Describe active scoped participants without granting a reference or changing selection.
+    pub(crate) fn participants(&self, scope: &str, contract: &str) -> Vec<Provider> {
+        self.providers
+            .values()
+            .filter(|provider| {
+                provider.caller.scope == scope && provider.contracts.contains_key(contract)
+            })
+            .cloned()
+            .collect()
     }
     pub fn choices(&self, scope: &str) -> Vec<Choice> {
         let mut contracts: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();

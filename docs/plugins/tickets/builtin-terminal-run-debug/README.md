@@ -2,7 +2,7 @@
 
 日期：2026-10-09
 
-状态：2026-10-09 用户批准并要求逐步执行全部工单。[01 已完成阶段验收](../../verification/builtin-terminal-01-2026-10-09.md)，随后执行 02；03、04 等待直接依赖完成。规格 [#87](https://github.com/T-miracle/Nanobug/issues/87) 与工单 [#88](https://github.com/T-miracle/Nanobug/issues/88)–[#91](https://github.com/T-miracle/Nanobug/issues/91) 的真实映射及依赖见 [publication.json](publication.json)。这不代表旧用户迁移或整批发行已经完成。
+状态：2026-10-09 用户批准并要求逐步执行全部工单。[01](../../verification/builtin-terminal-01-2026-10-09.md)、[02](../../verification/builtin-terminal-02-2026-10-09.md) 已完成阶段验收，随后执行 03；04 等待直接依赖完成。规格 [#87](https://github.com/T-miracle/Nanobug/issues/87) 与工单 [#88](https://github.com/T-miracle/Nanobug/issues/88)–[#91](https://github.com/T-miracle/Nanobug/issues/91) 的真实映射及依赖见 [publication.json](publication.json)。这不代表旧用户迁移或整批发行已经完成。
 
 依据：[总方案](../../specs/builtin-terminal-run-debug.md)，稳定标识 `builtin-terminal-run-debug`。目标跟踪器为 T-miracle/Nanobug GitHub Issues，发布标签为 `ready-for-agent`。本地编号不是 GitHub issue 编号。
 

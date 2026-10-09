@@ -148,6 +148,7 @@ impl EditorApp {
             return true;
         }
         if self.plugin_configuration_bridge.jobs.active(id) {
+            self.locate_terminal_task(id, window, cx);
             cx.notify();
             return true;
         }
@@ -269,6 +270,12 @@ impl EditorApp {
                 }
             }
             let request = self.run_controls.begin(id);
+            // Reserve the visible task before spawning; a full panel may not leave an invisible job.
+            if !self.begin_terminal_task(id, &snapshot.name, request, window, cx) {
+                self.run_controls
+                    .reject_start(id, request, &t!("terminal.session_limit"));
+                return Ok(());
+            }
             if let Err(error) = self.plugin_configuration_bridge.jobs.start(
                 id,
                 request,
@@ -279,6 +286,31 @@ impl EditorApp {
                     .reject_start(id, request, &format!("{error:#}"));
                 return Err(error);
             }
+            // Stdio jobs are independent from plugin actor publications. Wake the native window
+            // through the last exit frame without requiring mouse input. A watcher is created only
+            // for an admitted job and ends when that job or its editor owner is gone.
+            let watched = id.to_owned();
+            cx.spawn(async move |app, cx| {
+                loop {
+                    cx.background_executor()
+                        .timer(Duration::from_millis(33))
+                        .await;
+                    match app.update(cx, |app, cx| {
+                        cx.notify();
+                        app.plugin_configuration_bridge
+                            .jobs
+                            .report(&watched)
+                            .is_some_and(|report| {
+                                report.snapshot.request_id == request
+                                    && report.snapshot.state.is_active()
+                            })
+                    }) {
+                        Ok(true) => {}
+                        _ => break,
+                    }
+                }
+            })
+            .detach();
             Ok(())
         })();
         if let Err(error) = result {

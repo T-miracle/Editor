@@ -264,7 +264,42 @@ impl TerminalPanel {
             .relative()
             .size_full()
             .min_h_0()
-            .child(body)
+            .child(body.flex_1().min_h_0())
+            .when_some(self.pending_close, |body, id| {
+                let name = self
+                    .sessions
+                    .iter()
+                    .find(|session| session.id == id)
+                    .map(|session| session.name.clone())
+                    .unwrap_or_default();
+                body.child(
+                    h_flex()
+                        .id("terminal-close-confirmation")
+                        .debug_selector(|| "terminal-close-confirmation".into())
+                        .flex_shrink_0()
+                        .p_2()
+                        .gap_2()
+                        .items_center()
+                        .bg(cx.theme().background)
+                        .child(t!("terminal.close_task", name = name).to_string())
+                        .child(
+                            Button::new("terminal-close-cancel")
+                                .debug_selector(|| "terminal-close-cancel".into())
+                                .label(t!("terminal.cancel"))
+                                .on_click(cx.listener(|panel, _, _, cx| {
+                                    panel.pending_close = None;
+                                    panel.focus_pending = true;
+                                    cx.notify();
+                                })),
+                        )
+                        .child(
+                            Button::new("terminal-close-stop")
+                                .debug_selector(|| "terminal-close-stop".into())
+                                .label(t!("terminal.stop_close"))
+                                .on_click(cx.listener(|panel, _, _, cx| panel.confirm_close(cx))),
+                        ),
+                )
+            })
             .when_some(self.error.clone(), |body, error| {
                 body.child(div().px_2().text_color(cx.theme().danger).child(error))
             })
@@ -295,6 +330,7 @@ impl DockPanel for TerminalPanel {
             .child(
                 h_flex()
                     .gap_1()
+                    .when_some(self.task_toolbar(cx), |row, controls| row.child(controls))
                     .child(
                         Button::new("native-terminal-new")
                             .debug_selector(|| "native-terminal-new".into())

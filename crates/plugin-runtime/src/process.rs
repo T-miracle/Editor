@@ -117,7 +117,7 @@ impl Job {
         );
         Ok(())
     }
-    /// Native installers must stop every descendant before their staging directory can be published/deleted.
+    /// Confirm every descendant exited before publishing task completion or installer resources.
     pub(crate) fn terminate_and_wait(&self) -> anyhow::Result<()> {
         use windows_sys::Win32::System::JobObjects::*;
         self.terminate();
@@ -135,14 +135,14 @@ impl Job {
                         std::ptr::null_mut(),
                     )
                 } != 0,
-                "Cannot observe installer process tree"
+                "Cannot observe owned process tree"
             );
             if accounting.ActiveProcesses == 0 {
                 return Ok(());
             }
             anyhow::ensure!(
                 Instant::now() < deadline,
-                "Installer process tree termination timed out"
+                "Owned process tree termination timed out"
             );
             std::thread::sleep(Duration::from_millis(10));
         }
@@ -309,10 +309,22 @@ impl Processes {
         self.close_observed(id, |_| {})
     }
     pub fn clear(&mut self) {
-        for id in self.items.keys().copied().collect::<Vec<_>>() {
-            let _ = self.close(id);
+        if let Err(error) = self.clear_checked() {
+            eprintln!("Native cleanup failed: {error:#}");
         }
-        self.wait_closed();
+    }
+    /// Confirm cleanup for callers that must not acknowledge a failed tree/EOF retirement.
+    pub(crate) fn clear_checked(&mut self) -> anyhow::Result<()> {
+        let mut failure = None;
+        for id in self.items.keys().copied().collect::<Vec<_>>() {
+            if let Err(error) = self.close(id) {
+                failure.get_or_insert(error);
+            }
+        }
+        if let Err(error) = self.wait_closed() {
+            failure.get_or_insert(error);
+        }
+        failure.map_or(Ok(()), Err)
     }
     pub fn len(&self) -> usize {
         self.items.len()
@@ -326,62 +338,87 @@ impl Processes {
     }
     /// Drain a bounded batch so one noisy process cannot starve the UI event queue.
     pub fn poll_native(&mut self) -> anyhow::Result<Vec<(u64, Update)>> {
+        self.poll_native_observed()
+            .into_iter()
+            .map(|(handle, update)| update.map(|update| (handle, update)))
+            .collect()
+    }
+
+    /// Preserve each owner's error and already-read output. A failed cleanup cannot detach a live
+    /// lease or silently discard another process's output in the same supervisor iteration.
+    pub(crate) fn poll_native_observed(&mut self) -> Vec<(u64, anyhow::Result<Update>)> {
         self.reap_finished();
         let mut events = vec![];
         let mut exited = vec![];
         for (&handle, process) in &mut self.items {
-            // Windows resize runs asynchronously so an unanswered VT query cannot stall polling.
-            #[cfg(windows)]
-            if let Some(master) = &process.master {
-                master.get_size()?;
-            }
-            if process.exit_code.is_none()
-                && let Some(status) = process.child.try_wait()?
-            {
-                process.exit_code = Some(status.exit_code());
-                // Closing input must not depend on output EOF when a native query is unanswered.
-                process.input.take();
-                // Descendants share the owner's lifetime, even if they inherited its output pipes.
-                #[cfg(windows)]
-                process._job.terminate();
-                if let Some(master) = process.master.take() {
-                    std::thread::spawn(move || drop(master));
-                }
-                process.pending_resize = None;
-            }
-            if process
-                .pending_resize
-                .is_some_and(|(_, _, at)| at.elapsed() >= RESIZE_SETTLE)
-            {
-                process.flush_resize()?;
-            }
-            let mut eof = false;
-            for _ in 0..8 {
-                match process.output.try_recv() {
-                    Ok((stream, bytes)) => events.push((handle, Update::Output { stream, bytes })),
-                    Err(mpsc::TryRecvError::Disconnected) => {
-                        eof = true;
-                        break;
+            let mut updates = Vec::new();
+            let result = (|| -> anyhow::Result<()> {
+                if process.exit_code.is_none()
+                    && let Some(status) = process.child.try_wait()?
+                {
+                    process.exit_code = Some(status.exit_code());
+                    // Closing input must not depend on output EOF when a native query is unanswered.
+                    process.input.take();
+                    // Descendants share the owner's lifetime, even if they inherited its output pipes.
+                    #[cfg(windows)]
+                    process._job.terminate();
+                    if let Some(master) = process.master.take() {
+                        std::thread::spawn(move || drop(master));
                     }
-                    Err(mpsc::TryRecvError::Empty) => break,
+                    process.pending_resize = None;
                 }
-            }
-            if eof && let Some(code) = process.exit_code {
-                events.push((
-                    handle,
-                    if process.forced {
+                // A resize error is diagnostic, not permission to skip output or exit observation.
+                // In particular a permanent ConPTY failure must still allow Force/Close to converge.
+                #[cfg(windows)]
+                if let Some(master) = &process.master
+                    && let Err(error) = master.get_size()
+                {
+                    events.push((handle, Err(error)));
+                }
+                if process
+                    .pending_resize
+                    .is_some_and(|(_, _, at)| at.elapsed() >= RESIZE_SETTLE)
+                {
+                    if let Err(error) = process.flush_resize() {
+                        events.push((handle, Err(error)));
+                        process.pending_resize = None;
+                    }
+                }
+                let mut eof = false;
+                for _ in 0..8 {
+                    match process.output.try_recv() {
+                        Ok((stream, bytes)) => updates.push(Update::Output { stream, bytes }),
+                        Err(mpsc::TryRecvError::Disconnected) => {
+                            eof = true;
+                            break;
+                        }
+                        Err(mpsc::TryRecvError::Empty) => break,
+                    }
+                }
+                if eof && let Some(code) = process.exit_code {
+                    // Root exit and EOF do not prove that descendants with redirected pipes exited.
+                    // This runs on the native worker; the UI observes a terminal event only after the
+                    // OS job reports zero active processes. Failure retains the owner and its controls.
+                    #[cfg(windows)]
+                    process._job.terminate_and_wait()?;
+                    updates.push(if process.forced {
                         Update::Terminated
                     } else {
                         Update::Exited { code }
-                    },
-                ));
-                exited.push(handle);
+                    });
+                    exited.push(handle);
+                }
+                Ok(())
+            })();
+            events.extend(updates.into_iter().map(|update| (handle, Ok(update))));
+            if let Err(error) = result {
+                events.push((handle, Err(error)));
             }
         }
         for id in exited {
             self.items.remove(&id);
         }
-        Ok(events)
+        events
     }
 }
 

@@ -393,6 +393,7 @@ impl EditorApp {
         let terminal = cx.new(|cx| {
             terminal::TerminalPanel::new(
                 parent.clone(),
+                extensions.clone(),
                 workspace.root().to_owned(),
                 session_state.workspace_trusted,
                 window,

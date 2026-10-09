@@ -51,6 +51,7 @@ impl Manager {
     /// Count resources across logical workspaces and the application owner for shutdown diagnostics.
     pub fn resource_count(&self) -> usize {
         self.images.len()
+            + self.native_executions.resource_count()
             + self.structure_resource_count()
             + self
                 .language_services
@@ -135,6 +136,7 @@ impl Manager {
         self.environment = environment;
         self.trusted = trusted;
         self.workspace_open = true;
+        self.native_executions.set_trusted(trusted);
         if let Some(mut parked) = self.parked.remove(&next_key) {
             if trusted && parked.trusted {
                 self.live.append(&mut parked.live);
@@ -150,6 +152,7 @@ impl Manager {
 
     /// Revocation retires workspace guests immediately; application owners retain their own scope.
     pub fn set_workspace_trust(&mut self, trusted: bool) -> anyhow::Result<()> {
+        self.native_executions.set_trusted(trusted);
         // Authority is revoked even when a guest fails to save its final snapshot.
         self.trusted = trusted;
         if !trusted {
@@ -190,6 +193,7 @@ impl Manager {
         let key = workspace_key(workspace);
         let current = workspace_key(&self.environment.workspace) == key;
         if current {
+            self.native_executions.set_trusted(false);
             // Trust revocation skips guest callbacks; ordinary close retains its bounded cleanup.
             if self.trusted {
                 self.stop_owned_programs();
@@ -291,6 +295,7 @@ impl Manager {
         // Programs get a shared bounded cleanup window and then forceful tree termination. The UI
         // awaits the actor's shutdown acknowledgement; only afterwards may its window disappear.
         self.stop_owned_programs();
+        self.native_executions.shutdown();
         // Revocation must invalidate workers retained by a host before its last Arc is released.
         self.clear_structure_providers();
         // Host execution sessions end with the window that owns them; no start is left queued.

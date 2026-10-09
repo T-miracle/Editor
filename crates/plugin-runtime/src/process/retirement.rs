@@ -74,13 +74,19 @@ impl Processes {
         self.reapers = pending;
     }
     /// Lifecycle retirement waits for already revoked resources too, before installing another instance.
-    pub(crate) fn wait_closed(&mut self) {
+    pub(crate) fn wait_closed(&mut self) -> anyhow::Result<()> {
+        let mut failure = None;
         for reaper in self.reapers.drain(..) {
             match reaper.join() {
                 Ok(Ok(())) => {}
-                Ok(Err(error)) => eprintln!("Native cleanup failed: {error:#}"),
-                Err(_) => eprintln!("Native cleanup worker failed"),
+                Ok(Err(error)) => {
+                    failure.get_or_insert(error);
+                }
+                Err(_) => {
+                    failure.get_or_insert_with(|| anyhow::anyhow!("Native cleanup worker failed"));
+                }
             }
         }
+        failure.map_or(Ok(()), Err)
     }
 }

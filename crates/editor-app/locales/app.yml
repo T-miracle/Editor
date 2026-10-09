@@ -56,9 +56,36 @@ terminal.exited:
 terminal.session_limit:
   en: "The terminal session limit has been reached. Close an unused tab first."
   zh-CN: "已达到终端会话上限，请先关闭不用的 Tab。"
+terminal.shell_scripts:
+  en: "Shell scripts"
+  zh-CN: "Shell 脚本"
+terminal.shell_unavailable:
+  en: "Shell is unavailable on this operating system"
+  zh-CN: "此操作系统不支持所选 Shell"
+terminal.script_required:
+  en: "Enter a script"
+  zh-CN: "请填写脚本内容"
+terminal.shell_no_debugger:
+  en: "This Shell template has no debugger"
+  zh-CN: "此 Shell 模板未提供调试器"
 terminal.clear:
   en: "Clear buffer"
   zh-CN: "清空缓冲区"
+terminal.close_task:
+  en: "Stop %{name} and close its tab?"
+  zh-CN: "停止 %{name} 并关闭此 Tab？"
+terminal.cancel:
+  en: "Cancel"
+  zh-CN: "取消"
+terminal.stop_close:
+  en: "Stop and close"
+  zh-CN: "停止并关闭"
+terminal.stop:
+  en: "Stop task"
+  zh-CN: "停止任务"
+terminal.rerun:
+  en: "Run again"
+  zh-CN: "再次运行"
 terminal.interrupt:
   en: "Interrupt"
   zh-CN: "中断"

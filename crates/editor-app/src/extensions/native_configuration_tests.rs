@@ -6,6 +6,22 @@ use gpui_kit::{TestAppContext, VisualContext as _, gpui};
 use plugin_runtime::Manager;
 use std::time::{Duration, Instant};
 
+/// Inject one actor publication at the existing async boundary without exposing runtime test APIs.
+/// The caller deliberately combines a final output snapshot and its completion in the same frame.
+pub(crate) fn completed_preparation_frame(
+    app: &EditorApp,
+    cx: &App,
+    receipt: (String, usize, u64, Result<String, String>),
+    snapshot: plugin_runtime::PreparationSnapshot,
+) {
+    let (config, index, request, _) = &receipt;
+    let mut state = app.extensions.read(cx).worker.state.lock().unwrap();
+    state
+        .target_snapshots
+        .insert(*request, (config.clone(), *index, snapshot));
+    state.target_preparations.push(receipt);
+}
+
 /// Persistent request state mirrors the production actor instead of synthesizing provider answers.
 #[derive(Default)]
 pub(crate) struct Driver {

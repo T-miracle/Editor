@@ -8,7 +8,7 @@ use plugin_protocol::process::{Transport, Update};
 use std::{
     collections::{BTreeMap, VecDeque},
     sync::{
-        Arc,
+        Arc, Mutex,
         atomic::{AtomicBool, AtomicU64, Ordering},
         mpsc,
     },
@@ -17,6 +17,11 @@ use std::{
 
 #[cfg(test)]
 mod tests;
+
+/// Locate a tool without launching or installing it; host discovery and native launches share this policy.
+pub fn resolve_program(program: &str) -> anyhow::Result<std::path::PathBuf> {
+    crate::toolchains::resolve(program)
+}
 
 /// A literal launch requested by a trusted host interaction, with no shell interpolation.
 #[derive(Clone, Debug)]
@@ -51,17 +56,15 @@ pub enum NativeProcessEvent {
 }
 
 enum Command {
-    Launch(u64, u64, NativeLaunch),
+    Launch(u64, u64, Arc<AtomicU64>, NativeLaunch),
     Write(u64, u64, Vec<u8>),
     Resize(u64, u64, u16, u16),
-    Stop(u64, bool),
-    Close(u64),
+    Stop(u64),
 }
 
 /// Authority changes cannot be dropped or revived by an older queued launch/input operation.
 struct Authority {
     trusted: AtomicBool,
-    revoked: AtomicBool,
     generation: AtomicU64,
 }
 
@@ -69,6 +72,11 @@ struct Authority {
 struct ProcessLease {
     id: u64,
     generation: u64,
+    /// Each explicit retirement advances independently of the bounded data queue.
+    retirement: Arc<AtomicU64>,
+    /// Remember attempted termination so OS refusals do not create an unbounded diagnostic loop.
+    retired_revision: u64,
+    authority_retired: bool,
 }
 impl Authority {
     fn check(&self, generation: u64) -> anyhow::Result<()> {
@@ -89,6 +97,8 @@ pub struct NativeProcessGroup {
     commands: mpsc::SyncSender<Command>,
     events: mpsc::Receiver<NativeProcessEvent>,
     authority: Arc<Authority>,
+    /// Only admitted launches have entries; completed/failed launches release these bounded gates.
+    retirements: Arc<Mutex<BTreeMap<u64, Arc<AtomicU64>>>>,
     /// One separate close gate stays available even when data/output queues apply backpressure.
     shutdown: mpsc::SyncSender<mpsc::Sender<()>>,
 }
@@ -100,16 +110,26 @@ impl NativeProcessGroup {
         let (output, events) = mpsc::sync_channel(256);
         let authority = Arc::new(Authority {
             trusted: AtomicBool::new(trusted),
-            revoked: AtomicBool::new(false),
             generation: AtomicU64::new(0),
         });
         let (shutdown, close_gate) = mpsc::sync_channel(1);
         let supervisor_authority = authority.clone();
-        std::thread::spawn(move || supervise(input, output, close_gate, supervisor_authority));
+        let retirements = Arc::new(Mutex::new(BTreeMap::new()));
+        let supervisor_retirements = retirements.clone();
+        std::thread::spawn(move || {
+            supervise(
+                input,
+                output,
+                close_gate,
+                supervisor_authority,
+                supervisor_retirements,
+            )
+        });
         Self {
             commands,
             events,
             authority,
+            retirements,
             shutdown,
         }
     }
@@ -119,7 +139,6 @@ impl NativeProcessGroup {
         self.authority.trusted.store(trusted, Ordering::Release);
         if !trusted {
             self.authority.generation.fetch_add(1, Ordering::AcqRel);
-            self.authority.revoked.store(true, Ordering::Release);
         }
         Ok(())
     }
@@ -157,7 +176,21 @@ impl NativeProcessGroup {
             "Invalid native environment or directory"
         );
         self.authority.check(generation)?;
-        self.send(Command::Launch(session, generation, launch))
+        let retirement = Arc::new(AtomicU64::new(0));
+        {
+            let mut gates = self.retirements.lock().unwrap();
+            anyhow::ensure!(gates.len() < 512, "Native session quota exceeded");
+            anyhow::ensure!(
+                !gates.contains_key(&session),
+                "Session already owns a process"
+            );
+            gates.insert(session, retirement.clone());
+        }
+        let result = self.send(Command::Launch(session, generation, retirement, launch));
+        if result.is_err() {
+            self.retirements.lock().unwrap().remove(&session);
+        }
+        result
     }
 
     /// Queue literal stdin bytes with bounded backpressure; never block the UI on a slow child.
@@ -177,12 +210,21 @@ impl NativeProcessGroup {
 
     /// Request graceful exit or immediate tree termination; completion is a later process event.
     pub fn stop(&self, session: u64, force: bool) -> anyhow::Result<()> {
-        self.send(Command::Stop(session, force))
+        if force {
+            self.close(session)
+        } else {
+            self.send(Command::Stop(session))
+        }
     }
 
     /// Retire one session and its descendants without discarding other sessions' resources.
     pub fn close(&self, session: u64) -> anyhow::Result<()> {
-        self.send(Command::Close(session))
+        // Coalesce retirement in a per-launch gate, including launches that are still queued.
+        // Unknown or already-ended sessions add no tombstone and cannot exhaust metadata.
+        if let Some(retirement) = self.retirements.lock().unwrap().get(&session) {
+            retirement.fetch_add(1, Ordering::AcqRel);
+        }
+        Ok(())
     }
 
     /// Drain a bounded amount of output so a noisy child cannot monopolize one render frame.
@@ -214,6 +256,7 @@ fn supervise(
     output: mpsc::SyncSender<NativeProcessEvent>,
     close_gate: mpsc::Receiver<mpsc::Sender<()>>,
     authority: Arc<Authority>,
+    retirements: Arc<Mutex<BTreeMap<u64, Arc<AtomicU64>>>>,
 ) {
     let diagnostics = NativeDiagnostics::default();
     let mut processes = Processes::default();
@@ -223,25 +266,29 @@ fn supervise(
     let mut pending = VecDeque::new();
     'supervisor: loop {
         if let Ok(acknowledge) = close_gate.try_recv() {
-            processes.clear();
-            let _ = acknowledge.send(());
+            if processes.clear_checked().is_ok() {
+                let _ = acknowledge.send(());
+            }
+            // Failure drops the acknowledgement; callers retain activity instead of claiming exit.
             return;
         }
-        if authority.revoked.swap(false, Ordering::AcqRel) {
-            // A newer grant may already have launched a child while this thread was waiting
-            // for input. Retire only obsolete leases, not resources of that newer authority.
-            let generation = authority.generation.load(Ordering::Acquire);
-            let obsolete: Vec<_> = sessions
-                .iter()
-                .filter_map(|(session, lease)| (lease.generation != generation).then_some(*session))
-                .collect();
-            for session in obsolete {
-                let lease = sessions.remove(&session).expect("obsolete lease exists");
-                let _ = processes.close(lease.id);
-                pending.push_back(NativeProcessEvent::Update {
-                    session,
-                    update: Update::Terminated,
-                });
+        // Trust revocation and individual retirement bypass every data/output queue. A newer
+        // authority grant only preserves leases admitted under that newer generation.
+        let generation = authority.generation.load(Ordering::Acquire);
+        for (&session, lease) in &mut sessions {
+            let revision = lease.retirement.load(Ordering::Acquire);
+            let obsolete = lease.generation != generation && !lease.authority_retired;
+            if obsolete || revision != lease.retired_revision {
+                lease.authority_retired |= obsolete;
+                lease.retired_revision = revision;
+                // Keep the original native handle until real exit and EOF, even on OS refusal.
+                if let Err(error) = processes.terminate(lease.id) {
+                    pending.push_back(NativeProcessEvent::Failed {
+                        session,
+                        message: format!("{error:#}"),
+                        launch: false,
+                    });
+                }
             }
         }
         while let Some(event) = pending.pop_front() {
@@ -267,9 +314,13 @@ fn supervise(
         if let Some(command) = command {
             let launch_failed = matches!(command, Command::Launch(..));
             let (session, result) = match command {
-                Command::Launch(session, generation, launch) => {
+                Command::Launch(session, generation, retirement, launch) => {
                     let result = (|| {
                         authority.check(generation)?;
+                        anyhow::ensure!(
+                            retirement.load(Ordering::Acquire) == 0,
+                            "Native launch was retired"
+                        );
                         anyhow::ensure!(
                             !sessions.contains_key(&session),
                             "Session already owns a process"
@@ -297,10 +348,22 @@ fn supervise(
                                 &launch.env,
                             )?,
                         };
-                        sessions.insert(session, ProcessLease { id, generation });
+                        sessions.insert(
+                            session,
+                            ProcessLease {
+                                id,
+                                generation,
+                                retirement,
+                                retired_revision: 0,
+                                authority_retired: false,
+                            },
+                        );
                         pending.push_back(NativeProcessEvent::Started { session });
                         Ok(())
                     })();
+                    if result.is_err() {
+                        retirements.lock().unwrap().remove(&session);
+                    }
                     (session, result)
                 }
                 Command::Write(session, generation, bytes) => (
@@ -308,7 +371,10 @@ fn supervise(
                     authority.check(generation).and_then(|_| {
                         sessions
                             .get(&session)
-                            .filter(|lease| lease.generation == generation)
+                            .filter(|lease| {
+                                lease.generation == generation
+                                    && lease.retirement.load(Ordering::Acquire) == 0
+                            })
                             .ok_or_else(|| anyhow::anyhow!("Session has no process"))
                             .and_then(|lease| processes.write(lease.id, &bytes))
                     }),
@@ -318,29 +384,20 @@ fn supervise(
                     authority.check(generation).and_then(|_| {
                         sessions
                             .get(&session)
-                            .filter(|lease| lease.generation == generation)
+                            .filter(|lease| {
+                                lease.generation == generation
+                                    && lease.retirement.load(Ordering::Acquire) == 0
+                            })
                             .ok_or_else(|| anyhow::anyhow!("Session has no process"))
                             .and_then(|lease| processes.resize(lease.id, columns, rows))
                     }),
                 ),
-                Command::Stop(session, force) => (
+                Command::Stop(session) => (
                     session,
                     sessions
                         .get(&session)
                         .ok_or_else(|| anyhow::anyhow!("Session has no process"))
-                        .and_then(|lease| {
-                            if force {
-                                processes.terminate(lease.id)
-                            } else {
-                                processes.request_exit(lease.id).map(|_| ())
-                            }
-                        }),
-                ),
-                Command::Close(session) => (
-                    session,
-                    sessions
-                        .remove(&session)
-                        .map_or(Ok(()), |lease| processes.close(lease.id)),
+                        .and_then(|lease| processes.request_exit(lease.id).map(|_| ())),
                 ),
             };
             if let Err(error) = result {
@@ -354,25 +411,28 @@ fn supervise(
         if !pending.is_empty() {
             continue;
         }
-        match processes.poll_native() {
-            Ok(updates) => {
-                for (id, update) in updates {
-                    if let Some(session) = sessions
-                        .iter()
-                        .find_map(|(session, process)| (process.id == id).then_some(*session))
-                    {
-                        if matches!(update, Update::Exited { .. } | Update::Terminated) {
-                            sessions.remove(&session);
-                        }
-                        pending.push_back(NativeProcessEvent::Update { session, update });
+        for (id, result) in processes.poll_native_observed() {
+            if let Some(session) = sessions
+                .iter()
+                .find_map(|(session, process)| (process.id == id).then_some(*session))
+            {
+                let update = match result {
+                    Ok(update) => update,
+                    Err(error) => {
+                        pending.push_back(NativeProcessEvent::Failed {
+                            session,
+                            message: format!("{error:#}"),
+                            launch: false,
+                        });
+                        continue;
                     }
+                };
+                if matches!(update, Update::Exited { .. } | Update::Terminated) {
+                    sessions.remove(&session);
+                    retirements.lock().unwrap().remove(&session);
                 }
+                pending.push_back(NativeProcessEvent::Update { session, update });
             }
-            Err(error) => pending.push_back(NativeProcessEvent::Failed {
-                session: 0,
-                message: format!("{error:#}"),
-                launch: false,
-            }),
         }
     }
     processes.clear();

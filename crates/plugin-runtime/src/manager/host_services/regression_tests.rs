@@ -1,6 +1,96 @@
 //! Regression checks for the public session gateway's authority, scope and capacity.
 use super::*;
 
+/// Equal local handles from independent provider incarnations still identify distinct input targets.
+#[test]
+fn provider_local_session_ids_never_merge_execution_owners() {
+    let alive = Arc::new(AtomicBool::new(true));
+    let mut sessions = HostSessions::new(alive.clone());
+    for incarnation in ["plugin-provider@old", "native-provider@current"] {
+        let mut provider = session_provider("workspace", alive.clone());
+        provider.caller.instance = incarnation.into();
+        let origin = context_for(&provider.caller, &provider.alive);
+        let completion = Completion::new(5_000);
+        completion.finish(Ok(serde_json::json!({"session":"1","state":"started"})));
+        sessions
+            .insert(
+                provider,
+                RunRequest {
+                    program: "program.exe".into(),
+                    args: vec![],
+                    cwd: None,
+                    name: None,
+                    env: vec![],
+                },
+                incarnation.into(),
+                completion,
+                origin,
+            )
+            .unwrap();
+    }
+    let first = sessions.get(1).unwrap();
+    let second = sessions.get(2).unwrap();
+    assert!(first.owns_provider_session("plugin-provider@old", "1"));
+    assert!(!first.owns_provider_session("native-provider@current", "1"));
+    assert!(second.owns_provider_session("native-provider@current", "1"));
+    assert!(!second.owns_provider_session("native-provider@current", "2"));
+}
+
+/// With no packages installed, the ordinary public run gateway must create and observe a real child.
+#[test]
+fn builtin_execution_runs_without_a_terminal_package() {
+    let root = tempfile::tempdir().unwrap();
+    let mut manager = Manager::open(
+        root.path().join("plugins"),
+        Environment {
+            workspace: root.path().display().to_string(),
+            os: std::env::consts::OS.into(),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    let execution = manager
+        .start_configuration_execution(
+            "native-run",
+            RunRequest {
+                program: if cfg!(windows) {
+                    "powershell"
+                } else {
+                    "/bin/sh"
+                }
+                .into(),
+                args: if cfg!(windows) {
+                    vec![
+                        "-NoLogo",
+                        "-NoProfile",
+                        "-Command",
+                        "Write-Output 'native-task'",
+                    ]
+                } else {
+                    vec!["-c", "printf 'native-task\\n'"]
+                }
+                .into_iter()
+                .map(str::to_owned)
+                .collect(),
+                cwd: None,
+                name: Some("native task".into()),
+                env: vec![],
+            },
+        )
+        .expect("the built-in provider is available without a terminal package");
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while execution.snapshot().state.is_active() && std::time::Instant::now() < deadline {
+        manager.poll();
+        // A native view normally drains these publications; this fixture has no presentation owner.
+        manager.take_native_execution_updates();
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    assert_eq!(execution.snapshot().state, ExecutionState::Exited);
+    assert!(execution.snapshot().failure.is_none());
+    assert!(manager.installed.is_empty());
+    manager.shutdown();
+}
+
 /// An execution gateway must require the same authority as the provider it delegates to.
 #[test]
 fn starting_a_session_requires_execution_and_panel_authority() {

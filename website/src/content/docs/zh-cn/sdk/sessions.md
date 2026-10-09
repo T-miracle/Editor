@@ -8,11 +8,27 @@ alternate: /en/sdk/sessions/
 
 # 运行会话 — interactive.execute 2.0 与 session.host 2.0
 
+Nanobug 内置 `interactive.execute` 2.2 原生提供者，无需安装终端包。没有用户或工作区显式
+选择时使用内置提供者；兼容的显式选择仍优先，且不重定向已创建的会话。插件通过
+`session.host` 在统一终端面板创建可见任务 Tab 及归属自己的订阅。直接调用提供者不会
+创建宿主会话记录。
+
+2.1 额外提供 `resize(session, columns, rows)`，需要 `process.exec` 权限。列数为 2–1000，
+行数为 1–500，结果为 session、state。消费者只在使用尺寸接口时声明
+`execution::resize_method()`；2.0 的六个必需方法保持精确结构，所以已有 2.0 消费者仍兼容。
+原生执行最多保留 64 条会话记录，只淘汰已结束历史。
+
+2.2 还提供 `execute_terminal`，参数为 execute 的字段加必需的 inherit_cursor 布尔值，
+创建结果相同。使用时声明 `execution::terminal_execute_method()`。Windows VT 界面传 true，
+通过 input 回答 ConPTY 的初始光标查询，让后续准备步骤接在旧输出之后。无界面消费者使用
+execute，Unix 界面传 false；资源权限与归属规则相同。
+
 运行服务建立在[插件服务](/zh-cn/sdk/services/)上。提供者发布精确的方法结构、权限与版本；消费者声明所需方法。宿主按兼容契约与逻辑作用域选择提供者，提供者名称不产生授权。
 
 ## 交互执行
 
-公开 SDK 的 `execution::interactive_contract()` 提供六个方法的标准声明。
+公开 SDK 的 `execution::observation_methods()` 提供 input、locate 和 events 的标准声明；
+`execution::resize_method()` 和 `execution::terminal_execute_method()` 声明可选扩展。
 
 | 方法 | 参数 | 结果 | 权限 |
 | --- | --- | --- | --- |
@@ -33,7 +49,7 @@ program 是可执行程序，args 是字面参数数组，最多 128 项，每�
 
 输出事件包含 sequence、kind=output、stream（stdout、stderr 或 pty）及最多 512 个原始字节。状态事件包含 sequence、kind=state、state 和可选 code。消费者跨片段解码 UTF-8 与 ANSI。
 
-`execution::EventBuffer` 最多保留 128 项事件。每次读取游标后的 1–16 项；返回游标为最后送达的序号，空批次不前进。gap=true 明确表示历史被淘汰；未来游标和乱序事件不能伪装成完整输出。提供者最多保留 32 个会话，只回收完成历史，不挤出活动程序；已回收的输出或展示返回 InvalidHandle。
+`execution::EventBuffer` 最多保留 128 项事件。每次读取游标后的 1–16 项；返回游标为最后送达的序号，空批次不前进。gap=true 明确表示历史被淘汰；未来游标和乱序事件不能伪装成完整输出。原生提供者允许 32 个活动进程，最多保留 64 个会话记录，只回收完成历史，不挤出活动程序；已回收的输出或展示返回 InvalidHandle。
 
 ## 宿主统一会话
 

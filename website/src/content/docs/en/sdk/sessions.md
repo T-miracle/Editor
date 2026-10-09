@@ -8,11 +8,30 @@ alternate: /zh-cn/sdk/sessions/
 
 # Run sessions — interactive.execute 2.0 and session.host 2.0
 
+Nanobug includes a native `interactive.execute` 2.2 provider. No terminal package is required.
+The built-in provider is the default when no explicit user or workspace selection exists; an
+explicit compatible choice still wins and does not retarget sessions already created. Plugins
+use `session.host` to create visible task tabs and source-owned subscriptions in the unified
+terminal panel. Direct provider calls do not create a host session record.
+
+Version 2.1 additionally offers `resize(session, columns, rows)` with `process.exec` authority.
+Columns are 2–1000 and rows are 1–500; the result is `session, state`. Consumers require
+`execution::resize_method()` only when they use geometry. The six required 2.0 methods retain
+their exact schemas, so existing 2.0 consumers remain compatible. Native execution retains
+at most 64 session records, evicting only ended histories.
+
+Version 2.2 also offers `execute_terminal`, using the execute fields plus a required
+`inherit_cursor` boolean and the same creation result. Declare
+`execution::terminal_execute_method()` to use it. A Windows VT view passes true and answers
+ConPTY's initial cursor query through input so later preparation steps continue after prior output.
+Headless consumers use execute; Unix views pass false. Resource permissions and ownership are identical.
+
 Run services use [plugin.services](/en/sdk/services/). A provider publishes the exact method schemas, permissions and versions; consumers declare the methods they require. The host chooses by compatible contract and logical scope. A provider's name never supplies authority.
 
 ## Interactive execution
 
-The public SDK's `execution::interactive_contract()` gives the canonical six-method declaration.
+The public SDK's `execution::observation_methods()` declares the canonical input, locate and events methods;
+`execution::resize_method()` and `execution::terminal_execute_method()` declare the optional extensions.
 
 | Method | Parameters | Result | Permissions |
 | --- | --- | --- | --- |
@@ -33,7 +52,7 @@ Providers validate the authenticated caller instance for every session operation
 
 Output events contain sequence, kind=output, stream (stdout, stderr or pty) and at most 512 raw bytes. State events contain sequence, kind=state, state and an optional code. Consumers decode UTF-8 and ANSI across chunks.
 
-`execution::EventBuffer` retains at most 128 events. A request reads 1–16 events after a cursor; the returned cursor is the last delivered sequence and stays unchanged for an empty batch. `gap=true` explicitly reports evicted history. Future cursors and unordered events cannot be presented as complete output. Providers retain at most 32 sessions, reclaiming completed history rather than evicting active programs. Reclaimed output or presentation returns InvalidHandle.
+`execution::EventBuffer` retains at most 128 events. A request reads 1–16 events after a cursor; the returned cursor is the last delivered sequence and stays unchanged for an empty batch. `gap=true` explicitly reports evicted history. Future cursors and unordered events cannot be presented as complete output. The native provider allows 32 active processes and retains up to 64 session records, reclaiming completed history rather than evicting active programs. Reclaimed output or presentation returns InvalidHandle.
 
 ## Host-owned sessions
 

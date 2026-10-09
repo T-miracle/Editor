@@ -463,6 +463,22 @@ pub(super) fn pump_recording_all(
         false
     });
     work.retain(|item| match item {
+        Work::ExecutionInput { session, bytes } => {
+            manager
+                .input_execution(*session, bytes.clone())
+                .expect("owned execution accepts literal input");
+            false
+        }
+        Work::ExecutionResize {
+            session,
+            columns,
+            rows,
+        } => {
+            manager
+                .resize_execution(*session, *columns, *rows)
+                .expect("native execution supports negotiated geometry");
+            false
+        }
         Work::LocateRun { session, request } => {
             let completion = manager
                 .locate_execution(*session)
@@ -558,7 +574,9 @@ pub(super) fn pump_recording_all(
             config,
             request_id,
         } => {
-            let session = match manager.start_configuration_execution(config, request.clone()) {
+            let session = match manager
+                .start_terminal_configuration_execution(config, request.clone())
+            {
                 Ok(session) => session,
                 Err(error) => panic!(
                     "a compatible execution provider is installed: {error:#} (request {request:?})"
@@ -754,12 +772,33 @@ pub(super) fn publish_frame(
             )
         })
         .collect::<Vec<_>>();
+    let native_updates = manager
+        .take_native_execution_updates()
+        .into_iter()
+        .filter_map(|update| {
+            let session = manager.executions().into_iter().find(|session| {
+                session.owns_provider_session(&update.provider_instance, &update.session)
+            })?;
+            let (_, config, request_id) = launches
+                .iter()
+                .find(|(id, _, _)| *id == session.id())
+                .cloned()
+                .unwrap_or((session.id(), String::new(), 0));
+            Some(super::worker::NativeExecutionMessage {
+                execution: session.id(),
+                config,
+                request_id,
+                update,
+            })
+        })
+        .collect::<Vec<_>>();
     cx.update(|window, cx| {
         app.read(cx).extensions.clone().update(cx, |owner, cx| {
             let mut state = owner.worker.state.lock().unwrap();
             // A successfully opened Manager, rather than fabricated readiness or epochs,
             // supplies the same complete ownership publication as the production actor.
             state.publish_manager(manager);
+            state.native_execution_updates.extend(native_updates);
             state.diagnostics = manager
                 .installed
                 .keys()

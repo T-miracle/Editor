@@ -22,15 +22,14 @@ impl TerminalPanel {
                 if let Some(index) = self.active_index() {
                     let tab = &mut self.sessions[index];
                     tab.engine.resize(size);
-                    if tab.launched && !tab.exited {
-                        let _ =
-                            self.supervisor
-                                .resize(tab.id, size.columns as u16, size.rows as u16);
+                    let resize = (tab.launched && !tab.exited).then_some(tab.id);
+                    if let Some(id) = resize {
+                        self.resize_process(id, size, cx);
                     }
                 }
                 self.launch_active();
             }
-            CanvasEvent::Text { text } => self.write(text.into_bytes()),
+            CanvasEvent::Text { text } => self.write(text.into_bytes(), cx),
             CanvasEvent::Key {
                 key,
                 ctrl,
@@ -57,7 +56,7 @@ impl TerminalPanel {
                     } else if let Some(bytes) =
                         input::key(&key, ctrl, alt, shift, mode.contains(TermMode::APP_CURSOR))
                     {
-                        self.write(bytes);
+                        self.write(bytes, cx);
                     }
                 }
             }
@@ -83,7 +82,7 @@ impl TerminalPanel {
                             .mode()
                             .intersects(TermMode::MOUSE_MODE)
                     {
-                        self.report_mouse(if delta_y > 0. { 64 } else { 65 }, x, y, false);
+                        self.report_mouse(if delta_y > 0. { 64 } else { 65 }, x, y, false, cx);
                     } else {
                         self.sessions[index]
                             .engine
@@ -117,6 +116,7 @@ impl TerminalPanel {
                                 x,
                                 y,
                                 phase == PointerPhase::Up,
+                                cx,
                             );
                         }
                     } else if button == 2 && phase == PointerPhase::Down {
@@ -145,11 +145,14 @@ impl TerminalPanel {
                         .mode()
                         .contains(TermMode::FOCUS_IN_OUT)
                 }) {
-                    self.write(if focused {
-                        b"\x1b[I".to_vec()
-                    } else {
-                        b"\x1b[O".to_vec()
-                    });
+                    self.write(
+                        if focused {
+                            b"\x1b[I".to_vec()
+                        } else {
+                            b"\x1b[O".to_vec()
+                        },
+                        cx,
+                    );
                 }
             }
         }
@@ -158,7 +161,7 @@ impl TerminalPanel {
     }
 
     /// SGR and legacy mouse bytes are addressed only to the selected terminal's owned process.
-    fn report_mouse(&mut self, button: u8, x: f32, y: f32, release: bool) {
+    fn report_mouse(&mut self, button: u8, x: f32, y: f32, release: bool, cx: &mut App) {
         let Some(index) = self.active_index() else {
             return;
         };
@@ -186,7 +189,7 @@ impl TerminalPanel {
         } else {
             return;
         };
-        self.write(bytes);
+        self.write(bytes, cx);
     }
 
     fn copy(&self, cx: &mut App) {
@@ -205,7 +208,7 @@ impl TerminalPanel {
                     .mode()
                     .contains(TermMode::BRACKETED_PASTE)
             });
-            self.write(input::paste(&text, bracketed));
+            self.write(input::paste(&text, bracketed), cx);
         }
     }
 
@@ -276,7 +279,7 @@ impl TerminalPanel {
                         self.dirty = true;
                     }
                 }
-                "interrupt" => self.write(vec![3]),
+                "interrupt" => self.write(vec![3], cx),
                 "settings" => {
                     let path = self.storage.join("settings.json");
                     // Existing user edits remain intact when reopening settings.

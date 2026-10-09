@@ -38,6 +38,36 @@ pub const RETAINED_EVENTS: usize = 128;
 /// Most events one pull may publish, regardless of the caller's polling frequency.
 pub const BATCH_EVENTS: usize = 16;
 
+/// Optional execution 2.1 geometry method. Literal dimensions affect only the caller's owned PTY.
+/// Older providers retain execution 2.0 compatibility; views negotiate this extra method explicitly.
+pub fn resize_method() -> crate::service::Method {
+    serde_json::from_value(serde_json::json!({
+        "parameters":{"type":"record","fields":{
+            "session":{"type":"string","max_bytes":128},
+            "columns":{"type":"integer","min":2,"max":1000},
+            "rows":{"type":"integer","min":1,"max":500}}},
+        "result":{"type":"record","fields":{"session":{"type":"string","max_bytes":128},"state":{"type":"string","max_bytes":32}}},
+        "permissions":["process.exec"]
+    })).expect("fixed execution geometry schema is valid")
+}
+
+/// Execution 2.2 optionally joins an existing VT surface through ConPTY's initial cursor query.
+/// The caller must parse output and answer that query through input; Unix callers pass false.
+/// This separate method preserves the exact 2.0 execute signature for headless consumers.
+pub fn terminal_execute_method() -> crate::service::Method {
+    serde_json::from_value(serde_json::json!({
+        "parameters":{"type":"record","fields":{
+            "program":{"type":"string","max_bytes":4096},
+            "args":{"type":"array","max_items":128,"items":{"type":"string","max_bytes":4096}},
+            "cwd":{"type":"string","max_bytes":4096},"name":{"type":"string","max_bytes":256},
+            "env":{"type":"array","max_items":64,"items":{"type":"record","fields":{
+                "name":{"type":"string","max_bytes":128},"value":{"type":"string","max_bytes":32768}}}},
+            "inherit_cursor":{"type":"boolean"}},"optional":["cwd","name","env"]},
+        "result":{"type":"record","fields":{"session":{"type":"string","max_bytes":128},"state":{"type":"string","max_bytes":32}}},
+        "permissions":["process.exec","ui.panels"]
+    })).expect("fixed terminal execution declaration is valid")
+}
+
 /// Immutable ordered output or lifecycle observation. Bytes retain exact UTF-8/ANSI boundaries.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]

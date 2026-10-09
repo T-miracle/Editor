@@ -42,9 +42,9 @@ pub use manager::{
     DEBUG_CONTRACT, DEFAULT_STOP_GRACE_MS, DebugAbilities, DebugAnswer, DebugBreakpoint,
     DebugFrame, DebugRequest, DebugSession, DebugState, DebugVariable, EXECUTION_CONTRACT,
     EXECUTION_START_TIMEOUT_MS, ExecutionFailure, ExecutionSnapshot, ExecutionState, HostExecution,
-    InstallationPreparation, Installed, Manager, PreparedInstallation, ProviderCandidate,
-    RunEnvEntry, RunRequest, StopOptions, TargetOrigin, TargetRequest, debug_dependency_for_test,
-    frames_from_value, variables_from_value,
+    InstallationPreparation, Installed, Manager, NativeExecutionUpdate, PreparedInstallation,
+    ProviderCandidate, RunEnvEntry, RunRequest, StopOptions, TargetOrigin, TargetRequest,
+    debug_dependency_for_test, frames_from_value, variables_from_value,
 };
 mod native_work;
 pub use native_work::{PreparationRegistry, PreparationSnapshot};

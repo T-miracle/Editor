@@ -1,12 +1,15 @@
 //! Built-in terminal sessions: native UI and upstream VT state, independent of installed packages.
 
 mod config;
+pub(crate) mod configurations;
 mod engine;
 mod input;
 mod interaction;
 mod io;
 mod persistence;
 mod shell;
+pub(crate) mod task_view;
+mod tasks;
 #[cfg(test)]
 mod tests;
 mod view;
@@ -45,11 +48,15 @@ struct Session {
     exited: bool,
     /// Restored shells answer ConPTY's cursor handshake from the restored logical grid.
     restored: bool,
+    /// Tasks retain view identity while each accepted round owns distinct execution resources.
+    task: Option<tasks::Task>,
 }
 
 /// This window owns terminal policy; the process supervisor owns only controlled system resources.
 pub(crate) struct TerminalPanel {
     parent: WeakEntity<EditorApp>,
+    /// IO can be issued during the parent's update without re-borrowing that same EditorApp.
+    io_host: Entity<extensions::ExtensionPanel>,
     workspace: PathBuf,
     storage: PathBuf,
     settings: Settings,
@@ -81,6 +88,9 @@ pub(crate) struct TerminalPanel {
     settings_stamp: Option<std::time::SystemTime>,
     /// A rejected snapshot remains untouched until an explicit recovery/import replaces it.
     persistence_blocked: bool,
+    pending_close: Option<u64>,
+    /// A delayed public Locate cannot resurrect a task whose view the user already closed.
+    closed_tasks: std::collections::BTreeSet<String>,
 }
 
 impl TerminalPanel {
@@ -96,6 +106,7 @@ impl TerminalPanel {
     /// Prepare settings and logical history without launching anything in a restricted workspace.
     pub(crate) fn new(
         parent: WeakEntity<EditorApp>,
+        io_host: Entity<extensions::ExtensionPanel>,
         workspace: PathBuf,
         trusted: bool,
         window: &mut Window,
@@ -114,6 +125,7 @@ impl TerminalPanel {
         });
         let mut panel = Self {
             parent,
+            io_host,
             workspace,
             storage,
             settings: Settings::default(),
@@ -143,6 +155,8 @@ impl TerminalPanel {
             focus_pending: false,
             settings_stamp: None,
             persistence_blocked: false,
+            pending_close: None,
+            closed_tasks: Default::default(),
         };
         if let Err(error) = panel.restore() {
             panel.report_error(FailureKind::Restore, format!("{error:#}"));
@@ -253,6 +267,7 @@ impl TerminalPanel {
             launched: false,
             exited: false,
             restored: false,
+            task: None,
         });
         self.active = Some(self.next_id);
         self.dirty = true;
@@ -266,7 +281,11 @@ impl TerminalPanel {
         let Some(index) = self.active_index() else {
             return;
         };
-        if !self.trusted || self.sessions[index].launched || self.sessions[index].exited {
+        if !self.trusted
+            || self.sessions[index].task.is_some()
+            || self.sessions[index].launched
+            || self.sessions[index].exited
+        {
             return;
         }
         let size = self.grid_size();
@@ -296,28 +315,35 @@ impl TerminalPanel {
         }
     }
 
-    fn write(&mut self, bytes: Vec<u8>) {
+    fn write(&mut self, bytes: Vec<u8>, cx: &mut App) {
         if let Some(index) = self.active_index() {
             let session = &mut self.sessions[index];
             if session.exited || !session.launched {
                 return;
             }
             session.engine.set_offset(0);
-            if let Err(error) = self.supervisor.write(session.id, bytes) {
-                self.report_error(FailureKind::Process, error);
-            }
+            let id = session.id;
+            self.send_input(id, bytes, cx);
         }
     }
 
-    fn close(&mut self, id: u64, cx: &mut Context<Self>) {
+    fn remove_session(&mut self, id: u64, cx: &mut Context<Self>) {
         let Some(index) = self.sessions.iter().position(|session| session.id == id) else {
             return;
         };
-        if let Err(error) = self.supervisor.close(id) {
+        if self.sessions[index].task.is_none()
+            && let Err(error) = self.supervisor.close(id)
+        {
             self.report_error(FailureKind::Process, error);
             return;
         }
+        if let Some(task) = &self.sessions[index].task {
+            self.closed_tasks.insert(task.key.clone());
+        }
         self.sessions.remove(index);
+        if self.pending_close == Some(id) {
+            self.pending_close = None;
+        }
         if self.active == Some(id) {
             self.active = self
                 .sessions

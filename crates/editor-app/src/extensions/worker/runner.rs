@@ -48,6 +48,9 @@ impl Worker {
             let mut next_received = None;
             // Host session identity joined to the configuration and launch that requested it.
             let mut run_requests = BTreeMap::<u64, (String, u64)>::new();
+            // Input/geometry receipts remain observable until the exact provider acknowledges them.
+            let mut native_operations =
+                Vec::<(u64, plugin_runtime::Completion<serde_json::Value>)>::new();
             // Real adapter handshakes and inspections remain pending while the actor serves other work.
             let mut debug_requests = BTreeMap::<u64, (String, plugin_runtime::DebugRequest)>::new();
             // A slow status reply stays pending until its own deadline; 500 ms is never an outcome.
@@ -202,6 +205,16 @@ impl Worker {
                     })
                 } else {
                     match work.and_then(|work| work.admit(&manager, &output)) {
+                        Some(Work::ExecutionInput { session, bytes }) => manager
+                            .input_execution(session, bytes)
+                            .map(|completion| native_operations.push((session, completion))),
+                        Some(Work::ExecutionResize {
+                            session,
+                            columns,
+                            rows,
+                        }) => manager
+                            .resize_execution(session, columns, rows)
+                            .map(|completion| native_operations.push((session, completion))),
                         Some(Work::Validated { .. }) => {
                             unreachable!("admission consumes provenance")
                         }
@@ -362,7 +375,7 @@ impl Worker {
                             // The runtime selects a compatible provider by contract and scope; a
                             // missing or ambiguous provider is reported instead of being guessed at.
                             let result = manager
-                                .start_configuration_execution(&config, request)
+                                .start_terminal_configuration_execution(&config, request)
                                 .map(|session| {
                                     // Remember which launch produced this session before it is published.
                                     run_requests.insert(session.id(), (config.clone(), request_id));
@@ -705,6 +718,49 @@ impl Worker {
                     Err(error) => manager.document_events_failed(error),
                 }
                 manager.poll();
+                native_operations.retain(|(session, completion)| match completion.status() {
+                    api::RequestUpdate::Accepted | api::RequestUpdate::Progress { .. } => true,
+                    api::RequestUpdate::Completed { result: Err(error) } => {
+                        output.lock().unwrap().status = Some(OperationStatus {
+                            plugin: None,
+                            message: format!("{session}: {}", error.message),
+                        });
+                        false
+                    }
+                    _ => false,
+                });
+                // Preserve bytes until the UI drains them. The native provider retains its own
+                // bounded observations for public subscribers independently from this presentation.
+                if output.lock().unwrap().native_execution_updates.len() < 256 {
+                    let sessions = manager.executions();
+                    let messages = manager
+                        .take_native_execution_updates()
+                        .into_iter()
+                        .filter_map(|update| {
+                            let execution = sessions.iter().find(|session| {
+                                // Local handles may repeat across providers; bind the incarnation too.
+                                session.owns_provider_session(
+                                    &update.provider_instance,
+                                    &update.session,
+                                )
+                            })?;
+                            let (config, request_id) = run_requests
+                                .get(&execution.id())
+                                .cloned()
+                                .unwrap_or_default();
+                            Some(NativeExecutionMessage {
+                                execution: execution.id(),
+                                config,
+                                request_id,
+                                update,
+                            })
+                        });
+                    output
+                        .lock()
+                        .unwrap()
+                        .native_execution_updates
+                        .extend(messages);
+                }
                 target_calls.poll(&manager, &output);
                 configuration_calls.poll(&manager, &output);
                 debug_requests.retain(|request, (method, pending)| {

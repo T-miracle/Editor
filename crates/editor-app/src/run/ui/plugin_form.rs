@@ -14,6 +14,7 @@ pub(super) use state::*;
 #[cfg(test)]
 mod fault_tests;
 mod host;
+mod host_templates;
 #[cfg(test)]
 mod native_profile;
 #[cfg(test)]
@@ -52,6 +53,8 @@ pub(crate) struct Bridge {
     live_origins: Vec<plugin_runtime::TargetOrigin>,
     /// Host-owned workflows are available independently of installed template providers.
     pub(crate) jobs: crate::plugin_development::jobs::Jobs,
+    /// Explicit replacements wait for the stdio worker to join, scoped to their original workspace.
+    pub(crate) rerun_jobs: BTreeMap<String, String>,
 }
 impl Bridge {
     fn reserve(&mut self, purpose: Purpose, workspace: String) -> u64 {
@@ -100,8 +103,7 @@ impl EditorApp {
         });
         form.update(cx, |form, cx| {
             let mut state = State::new(set, selected.clone());
-            state.catalog =
-                crate::plugin_development::configuration::templates(&self.workspace_key());
+            state.catalog = host_templates::templates(&self.workspace_key());
             state.tree = Some(tree);
             state.tree_observer = Some(observer);
             form.plugin = Some(Box::new(state));
@@ -167,7 +169,7 @@ impl EditorApp {
         let Some(snapshot) = snapshot else {
             return;
         };
-        if snapshot.provider == crate::plugin_development::configuration::PROVIDER {
+        if host_templates::owns(&snapshot.provider) {
             let mut arguments = self.configuration_arguments(&snapshot);
             arguments["event"] = snapshot
                 .pending_events
@@ -175,7 +177,7 @@ impl EditorApp {
                 .cloned()
                 .unwrap_or_default()
                 .into();
-            let result = crate::plugin_development::configuration::form(&arguments);
+            let result = host_templates::invoke(&snapshot.provider, "form", &arguments);
             self.accept_plugin_form(form.entity_id(), id, snapshot, result, cx);
             return;
         }
@@ -233,7 +235,7 @@ impl EditorApp {
             let set = self.run_controls.configuration_set();
             for (id, mut data) in set.plugin_configurations {
                 if matches!(data.validation, ConfigurationValidation::Valid)
-                    && data.provider != crate::plugin_development::configuration::PROVIDER
+                    && !host_templates::owns(&data.provider)
                     && !origins
                         .iter()
                         .any(|origin| origin.provider() == data.provider)
@@ -302,11 +304,7 @@ impl EditorApp {
                             })
                         })
                         .collect();
-                    state
-                        .catalog
-                        .extend(crate::plugin_development::configuration::templates(
-                            &workspace,
-                        ));
+                    state.catalog.extend(host_templates::templates(&workspace));
                     state.error = (!catalog.failures.is_empty()).then(|| {
                         catalog
                             .failures

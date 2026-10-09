@@ -10,6 +10,9 @@ struct SavedSession {
     cwd: String,
     exited: bool,
     grid: engine::SavedGrid,
+    /// Only logical task identity survives; executable receipts and commands are never replayed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    task: Option<tasks::Task>,
 }
 #[derive(Serialize, Deserialize)]
 struct Saved {
@@ -92,9 +95,10 @@ impl TerminalPanel {
                     profile: tab.profile,
                     cwd: tab.cwd,
                     engine,
-                    launched: false,
-                    exited: tab.exited,
+                    launched: tab.task.is_some(),
+                    exited: tab.task.is_some() || tab.exited,
                     restored: true,
+                    task: tab.task,
                 });
             }
         }
@@ -142,6 +146,7 @@ impl TerminalPanel {
                     cwd: tab.cwd.clone(),
                     exited: tab.exited,
                     grid: tab.engine.snapshot(),
+                    task: tab.task.clone(),
                 })
                 .collect(),
         };
