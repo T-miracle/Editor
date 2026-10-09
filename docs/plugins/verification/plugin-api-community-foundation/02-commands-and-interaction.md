@@ -42,10 +42,12 @@ cargo test -p editor-app ui::controls::interaction::tests -- --ignored
 | --- | --- |
 | T06：`host_interaction` | **4 passed**。真实包进入公开 Manager；发现返回精确参数/结果 schema，内部命令通道不出现在服务提供者设置；两实例验证参数、错误、返回形状、权限交集、禁止借用私有根、取消、迟到回复、超时及禁用。取消 typed wait 在下一次 Manager tick 前已关闭所属原生 request，未把 wait 取消误作进程生命周期撤销。 |
 | T07/T08/T10：`extensions::interaction_tests` | **2 passed**。真实 Explorer 按钮点击经过正式 worker 路由，保留已打开但非活动文档目标；四类菜单声明的条件/分组排序、真实选区、禁用状态及过期实例移除正确。另两种包身份经生产 publication 接缝验证中文输入返回、稳定快选 ID、确认取消、通知关闭、进度更新/取消、深浅主题与编辑器焦点恢复。 |
-| T08/T10：本地交互控件 | **2 passed**。实际 SDK 包和 Base Input handler 的 marked text 不被第一次 Enter 确认；提交中文后下一次 Enter 返回真实文字。512 项快选 End 将最后条目滚入可见区，确认按钮仍可见，Enter 返回 `511`。Base 已绑定的移动 Action 与 raw key 共用有 IME 检查的导航；条目具有可读 accessibility label。 |
+| T08/T10：本地交互控件 | **2 passed**。实际 SDK 包和 Base Input handler 的 marked text 不被第一次 Enter 确认；提交中文后下一次 Enter 返回真实文字。512 项快选 End 将最后条目滚入可见区，确认按钮仍可见，Enter 返回 `511`。该快选用例随后合并 en/zh-CN、深浅主题与 1/1.5/2 倍 DPI 的四组实时状态，精确检查译文，英文 Confirm 与中文确认的实际按钮宽度变化，最后选项位于 choices 可见区、取消与确认处于窗口范围；扩展后定向重跑 **1 passed / 0 ignored**。Base 已绑定的移动 Action 与 raw key 共用有 IME 检查的导航；条目具有可读 accessibility label。 |
 | T09：`selected_resources` | **12 passed**。文件精确读取、目录相对子项、Save 无读写旁路；cross-instance/伪造/释放/禁用/信任撤销；取消、超时、非法整批选择不留授权；路径穿越、设备/ADS/绝对路径与真实 Windows junction 逃逸被拒绝。选中后正常改名/原子替换成功，旧句柄拒读新对象。普通 service 与双方显式具有 `files.select` 的跨插件 typed command 都不能选择或读取；公开 Manager 直接 typed 调用可选择、读取并释放自身资源。 |
 
 命令与 UI 结果经 `Accepted -> RequestUpdate` 的真实 transport 返回；没有测试专用宿主命令 API 或插件 ID 白名单。重复测试仅用于处理失败及新增的来源/键盘边界，未为后续每个插件复制完整原生矩阵。
+
+双语/缩放扩展的定向命令为 `cargo test -p editor-app native_plugin_quick_pick_scrolls_the_keyboard_target_into_view -- --ignored`，日志 `../target/app-interaction-locale-scale-final.log`。首轮尝试读取 `Window::debug_a11y_tree_json`，但 GPUI TestPlatform 没有激活辅助技术客户端，返回 `None`；没有把此失败当作产品可访问性通过。最终自动断言使用精确翻译与实际布局，真实可访问名称由下文的 Windows 桌面观察验证；此次追加仅改变测试和验收记录，宿主、SDK 与三包指纹保持上表值。
 
 ### Windows 系统对话框
 
@@ -93,6 +95,8 @@ cargo check --workspace
 
 同次探索发现 panel 命令菜单错误固定在窗口左上角：旧 `ExtensionPanel.bounds` 没有更新。已改为实际 trigger prepaint 窗口坐标与本地 `PopupMenu::anchor_to`，相关 popup 组 **4 passed**，编译检查通过。
 
-根代理随后对上表最终 `e62ec53...` exe 完成真实 Windows 复查：panel 菜单在按钮下方右侧；QuickPick 暴露“快速检查 / Quick”“完整检查 / Full”名称，Down 实际切到 Full。另一次默认 Quick 流程中，物理 `n`、`i`、空格提交“你”，Confirm 呈现“你 (brief)”，随后 50% 非模态 Progress 不抢焦点；点击取消回显 `Cancelled / cancelled / not_executed` 且控件撤销。操作超过 30 秒也实际返回 `timed_out`。最新候选的文件/目录/保存系统选择、四类菜单完整入口、相关缩放与退役可见结果仍待根代理完成记录。
+根代理随后对上表最终 `e62ec53...` exe 完成真实 Windows 复查：panel 菜单在按钮下方右侧；QuickPick 暴露“快速检查 / Quick”“完整检查 / Full”名称，Down 实际切到 Full。另一次默认 Quick 流程中，物理 `n`、`i`、空格提交“你”，Confirm 呈现“你 (brief)”，随后 50% 非模态 Progress 不抢焦点；点击取消回显 `Cancelled / cancelled / not_executed` 且控件撤销。操作超过 30 秒也实际返回 `timed_out`。
+
+同一最终 exe 的文件选择也经根代理实际操作：从编辑器菜单打开真正 Win32 picker，输入自有 `input.txt` 绝对路径并点击 Open；返回 panel 与 Notify 均显示 `input.txt:6490 bytes`，与磁盘 6490 字节一致，关闭通知正常。另一轮选择超过 60 秒后，系统 picker 实际自动关闭并回显 `timed_out / not_executed`。目录/保存系统选择、外部中文 emoji 路径、四类菜单完整入口、桌面缩放与退役可见结果仍待根代理完成记录。
 
 工单 01 合入后的虚拟只读文档菜单需按资源身份适配 `path=None`，这是根代理集成回归，不能在本单独立树把虚拟资源伪装为磁盘路径。最新原生 C03、集成复核与双轴审查尚未记为通过，因此此记录不授权提前关闭 #94。

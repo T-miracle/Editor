@@ -97,6 +97,14 @@ fn native_plugin_input_does_not_confirm_marked_ime_text(cx: &mut TestAppContext)
 #[gpui::test]
 #[ignore = "build capability-example with current --plugin-package before running"]
 fn native_plugin_quick_pick_scrolls_the_keyboard_target_into_view(cx: &mut TestAppContext) {
+    // Locale is process-wide: failed layout assertions must not leak it into another test.
+    struct RestoreLocale(String);
+    impl Drop for RestoreLocale {
+        fn drop(&mut self) {
+            rust_i18n::set_locale(&self.0);
+        }
+    }
+    let _locale = RestoreLocale(rust_i18n::locale().to_string());
     cx.update(|cx| {
         gpui_kit::init(cx);
         crate::typography::init(cx);
@@ -173,6 +181,56 @@ fn native_plugin_quick_pick_scrolls_the_keyboard_target_into_view(cx: &mut TestA
         confirm.center().y < px(700.),
         "confirmation must remain in view"
     );
+    // Reuse the live SDK request so locale, theme and DPI changes cannot reset its selection.
+    let mut english_confirm_width = None;
+    for (locale, dark, scale, cancel, confirm) in [
+        ("en", false, 1., "Cancel", "Confirm"),
+        ("zh-CN", true, 1.5, "取消", "确认"),
+        ("en", true, 2., "Cancel", "Confirm"),
+        ("zh-CN", false, 1., "取消", "确认"),
+    ] {
+        rust_i18n::set_locale(locale);
+        visual.update(|window, cx| {
+            crate::apply_theme(crate::builtin_theme(dark), cx);
+            window.refresh();
+        });
+        visual.simulate_scale_factor_change(scale);
+        visual.run_until_parked();
+        let choices = visual.debug_bounds("plugin-interaction-choices").unwrap();
+        let last = visual.debug_bounds("plugin-pick-511").unwrap();
+        assert!(
+            last.center().y >= choices.origin.y
+                && last.center().y <= choices.origin.y + choices.size.height,
+            "{locale} at scale {scale} hid the keyboard target: {last:?} in {choices:?}"
+        );
+        for selector in ["plugin-interaction-cancel", "plugin-interaction-confirm"] {
+            let bounds = visual.debug_bounds(selector).unwrap();
+            assert!(
+                bounds.center().x >= px(0.)
+                    && bounds.center().x <= px(600.)
+                    && bounds.center().y >= px(0.)
+                    && bounds.center().y <= px(720.),
+                "{locale} at scale {scale} hid {selector}: {bounds:?}"
+            );
+        }
+        assert_eq!(rust_i18n::t!("interaction.cancel").as_ref(), cancel);
+        assert_eq!(rust_i18n::t!("interaction.confirm").as_ref(), confirm);
+        // TestPlatform has no active accessibility client. Observe real label layout instead;
+        // the physical Windows acceptance separately checks the published accessible names.
+        let confirm_width = visual
+            .debug_bounds("plugin-interaction-confirm")
+            .unwrap()
+            .size
+            .width;
+        if locale == "en" {
+            english_confirm_width = Some(confirm_width);
+        } else {
+            assert!(
+                confirm_width < english_confirm_width.unwrap(),
+                "locale changed the resource but not the rendered confirmation: {confirm_width:?}"
+            );
+        }
+    }
     visual.simulate_keystrokes("enter");
     assert!(matches!(request.status(), api::RequestUpdate::Completed {
         result: Ok(api::EditorValue::Interaction(Value::Picked(id)))
