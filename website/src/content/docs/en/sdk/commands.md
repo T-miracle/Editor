@@ -11,9 +11,10 @@ alternate: /zh-cn/sdk/commands/
 Negotiate `plugin.commands ^1` to discover or provide typed commands and native menu contributions. Calling another plugin also requires approved `commands.call`. A command without `signature` keeps existing one-way `Notification::Command` semantics and is not discoverable as a result-bearing command.
 
 `plugin.commands` **1.0.0 is stable**, not experimental. Its minimum host supports the current
-`protocol = 7`, `api.base = ^1` and `plugin.commands = ^1` negotiation. Declare it as required
-when the plugin cannot operate without commands, or optional and disable these entry points
-when it is absent. The shared [stability, compatibility and deprecation policy](/en/sdk/#stability-and-capability-compatibility)
+`protocol = 7`, `api.base = ^1` and `plugin.commands = ^1` negotiation. Packages providing typed
+commands or native menus must declare `plugin.commands` in `api.required`. Consumer-only plugins
+may use `api.optional` for discovery/invocation and disable those calls or fall back when the
+capability is absent. The shared [stability, compatibility and deprecation policy](/en/sdk/#stability-and-capability-compatibility)
 defines same-major additions and major-version migrations without promising a future host
 release or wire protocol.
 

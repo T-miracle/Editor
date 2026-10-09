@@ -10,7 +10,7 @@ alternate: /en/sdk/commands/
 
 发现或提供 typed 命令、贡献原生菜单需协商 `plugin.commands ^1`。调用其他插件另需已批准的 `commands.call`。没有 `signature` 的命令保留既有单向 `Notification::Command` 语义，不作为有返回值的命令被发现。
 
-`plugin.commands` **1.0.0 为稳定接口**，不是实验能力。最低宿主需支持当前 `protocol = 7`、`api.base = ^1` 及 `plugin.commands = ^1` 协商。无法缺少命令时声明为 required；声明为 optional 时，能力缺失需禁用这些入口。[公共稳定性、兼容与弃用政策](/zh-cn/sdk/#稳定性与能力兼容)规定同 major 的加法演进和跨 major 的迁移，不承诺未来宿主版本或传输协议。
+`plugin.commands` **1.0.0 为稳定接口**，不是实验能力。最低宿主需支持当前 `protocol = 7`、`api.base = ^1` 及 `plugin.commands = ^1` 协商。提供 typed 命令或原生菜单的包必须在 `api.required` 声明 `plugin.commands`；仅消费发现/调用的插件可用 `api.optional` 协商，在能力缺失时禁用这些调用或降级。[公共稳定性、兼容与弃用政策](/zh-cn/sdk/#稳定性与能力兼容)规定同 major 的加法演进和跨 major 的迁移，不承诺未来宿主版本或传输协议。
 
 ## 注册与调用
 

@@ -129,7 +129,7 @@ cargo build -p editor-app
 
 实际构建消息中的三包 `plugin-protocol` 路径均指向 SDK key `e6c489a1f6ba891fac413c6658e4cccae50752cdec65a91bf15c71e1bf22cac8`。已直接核对该缓存的 `INTERACTION.md` 包含按值释放、平台失败规则和本地 `README.md#stability-and-capability-compatibility` 链接。曾尝试 `--plugin-cargo ... metadata` 获取 key，该入口只允许 build/check/test 并明确拒绝；该失败没有计入通过，最终 key 取自真正的包构建路径，未扩大工具入口。
 
-| 当前 C04 重建产物 | SHA-256 |
+| 上一轮 C04 重建产物 | SHA-256 |
 | --- | --- |
 | `target/plugin-api-test/capability-example-0.18.0.zip` | `a27558f475cf707c26af041d2232493d53d8075d5e0e9c7eae9f2898c0f1f9ef` |
 | `target/plugin-api-test/example-0.4.0.zip` | `970e435495328e79854c6673d9e8410950fe0172ea559670337a1e3775db0e54` |
@@ -137,3 +137,18 @@ cargo build -p editor-app
 | `../target/interaction-docs-candidate/editor-app.exe` | `80621afadc1dba68c284f8727a4e42332c9a6af5f341bd1013998ca6f165de0a` |
 
 此次新增生产代码仅修正 SDK 文档链接导出，访客源码、线协议、schema、权限与 UI 消费行为未变。按根代理明确的复用范围，不重跑完整 negative 或原生矩阵；复用先前相同代码路径的行为断言，当前交付使用新 SDK 与新包指纹。实际 Windows 输入仍绑定 `e62ec53...` 与根代理的原生开发候选，不把它们冒充 `80621a...` 的物理输入。
+
+## 命令提供者 required 声明复核
+
+Spec 复核确认两語命令页对 required / optional 的说明过于宽泛。已静态核对 `package.rs`：有 `signature` 或非空 `menus` 的包均检查 `api.required.contains_key("plugin.commands")`。两语页面现明确提供 typed 命令或原生菜单必须 required；optional 仅供消费者发现/调用的协商降级。公开代码、协议、签名与执行行为没有变化。
+
+此次按根代理限定范围仅执行 `npm test` 与声明静态核对：**15 passed / 2 skipped / 0 failed**，日志 `../target/interaction-provider-policy-website.log`，跳过的仍是缺少 dist 的搜索索引。没有重复全量 Rust、negative 或原生矩阵。英文页面编入 SDK，已重新 `cargo build -p editor-app` 并通过上述正式 `--plugin-package` 入口重建三包；日志分别为 `../target/interaction-provider-policy-build.log`、`../target/interaction-provider-policy-packages.log`。
+
+三包实际构建路径均指向当前 SDK key `312c70d60ab8554f69780169c2a10b81ca81375393f12f842a4b7d0103265900`，已直接核对缓存中的 `COMMANDS.md` 包含提供者 required / 消费者 optional 规则。下表替代上一轮产物的当前指纹，包版本保持本次尚未发布的候选版本；行为与原生输入按未变化的路径复用，不把旧包 hash 当作新包。
+
+| 当前提供者声明复核产物 | SHA-256 |
+| --- | --- |
+| `target/plugin-api-test/capability-example-0.18.0.zip` | `6d90776018346696197d4ee7c4762a3341b5522a8cfe74e299ecc949fbd59a17` |
+| `target/plugin-api-test/example-0.4.0.zip` | `2b2ce9cadd9fcfddaf8a1dd2b2a40423aaad9e97f0087f3138335c2dea483877` |
+| `target/plugin-api-test/terminal-0.12.3.zip` | `9f21fdc0dde1d4ede4a401f6ec27e2548b7002ed4536b3ed7f4e6e27267a9639` |
+| `../target/interaction-provider-policy-candidate/editor-app.exe` | `349ae9a63d9f0a39bc8accdd0fca795e71b4307fa890e3b2654abd55244616a6` |
