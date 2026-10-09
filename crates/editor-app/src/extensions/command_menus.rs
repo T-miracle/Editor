@@ -99,6 +99,24 @@ pub(crate) fn contributions(
 }
 
 impl EditorApp {
+    /// Bind a rendered session to its exact version, never infer its identity from a relative name.
+    /// The live Tab supplies a local absolute path only for descriptive menu metadata; a stale
+    /// version retains its original document target so activation cannot fall back to disk.
+    pub(crate) fn plugin_document_menu_target(&self, document: &DocumentVersion) -> Target {
+        let path = (0..self.tabs.len())
+            .find(|index| {
+                self.plugin_document_version(*index)
+                    .is_ok_and(|current| current == *document)
+            })
+            .filter(|index| self.tabs[*index].virtual_document.is_none())
+            .map(|index| self.tabs[index].path().to_path_buf());
+        Target {
+            path,
+            document: Some(document.clone()),
+            directory: false,
+        }
+    }
+
     /// Capture host document identity where available; directory menus retain their clicked path.
     pub(crate) fn plugin_menu_target(&self, path: &Path) -> Target {
         // Resolve virtual identities before any filesystem operation, including canonicalization.

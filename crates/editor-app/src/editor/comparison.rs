@@ -317,7 +317,7 @@ impl EditorApp {
             cx,
         );
         let right = self.render_native_editor(window, cx);
-        let menu_target = self.plugin_menu_target(Path::new(&comparison.left.path));
+        let menu_target = self.plugin_document_menu_target(&comparison.left);
         let left_focus = left.clone();
         Some(
             div()
