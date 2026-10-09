@@ -72,3 +72,23 @@
 本轮原生测试数据保持隔离，文本没有保存到磁盘。成功替换、禁用、信任撤销、失败候选保留和原有 readonly/其他装饰及非编辑器焦点的保留，由实际 SDK 包驱动的 GPUI 生命周期矩阵负责，详见逐单验收记录。
 
 原生退出后仅完善两包内 README 的可执行构建示例并重新归档，最终 ZIP 为 history-preview 0.1.1 `793af3015f7a8a7aee8668d1c2947380f6cfe75b90693e00434fb17a79c4d25e`、generated-preview 0.1.1 `6adddb8976f33fdc059dc7e8c2ec62be3f4fd66495d1259a56a17674ca7a8d2c`。ZIP 内 WASM 的 SHA256 前后相同，分别为 `d2d7e0d53e4eea0f89e6ad4b95174ee06464b88275f6782f26e8c8deb65d5623` 和 `1d24504aaf87d14f4287632db37729b20e0a62fd19dc02366000cfa20012f214`；宿主、SDK、清单与资源行为未变。本轮操作没有使用修改后的 README 作为输入，复用上述原生观察，并在最终实际包回归中使用新的 ZIP。
+
+## Spec 复审追加的自动退役边界
+
+对 `3ef99c5d8b82f946c7c2a2688ddae4a3ad8cfe7c` 的固定提交复审中，Standards 未解决项为 0；Spec 确认原三项已修复，另发现左比较栏正持有焦点时，自动退役清理没有转移焦点。GPUI 未挂载焦点的默认路径仅通知监听器，而现有宿主没有注册恢复逻辑。这是静态路径结论，不能写成已经执行失败的原生操作。
+
+随后在现有实际 SDK 生命周期矩阵中增加 trust-loss 时的左侧点击、退役后的右侧 Ctrl+A 与中文输入；保留另两段对无关控件焦点的检查。红测确实失败于撤下左栏后右编辑器未获焦点，修复提交 `9a242a7f6448dc5b6989aa464b4d7a2ea687329e` 后绿测为 1 passed、0 failed、0 ignored。上面 `95a333…` 的显式 Close 证据不替代该自动退役分支。
+
+## 自动退役修复候选：真实重载与键盘恢复
+
+宿主副本 `native-qa-01/bin/editor-app-auto-focus.exe` SHA256 为 `bbec2a401ae92fe94018730481f6b2cc660907f0e01d2458945dd719a49c0109`，对应 `9a242a7f`。SDK 摘要仍为 `df7c52db8ecd3696a8cb4891af75d85d7e1b7a58e91fc8da7b7616375cb5e066`；两份正式 0.1.1 ZIP 与 WASM 均未变化，沿用上一节最终摘要。
+
+使用新的 `profile-auto-focus`、`workspace-auto-focus`，通过 `--plugin-dev plugins/generated-preview` 和原有三项 grant 启动；开发控制器使用 `tty=true`，日志为 `native-qa-01/generated-auto-focus.log`。本次只复核新焦点分支及实际实例退出。
+
+1. 在普通编辑器输入未保存的“退役前未保存😀”与 `reload keeps buffer`，实际菜单打开比较。左侧 Document Value 为“生成的建议内容”、同一中文和 `RELOAD KEEPS BUFFER`，右侧保持未保存原文。
+2. 点击左比较栏后发送控制器 `reload`。重载准备期间，实际 UIA focused element 为左侧只读 Document，证明这次自动清理开始前左栏确实持有焦点；日志随后记录 generation 1 准入并激活。
+3. 成功替换撤下旧比较与虚拟 Tab，仅保留仍 dirty 的本地文档。不重新点击右编辑器，Ctrl+A 在屏幕全选两行；输入“自动退役后输入正常😀”后，可见文本与 UIA Edit Value 同步变为该内容。
+4. `current.txt` 操作前后磁盘 SHA256 都为 `ae9dfed7dac311fb8daa75098df7bf349baf13526e7d4b6aee58df111cb9c1e6`。右侧输入没有保存到磁盘。
+5. 发送 `stop` 后控制器退出码 0，精确自有可执行路径的进程列表为空。未控制或关闭其他验收窗口。
+
+本轮物理输入证明虚拟比较的成功 dev reload 路径；local→local 的信任撤销、禁用与无关控件焦点保留由前述实际 SDK/GPUI 生命周期矩阵验证，没有把它们写成已逐项人工操作。固定范围 `3ef99c5d…9a242a7f` 的最终 Standards 与 Spec 复审分别为 0 个剩余可操作发现。

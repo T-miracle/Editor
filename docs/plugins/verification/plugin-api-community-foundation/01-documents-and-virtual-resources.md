@@ -1,6 +1,6 @@
-# 01：文档快照、事件与只读资源比较候选验收
+# 01：文档快照、事件与只读资源比较验收
 
-日期：2026-10-09。对应 [#93](https://github.com/T-miracle/Nanobug/issues/93) 与[工单 01](../../tickets/plugin-api-community-foundation/01-documents-and-virtual-resources.md)。状态：初轮双轴问题已修复并验证；Spec 复审追加的自动撤下聚焦窗格 P2 已修复，实际 SDK/GPUI 回归与三项仓库门禁通过。新分支的原生验收、相邻焦点变更双轴复审及推送读回尚未完成，不关闭工单。
+日期：2026-10-09。对应 [#93](https://github.com/T-miracle/Nanobug/issues/93) 与[工单 01](../../tickets/plugin-api-community-foundation/01-documents-and-virtual-resources.md)。状态：T01–T05、C01–C06 验收及最终双轴复审通过，发布处理中；推送及议题状态以验收入口的实际读回记录为准。
 
 ## 固定范围与环境
 
@@ -65,8 +65,8 @@
 | T01 | 原生输入的未保存中文/emoji/CRLF 快照与 dirty/编码/EOL/字节长度；正式本地打开保留 `#%20`；完整读取限额及小范围；磁盘仍旧值 | 自动化通过 |
 | T02 | native 打开/关闭重开、编辑、Ctrl+S、活动、选区/视口送真实 Manager；顺序递增及 WillSave→DidSave；取消、溢出失败/补读/重新订阅；旧 SDK 订阅可继续使用 | 自动化通过 |
 | T03 | UTF-8/UTF-16 与 CRLF/non-BMP 对应；拒绝 surrogate/字符切分、越界、旧 revision、关闭旧 ID、外国虚拟资源、缺权限/应用实例；身份不授予权限 | 自动化通过 |
-| T04 | 两个 SDK 消费者菜单完成打开/刷新/定位/比较；两栏实际绘制；鼠标左焦点后真实键盘输入/Save 拒绝，不保存右 dirty；正常只读 Tab 不落临时文件/恢复；虚拟不扫描、不改提供者选择；实际 Close 后右焦点恢复 | 自动化通过；受影响原生复核见 native-01，待双轴复审 |
-| T05 | 显式资源释放、native Tab 关闭、插件禁用；失败候选保持旧文本/面板；重新打开产生新 ID；过期比较消失，其他 owner 标记保留；local-owner 替换/禁用/信任撤销清理与原 readonly/他人焦点保留；撤下聚焦左栏后右侧键盘选择/输入恢复 | 自动化通过；前一宿主真正控制器 stop 原生复核见 native-01；新增自动焦点分支待原生与双轴复审 |
+| T04 | 两个 SDK 消费者菜单完成打开/刷新/定位/比较；两栏实际绘制；鼠标左焦点后真实键盘输入/Save 拒绝，不保存右 dirty；正常只读 Tab 不落临时文件/恢复；虚拟不扫描、不改提供者选择；实际 Close 后右焦点恢复 | 自动化及受影响原生复核通过，见 native-01；双轴剩余发现为 0 |
+| T05 | 显式资源释放、native Tab 关闭、插件禁用；失败候选保持旧文本/面板；重新打开产生新 ID；过期比较消失，其他 owner 标记保留；local-owner 替换/禁用/信任撤销清理与原 readonly/他人焦点保留；撤下聚焦左栏后右侧键盘选择/输入恢复 | 自动化及 dev reload/TTY stop 原生复核通过；双轴剩余发现为 0 |
 
 GPUI 夹具仅适配现有 worker 的发布与事件入口：正式包产生 `EditorRequest`，生产队列分派到真实应用，断言实际 EditorState/磁盘/可见 bounds。没有插件专用宿主测试 API。事件夹具按用户手势逐批送现有 actor 入口；不把停止消费后的 128 条合约溢出当作正常事件丢失。溢出单独在真实 Manager 用例验证。
 
@@ -136,13 +136,13 @@ cargo check --workspace
 | `cargo check --workspace` / `target/community-review-fix-workspace-check.log` | 通过，6.41 秒 |
 | 站点 `npm run build` / `target/community-review-fix-website.log` | Astro 构建成功，17 passed，0 skipped；两语内容/链接/锚点/搜索均通过 |
 
-三项仓库门禁、针对性 GPUI/actual WASM/SDK/站点检查均通过。最终原生 Close 和真正 TTY dev stop 已由根代理在同 hash 的副本与 fresh profile 记录通过；修复后双轴复审尚未完成。
+三项仓库门禁、针对性 GPUI/actual WASM/SDK/站点检查均通过。原生 Close 和真正 TTY dev stop 已由根代理在同 hash 的副本与 fresh profile 记录通过；当轮复审追加的自动退役边界及其最终修复另见末节。
 
 ## Windows 原生复核与后续
 
 根代理使用 Computer Use/Windows 输入在自有副本与隔离 `--profile` 中验收，日常 Nanobug 窗口未动。首轮已观察：双栏/只读标识、右栏未保存中文 emoji 输入触发比较失效、重新比较读到最新文本、左侧 Ctrl+S 明确拒绝且右侧仍 dirty、磁盘 hash 不变、左侧输入不改变历史文本。首轮同时发现路径扫描错误与左侧主题陈旧，不能据此判定 T04/C03 完成。
 
-`9d645…` 复核确认了主题和路径扫描修复、dirty 输入及只读保存，但继续发现新增比较区域没有基础辅助语义，因此不是最终通过。`fc63…` 随后通过来源/只读值/按钮的实际 UIA 观察与输入/保存门禁，仍在显式 Close 丢失焦点，初轮失败证据保留在 `native-01.md`。本次 `95a333…` 复核确认左侧只读与 UIA 仍成立；Close 后不重新点击编辑器，Ctrl+A 实际选中右文本，输入中文/emoji成功，磁盘 hash 不变。真正 TTY 控制器 `stop` 返回 0，自有进程/窗口消失。第一次遗漏 TTY 导致 stdin 关闭后的自有进程清理不计作正常退出；详见[原生记录](native-01.md)。仍需完成双轴复审、普通提交/推送读回后才关闭 #93。本候选不宣称其他工单或完整平台已验收。
+`9d645…` 复核确认了主题和路径扫描修复、dirty 输入及只读保存，但继续发现新增比较区域没有基础辅助语义，因此不是最终通过。`fc63…` 随后通过来源/只读值/按钮的实际 UIA 观察与输入/保存门禁，仍在显式 Close 丢失焦点，初轮失败证据保留在 `native-01.md`。`95a333…` 复核确认左侧只读与 UIA 仍成立；Close 后不重新点击编辑器，Ctrl+A 实际选中右文本，输入中文/emoji 成功，磁盘 hash 不变。真正 TTY 控制器 `stop` 返回 0，自有进程/窗口消失。第一次遗漏 TTY 导致 stdin 关闭后的自有进程清理不计作正常退出；详见[原生记录](native-01.md)。后续 `bbec2a…` 的自动退役原生操作见末节。本单不宣称其他工单或完整平台已验收。
 
 ## 自动退役焦点复审与修复
 
@@ -163,4 +163,20 @@ cargo check --workspace
 | `cargo check --workspace` / `target/community-auto-focus-workspace-check.log` | 通过，3.51 秒 |
 | `cargo build -p editor-app` / `target/community-auto-focus-build.log` | 通过，27.73 秒；使用同一 `target01`，未升级依赖或工具链 |
 
-自动退役的 Windows dev reload/真实输入复核及相邻焦点变更的双轴 follow-up 尚待根代理完成；`95a333…` 的显式 Close 证据不替代新分支验收。
+根代理已使用 `bbec2a…` 宿主、新的隔离 profile/workspace 实际验收 dev reload。UIA 在重载切换前确认左比较 Document 仍聚焦，成功激活后旧比较/虚拟 Tab 撤下；无需重新点击，Ctrl+A 选中右侧两行，中文 emoji 输入只改变未保存的右文本。磁盘 hash 保持原值；真正 TTY `stop` 返回 0 且自有进程清空。详见 [native-01.md](native-01.md) 的最终候选节。
+
+## 最终双轴结论
+
+审查使用固定提交范围，未让审查代理编辑文件、重复构建或操作桌面。初轮发现及后续新增问题均保留上述修复和失败证据。
+
+### Standards
+
+复审范围 `3ef99c5d…9a242a7f`，剩余可操作发现 **0**，此前四项修复结论保持。焦点判断和恢复集中在既有比较同步方法，Shell 仅传入已有 Window；条件区分撤下的聚焦窗格、可见编辑器及其他控件，并检查活动文本目标。注释与行为一致，没有新全局焦点管理或文档状态。实际 SDK 生命周期回归沿用原场景，补鼠标聚焦、重新比较、撤销后的全选及中文 emoji 输入，保留无关焦点、readonly 和其他装饰检查。
+
+### Spec
+
+复审范围 `3ef99c5d…9a242a7f`，剩余可操作发现 **0**，三项初轮发现保持修复，追加 P2 自动退役焦点也已解决。撤销前检查消失栏位是否持有焦点，仅有活动文本目标时转移给当前编辑器，保留其他控件和仍可见编辑器的焦点。已核对真实 SDK/GPUI 红绿日志：旧断言失败，新候选 1 passed、0 failed、0 ignored；左文本、两份磁盘、foreign marks 及原 readonly 保留。Windows 原生新增分支由根代理另行验证通过。
+
+## 交付限制
+
+本单通过 Windows 原生与目标工具链验证；未实测或交叉构建 macOS/Linux，也未发布 Release。右侧普通编辑器既有 Dark gutter 风格不承诺与左栏像素相同。两个示例证明通用公开能力，不交付完整 Git 历史产品。
