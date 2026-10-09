@@ -158,17 +158,6 @@ impl ExtensionPanel {
 }
 
 impl EditorApp {
-    /// Native contributions share the established command panel reveal path.
-    pub(super) fn reveal_menu_panel(
-        &mut self,
-        plugin: &str,
-        command: &str,
-        epoch: u64,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        self.reveal_plugin_command_panel(plugin, command, epoch, window, cx);
-    }
     /// Hide only a panel declared by the requesting plugin and save its visibility preference.
     /// The plugin decides when to close its view; the host owns native dock layout and persistence.
     pub(crate) fn hide_plugin_panel(&mut self, plugin: &str, panel: &str, cx: &mut Context<Self>) {
@@ -207,7 +196,7 @@ impl EditorApp {
     }
 
     /// Reveal only after command admission, sharing the ordinary command layout and visibility path.
-    fn reveal_plugin_command_panel(
+    pub(super) fn reveal_plugin_command_panel(
         &mut self,
         plugin: &str,
         command: &str,

@@ -517,7 +517,9 @@ pub struct DocumentChange {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum EditorOperation {
-    /// Stable host-owned interaction; requires ui.interaction and the matching installation grant.
+    /// Stable host-owned interaction, admitted according to the selected variant.
+    /// `Select` requires the `files.selection` capability and `files.select` installation grant;
+    /// all other variants require the `ui.interaction` capability and installation grant.
     Interaction {
         operation: crate::interaction::Operation,
     },

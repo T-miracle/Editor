@@ -207,7 +207,9 @@ impl EditorApp {
             Some(context),
         ) {
             Err(error) => self.status = error,
-            Ok(epoch) => self.reveal_menu_panel(&row.plugin, &row.command, epoch, window, cx),
+            Ok(epoch) => {
+                self.reveal_plugin_command_panel(&row.plugin, &row.command, epoch, window, cx)
+            }
         }
         cx.notify();
     }

@@ -8,7 +8,7 @@ alternate: /en/sdk/interaction/
 
 # 原生交互
 
-快选、输入、确认、通知和进度需协商 `ui.interaction ^1` 并批准 `ui.interaction`。文件、目录和保存位置选择另需 `files.selection ^1` 与已批准的 `files.select` 权限。这些操作通过 `api::EditorOperation::Interaction` 在活动、可信的工作区实例中运行。
+快选、输入、确认、通知和进度需协商 `ui.interaction ^1` 并批准 `ui.interaction`。文件、目录和保存位置选择则需 `files.selection ^1` 与已批准的 `files.select` 权限。这些操作通过 `api::EditorOperation::Interaction` 在活动、可信的工作区实例中运行。
 
 `interaction::start(operation, timeout_ms)` 返回所属实例的 accepted 句柄。结果通过 `Notification::Request` 的 `RequestUpdate<EditorValue>` 投递，成功值包装为 `EditorValue::Interaction`。`api::guest::EditorTask` 关联该句柄并忽略其他任务和重复终态。Accepted 只表示排队，并不表示用户已经确认。
 

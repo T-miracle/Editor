@@ -19,7 +19,7 @@ cargo build -p editor-app
 & '../target/debug/editor-app.exe' --plugin-cargo plugins/terminal/Cargo.toml test --lib
 ```
 
-三包均由当前宿主内嵌 SDK 缓存独立编译并正式打包；访客无仓库 crate 路径依赖或 SDK 源码副本。SDK 缓存摘要 `22751a70f284b7363e30323353a4c2dff1b29464c3b94d6889bd68852f457062`。终端本次只适配新增可选命令上下文字段，独立单元测试 **44 passed**。
+三包均由原生验收候选宿主的内嵌 SDK 缓存独立编译并正式打包；访客无仓库 crate 路径依赖或 SDK 源码副本。三包构建使用的 SDK 缓存摘要 `22751a70f284b7363e30323353a4c2dff1b29464c3b94d6889bd68852f457062`。终端本次只适配新增可选命令上下文字段，独立单元测试 **44 passed**。
 
 | 产物 | SHA-256 |
 | --- | --- |
@@ -27,8 +27,9 @@ cargo build -p editor-app
 | `target/plugin-api-test/example-0.4.0.zip` | `d775e2d12d94963e8b1910ef3e245f03037bbda6cefc95fb012880e852b596cd` |
 | `target/plugin-api-test/terminal-0.12.3.zip` | `df8fa6ed9c53732d0497c543a65af1722dcada12b639d9f4b9e8678e57c01607` |
 | `../target/interaction-candidate/editor-app.exe` | `e62ec53fba4d73da50658d0b2c175d3bbee5f8bd1b86c3ef1f1d5a9ec4d5b4ae` |
+| `../target/interaction-review-candidate/editor-app.exe` | `27f1ab94e2140fa4a86d05a53c3923dc26480056aa043320a707e1b32d1c76dc` |
 
-该 exe 是当前构建产物的独立副本，用于原生验收，不锁住 Cargo 输出、不接触用户主工作区实例。后续若修改实际源码/SDK/清单，需重新核对受影响证据与指纹。
+两份 exe 都是对应构建产物的独立副本，不锁住 Cargo 输出、不接触用户主工作区实例。`interaction-candidate` 对应下文已经实际观察的原生行为；`interaction-review-candidate` 是两条 P3 审查修正后的新构建，差异与复用范围见末节。后续若修改实际源码/SDK/清单，需重新核对受影响证据与指纹。
 
 ## 主责自动证据
 
@@ -100,3 +101,11 @@ cargo check --workspace
 同一最终 exe 的文件选择也经根代理实际操作：从编辑器菜单打开真正 Win32 picker，输入自有 `input.txt` 绝对路径并点击 Open；返回 panel 与 Notify 均显示 `input.txt:6490 bytes`，与磁盘 6490 字节一致，关闭通知正常。另一轮选择超过 60 秒后，系统 picker 实际自动关闭并回显 `timed_out / not_executed`。目录/保存系统选择、外部中文 emoji 路径、四类菜单完整入口、桌面缩放与退役可见结果仍待根代理完成记录。
 
 工单 01 合入后的虚拟只读文档菜单需按资源身份适配 `path=None`，这是根代理集成回归，不能在本单独立树把虚拟资源伪装为磁盘路径。最新原生 C03、集成复核与双轴审查尚未记为通过，因此此记录不授权提前关闭 #94。
+
+## 候选审查 P3 修正
+
+固定候选 `7fa4201` 的规范轴审查指出两项 P3。已删除只转发五个参数的 `reveal_menu_panel`，菜单直接复用 `reveal_plugin_command_panel`；既有方法仅开放为 `pub(super)`，其他接口可见性没有扩大。`EditorOperation::Interaction` 注释现在区分 `Select` 的 `files.selection` 能力与 `files.select` 安装授权，以及其他变体的 `ui.interaction` 能力与授权。英文页面原有说明准确；中文“另需”改为“则需”，与英文的独立授权规则一致。
+
+修正后重新执行三项必需门禁，全部成功：`cargo fmt --check`、非 UI workspace **227 passed / 199 ignored / 0 failed**、`cargo check --workspace`。真实包菜单回归 `cargo test -p editor-app native_plugin_menus_revalidate_context_and_remove_retired_contributions -- --ignored` 为 **1 passed / 0 ignored**，日志 `../target/interaction-review-menu.log`。`website` 的 `npm test` 为 **15 passed / 2 skipped**，仍仅跳过缺少 dist 的搜索索引；`git diff --check` 通过。
+
+随后 `cargo build -p editor-app` 成功，复制到上表 `interaction-review-candidate` 新路径，保留根代理正在验收的 `e62ec53...` 副本。此次只删除同参数转发并校正 SDK 注释与措辞，线协议、schema、权限校验、选择/取消/焦点实现与三包内容均未改变，因此原三包与已有行为测试适用于这一差异；没有重复构建插件包。新 SDK 源文本因注释变化而不同，表中 SDK 缓存摘要仅证明上述三包原始构建。实际 Windows 观察仍属于 `e62ec53...`，没有将其伪称为新 exe hash 的物理验收。
