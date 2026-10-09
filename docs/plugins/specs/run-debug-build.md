@@ -293,7 +293,7 @@
 
 - [项目需求基线](../../project/需求整理.md)、[历史开发计划](../../project/开发计划.md)。本规格的新增范围仅替代 Implementation Decisions 第 1 节明确列出的限制。
 - [插件平台方案](plugin-api-platform.md)、[交互式执行工单](../tickets/19-terminal-service-consumer.md)、[执行服务验收](../verification/plugin-api-execution-service-verification.md)。
-- [公开插件服务契约](../../../website/src/content/docs/en/sdk/services.md)、[原生进程契约实现](../../../crates/plugin-protocol/src/process.rs)、[现有终端执行服务](../../../plugins/terminal/src/service.rs)。
+- [公开插件服务契约](../../../documentation/en/sdk/services.md)、[原生进程契约实现](../../../crates/plugin-protocol/src/process.rs)、[现有终端执行服务](../../../plugins/terminal/src/service.rs)。
 - 可复用测试先例：[真实包执行测试](../../../crates/plugin-runtime/tests/interactive_execution.rs)、[原生面板执行验收](../../../crates/editor-app/src/extensions/execution_service_tests.rs)。
 - [领域约定](../../agents/domain.md)、[议题工作流](../../agents/issue-tracker.md)、[分诊标签](../../agents/triage-labels.md)。未发现单独的相关 ADR 或 CONTEXT 文件，不虚构额外决策来源。
 

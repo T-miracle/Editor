@@ -1,12 +1,11 @@
 //! Supply the editor's compiled-in contract to independent Cargo plugin projects.
 //!
-//! The contract documents are authored for readers under `website/`, which is the single
-//! hand-written source: the same files are published on the documentation site and shipped
-//! to plugin projects through this export. Moving that directory therefore breaks this
-//! build on purpose.
+//! The bilingual Markdown under `documentation/` is the single hand-written reader source.
+//! The host embeds its English contract and ships it to independent plugin projects without
+//! requiring a site build, a Node runtime or an online documentation service.
 //!
 //! Established exported filenames stay stable. Shared project packaging documentation ships
-//! alongside the public contract; website names remain lower-case for readable URLs.
+//! alongside the public contract; repository documents keep lower-case filenames.
 use anyhow::Context;
 use sha2::{Digest, Sha256};
 use std::path::{Path, PathBuf};
@@ -17,7 +16,7 @@ const SDK_FILES: &[(&str, &[u8])] = &[
     // The shared project format is shipped beside the public contract for independent authors.
     (
         "PACKAGING.md",
-        include_bytes!("../../../website/src/content/docs/en/sdk/packaging.md"),
+        include_bytes!("../../../documentation/en/sdk/packaging.md"),
     ),
     (
         "src/api/preference_binding.rs",
@@ -30,7 +29,7 @@ const SDK_FILES: &[(&str, &[u8])] = &[
     ),
     (
         "CONFIGURATIONS.md",
-        include_bytes!("../../../website/src/content/docs/en/sdk/configurations.md"),
+        include_bytes!("../../../documentation/en/sdk/configurations.md"),
     ),
     // Public configuration providers receive the identical template, native form and validation types.
     (
@@ -44,11 +43,11 @@ const SDK_FILES: &[(&str, &[u8])] = &[
     // Reader-facing English is the canonical documentation exported with the identical public SDK.
     (
         "DEBUG.md",
-        include_bytes!("../../../website/src/content/docs/en/sdk/debug.md"),
+        include_bytes!("../../../documentation/en/sdk/debug.md"),
     ),
     (
         "TARGETS.md",
-        include_bytes!("../../../website/src/content/docs/en/sdk/targets.md"),
+        include_bytes!("../../../documentation/en/sdk/targets.md"),
     ),
     // Independent target providers use the same exact schemas as the host consumer.
     (
@@ -76,11 +75,11 @@ const SDK_FILES: &[(&str, &[u8])] = &[
     // Independent consumers receive the same session contract and migration rules as the host.
     (
         "SESSIONS.md",
-        include_bytes!("../../../website/src/content/docs/en/sdk/sessions.md"),
+        include_bytes!("../../../documentation/en/sdk/sessions.md"),
     ),
     (
         "VIEWPORT.md",
-        include_bytes!("../../../website/src/content/docs/en/sdk/viewport.md"),
+        include_bytes!("../../../documentation/en/sdk/viewport.md"),
     ),
     (
         "src/api/viewport.rs",
@@ -88,11 +87,11 @@ const SDK_FILES: &[(&str, &[u8])] = &[
     ),
     (
         "CODE_HIGHLIGHTING.md",
-        include_bytes!("../../../website/src/content/docs/en/sdk/code-highlighting.md"),
+        include_bytes!("../../../documentation/en/sdk/code-highlighting.md"),
     ),
     (
         "NAVIGATION.md",
-        include_bytes!("../../../website/src/content/docs/en/sdk/navigation.md"),
+        include_bytes!("../../../documentation/en/sdk/navigation.md"),
     ),
     (
         "src/api/navigation.rs",
@@ -100,15 +99,15 @@ const SDK_FILES: &[(&str, &[u8])] = &[
     ),
     (
         "MIGRATION.md",
-        include_bytes!("../../../website/src/content/docs/en/sdk/migration.md"),
+        include_bytes!("../../../documentation/en/sdk/migration.md"),
     ),
     (
         "FAULTS.md",
-        include_bytes!("../../../website/src/content/docs/en/sdk/faults.md"),
+        include_bytes!("../../../documentation/en/sdk/faults.md"),
     ),
     (
         "SERVICES.md",
-        include_bytes!("../../../website/src/content/docs/en/sdk/services.md"),
+        include_bytes!("../../../documentation/en/sdk/services.md"),
     ),
     (
         "src/service.rs",
@@ -136,7 +135,7 @@ const SDK_FILES: &[(&str, &[u8])] = &[
     ),
     (
         "DEPENDENCIES.md",
-        include_bytes!("../../../website/src/content/docs/en/sdk/dependencies.md"),
+        include_bytes!("../../../documentation/en/sdk/dependencies.md"),
     ),
     (
         "src/dependencies.rs",
@@ -144,7 +143,7 @@ const SDK_FILES: &[(&str, &[u8])] = &[
     ),
     (
         "LSP.md",
-        include_bytes!("../../../website/src/content/docs/en/sdk/lsp.md"),
+        include_bytes!("../../../documentation/en/sdk/lsp.md"),
     ),
     (
         "src/language.rs",
@@ -157,7 +156,7 @@ const SDK_FILES: &[(&str, &[u8])] = &[
     ),
     (
         "STRUCTURE.md",
-        include_bytes!("../../../website/src/content/docs/en/sdk/structure.md"),
+        include_bytes!("../../../documentation/en/sdk/structure.md"),
     ),
     (
         "src/process.rs",
@@ -189,19 +188,19 @@ const SDK_FILES: &[(&str, &[u8])] = &[
     ),
     (
         "README.md",
-        include_bytes!("../../../website/src/content/docs/en/sdk/index.md"),
+        include_bytes!("../../../documentation/en/sdk/index.md"),
     ),
     (
         "UI.md",
-        include_bytes!("../../../website/src/content/docs/en/sdk/ui.md"),
+        include_bytes!("../../../documentation/en/sdk/ui.md"),
     ),
     (
         "PROCESSES.md",
-        include_bytes!("../../../website/src/content/docs/en/sdk/processes.md"),
+        include_bytes!("../../../documentation/en/sdk/processes.md"),
     ),
     (
         "LANGUAGES.md",
-        include_bytes!("../../../website/src/content/docs/en/sdk/languages.md"),
+        include_bytes!("../../../documentation/en/sdk/languages.md"),
     ),
     (
         "src/lib.rs",
@@ -323,7 +322,7 @@ pub(crate) fn cargo_config() -> anyhow::Result<PathBuf> {
 }
 
 /// Derive offline Markdown from the sole reader source; SDK code and schemas stay byte-identical.
-/// The known documentation routes become package-relative links, including any trailing anchor.
+/// Reader filenames become package-relative links, including any trailing anchor.
 fn exported_bytes<'a>(relative: &str, bytes: &'a [u8]) -> Cow<'a, [u8]> {
     if !relative.ends_with(".md") {
         return Cow::Borrowed(bytes);
@@ -331,17 +330,23 @@ fn exported_bytes<'a>(relative: &str, bytes: &'a [u8]) -> Cow<'a, [u8]> {
     let mut document = std::str::from_utf8(bytes)
         .expect("embedded reader documentation is UTF-8")
         .to_owned();
-    // Astro metadata is presentation-only and is omitted from the independent SDK's Markdown.
+    // Optional Markdown metadata does not belong to the standalone public contract.
+    // Keep body line endings intact so Windows checkouts export the same readable content.
     if let Some(rest) = document
         .strip_prefix("---\r\n")
         .or_else(|| document.strip_prefix("---\n"))
         && let Some(end) = rest.find("\n---")
     {
-        // Site metadata is removed on either checkout style; body bytes retain their line endings.
         document = rest[(end + 4)..]
             .trim_start_matches(['\r', '\n'])
             .to_owned();
     }
+    // The exported SDK contains the English contract only; repository translation navigation
+    // resolves online without copying a second mutable source into each independent project.
+    document = document.replace(
+        "](../../zh-cn/sdk/",
+        "](https://github.com/T-miracle/Nanobug/blob/main/documentation/zh-cn/sdk/",
+    );
     for (route, file) in [
         ("packaging", "PACKAGING.md"),
         ("configurations", "CONFIGURATIONS.md"),
@@ -363,17 +368,16 @@ fn exported_bytes<'a>(relative: &str, bytes: &'a [u8]) -> Cow<'a, [u8]> {
         ("", "README.md"),
     ] {
         let route = if route.is_empty() {
-            "/en/sdk/".to_owned()
+            "index.md".to_owned()
         } else {
-            format!("/en/sdk/{route}/")
+            format!("{route}.md")
         };
         document = document.replace(&format!("]({route}"), &format!("]({file}"));
     }
-    // User guides are not part of the guest SDK source bundle; exported links still open the
-    // published guide while capability references above resolve to local SDK Markdown.
+    // User guides live in the repository rather than the guest SDK source bundle.
     document = document.replace(
-        "](/en/guide/",
-        "](https://t-miracle.github.io/Editor/en/guide/",
+        "](../guide/",
+        "](https://github.com/T-miracle/Nanobug/blob/main/documentation/en/guide/",
     );
     Cow::Owned(document.into_bytes())
 }
@@ -453,11 +457,10 @@ mod tests {
         }
     }
 
-    /// Both checkout styles remove Astro metadata and rewrite links while retaining body newlines.
+    /// Both checkout styles rewrite reader links while retaining body newlines and real separators.
     #[test]
     fn reader_export_handles_both_checkout_newlines() {
-        let document =
-            "---\ntitle: Protocol\n---\n\n# Public protocol\n[Services](/en/sdk/services/)\n";
+        let document = "# Public protocol\n[Services](services.md)\n";
         let crlf = document.replace('\n', "\r\n");
         assert_eq!(
             exported_bytes("README.md", document.as_bytes()).as_ref(),
@@ -469,7 +472,22 @@ mod tests {
         );
     }
 
-    /// Exported Markdown must be navigable from the SDK directory without a running website.
+    /// Cross-language and guide links use repository files while capability anchors remain local.
+    #[test]
+    fn reader_export_preserves_anchors_and_resolves_repository_navigation() {
+        let document = "[Services](services.md#permissions)\n[Guide](../guide/plugins.md)\n[中文](../../zh-cn/sdk/services.md)\n";
+        let exported = exported_bytes("README.md", document.as_bytes());
+        assert_eq!(
+            exported.as_ref(),
+            concat!(
+                "[Services](SERVICES.md#permissions)\n",
+                "[Guide](https://github.com/T-miracle/Nanobug/blob/main/documentation/en/guide/plugins.md)\n",
+                "[中文](https://github.com/T-miracle/Nanobug/blob/main/documentation/zh-cn/sdk/services.md)\n",
+            ).as_bytes()
+        );
+    }
+
+    /// Exported Markdown must be navigable from the SDK directory without a documentation server.
     #[test]
     fn exported_reader_documents_resolve_all_local_links() {
         let root = tempfile::tempdir().unwrap();
@@ -478,7 +496,7 @@ mod tests {
             let document = std::fs::read_to_string(root.path().join(relative)).unwrap();
             assert!(
                 !document.contains("](/en/"),
-                "{relative} still contains a site-root link"
+                "{relative} still contains a root-relative documentation link"
             );
             for link in document
                 .split("](")
@@ -526,7 +544,7 @@ mod tests {
     }
 
     #[test]
-    fn exported_documents_carry_no_site_frontmatter() {
+    fn exported_documents_start_with_the_contract_heading() {
         for (relative, bytes) in SDK_FILES {
             if !relative.ends_with(".md") {
                 continue;
@@ -538,7 +556,7 @@ mod tests {
             );
             assert!(
                 !exported.starts_with("---"),
-                "{relative} must not export the site frontmatter"
+                "{relative} must not export Markdown metadata"
             );
         }
     }

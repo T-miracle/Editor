@@ -15,6 +15,6 @@
 首个消费者为 Image 0.6.0。普通图片通过视口能力维护自己的手动比例；SVG 继续使用公开画布绘图，
 保留透明棋盘、工具栏、居中缩放及初次最长边至少 240px（可见区域不足时等比缩小）。
 
-公开契约正文维护在 [英文 SDK UI](../../../website/src/content/docs/en/sdk/ui.md) 与
-[中文 SDK UI](../../../website/src/content/docs/zh-cn/sdk/ui.md)，不在此复制读者文档。
+公开契约正文维护在 [英文 SDK UI](../../../documentation/en/sdk/ui.md) 与
+[中文 SDK UI](../../../documentation/zh-cn/sdk/ui.md)，不在此复制读者文档。
 接口类型见 [visual_viewport.rs](../../../crates/plugin-protocol/src/ui/visual_viewport.rs)。

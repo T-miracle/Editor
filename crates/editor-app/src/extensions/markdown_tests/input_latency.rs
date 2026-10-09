@@ -7,7 +7,7 @@ use harness::NativeMarkdown;
 #[gpui::test]
 #[ignore = "build markdown through scripts/build-plugins.ps1 first"]
 fn delivered_markdown_input_to_frame_latency(cx: &mut TestAppContext) {
-    let source = include_str!("../../../../../website/src/content/docs/en/sdk/ui.md")
+    let source = include_str!("../../../../../documentation/en/sdk/ui.md")
         .lines()
         .take(120)
         .collect::<Vec<_>>()

@@ -24,7 +24,7 @@ WIT 世界 `editor:plugin/plugin@0.1.0` 提供 host.request 导入与 dispatch �
 
 不再存在旧 Message/Reply/Scene、字符串宿主命令、chrome/controls 兼容字段或运行时转换。标准组件、SideTabs 与 Canvas 组成同一棵 UI 树，宿主的 gpui-base 行为和本地外观负责输入、焦点、布局、滚动、菜单及弹窗。SVG 预览接收带 DocumentVersion 的内存文本，必须回传 source，包含未保存编辑；过期结果不能覆盖新文档。
 
-详细接口见 [SDK](../../crates/plugin-protocol/README.md)、[UI](../../website/src/content/docs/en/sdk/ui.md)、[语言](../../website/src/content/docs/en/sdk/languages.md)、[LSP](../../website/src/content/docs/en/sdk/lsp.md)、[进程](../../website/src/content/docs/en/sdk/processes.md)、[服务](../../website/src/content/docs/en/sdk/services.md)。读者正文维护在站点源，宿主同时导出这些英文契约供独立插件使用。
+详细接口见 [SDK](../../crates/plugin-protocol/README.md)、[UI](../../documentation/en/sdk/ui.md)、[语言](../../documentation/en/sdk/languages.md)、[LSP](../../documentation/en/sdk/lsp.md)、[进程](../../documentation/en/sdk/processes.md)、[服务](../../documentation/en/sdk/services.md)。读者正文维护在双语 Markdown 文档，宿主同时导出这些英文契约供独立插件使用。
 
 文件预览可以通过公开 `editor.presentation` 声明源码／分栏／预览三态，通过 `editor.toolbar` 提供源码顶部操作；版本化范围编辑、图片输入、导航及视口请求分别核对文档身份、revision 和来源权限。Markdown 使用这些通用接口提供实时原生预览、任务框写回、同级图片导入和双向内容块滚动；SVG 使用同一底栏三态入口。详见[Markdown 使用说明](../../plugins/markdown/README.md)、[导航](../../crates/plugin-protocol/NAVIGATION.md)、[视口](../../crates/plugin-protocol/VIEWPORT.md)和[代码块高亮](../../crates/plugin-protocol/CODE_HIGHLIGHTING.md)。新增插件仍只使用公开契约，不需要宿主按插件名称分支。
 
@@ -55,7 +55,7 @@ WASM 不继承宿主目录、环境、输入输出或网络访问。每次调用
 4. 候选激活成功后以日志、备份和原子替换提交包记录与私有数据，再发布新实例。
 5. 准备失败保留旧实例；切换失败恢复旧版本及数据并分配新实例身份，旧句柄和回调不会复活。
 
-备份及恢复失败路径、休眠工作区升级见 [迁移契约](../../website/src/content/docs/en/sdk/migration.md)。快照是插件的逻辑数据，不能恢复 OS 进程内存或撤销用户文档、外部文件等副作用。内置终端恢复有界历史和新 Shell；经 interactive.execute 服务创建的执行会话只恢复历史，不重跑程序。旧终端数据在任何组件激活前备份并导入，重复启动不覆盖已完成迁移后的数据。
+备份及恢复失败路径、休眠工作区升级见 [迁移契约](../../documentation/en/sdk/migration.md)。快照是插件的逻辑数据，不能恢复 OS 进程内存或撤销用户文档、外部文件等副作用。内置终端恢复有界历史和新 Shell；经 interactive.execute 服务创建的执行会话只恢复历史，不重跑程序。旧终端数据在任何组件激活前备份并导入，重复启动不覆盖已完成迁移后的数据。
 
 WASM 指令、时间和内存有独立预算；队列、进程、文件、绘图和事件均有上限。超限定位到插件/作用域/操作；插件可独立重启，LSP 有限重试。停用与卸载结清请求、撤销订阅和租约并回收进程树。
 

@@ -1,4 +1,6 @@
-# 编辑器文档站点方案
+# 编辑器文档站点方案（历史）
+
+2026-10-09 用户要求移除 `website/`。站点源码、Node 依赖入口和 GitHub Pages 发布工作流已移除；读者说明迁为 `documentation/` 下的双语 Markdown。以下内容保留当时的设计决策，不再作为当前实施或构建要求。
 
 状态：已确认。方案与规格已发布为 GitHub [#38](https://github.com/T-miracle/Editor/issues/38)，实施工单 [#39–#47](https://github.com/T-miracle/Editor/issues/39) 已建立原生阻塞边，待实施（尚未建站点目录）。工单拆分见[工单索引](../tickets/README.md)与[规格正文](docs-site.md)。
 
@@ -24,7 +26,7 @@
 | 站点范围 | 只发布"编辑器使用"与"插件系统对接"（能力协议） | 内部工单、验收记录、协作约定不进公开面 |
 | 插件包 README | 不进站点 | `management.rs` 从已安装包读取它并在管理器 Overview 显示，生命周期属于插件包，不属于站点 |
 | 插件使用说明 | 站点写一页**宿主行为**（安装、权限确认、启停更新卸载、受限工作区限制） | 这是宿主行为，不是插件包内容；不复述各插件自己的用法，避免与包 README 形成第二份源 |
-| SDK 文档位置 | 9 篇的内容并入站点英文 SDK 栏目，成为唯一手写源（页面落在 `website/src/content/docs/en/sdk/`） | 站点内容集中；`include_bytes!` 与 SDK 摘要缓存机制不受影响；导出名保持迁移前的大写形式 |
+| SDK 文档位置 | 9 篇的内容并入站点英文 SDK 栏目，成为唯一手写源（页面落在 `documentation/en/sdk/`） | 站点内容集中；`include_bytes!` 与 SDK 摘要缓存机制不受影响；导出名保持迁移前的大写形式 |
 | 技术选型 | Astro 自建管线 | 参照 [gpui-kit](https://github.com/longbridge/gpui-kit)，其站点位于主仓库 `website/` 目录 |
 | 双语 | `en/` 与 `zh-CN/` 平行，首次即双语 | 英文是权威正本，中文是译文 |
 | 权威正本 | 英文为权威；协议变更先改 `en/`，中文同步；SDK 导出取英文版 | 英文已是四篇的原生语言，且是面向第三方作者的公开契约 |
@@ -52,7 +54,7 @@ docs/website/
 
 ## 目标结构
 
-实施后页面落在 Astro 内容集合约定的路径下（`website/src/content/docs/<locale>/`）；方案初稿写的
+实施后页面落在 Astro 内容集合约定的路径下（`documentation/<locale>/`）；方案初稿写的
 `website/en|zh-cn/` 是同一结构的简写，下面按实际路径给出。
 
 ```text

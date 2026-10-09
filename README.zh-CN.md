@@ -12,7 +12,7 @@ Nanobug 是一个使用 Rust 与 GPUI 构建的原生桌面代码编辑器，优
 
 XML 插件提供 Schema 辅助、补全、格式化、配对标签编辑与文档大纲；HTML、JavaScript 提供独立的原生语言服务。新工作区默认隐藏大纲，可从底部窗口控件打开。
 
-[文档](https://t-miracle.github.io/Editor/zh-cn/) · [快速开始](https://t-miracle.github.io/Editor/zh-cn/guide/getting-started/) · [插件 SDK](https://t-miracle.github.io/Editor/zh-cn/sdk/) · [问题反馈](https://github.com/T-miracle/Editor/issues)
+[文档](documentation/zh-cn/index.md) · [快速开始](documentation/zh-cn/guide/getting-started.md) · [插件 SDK](documentation/zh-cn/sdk/index.md) · [问题反馈](https://github.com/T-miracle/Editor/issues)
 
 ## 安装
 
@@ -99,7 +99,7 @@ cargo build -p editor-app
 
 CLI 开发运行通过标准输入发送 `reload` 或 `stop`。`--workspace` 指定测试工作区，默认使用插件项目；`--profile` 指定隔离数据目录。用多个 `--grant <权限名>` 显式授权清单中声明的权限。新增权限需停止后重新授权运行，更改插件 ID 也需重新启动配置。缺失的编译器／SDK 目标会报错，不会自动安装。原生构建明确声明系统和架构，拒绝混入其他平台的原生产物。Windows 已验证；macOS/Linux 使用兼容的路径与进程接口，尚未实测。
 
-在插件管理中安装或更新生成的 ZIP，并批准声明的权限。详见[打包格式](https://t-miracle.github.io/Editor/zh-cn/sdk/packaging/)、[运行、调试与构建指南](https://t-miracle.github.io/Editor/zh-cn/guide/run-debug-build/)和 [Rust 调试器说明](plugins/rust-debugger/README.md)。维护者决策和验收见[插件文档入口](docs/plugins/README.md)。
+在插件管理中安装或更新生成的 ZIP，并批准声明的权限。详见[打包格式](documentation/zh-cn/sdk/packaging.md)、[运行、调试与构建指南](documentation/zh-cn/guide/run-debug-build.md)和 [Rust 调试器说明](plugins/rust-debugger/README.md)。维护者决策和验收见[插件文档入口](docs/plugins/README.md)。
 
 ## 参与贡献
 
@@ -120,7 +120,7 @@ cargo check --workspace
 
 修改 `editor-app` 时还需运行相关 UI 测试与原生交互验收；实际 WASM 包的 ignored 测试需先构建夹具，再显式执行。纯文档变更检查链接、路径及 `git diff --check`。
 
-面向读者的使用说明与 SDK 正文维护在 `website/`，站点构建方式见 [website/README.md](website/README.md)。项目规格、工单与验收记录维护在 `docs/`。本中文 README 与[英文正本](README.md)同步维护。
+面向读者的使用说明与 SDK 正文以普通 Markdown 保存在 [documentation/zh-cn/index.md](documentation/zh-cn/index.md)。项目规格、工单与验收记录维护在 `docs/`。本中文 README 与[英文正本](README.md)同步维护。
 
 ## 许可
 

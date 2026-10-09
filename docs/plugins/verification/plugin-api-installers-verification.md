@@ -13,7 +13,7 @@
 - 原生程序拥有实际 OS 权限，私有目录不代表系统沙箱；取消不承诺撤销外部副作用。
 - 安装在临时私有目录内进行，安装定义参与缓存身份；保留旧下载型缓存身份。只有成功且入口存在/未逃逸才发布完成标记。
 - Windows 原生执行保留 job，等待所有子进程退出和管道读者结束，再清理或发布目录。旧版本在准备失败时保留。
-- SDK 对外文档见 [DEPENDENCIES.md](../../../website/src/content/docs/en/sdk/dependencies.md)。不引入插件或语言专属宿主入口。
+- SDK 对外文档见 [DEPENDENCIES.md](../../../documentation/en/sdk/dependencies.md)。不引入插件或语言专属宿主入口。
 
 ## 验证
 

@@ -1,5 +1,7 @@
 # 编辑器文档站点规格
 
+现行范围说明（2026-10-09）：用户已要求移除站点，以下为历史规格，不再按本文启动站点实现；当前双语说明位于 `documentation/`，见[文档总目录](../../README.md)。
+
 Status: ready-for-agent — 规格与工单拆分已确认；测试接缝已由用户确认（两个接缝，见 Testing Decisions）。
 已发布：[GitHub #38](https://github.com/T-miracle/Editor/issues/38)。工单 #39–#47 见[工单索引](../tickets/README.md)，14 条原生阻塞边已建立并读回核对。
 依据：[静态文档站点方案](static-docs-site.md)（决策记录、目录树、迁移映射、防漂移机制、风险）。

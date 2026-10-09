@@ -13,7 +13,7 @@
 - 安装确认展示本机执行权限边界和服务程序/参数。新增权限未确认时，旧包和授权保持有效。
 - 独立 SDK 示例升级为 0.5.0，仍通过宿主公开 SDK 构建；默认示例不申请原生执行，测试包才声明其夹具权限。
 
-公开契约随 SDK 导出为 [PROCESSES.md](../../../website/src/content/docs/en/sdk/processes.md)。没有安装脚本接口、插件名称判断或终端画面解析。
+公开契约随 SDK 导出为 [PROCESSES.md](../../../documentation/en/sdk/processes.md)。没有安装脚本接口、插件名称判断或终端画面解析。
 
 ## 回归
 

@@ -13,7 +13,7 @@
 
 - 文档总入口为 `docs/README.md`。插件系统相关方案统一放入 `docs/plugins/specs/`，工单放入 `docs/plugins/tickets/`，验收记录放入 `docs/plugins/verification/`，并同步维护 `docs/plugins/README.md`。其他主题按 `docs/README.md` 的分类约定归档；只有实际验收与交付完成后才标记已完成。
 - 项目对外名称为 Nanobug；仓库首页使用英文 `README.md`，中文译文为 `README.zh-CN.md`，两份同步更新并互相链接。品牌名称调整保留既有 `MeEditor` 数据目录和持久化标识，详见 `docs/project/branding.md`。
-- `docs/` 与 `website/` 是两个工作面：前者给 AI 与维护者，不发布；后者是面向读者的站点源（Astro）。读者文档只在 `website/` 手写，不在 `docs/` 复制正文；站点规则见 `docs/website/specs/static-docs-site.md` 与 `website/AGENTS.md`。
+- `docs/` 保存 AI 与维护者资料；`documentation/` 保存面向读者的双语 Markdown 使用说明与 SDK 正文，不维护站点或 Node 构建流程。英文为正本，修改正文时同步中文；宿主从 `documentation/en/sdk/` 内嵌导出公开契约，移动目录时同步核对 Rust 资源引用。
 
 ## 项目结构与职责
 
@@ -30,7 +30,7 @@
 | `plugins/` | 独立插件包、语言资源、可选 WASM 行为及插件自己的领域逻辑 |
 | `installer/` | 原生安装器配置与直接调用工具的打包说明 |
 | `docs/` | 分类文档入口；项目基线、插件系统、UI 调研和协作约定（AI 与维护者工作面，不发布为站点） |
-| `website/` | 面向读者的文档站点源（Astro）；编辑器使用说明与插件能力协议正文，与 `docs/` 职责分离 |
+| `documentation/` | 面向读者的双语 Markdown 使用说明与插件能力协议正文 |
 
 - 复用现有模块和公开接口，不为每个逻辑模块新增 crate，不建立仅转发调用的包装层。
 - `crates/editor-app/src/main.rs` 仅负责启动、应用状态组装和顶层路由。`app/` 管理窗口、布局、设置、对话框和会话；`editor/` 管理文档与编辑区；`explorer/` 管理文件树；`language/` 管理语言接入；`extensions/` 管理通用插件宿主集成；`ui/` 管理本地控件、主题、图标、字体和绘制。

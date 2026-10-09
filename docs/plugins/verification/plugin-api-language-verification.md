@@ -14,7 +14,7 @@
 
 图标和主题贡献沿用原路径。旧语言包暂时保留，但其后台加载同样改为准备后再由 UI 检查发布；不会覆盖动态选择。动态高亮可沿用旧识别，移除动态覆盖后重新验证并恢复可用的旧插件 grammar。本项没有迁移既有语言插件或修改 LSP 配置；相关工作仍属于后续工单。
 
-公开 SDK 导出包含 [LANGUAGES.md](../../../website/src/content/docs/en/sdk/languages.md)，说明完整包清单、TOML 格式、预算、路径、选择和热加载语义。
+公开 SDK 导出包含 [LANGUAGES.md](../../../documentation/en/sdk/languages.md)，说明完整包清单、TOML 格式、预算、路径、选择和热加载语义。
 
 ## 验证记录
 

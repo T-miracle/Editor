@@ -12,7 +12,7 @@
 - 安装准备在旧实例切换之前执行。显式用户/项目路径、WASM 本机程序优先；错误不静默回退。
 - 下载等待及缓存锁等待支持取消。撤销工作区信任和退出绕过命令队列，立即取消准备。
 - 安装进度使用项目原生对话框与本地 Button；下载、校验、解包、安装、LSP 启动与就绪分别表达。
-- SDK 示例升级 0.7.0；[DEPENDENCIES.md](../../../website/src/content/docs/en/sdk/dependencies.md) 随宿主 SDK 导出。
+- SDK 示例升级 0.7.0；[DEPENDENCIES.md](../../../documentation/en/sdk/dependencies.md) 随宿主 SDK 导出。
 
 本票不运行安装程序或脚本；后续 #10 单独实现与授权。配置/启用只读已准备缓存，缺少新依赖时提示重新安装。
 恢复收据保守保留至卸载；取消不代表回滚原生副作用。Windows 为当前实际原生验收平台。
