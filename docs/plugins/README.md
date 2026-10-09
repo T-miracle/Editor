@@ -4,6 +4,7 @@
 
 - [内置终端与运行、调试统一面板方案](specs/builtin-terminal-run-debug.md)、[四张工单与测试安排](tickets/builtin-terminal-run-debug/README.md)：2026-10-09 范围、拆分和测试接缝已批准并发布为 #87–#91，按 01 → 04 执行中。恢复上游 Alacritty、终端迁入宿主、构建和调试统一面板；语言与调试器仍由插件提供，旧数据迁移与发行退役由 04 负责。
 - [内置终端 02 验收](verification/builtin-terminal-02-2026-10-09.md)：统一构建/运行任务、真实公开消费者、关闭与复用及 Windows 插件开发操作已验证；后续调试和旧用户迁移仍在实施。
+- [内置终端 03 验收](verification/builtin-terminal-03-2026-10-09.md)：唯一真实调试目标的输入、同面板检查、诊断归组和停止清理已验证；旧用户迁移由 04 承接。
 
 - [插件打包与隔离开发运行](specs/plugin-development-packaging.md)、[本次验收](verification/plugin-development-packaging.md)：宿主模板与 CLI 共享项目描述，自动 ZIP、输出选择和无 ZIP 的独立开发运行。
 - [插件开发工作区整合主工作区改动](verification/plugin-development-main-integration.md)：2026-10-08 用户授权整合全部未提交改动，包含两侧备份、冲突处理与重新验证；未提交或推送。

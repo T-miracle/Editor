@@ -202,12 +202,25 @@ impl EditorApp {
                 self.open_debug_location(source, line, window, cx);
             }
         }
+        // A close confirmed before creation cancels its original host root as soon as its identity
+        // arrives, even if the adapter has not completed initialization.
+        let selected_debug = self
+            .run_controls
+            .debug_session()
+            .map(|(config, _)| config.to_owned());
+        for config in self.run_controls.take_ready_debug_closes() {
+            self.run_controls.select_debug_session(&config);
+            self.force_debug(cx);
+        }
+        if let Some(config) = selected_debug {
+            self.run_controls.select_debug_session(&config);
+        }
         // Inspection belongs to the newly observed pause, never to cached output text.
         // the panel renders frames and variables that nobody ever requested.
         self.fetch_debug_inspection(cx);
         if !self.leave_confirmed && !self.shutting_down {
             for configuration in self.run_controls.take_ready_debug_reruns() {
-                self.debug_configuration(&configuration, cx);
+                self.debug_configuration(&configuration, window, cx);
             }
         }
         // And it is the moment to tell the debugger where to stop: a session that began before the user
@@ -268,7 +281,7 @@ impl EditorApp {
                 let workspace = self.workspace_key();
                 self.run_controls.select(&config, &workspace);
                 if debug {
-                    self.debug_configuration(&config, cx);
+                    self.debug_configuration(&config, window, cx);
                 } else {
                     self.start_configuration_without_environment(&config, window, cx);
                 }
@@ -281,6 +294,7 @@ impl EditorApp {
             }
         }
         self.sync_terminal_results(cx);
+        self.sync_debug_inspection(cx);
     }
 
     /// Whether this workspace may start programs at all; a restricted workspace never launches.
@@ -898,7 +912,7 @@ impl EditorApp {
                     .tooltip(
                         debug_blocker.unwrap_or_else(|| t!("run.debug_hint").to_string().into()),
                     )
-                    .on_click(cx.listener(|this, _, _, cx| this.debug_selected(cx)))
+                    .on_click(cx.listener(|this, _, window, cx| this.debug_selected(window, cx)))
             }))
             .child(
                 div().debug_selector(|| "run-stop".into()).child(
@@ -1005,6 +1019,7 @@ impl EditorApp {
         if self.run_controls.debug_target_active(config_id) {
             self.run_controls.select_debug_session(config_id);
             self.debug_panel.open = true;
+            self.locate_terminal_task(config_id, window, cx);
             cx.notify();
             return;
         }
@@ -1404,7 +1419,7 @@ impl EditorApp {
     /// The refusal is the point of this method: a debug click that cannot be honoured has to say so,
     /// because running the program without a debugger would look like success while handing the user
     /// something they did not ask for.
-    pub(crate) fn debug_selected(&mut self, cx: &mut Context<Self>) {
+    pub(crate) fn debug_selected(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(configuration) = self.run_controls.selected().map(|config| config.id.clone())
         else {
             // An empty native selection is a host refusal, distinct from the debugger's result.
@@ -1416,11 +1431,11 @@ impl EditorApp {
             cx.notify();
             return;
         };
-        self.debug_configuration(&configuration, cx);
+        self.debug_configuration(&configuration, window, cx);
     }
 
     /// Both an explicit Debug and a replacement use the captured owner, even after selection changes.
-    fn debug_configuration(&mut self, id: &str, cx: &mut Context<Self>) {
+    fn debug_configuration(&mut self, id: &str, window: &mut Window, cx: &mut Context<Self>) {
         if self.guard_plugin_execution(id, plugin_form::Execution::Debug, cx) {
             return;
         }
@@ -1452,6 +1467,7 @@ impl EditorApp {
         {
             self.run_controls.select_debug_session(&configuration.id);
             self.debug_panel.open = true;
+            self.locate_terminal_task(&configuration.id, window, cx);
             cx.notify();
             return;
         }
@@ -1493,8 +1509,22 @@ impl EditorApp {
             .run_controls
             .begin_debug_preparation(&configuration.id, plan, &workspace)
         {
-            Ok(()) => {
+            Ok(request) => {
+                if !self.begin_terminal_task(
+                    &configuration.id,
+                    &configuration.name,
+                    request,
+                    window,
+                    cx,
+                ) {
+                    self.run_controls
+                        .request_configuration_stop(&configuration.id);
+                    return;
+                }
                 self.debug_panel.open = true;
+                self.terminal.update(cx, |panel, _| {
+                    panel.mark_debug_task(&configuration.id, false)
+                });
                 self.status = t!("run.preparing_debug", name = configuration.name.clone()).into();
                 self.drive_preparation(cx);
             }
@@ -1533,6 +1563,11 @@ impl EditorApp {
         let Some(request) = self.run_controls.begin_debug_start_request(configuration) else {
             return;
         };
+        self.terminal.update(cx, |panel, cx| {
+            panel.task_step(configuration, request, &t!("run.debug_panel"), cx)
+        });
+        self.terminal
+            .update(cx, |panel, _| panel.mark_debug_task(configuration, true));
         if !self.stage_validated_run(
             configuration,
             Work::DebugCall {

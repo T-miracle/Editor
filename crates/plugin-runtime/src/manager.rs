@@ -17,6 +17,7 @@ mod image_input;
 mod images;
 mod language;
 mod native_execution;
+mod terminal_presentations;
 pub use native_execution::NativeExecutionUpdate;
 mod plugin_services;
 mod preferences;
@@ -188,6 +189,9 @@ impl Manager {
     ) -> anyhow::Result<Self> {
         std::fs::create_dir_all(&root)?;
         let installed = Self::read_registry(&root)?;
+        host_resources
+            .terminals
+            .select_scope(scopes::workspace_key(&environment.workspace));
         let host_alive = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true));
         let mut manager = Self {
             _runtime_lock: None,
@@ -670,6 +674,7 @@ impl Manager {
         )
     }
     pub fn poll(&mut self) {
+        self.advance_terminal_exits();
         self.native_executions.poll(&self.plugin_services);
         self.route_services();
         self.poll_parked();

@@ -1,28 +1,21 @@
-//! Unified native debug presentation. Base buttons own activation; GPUI owns bounded scrolling/focus.
-//! The panel holds no target or text snapshot: every row comes from the selected RunControls session.
+//! Debug inspection belongs to its task tab; snapshots are read-only projections of RunControls.
 use super::*;
 use gpui_kit::{FocusHandle, KeyDownEvent, ScrollHandle};
 
-/// Presentation-only state survives re-paints and session switches without duplicating inspection.
+/// Retained focus is shared with the selected native inspection, never with target stdin.
 pub(crate) struct DebugPanelState {
     pub open: bool,
     focus: FocusHandle,
-    frames: ScrollHandle,
-    variables: ScrollHandle,
 }
 impl DebugPanelState {
-    /// The owner retains native focus and scroll handles; hiding never stops a debug target.
+    /// Preparing presentation does not allocate a debug target or another dock panel.
     pub fn new(cx: &mut App) -> Self {
         Self {
             open: false,
             focus: cx.focus_handle(),
-            frames: ScrollHandle::new(),
-            variables: ScrollHandle::new(),
         }
     }
 }
-
-/// The standard GPUI focus interface lets inspection retain keyboard navigation across source jumps.
 impl gpui_kit::Focusable for DebugPanelState {
     fn focus_handle(&self, _: &App) -> FocusHandle {
         self.focus.clone()
@@ -33,6 +26,13 @@ impl EditorApp {
     /// Force is distinct from DAP disconnect: synchronously revoke the selected target's own root.
     pub(crate) fn force_debug(&mut self, cx: &mut Context<Self>) {
         let Some(session) = self.run_controls.debug_provider_session() else {
+            if let Some(config) = self
+                .run_controls
+                .debug_session()
+                .map(|(config, _)| config.to_owned())
+            {
+                self.run_controls.defer_debug_close(&config);
+            }
             self.status = t!("run.debug_connecting").into();
             cx.notify();
             return;
@@ -73,147 +73,19 @@ impl EditorApp {
         cx.notify();
     }
 
-    /// One native panel serves every provider and configuration, with ordinary theme/scale contracts.
-    pub(crate) fn render_debug_panel(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
-        if !self.debug_panel.open {
-            return None;
+    /// Publish the selected tab's canonical inspection without borrowing the parent during child render.
+    pub(crate) fn sync_debug_inspection(&mut self, cx: &mut Context<Self>) {
+        let Some(key) = self.terminal.read(cx).active_task() else {
+            return;
+        };
+        if !self.terminal.read(cx).task_is_debug(&key) {
+            return;
         }
-        let controls = self.run_controls.debug_controls();
-        let rows = self.run_controls.debug_panel_rows();
-        let mut breakpoints = v_flex()
-            .id("debug-panel-breakpoints")
-            .debug_selector(|| "debug-panel-breakpoints".into())
-            .flex_1()
-            .min_w_0()
-            .min_h_0()
-            .overflow_y_scroll()
-            .child(div().font_semibold().child(t!("run.debug_breakpoints")));
-        for (source, line) in self.run_controls.debug_breakpoint_positions() {
-            let verification = match self.run_controls.debug_breakpoint_verified(&source, line) {
-                Some(true) => t!("run.breakpoint_verified"),
-                Some(false) => t!("run.breakpoint_unverified"),
-                None => t!("run.breakpoint_waiting"),
-            };
-            let location = source.clone();
-            let selector = format!("debug-panel-breakpoint-{}-{line}", source);
-            breakpoints = breakpoints.child(
-                Button::new(selector.clone())
-                    .small()
-                    .ghost()
-                    .content_full_width()
-                    .label(format!("{source}:{line} ({verification})"))
-                    .debug_selector(move || selector.clone())
-                    .on_click(cx.listener(move |this, _, window, cx| {
-                        this.open_debug_location(&location, line, window, cx);
-                    })),
-            );
+        if self.run_controls.debug_session_of(&key).is_none() {
+            return;
         }
-        let mut toolbar = h_flex()
-            .gap_1()
-            .items_center()
-            .flex_wrap()
-            .child(div().font_semibold().child(t!("run.debug_panel")));
-        // Stable configuration identities select the inspection; defaults never re-route live targets.
-        for (configuration, _) in self.run_controls.debug_sessions() {
-            let id = configuration.to_owned();
-            let selected = self
-                .run_controls
-                .debug_session()
-                .is_some_and(|(current, _)| current == configuration);
-            let name = self
-                .run_controls
-                .configuration(configuration)
-                .map(|config| config.name.clone())
-                .unwrap_or_else(|| configuration.into());
-            let selector = format!("debug-session-{configuration}");
-            toolbar = toolbar.child(
-                Button::new(selector.clone())
-                    .label(name)
-                    .small()
-                    .compact()
-                    .ghost()
-                    .when(selected, |button| button.text_color(cx.theme().primary))
-                    .debug_selector(move || selector.clone())
-                    .on_click(cx.listener(move |this, _, _, cx| {
-                        this.run_controls.select_debug_session(&id);
-                        cx.notify();
-                    })),
-            );
-        }
-        for (method, key, outcome) in [
-            ("resume", "run.debug_resume", controls.resume),
-            ("pause", "run.debug_pause", controls.pause),
-            ("stop", "run.debug_stop", controls.stop),
-        ] {
-            let selector = format!("debug-panel-{method}");
-            let reason = outcome.as_ref().err().cloned();
-            toolbar = toolbar.child(
-                Button::new(selector.clone())
-                    .label(t!(key))
-                    .small()
-                    .compact()
-                    .ghost()
-                    .disabled(reason.is_some())
-                    .tooltip(reason.unwrap_or_else(|| t!(key).into()))
-                    .debug_selector(move || selector.clone())
-                    .on_click(cx.listener(move |this, _, _, cx| this.debug_action(method, cx))),
-            );
-        }
-        for (kind, key, outcome) in controls.step.into_iter().map(|(kind, outcome)| {
-            (
-                kind,
-                match kind {
-                    editor_core::DebugStep::Into => "run.debug_into",
-                    editor_core::DebugStep::Over => "run.debug_over",
-                    editor_core::DebugStep::Out => "run.debug_out",
-                },
-                outcome,
-            )
-        }) {
-            let selector = format!("debug-panel-step-{}", kind.as_str());
-            let reason = outcome.as_ref().err().cloned();
-            toolbar = toolbar.child(
-                Button::new(selector.clone())
-                    .label(t!(key))
-                    .small()
-                    .compact()
-                    .ghost()
-                    .disabled(reason.is_some())
-                    .tooltip(reason.unwrap_or_else(|| t!(key).into()))
-                    .debug_selector(move || selector.clone())
-                    .on_click(cx.listener(move |this, _, _, cx| this.step_debug(kind, cx))),
-            );
-        }
-        toolbar = toolbar
-            .child(
-                Button::new("debug-panel-force")
-                    .label(t!("run.force"))
-                    .small()
-                    .compact()
-                    .ghost()
-                    .disabled(
-                        self.run_controls.debug_provider_session().is_none()
-                            || !self
-                                .run_controls
-                                .debug_session()
-                                .is_some_and(|(id, _)| self.run_controls.debug_target_active(id)),
-                    )
-                    .tooltip(t!("run.force_hint"))
-                    .debug_selector(|| "debug-panel-force".into())
-                    .on_click(cx.listener(|this, _, _, cx| this.force_debug(cx))),
-            )
-            .child(
-                Button::new("debug-panel-hide")
-                    .label(t!("run.debug_hide"))
-                    .small()
-                    .compact()
-                    .ghost()
-                    .debug_selector(|| "debug-panel-hide".into())
-                    .on_click(cx.listener(|this, _, _, cx| {
-                        this.debug_panel.open = false;
-                        cx.notify();
-                    })),
-            );
+        self.run_controls.select_debug_session(&key);
+        self.fetch_debug_inspection(cx);
         let status = match self.run_controls.debug_state() {
             editor_core::DebugSessionState::Disconnected => {
                 t!("run.debug_disconnected").to_string()
@@ -228,6 +100,217 @@ impl EditorApp {
                 t!("run.debug_failed", reason = reason).to_string()
             }
         };
+        let model = Inspection {
+            configuration: key.clone(),
+            session: self.run_controls.debug_provider_session(),
+            pause: self.run_controls.debug_pause_epoch(),
+            controls: self.run_controls.debug_controls(),
+            rows: self.run_controls.debug_panel_rows(),
+            status,
+            force: self.run_controls.debug_provider_session().is_some()
+                && self.run_controls.debug_target_active(&key),
+            breakpoints: self
+                .run_controls
+                .debug_breakpoint_positions()
+                .into_iter()
+                .map(|(source, line)| {
+                    let verified = self.run_controls.debug_breakpoint_verified(&source, line);
+                    (source, line, verified)
+                })
+                .collect(),
+        };
+        let parent = cx.entity().downgrade();
+        let focus = self.debug_panel.focus.clone();
+        self.terminal.update(cx, |panel, cx| {
+            panel.publish_inspection(key, model, parent, focus, cx)
+        });
+    }
+}
+
+/// This model is immutable publication data. Canonical sessions, pauses and variables stay in RunControls.
+#[derive(Clone, PartialEq, Eq)]
+pub(crate) struct Inspection {
+    configuration: String,
+    session: Option<String>,
+    pause: Option<u64>,
+    controls: editor_core::DebugControls,
+    rows: crate::run::DebugPanelRows,
+    status: String,
+    breakpoints: Vec<(String, u32, Option<bool>)>,
+    force: bool,
+}
+#[derive(Clone)]
+enum InspectAction {
+    Control(&'static str),
+    Step(editor_core::DebugStep),
+    Frame(u32),
+    Navigate(String, u32),
+    Hide,
+}
+
+/// One retained view per task keeps scrolling/focus while its tab is hidden.
+pub(crate) struct InspectionView {
+    parent: WeakEntity<EditorApp>,
+    model: Inspection,
+    focus: FocusHandle,
+    frames: ScrollHandle,
+    variables: ScrollHandle,
+}
+impl InspectionView {
+    pub(crate) fn new(
+        parent: WeakEntity<EditorApp>,
+        model: Inspection,
+        focus: FocusHandle,
+    ) -> Self {
+        Self {
+            parent,
+            model,
+            focus,
+            frames: ScrollHandle::new(),
+            variables: ScrollHandle::new(),
+        }
+    }
+    /// Only changed publications invalidate this child; output alone does not reset its controls.
+    pub(crate) fn publish(&mut self, model: Inspection, cx: &mut Context<Self>) {
+        if self.model != model {
+            self.model = model;
+            cx.notify();
+        }
+    }
+    fn dispatch(&self, action: InspectAction, window: &mut Window, cx: &mut App) {
+        let parent = self.parent.clone();
+        let snapshot = self.model.clone();
+        let handle = window.window_handle();
+        // End the child's mutable event borrow before the coordinator may update the same terminal.
+        cx.defer(move |cx| {
+            let _ = handle.update(cx, |_, window, cx| {
+                let _ = parent.update(cx, |app, cx| {
+                    app.run_controls
+                        .select_debug_session(&snapshot.configuration);
+                    // A delayed control cannot resume a newer pause or close a replacement target.
+                    if app.run_controls.debug_provider_session() != snapshot.session
+                        || (matches!(
+                            action,
+                            InspectAction::Step(_)
+                                | InspectAction::Frame(_)
+                                | InspectAction::Control("resume")
+                        ) && app.run_controls.debug_pause_epoch() != snapshot.pause)
+                    {
+                        app.status = t!("run.debug_stale_pause").to_string();
+                        cx.notify();
+                        return;
+                    }
+                    match action {
+                        InspectAction::Control("force") => app.force_debug(cx),
+                        InspectAction::Control(method) => app.debug_action(method, cx),
+                        InspectAction::Step(kind) => app.step_debug(kind, cx),
+                        InspectAction::Frame(frame) => {
+                            app.select_inspection_frame(frame, window, cx)
+                        }
+                        InspectAction::Navigate(source, line) => {
+                            app.open_debug_location(&source, line, window, cx);
+                        }
+                        InspectAction::Hide => app
+                            .terminal
+                            .update(cx, |panel, cx| panel.set_visible(false, cx)),
+                    }
+                });
+            });
+        });
+    }
+    fn button(
+        &self,
+        id: String,
+        label: String,
+        reason: Option<String>,
+        action: InspectAction,
+        cx: &Context<Self>,
+    ) -> Button {
+        let selector = id.clone();
+        Button::new(id)
+            .small()
+            .compact()
+            .ghost()
+            .label(label.clone())
+            .disabled(reason.is_some())
+            .tooltip(reason.unwrap_or(label))
+            .debug_selector(move || selector.clone())
+            .on_click(
+                cx.listener(move |view, _, window, cx| view.dispatch(action.clone(), window, cx)),
+            )
+    }
+}
+impl Render for InspectionView {
+    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let model = &self.model;
+        let mut toolbar = h_flex().gap_1().items_center().flex_wrap();
+        for (method, key, result) in [
+            ("resume", "run.debug_resume", &model.controls.resume),
+            ("pause", "run.debug_pause", &model.controls.pause),
+            ("stop", "run.debug_stop", &model.controls.stop),
+        ] {
+            toolbar = toolbar.child(self.button(
+                format!("debug-panel-{method}"),
+                t!(key).to_string(),
+                result.as_ref().err().cloned(),
+                InspectAction::Control(method),
+                cx,
+            ));
+        }
+        for (kind, result) in &model.controls.step {
+            let key = match kind {
+                editor_core::DebugStep::Into => "run.debug_into",
+                editor_core::DebugStep::Over => "run.debug_over",
+                editor_core::DebugStep::Out => "run.debug_out",
+            };
+            toolbar = toolbar.child(self.button(
+                format!("debug-panel-step-{}", kind.as_str()),
+                t!(key).to_string(),
+                result.as_ref().err().cloned(),
+                InspectAction::Step(*kind),
+                cx,
+            ));
+        }
+        toolbar = toolbar
+            .child(self.button(
+                "debug-panel-force".into(),
+                t!("run.force").to_string(),
+                (!model.force).then(|| t!("run.debug_exited").to_string()),
+                InspectAction::Control("force"),
+                cx,
+            ))
+            .child(self.button(
+                "debug-panel-hide".into(),
+                t!("run.debug_hide").to_string(),
+                None,
+                InspectAction::Hide,
+                cx,
+            ));
+        let mut breakpoints = v_flex()
+            .id("debug-panel-breakpoints")
+            .debug_selector(|| "debug-panel-breakpoints".into())
+            .flex_1()
+            .min_w_0()
+            .min_h_0()
+            .overflow_y_scroll()
+            .child(div().font_semibold().child(t!("run.debug_breakpoints")));
+        for (source, line, verified) in &model.breakpoints {
+            let label = match verified {
+                Some(true) => t!("run.breakpoint_verified"),
+                Some(false) => t!("run.breakpoint_unverified"),
+                None => t!("run.breakpoint_waiting"),
+            };
+            breakpoints = breakpoints.child(
+                self.button(
+                    format!("debug-panel-breakpoint-{source}-{line}"),
+                    format!("{source}:{line} ({label})"),
+                    None,
+                    InspectAction::Navigate(source.clone(), *line),
+                    cx,
+                )
+                .content_full_width(),
+            );
+        }
         let mut frames = v_flex()
             .id("debug-panel-frames")
             .debug_selector(|| "debug-panel-frames".into())
@@ -235,22 +318,19 @@ impl EditorApp {
             .min_w_0()
             .min_h_0()
             .overflow_y_scroll()
-            .track_scroll(&self.debug_panel.frames)
+            .track_scroll(&self.frames)
             .child(div().font_semibold().child(t!("run.debug_stack")));
-        for row in rows.frames {
-            let frame = row.frame;
-            let selector = format!("debug-panel-frame-{frame}");
+        for row in &model.rows.frames {
             frames = frames.child(
-                Button::new(selector.clone())
-                    .label(row.label)
-                    .small()
-                    .ghost()
-                    .content_full_width()
-                    .when(row.selected, |button| button.text_color(cx.theme().primary))
-                    .debug_selector(move || selector.clone())
-                    .on_click(cx.listener(move |this, _, window, cx| {
-                        this.select_inspection_frame(frame, window, cx)
-                    })),
+                self.button(
+                    format!("debug-panel-frame-{}", row.frame),
+                    row.label.clone(),
+                    None,
+                    InspectAction::Frame(row.frame),
+                    cx,
+                )
+                .content_full_width()
+                .when(row.selected, |button| button.text_color(cx.theme().primary)),
             );
         }
         let mut variables = v_flex()
@@ -260,83 +340,75 @@ impl EditorApp {
             .min_w_0()
             .min_h_0()
             .overflow_y_scroll()
-            .track_scroll(&self.debug_panel.variables)
+            .track_scroll(&self.variables)
             .child(div().font_semibold().child(t!("run.debug_locals")));
-        if rows.variables.is_empty() {
-            variables = variables.child(div().child(t!("run.debug_no_locals")));
+        if model.rows.variables.is_empty() {
+            variables = variables.child(t!("run.debug_no_locals"));
         }
-        for row in rows.variables {
+        for row in &model.rows.variables {
+            let selector = row.selector.clone();
             variables = variables.child(
                 div()
-                    .debug_selector(move || row.selector.clone())
-                    .child(row.label),
+                    .debug_selector(move || selector.clone())
+                    .child(row.label.clone()),
             );
         }
-        let mut panel = v_flex()
+        v_flex()
             .id("debug-panel")
             .debug_selector(|| "debug-panel".into())
             .w_full()
-            .h(px(220.))
-            .max_h(px(300.))
-            .flex_shrink_0()
-            .gap_1()
+            .h_full()
+            .min_h_0()
             .p_2()
+            .gap_1()
             .border_t_1()
             .border_color(cx.theme().border)
             .bg(cx.theme().background)
             .text_color(cx.theme().foreground)
             .text_sm()
-            .track_focus(&self.debug_panel.focus)
+            .track_focus(&self.focus)
             .on_mouse_down(
                 MouseButton::Left,
-                cx.listener(|this, _, window, cx| {
-                    this.debug_panel.focus.focus(window, cx);
-                    // The surrounding editor also handles pointer focus; inspection owns this click.
+                cx.listener(|view, _, window, cx| {
+                    view.focus.focus(window, cx);
                     cx.stop_propagation();
                 }),
             )
-            .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
+            .on_key_down(cx.listener(|view, event: &KeyDownEvent, window, cx| {
                 let key = event.keystroke.key.as_str();
                 let shift = event.keystroke.modifiers.shift;
-                match (key, shift) {
-                    ("f5", false) => this.debug_action("resume", cx),
-                    ("f5", true) => this.debug_action("stop", cx),
-                    ("f6", _) => this.debug_action("pause", cx),
-                    ("f10", _) => this.step_debug(editor_core::DebugStep::Over, cx),
-                    ("f11", false) => this.step_debug(editor_core::DebugStep::Into, cx),
-                    ("f11", true) => this.step_debug(editor_core::DebugStep::Out, cx),
+                let action = match (key, shift) {
+                    ("f5", false) => InspectAction::Control("resume"),
+                    ("f5", true) => InspectAction::Control("stop"),
+                    ("f6", _) => InspectAction::Control("pause"),
+                    ("f10", _) => InspectAction::Step(editor_core::DebugStep::Over),
+                    ("f11", false) => InspectAction::Step(editor_core::DebugStep::Into),
+                    ("f11", true) => InspectAction::Step(editor_core::DebugStep::Out),
                     ("up" | "down", _) => {
-                        let frames = this.run_controls.debug_frames();
-                        if frames.is_empty() {
+                        let rows = &view.model.rows.frames;
+                        if rows.is_empty() {
                             return;
                         }
-                        let previous = frames
-                            .iter()
-                            .position(|frame| {
-                                Some(frame.id) == this.run_controls.selected_debug_frame()
-                            })
-                            .unwrap_or(0);
+                        let previous = rows.iter().position(|row| row.selected).unwrap_or(0);
                         let next = if key == "up" {
                             previous.saturating_sub(1)
                         } else {
-                            (previous + 1).min(frames.len() - 1)
+                            (previous + 1).min(rows.len() - 1)
                         };
-                        let frame = frames[next].id;
-                        this.debug_panel.frames.scroll_to_item(next);
-                        this.select_inspection_frame(frame, window, cx);
+                        view.frames.scroll_to_item(next);
+                        InspectAction::Frame(rows[next].frame)
                     }
                     _ => return,
-                }
+                };
+                view.dispatch(action, window, cx);
                 cx.stop_propagation();
             }))
             .child(toolbar)
             .child(
                 div()
                     .debug_selector(|| "debug-panel-state".into())
-                    .child(status),
+                    .child(model.status.clone()),
             )
-            // The shared row must stretch panes to its bounded height. Center alignment leaves
-            // each long list at its full content height, so a wheel has no viewport to scroll.
             .child(
                 h_flex()
                     .items_stretch()
@@ -346,10 +418,9 @@ impl EditorApp {
                     .child(breakpoints)
                     .child(frames)
                     .child(variables),
-            );
-        if rows.another_paused {
-            panel = panel.child(div().child(t!("run.debug_other_paused")));
-        }
-        Some(panel.into_any_element())
+            )
+            .when(model.rows.another_paused, |panel| {
+                panel.child(t!("run.debug_other_paused"))
+            })
     }
 }

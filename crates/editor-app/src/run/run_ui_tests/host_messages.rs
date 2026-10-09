@@ -65,7 +65,7 @@ fn host_messages_run_admission_retains_host_refusals(cx: &mut TestAppContext) {
                             cx,
                         ),
                         "build" => app.build_selected(window, cx),
-                        "debug" => app.debug_selected(cx),
+                        "debug" => app.debug_selected(window, cx),
                         _ => unreachable!(),
                     }
                     let expected = if restricted {

@@ -347,10 +347,21 @@ impl Processes {
     /// Preserve each owner's error and already-read output. A failed cleanup cannot detach a live
     /// lease or silently discard another process's output in the same supervisor iteration.
     pub(crate) fn poll_native_observed(&mut self) -> Vec<(u64, anyhow::Result<Update>)> {
+        self.poll_native_ready(|_| true)
+    }
+
+    /// A bounded presentation may defer reading one PTY while its control/retirement remains live.
+    pub(crate) fn poll_native_ready(
+        &mut self,
+        mut ready: impl FnMut(u64) -> bool,
+    ) -> Vec<(u64, anyhow::Result<Update>)> {
         self.reap_finished();
         let mut events = vec![];
         let mut exited = vec![];
         for (&handle, process) in &mut self.items {
+            if !ready(handle) {
+                continue;
+            }
             let mut updates = Vec::new();
             let result = (|| -> anyhow::Result<()> {
                 if process.exit_code.is_none()
@@ -419,6 +430,13 @@ impl Processes {
             self.items.remove(&id);
         }
         events
+    }
+
+    /// Presentation is valid only for an actual PTY, not the adapter's separate protocol pipes.
+    pub(crate) fn is_pty(&self, id: u64) -> bool {
+        self.items
+            .get(&id)
+            .is_some_and(|process| process.applied_size != (0, 0))
     }
 }
 

@@ -424,6 +424,9 @@ pub(super) fn pump_recording_all(
             match answer {
                 Ok(pending) => {
                     if method == "start" {
+                        state
+                            .debug_terminal_requests
+                            .insert(pending.session().into(), *request);
                         state.debug_answers.push((
                             *request,
                             super::DebugAnswerMessage::Connecting(pending.session().into()),
@@ -463,6 +466,22 @@ pub(super) fn pump_recording_all(
         false
     });
     work.retain(|item| match item {
+        Work::PresentedInput { handle, bytes } => {
+            manager.terminal_input(handle, bytes).unwrap();
+            false
+        }
+        Work::PresentedResize {
+            handle,
+            columns,
+            rows,
+        } => {
+            manager.terminal_resize(handle, *columns, *rows).unwrap();
+            false
+        }
+        Work::PresentedExit { handle, mode } => {
+            manager.terminal_exit(handle, *mode).unwrap();
+            false
+        }
         Work::ExecutionInput { session, bytes } => {
             manager
                 .input_execution(*session, bytes.clone())
@@ -792,6 +811,7 @@ pub(super) fn publish_frame(
             })
         })
         .collect::<Vec<_>>();
+    let presentations = manager.take_terminal_presentations();
     cx.update(|window, cx| {
         app.read(cx).extensions.clone().update(cx, |owner, cx| {
             let mut state = owner.worker.state.lock().unwrap();
@@ -799,6 +819,22 @@ pub(super) fn publish_frame(
             // supplies the same complete ownership publication as the production actor.
             state.publish_manager(manager);
             state.native_execution_updates.extend(native_updates);
+            let messages = presentations
+                .into_iter()
+                .map(|presentation| {
+                    let request_id = presentation
+                        .owner
+                        .as_ref()
+                        .and_then(|owner| state.debug_terminal_requests.get(&owner.invocation))
+                        .copied()
+                        .unwrap_or(0);
+                    super::worker::PresentedTerminalMessage {
+                        request_id,
+                        presentation,
+                    }
+                })
+                .collect::<Vec<_>>();
+            state.terminal_presentations.extend(messages);
             state.diagnostics = manager
                 .installed
                 .keys()

@@ -24,6 +24,7 @@ mod service_replies;
 mod settings;
 mod stdio;
 mod structure;
+mod terminal_calls;
 mod tools;
 use resource_roots::ResourceRoots;
 wasmtime::component::bindgen!({path:"../plugin-protocol/wit",world:"plugin",require_store_data_send:true});
@@ -57,6 +58,8 @@ struct State {
     /// Service definitions and process handles cannot be retargeted by guest request fields.
     services: std::collections::BTreeMap<String, plugin_protocol::process::Service>,
     process_handles: std::collections::BTreeMap<u64, (api::ResourceHandle, String)>,
+    /// Original calling workspace stays fixed even for resources held by an application provider.
+    process_display_scopes: std::collections::BTreeMap<u64, String>,
     /// Each native process separately pins its immutable runtime files until it exits or is retired.
     process_dependencies: std::collections::BTreeMap<u64, Vec<std::sync::Arc<std::fs::File>>>,
     workspace: PathBuf,
@@ -349,6 +352,7 @@ impl Instance {
             processes: Processes::default(),
             services: manifest.services.clone(),
             process_handles: Default::default(),
+            process_display_scopes: Default::default(),
             process_dependencies: Default::default(),
             workspace: PathBuf::from(&environment.workspace),
             data,
@@ -627,6 +631,7 @@ impl Instance {
         self.views.clear();
         self.store.data_mut().processes.clear();
         self.store.data_mut().process_handles.clear();
+        self.store.data_mut().process_display_scopes.clear();
         self.store.data_mut().process_dependencies.clear();
         self.store.data_mut().active = false;
     }
@@ -692,7 +697,7 @@ impl Instance {
             if self.store.data_mut().accept_process_event(&event) {
                 let finished = if let api::Notification::Process {
                     handle,
-                    update: process::Update::Exited { .. },
+                    update: process::Update::Exited { .. } | process::Update::Terminated,
                 } = &event
                 {
                     Some(handle.resource)

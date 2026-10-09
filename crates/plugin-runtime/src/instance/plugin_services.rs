@@ -319,6 +319,19 @@ impl State {
             } => "process.exec",
             api::Operation::Process {
                 operation:
+                    process::Operation::PresentTerminal { handle, .. }
+                    | process::Operation::TerminalOutput { handle, .. },
+            } if owned(handle) => {
+                if !context.permissions.contains("process.exec") {
+                    return Err(Failure::new(
+                        ErrorCode::PermissionDenied,
+                        "Terminal source did not delegate process.exec",
+                    ));
+                }
+                "ui.panels"
+            }
+            api::Operation::Process {
+                operation:
                     process::Operation::Write { handle, .. }
                     | process::Operation::Resize { handle, .. }
                     | process::Operation::RequestExit { handle, .. }

@@ -1,4 +1,6 @@
 //! One source-owned target, its adapter handshake, and pause-scoped request correlations.
+mod messages;
+
 use crate::transport::{Transport, failure};
 use plugin_protocol::{
     api::{self, ErrorCode, Failure, ResourceHandle},
@@ -39,6 +41,8 @@ enum Pending {
 /// All mutable adapter state stays in this guest; the handle is a host-owned native job root.
 pub struct Session {
     pub handle: ResourceHandle,
+    /// A separate owned PTY transports target I/O; adapter stdout remains byte-exact DAP.
+    terminal: Option<ResourceHandle>,
     pub owner: String,
     id: String,
     transport: Transport,
@@ -58,7 +62,6 @@ pub struct Session {
     reason: String,
     source: Option<String>,
     line: Option<u32>,
-    output: String,
     diagnostics: String,
     stop_replies: Vec<ResourceHandle>,
 }
@@ -79,6 +82,7 @@ impl Session {
         };
         let mut session = Self {
             handle,
+            terminal: None,
             owner: call.caller.instance,
             id,
             transport: Transport::default(),
@@ -96,24 +100,11 @@ impl Session {
             reason: String::new(),
             source: None,
             line: None,
-            output: String::new(),
             diagnostics: String::new(),
             stop_replies: Vec::new(),
         };
         session.breakpoints = group_breakpoints(&session.launch)?;
-        // Presentation is a public editor request owned by the same source as the adapter job.
-        // Installation has no such request; only an explicit debug launch reveals its output.
-        if let Err(error) = api::guest::EditorTask::start(
-            api::EditorOperation::SetPanelVisibility {
-                panel: "debug-output".into(),
-                visible: true,
-            },
-            30_000,
-        ) {
-            session.release();
-            return Err(error);
-        }
-        if let Err(error) = session.send("initialize", json!({"adapterID":"codelldb","clientID":"me-editor","linesStartAt1":true,"columnsStartAt1":true,"pathFormat":"path","supportsRunInTerminalRequest":false}), Pending::Initialize) {
+        if let Err(error) = session.send("initialize", json!({"adapterID":"codelldb","clientID":"me-editor","linesStartAt1":true,"columnsStartAt1":true,"pathFormat":"path","supportsRunInTerminalRequest":true}), Pending::Initialize) {
             session.release(); return Err(error);
         }
         Ok(session)
@@ -121,22 +112,6 @@ impl Session {
     /// Native completion is authoritative even if the adapter never sent a DAP terminated event.
     pub fn ended(&self) -> bool {
         self.state == "exited"
-    }
-    /// Each output choice has a stable session identity and its original user-visible configuration name.
-    pub fn caption(&self) -> String {
-        format!(
-            "{} · {} [{}]",
-            self.launch["name"].as_str().unwrap_or("调试 / Debug"),
-            self.id,
-            self.state
-        )
-    }
-    /// Show bounded target output separately from typed call stack/variable results.
-    pub fn transcript(&self) -> String {
-        format!(
-            "Session {} [{}]\n{}{}",
-            self.id, self.state, self.output, self.diagnostics
-        )
     }
     /// Exact source ownership was checked by the dispatcher before every control or read.
     pub fn call(&mut self, call: service::Invocation) -> Result<Option<Value>, Failure> {
@@ -287,6 +262,9 @@ impl Session {
     }
     /// Release guest authority; the host retains the native observer through asynchronous tree/EOF cleanup.
     pub fn release(&mut self) {
+        if let Some(handle) = self.terminal.take() {
+            let _ = api::guest::request(api::Operation::CloseResource { handle });
+        }
         let _ = api::guest::request(api::Operation::CloseResource {
             handle: self.handle.clone(),
         });
@@ -306,7 +284,7 @@ impl Session {
             }),
             process::Update::Output { bytes, .. } => {
                 append_bounded(&mut self.diagnostics, &String::from_utf8_lossy(&bytes));
-                Ok(())
+                self.publish_output(&String::from_utf8_lossy(&bytes))
             }
             process::Update::Exited { .. } | process::Update::Terminated => {
                 self.finish_exit();
@@ -315,6 +293,7 @@ impl Session {
         };
         if let Err(error) = result {
             append_bounded(&mut self.diagnostics, &error.message);
+            let _ = self.publish_output(&error.message);
             self.fail_pending(error);
             self.release();
         }
@@ -330,266 +309,6 @@ impl Session {
             }
         }
     }
-    /// Correlate responses by sequence and inspections by pause generation, never by arrival order.
-    fn message(&mut self, message: Value) -> Result<(), Failure> {
-        if message["type"] == "event" {
-            return self.event(&message);
-        }
-        if message["type"] == "request" {
-            return Err(failure(
-                "Adapter requested an unsupported reverse operation",
-            ));
-        }
-        let Some(sequence) = message["request_seq"]
-            .as_u64()
-            .and_then(|value| u32::try_from(value).ok())
-        else {
-            return Err(failure("DAP response has no correlation"));
-        };
-        let Some(pending) = self.pending.remove(&sequence) else {
-            return Ok(());
-        };
-        if message["success"] != true {
-            let error = failure(
-                message["message"]
-                    .as_str()
-                    .unwrap_or("Adapter rejected the operation"),
-            );
-            if let Pending::Control { moves, pause, .. } = &pending {
-                if *moves && self.moving == Some(*pause) {
-                    self.moving = None;
-                }
-                if !moves {
-                    self.pausing = None;
-                }
-            }
-            if let Some(reply) = pending.reply().cloned() {
-                answer(reply, Err(error));
-                return Ok(());
-            }
-            if matches!(pending, Pending::Control { .. } | Pending::Stop(_)) {
-                return Ok(());
-            }
-            return Err(error);
-        }
-        let body = &message["body"];
-        match pending {
-            Pending::Initialize => {
-                let mut args = json!({"program":self.launch["program"],"args":self.launch["args"],"console":"internalConsole","stopOnEntry":self.launch["stop_on_entry"].as_bool().unwrap_or(false)});
-                if let Some(cwd) = self.launch.get("cwd") {
-                    args["cwd"] = cwd.clone();
-                }
-                if let Some(env) = self.launch["env"].as_array() {
-                    args["env"] = Value::Object(
-                        env.iter()
-                            .filter_map(|entry| {
-                                Some((entry["name"].as_str()?.into(), entry["value"].clone()))
-                            })
-                            .collect(),
-                    );
-                }
-                self.send("launch", args, Pending::Launch)?;
-            }
-            Pending::Launch => {
-                self.launched = true;
-                self.maybe_started();
-            }
-            Pending::InitialBreakpoints => self.configure_next()?,
-            Pending::Configured => {
-                self.configured = true;
-                self.maybe_started();
-            }
-            Pending::Control {
-                reply,
-                moves,
-                pause,
-            } => {
-                if moves && self.moving == Some(pause) {
-                    self.moving = None;
-                    // A stopped event may have overtaken this response; preserve that newer pause.
-                    if self.pause == pause && self.state == "paused" {
-                        self.invalidate_pause()?;
-                        self.state = "running";
-                    }
-                }
-                if let Some(reply) = reply {
-                    answer(reply, Ok(self.receipt()));
-                }
-            }
-            Pending::Stop(reply) => {
-                // DAP acknowledges termination intent. Only actual native job completion ends stop.
-                if let Some(reply) = reply {
-                    self.stop_replies.push(reply);
-                }
-                api::guest::request(api::Operation::Process {
-                    operation: process::Operation::RequestExit {
-                        handle: self.handle.clone(),
-                        mode: process::ExitMode::Force,
-                    },
-                })?;
-            }
-            Pending::Location(pause) => {
-                if pause == self.pause && self.state == "paused" {
-                    // A manual Windows pause may stop inside ntdll's synthetic breakpoint. Locate
-                    // the first actual source frame instead of inventing a path for disassembly.
-                    if let Some(frame) = body["stackFrames"].as_array().and_then(|frames| {
-                        frames
-                            .iter()
-                            .find(|frame| frame["source"]["path"].as_str().is_some())
-                    }) {
-                        self.source = frame["source"]["path"].as_str().map(str::to_owned);
-                        self.line = frame["line"]
-                            .as_u64()
-                            .and_then(|line| u32::try_from(line).ok());
-                    }
-                }
-            }
-            Pending::Frames(reply, pause) => {
-                if self.valid_pause(pause, &reply) {
-                    let frames = body["stackFrames"].as_array().ok_or_else(|| failure("Missing DAP stack frames"))?.iter().take(256)
-                        .filter_map(|frame| Some(json!({"id":frame["id"],"name":bounded(frame["name"].as_str()?,512),"source":frame["source"]["path"].as_str()?,"line":frame["line"].as_u64()?.max(1)}))).collect::<Vec<_>>();
-                    answer(reply, Ok(json!({"frames":frames})));
-                }
-            }
-            Pending::Scopes(reply, pause) => {
-                if self.valid_pause(pause, &reply) {
-                    let mut references: VecDeque<_> = body["scopes"]
-                        .as_array()
-                        .ok_or_else(|| failure("Missing DAP scopes"))?
-                        .iter()
-                        .take(16)
-                        .filter(|scope| scope["expensive"] != true)
-                        .filter_map(|scope| {
-                            scope["variablesReference"].as_u64().filter(|id| *id != 0)
-                        })
-                        .collect();
-                    if let Some(reference) = references.pop_front() {
-                        self.send(
-                            "variables",
-                            json!({"variablesReference":reference,"count":512}),
-                            Pending::Variables {
-                                reply,
-                                pause,
-                                references,
-                                values: vec![],
-                            },
-                        )?;
-                    } else {
-                        answer(reply, Ok(json!({"variables":[]})));
-                    }
-                }
-            }
-            Pending::Variables {
-                reply,
-                pause,
-                mut references,
-                mut values,
-            } => {
-                if self.valid_pause(pause, &reply) {
-                    for variable in body["variables"]
-                        .as_array()
-                        .ok_or_else(|| failure("Missing DAP variables"))?
-                    {
-                        if values.len() == 512 {
-                            break;
-                        }
-                        values.push(json!({"name":bounded(variable["name"].as_str().unwrap_or_default(),512),"value":bounded(variable["value"].as_str().unwrap_or_default(),4096)}));
-                    }
-                    if let Some(reference) = references.pop_front() {
-                        self.send(
-                            "variables",
-                            json!({"variablesReference":reference,"count":512-values.len()}),
-                            Pending::Variables {
-                                reply,
-                                pause,
-                                references,
-                                values,
-                            },
-                        )?;
-                    } else {
-                        answer(reply, Ok(json!({"variables":values})));
-                    }
-                }
-            }
-            Pending::Breakpoints {
-                reply,
-                mut groups,
-                mut values,
-                source,
-            } => {
-                for breakpoint in body["breakpoints"]
-                    .as_array()
-                    .ok_or_else(|| failure("Missing breakpoint acknowledgements"))?
-                {
-                    values.push(json!({"source":source,"line":breakpoint["line"].as_u64().unwrap_or(1).max(1),"verified":breakpoint["verified"] == true}));
-                }
-                if let Some((source, lines)) = groups.pop_front() {
-                    self.send(
-                        "setBreakpoints",
-                        breakpoint_args(&source, &lines),
-                        Pending::Breakpoints {
-                            reply,
-                            groups,
-                            values,
-                            source,
-                        },
-                    )?;
-                } else {
-                    answer(reply, Ok(json!({"breakpoints":values})));
-                }
-            }
-        }
-        Ok(())
-    }
-    /// Adapter events update only this target; pause state is never inferred from elapsed time.
-    fn event(&mut self, message: &Value) -> Result<(), Failure> {
-        let body = &message["body"];
-        match message["event"].as_str().unwrap_or_default() {
-            "initialized" => self.configure_next()?,
-            "thread" => {
-                if body["reason"] == "started" && self.thread == 0 {
-                    self.thread = body["threadId"].as_u64().unwrap_or(self.thread);
-                }
-            }
-            "stopped" => {
-                if let Some(description) = body["description"].as_str() {
-                    append_bounded(&mut self.diagnostics, description);
-                }
-                self.invalidate_pause()?;
-                self.state = "paused";
-                self.moving = None;
-                let requested = self
-                    .pausing
-                    .take()
-                    .filter(|_| body["allThreadsStopped"] == true);
-                self.thread = requested
-                    .or_else(|| body["threadId"].as_u64())
-                    .unwrap_or(self.thread);
-                self.reason = bounded(body["reason"].as_str().unwrap_or("paused"), 64);
-                self.send(
-                    "stackTrace",
-                    json!({"threadId":self.thread,"startFrame":0,"levels":256}),
-                    Pending::Location(self.pause),
-                )?;
-            }
-            "continued" => {
-                self.invalidate_pause()?;
-                self.state = "running";
-                self.moving = None;
-            }
-            "output" => append_bounded(
-                &mut self.output,
-                body["output"].as_str().unwrap_or_default(),
-            ),
-            "terminated" => {
-                // The target is gone. Release the enclosing adapter job and complete outstanding stops.
-                self.release();
-                self.finish_exit();
-            }
-            _ => {}
-        }
-        Ok(())
-    }
     /// Group breakpoints by source because DAP replaces the entire set of each source.
     fn configure_next(&mut self) -> Result<(), Failure> {
         if let Some((source, lines)) = self.breakpoints.pop_front() {
@@ -600,6 +319,20 @@ impl Session {
             )?;
         } else {
             self.send("configurationDone", json!({}), Pending::Configured)?;
+        }
+        Ok(())
+    }
+    /// Only decoded DAP text and adapter diagnostics enter the terminal; framed stdout stays private.
+    fn publish_output(&self, text: &str) -> Result<(), Failure> {
+        let normalized = text.replace("\r\n", "\n").replace('\n', "\r\n");
+        for bytes in normalized.as_bytes().chunks(16 * 1024) {
+            api::guest::request(api::Operation::Process {
+                operation: process::Operation::TerminalOutput {
+                    handle: self.handle.clone(),
+                    title: self.launch["name"].as_str().unwrap_or("Debug").into(),
+                    bytes: bytes.to_vec(),
+                },
+            })?;
         }
         Ok(())
     }

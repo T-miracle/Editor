@@ -137,6 +137,11 @@ fn main() {
         let body = String::from_utf8(bytes).unwrap();
         let sequence:u32 = body.split("\"seq\":").nth(1).unwrap().split(|c:char| !c.is_ascii_digit()).next().unwrap().parse().unwrap();
         let command = body.split("\"command\":\"").nth(1).unwrap().split('"').next().unwrap();
+        // The acknowledged disconnect may revoke this job immediately; persist its receipt first.
+        if command == "disconnect" {
+            let marker=std::path::PathBuf::from(std::env::args().nth(1).unwrap());
+            std::fs::write(marker.with_extension("disconnect"),"received").unwrap();
+        }
         if command == "next" { emit(&format!(r#"{{"type":"response","request_seq":{sequence},"success":false,"message":"STEP_REFUSED_BY_INSTRUMENT"}}"#)); continue; }
         let result = match command {
             "stackTrace" => r#"{"stackFrames":[{"id":0,"name":"main","source":{"path":"main.rs"},"line":8}]}"#.into(),
@@ -157,13 +162,47 @@ fn main() {
         if command == "initialize" { emit(r#"{"type":"event","event":"initialized","body":{}}"#); }
         if command == "configurationDone" { emit(r#"{"type":"event","event":"stopped","body":{"threadId":1,"reason":"breakpoint"}}"#); }
         if command == "disconnect" {
-            let marker=std::path::PathBuf::from(std::env::args().nth(1).unwrap());
-            std::fs::write(marker.with_extension("disconnect"),"received").unwrap();
             break;
         }
     }
 }
 "##;
+/// Compile the same genuine stdin target for public-runtime and painted native acceptance.
+pub fn interactive_program(directory: &Path) -> (PathBuf, PathBuf) {
+    let source = directory.join("input.rs");
+    std::fs::write(&source, r#"//! One real interactive debugging target; startup records prove instance count.
+#[inline(never)]
+fn calculate(value:i32)->i32 {
+    let doubled = value * 2;
+    doubled + 1
+}
+fn main() {
+    use std::io::Write;
+    let mut starts = std::fs::OpenOptions::new().create(true).append(true).open("starts.txt").unwrap();
+    writeln!(starts,"{}",std::process::id()).unwrap();
+    println!("WAITING_FOR_INPUT"); std::io::stdout().flush().unwrap();
+    let mut text = String::new(); std::io::stdin().read_line(&mut text).unwrap();
+    let value:i32 = text.trim().parse().unwrap();
+    let result = calculate(value);
+    println!("INPUT_RESULT:{result}");
+    std::thread::sleep(std::time::Duration::from_secs(60));
+}
+"#).unwrap();
+    let binary = directory.join("input.exe");
+    let build = std::process::Command::new("rustc")
+        .args(["--edition", "2024", "-g", "-C", "opt-level=0", "-o"])
+        .arg(&binary)
+        .arg(&source)
+        .output()
+        .unwrap();
+    assert!(
+        build.status.success(),
+        "{}",
+        String::from_utf8_lossy(&build.stderr)
+    );
+    (source, binary)
+}
+
 /// Compile a real Rust/MSVC executable and PDB with the installed compiler; no toolchain install.
 pub fn program(directory: &Path) -> (PathBuf, PathBuf) {
     let source = directory.join("debug_probe.rs");

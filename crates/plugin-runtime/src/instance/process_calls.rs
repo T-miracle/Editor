@@ -8,14 +8,7 @@ impl State {
     /// Quiescing must capture observation before the service table is cleared during an update.
     pub(super) fn retire_native_processes(&mut self) {
         for (id, (handle, _)) in self.process_handles.clone() {
-            let observer =
-                if let Some((_, context)) = self.plugin_services.resources.get(&handle.resource) {
-                    self.host_resources
-                        .preparations
-                        .closing(&context.lifetimes, &handle)
-                } else {
-                    Box::new(|_| {})
-                };
+            let observer = self.native_observer(&handle);
             if let Err(error) = self.processes.close_observed(id, observer) {
                 eprintln!("Native revocation failed: {error:#}");
             }
@@ -48,6 +41,59 @@ impl State {
     /// Service calls cannot provide a program, arguments, cwd, environment, or installer step.
     pub(super) fn process_request(&mut self, operation: Operation) -> Result<Value, Failure> {
         match operation {
+            Operation::PresentTerminal { handle, title } => {
+                let id = self.presentation_authority(&handle)?;
+                if !self.processes.is_pty(id) {
+                    return Err(Failure::new(
+                        ErrorCode::InvalidRequest,
+                        "Only an owned PTY can be presented",
+                    ));
+                }
+                let lifetimes = self
+                    .plugin_services
+                    .resources
+                    .get(&handle.resource)
+                    .map(|(_, context)| context.lifetimes.clone())
+                    .unwrap_or_default();
+                let owner = self.host_resources.preparations.terminal_owner(&lifetimes);
+                self.host_resources.terminals.present(
+                    &handle,
+                    title,
+                    owner,
+                    true,
+                    self.process_display_scopes[&id].clone(),
+                )?;
+                Ok(Value::Unit)
+            }
+            Operation::TerminalOutput {
+                handle,
+                title,
+                bytes,
+            } => {
+                let id = self.presentation_authority(&handle)?;
+                if bytes.len() > 16 * 1024 {
+                    return Err(Failure::new(
+                        ErrorCode::LimitExceeded,
+                        "Decoded output exceeds 16 KiB",
+                    ));
+                }
+                let lifetimes = self
+                    .plugin_services
+                    .resources
+                    .get(&handle.resource)
+                    .map(|(_, context)| context.lifetimes.clone())
+                    .unwrap_or_default();
+                let owner = self.host_resources.preparations.terminal_owner(&lifetimes);
+                self.host_resources.terminals.present(
+                    &handle,
+                    title,
+                    owner,
+                    false,
+                    self.process_display_scopes[&id].clone(),
+                )?;
+                self.host_resources.terminals.output(&handle, bytes)?;
+                Ok(Value::Unit)
+            }
             Operation::Resolve { program } => {
                 self.process_authority("process.exec")?;
                 if !self
@@ -191,19 +237,12 @@ impl State {
                 let id = self.process_id(&handle)?;
                 // Resource release revokes guest delivery, while the original preparation waits for
                 // the real tree/EOF receipt and retains tail output through its authenticated reaper.
-                let observer = if let Some((_, context)) =
-                    self.plugin_services.resources.get(&handle.resource)
-                {
-                    self.host_resources
-                        .preparations
-                        .closing(&context.lifetimes, &handle)
-                } else {
-                    Box::new(|_| {})
-                };
+                let observer = self.native_observer(&handle);
                 self.processes
                     .close_observed(id, observer)
                     .map_err(process_failure)?;
                 self.process_handles.remove(&id);
+                self.process_display_scopes.remove(&id);
                 self.process_dependencies.remove(&id);
                 self.plugin_services.resources.remove(&handle.resource);
                 self.roots.remove(&handle);
@@ -213,7 +252,30 @@ impl State {
         }
     }
 
-    fn process_id(&self, handle: &api::ResourceHandle) -> Result<u64, Failure> {
+    /// Both interactive presentation and decoded diagnostics retain the original execution grants.
+    fn presentation_authority(&self, handle: &api::ResourceHandle) -> Result<u64, Failure> {
+        self.process_authority("process.exec")?;
+        let id = self.process_id(handle)?;
+        if !self
+            .api
+            .capabilities
+            .get("process")
+            .is_some_and(|v| *v >= semver::Version::new(1, 7, 0))
+        {
+            return Err(Failure::new(
+                ErrorCode::CapabilityUnavailable,
+                "process 1.7 is required for terminal presentation",
+            ));
+        }
+        if !self.permissions.contains("ui.panels") {
+            return Err(Failure::new(
+                ErrorCode::PermissionDenied,
+                "ui.panels permission required",
+            ));
+        }
+        Ok(id)
+    }
+    pub(super) fn process_id(&self, handle: &api::ResourceHandle) -> Result<u64, Failure> {
         let RootKind::Process(id) = self.roots.resolve(handle)? else {
             return Err(Failure::new(
                 ErrorCode::InvalidHandle,
@@ -387,6 +449,18 @@ impl State {
             }
             self.process_handles
                 .insert(id, (handle.clone(), permission));
+            let source_scope = self
+                .plugin_services
+                .context
+                .as_ref()
+                .map(|context| context.caller.scope.as_str())
+                .unwrap_or(&handle.scope);
+            let scope = if source_scope == "application" {
+                self.host_resources.terminals.current_scope()
+            } else {
+                source_scope.into()
+            };
+            self.process_display_scopes.insert(id, scope);
         }
         Ok(value)
     }
@@ -416,8 +490,35 @@ impl State {
             }
         }
         let mut events = Vec::new();
-        for (id, update) in self.processes.poll_native()? {
+        let handles = &self.process_handles;
+        let projections = &self.host_resources.terminals;
+        for (id, result) in self.processes.poll_native_ready(|id| {
+            handles
+                .get(&id)
+                .is_none_or(|(handle, _)| projections.ready(handle))
+        }) {
             if let Some((handle, _)) = self.process_handles.get(&id).cloned() {
+                // Read the entire supervisor batch. One PTY error must not lose another owner's
+                // already-read bytes or final receipt after its native slot has been removed.
+                let update = match result {
+                    Ok(update) => update,
+                    Err(error) => {
+                        self.host_resources
+                            .terminals
+                            .fail(&handle, error.to_string());
+                        if let Some((_, context)) =
+                            self.plugin_services.resources.get(&handle.resource)
+                        {
+                            let mut observer = self
+                                .host_resources
+                                .preparations
+                                .closing(&context.lifetimes, &handle);
+                            observer(Err(error.to_string()));
+                        }
+                        continue;
+                    }
+                };
+                self.host_resources.terminals.update(&handle, &update);
                 if let Some((_, context)) = self.plugin_services.resources.get(&handle.resource) {
                     self.host_resources
                         .preparations
@@ -437,16 +538,42 @@ impl State {
         let Ok(RootKind::Process(id)) = self.roots.resolve(handle) else {
             return false;
         };
-        if matches!(update, Update::Exited { .. }) {
+        if matches!(update, Update::Exited { .. } | Update::Terminated) {
             self.process_dependencies.remove(&id);
             self.process_handles.remove(&id);
+            self.process_display_scopes.remove(&id);
             self.roots.remove(handle);
         }
         true
     }
 }
 
+impl State {
+    /// Closing delivery keeps both lifecycle and presented tail observations after guest revocation.
+    fn native_observer(
+        &self,
+        handle: &api::ResourceHandle,
+    ) -> Box<dyn FnMut(Result<Update, String>) + Send> {
+        let lifetimes = self
+            .plugin_services
+            .resources
+            .get(&handle.resource)
+            .map(|(_, context)| context.lifetimes.clone())
+            .unwrap_or_default();
+        let mut lifecycle = self.host_resources.preparations.closing(&lifetimes, handle);
+        let terminals = self.host_resources.terminals.clone();
+        let handle = handle.clone();
+        Box::new(move |result| {
+            match &result {
+                Ok(update) => terminals.update(&handle, update),
+                Err(error) => terminals.fail(&handle, error.clone()),
+            }
+            lifecycle(result);
+        })
+    }
+}
+
 /// Native I/O failure preserves a typed failure without pretending a side effect was undone.
-fn process_failure(error: anyhow::Error) -> Failure {
+pub(super) fn process_failure(error: anyhow::Error) -> Failure {
     Failure::new(ErrorCode::OperationFailed, error.to_string())
 }

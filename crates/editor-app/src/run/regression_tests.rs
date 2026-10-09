@@ -219,6 +219,35 @@ fn debug_programs_are_owned_work_until_their_real_exit() {
     );
 }
 
+/// Closing a starting target survives delayed creation and cannot cancel a replacement round.
+#[test]
+fn close_before_debug_creation_waits_for_its_original_identity() {
+    let mut controls = RunControls::default();
+    controls.begin_debug_session("closing");
+    let start = controls.begin_debug_start_request("closing").unwrap();
+    assert!(controls.defer_debug_close("closing"));
+    assert!(controls.take_ready_debug_closes().is_empty());
+    controls.begin_debug_session("unrelated");
+    controls
+        .note_debug_connecting(start, "original-root")
+        .unwrap();
+    assert_eq!(controls.take_ready_debug_closes(), vec!["closing"]);
+    assert!(controls.take_ready_debug_closes().is_empty());
+    controls.begin_debug_session("retry");
+    let old = controls.begin_debug_start_request("retry").unwrap();
+    assert!(controls.defer_debug_close("retry"));
+    controls
+        .fail_debug_reply(old, "initialization failed".into())
+        .unwrap();
+    controls.begin_debug_session("retry");
+    controls.begin_debug_start_request("retry").unwrap();
+    controls.note_debug_provider_session("retry", "new-root");
+    assert!(
+        controls.take_ready_debug_closes().is_empty(),
+        "an old close cannot kill a replacement"
+    );
+}
+
 /// Changing the start default cannot revoke optional controls on an already pinned live session.
 #[test]
 fn live_debug_controls_keep_the_original_provider_capabilities() {

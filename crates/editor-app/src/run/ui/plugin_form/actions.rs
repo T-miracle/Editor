@@ -460,7 +460,7 @@ impl EditorApp {
         self.plugin_configuration_bridge.resume = Some((id.into(), action.kind()));
         match action {
             Execution::Run(env) => self.start_configuration(id, env, window, cx),
-            Execution::Debug => self.debug_configuration(id, cx),
+            Execution::Debug => self.debug_configuration(id, window, cx),
             Execution::Build => {
                 if self
                     .run_controls

@@ -7,6 +7,7 @@ use std::time::{Duration, Instant};
 
 /// Click the actual painted hit region; a selector is never treated as a synthetic action dispatch.
 fn click(cx: &mut gpui_kit::VisualTestContext, selector: &'static str) {
+    cx.update(|window, cx| window.draw(cx).clear(cx));
     let position = cx
         .debug_bounds(selector)
         .unwrap_or_else(|| panic!("missing native control {selector}"))
@@ -37,11 +38,11 @@ fn frame(
 
 /// Native Debug enters one target, paints its real stack/locals and keeps a paused target on Cancel.
 #[gpui::test]
-#[ignore = "build terminal/rust-debugger through the current SDK and acquire the pinned CodeLLDB VSIX"]
+#[ignore = "build rust-debugger through the current SDK and acquire the pinned CodeLLDB VSIX"]
 fn native_rust_debug_controls_inspect_and_confirm_a_real_paused_target(cx: &mut TestAppContext) {
     let root = tempfile::tempdir().unwrap();
     let (source, binary) = packages::program(root.path());
-    let (mut manager, app, cx) = fixture(cx, root.path(), binary.to_str().unwrap(), vec![]);
+    let (mut manager, app, cx) = builtin_fixture(cx, root.path(), binary.to_str().unwrap(), vec![]);
     let debugger = packages::debugger("native-rust-debug");
     manager
         .install(&debugger, debugger.manifest.permissions.clone())
@@ -59,22 +60,13 @@ fn native_rust_debug_controls_inspect_and_confirm_a_real_paused_target(cx: &mut 
             id
         })
     });
-    let mut renderer = images::VectorRenderer::default();
-    let mut launches = Vec::new();
-    let mut debug = BTreeMap::new();
-    publish(&mut manager, &mut renderer, &app, cx);
+    let mut driver = crate::extensions::native_configuration_tests::Driver::default();
+    driver.frame(&mut manager, &app, cx);
     assert!(cx.debug_bounds("plugin-ui-debug-text").is_none());
     click(cx, "run-debug");
     let deadline = Instant::now() + Duration::from_secs(30);
     loop {
-        frame(
-            &mut manager,
-            &app,
-            cx,
-            &mut renderer,
-            &mut launches,
-            &mut debug,
-        );
+        driver.frame(&mut manager, &app, cx);
         if cx.update(|_, cx| {
             matches!(
                 app.read(cx).run_controls.debug_state(),
@@ -91,24 +83,18 @@ fn native_rust_debug_controls_inspect_and_confirm_a_real_paused_target(cx: &mut 
         std::thread::sleep(Duration::from_millis(10));
     }
     assert!(
-        launches.is_empty(),
+        driver.launches.is_empty(),
         "the final debug target must never also run through ordinary execution"
     );
-    assert_eq!(manager.live["native-rust-debug"].process_count(), 1);
+    assert_eq!(manager.live["native-rust-debug"].process_count(), 2);
     assert!(
-        cx.debug_bounds("plugin-ui-debug-text").is_some(),
-        "launch reveals its owned native output panel"
+        cx.debug_bounds("plugin-ui-debug-text").is_none(),
+        "debug output must not create a second plugin panel"
     );
+    assert!(cx.debug_bounds("native-terminal-output").is_some());
     let before = manager.debug_observations();
     click(cx, "run-debug");
-    frame(
-        &mut manager,
-        &app,
-        cx,
-        &mut renderer,
-        &mut launches,
-        &mut debug,
-    );
+    driver.frame(&mut manager, &app, cx);
     assert_eq!(
         manager.debug_observations().len(),
         before.len(),
@@ -122,14 +108,7 @@ fn native_rust_debug_controls_inspect_and_confirm_a_real_paused_target(cx: &mut 
     click(cx, "debug-panel-step-into");
     let deadline = Instant::now() + Duration::from_secs(20);
     loop {
-        frame(
-            &mut manager,
-            &app,
-            cx,
-            &mut renderer,
-            &mut launches,
-            &mut debug,
-        );
+        driver.frame(&mut manager, &app, cx);
         if cx.update(|_, cx| {
             app.read(cx)
                 .run_controls
@@ -181,7 +160,7 @@ fn native_rust_debug_controls_inspect_and_confirm_a_real_paused_target(cx: &mut 
     cx.run_until_parked();
     assert!(cx.debug_bounds("run-leave-confirm").is_some());
     click(cx, "run-leave-cancel");
-    assert_eq!(manager.live["native-rust-debug"].process_count(), 1);
+    assert_eq!(manager.live["native-rust-debug"].process_count(), 2);
     click(cx, "debug-panel-stop");
     let deadline = Instant::now() + Duration::from_secs(20);
     while !cx.update(|_, cx| {
@@ -190,32 +169,110 @@ fn native_rust_debug_controls_inspect_and_confirm_a_real_paused_target(cx: &mut 
             editor_core::DebugSessionState::Exited
         )
     }) {
-        frame(
-            &mut manager,
-            &app,
-            cx,
-            &mut renderer,
-            &mut launches,
-            &mut debug,
-        );
+        driver.frame(&mut manager, &app, cx);
         assert!(
             Instant::now() < deadline,
             "native Stop did not release its target tree"
         );
         std::thread::sleep(Duration::from_millis(10));
     }
-    frame(
-        &mut manager,
-        &app,
-        cx,
-        &mut renderer,
-        &mut launches,
-        &mut debug,
-    );
+    driver.frame(&mut manager, &app, cx);
     assert!(cx.update(|_, cx| matches!(
         app.read(cx).run_controls.debug_state(),
         editor_core::DebugSessionState::Exited
     )));
+    manager.shutdown();
+}
+
+/// Actual Canvas focus, IME input and Enter reach the sole debugger-owned target and its real pause.
+#[gpui::test]
+#[ignore = "build configuration-example/rust-debugger with the public SDK and prepare CodeLLDB"]
+fn native_debug_stdin_reaches_the_target_and_inspection_stays_inside_its_tab(
+    cx: &mut TestAppContext,
+) {
+    let root = tempfile::tempdir().unwrap();
+    let (source, binary) = packages::interactive_program(root.path());
+    let (mut manager, app, cx) = builtin_fixture(cx, root.path(), binary.to_str().unwrap(), vec![]);
+    let debugger = packages::debugger("native-stdin-debugger");
+    manager
+        .install(&debugger, debugger.manifest.permissions.clone())
+        .unwrap();
+    cx.update(|_, cx| {
+        app.update(cx, |app, _| {
+            let mut config = app.run_controls.selected().unwrap().clone();
+            config
+                .breakpoints
+                .insert(source.to_str().unwrap(), 4)
+                .unwrap();
+            app.run_controls
+                .upsert(config, &app.workspace_key())
+                .unwrap();
+        })
+    });
+    let mut driver = crate::extensions::native_configuration_tests::Driver::default();
+    driver.frame(&mut manager, &app, cx);
+    click(cx, "run-debug");
+    driver.wait(&mut manager, &app, cx, |cx| {
+        crate::terminal::tests::painted(&app, cx).contains("WAITING_FOR_INPUT")
+    });
+    assert!(cx.debug_bounds("plugin-ui-debug-text").is_none());
+    let terminal = cx.debug_bounds("native-terminal-output").unwrap();
+    let inspection = cx.debug_bounds("debug-panel").unwrap();
+    assert!(
+        inspection.top() >= terminal.bottom(),
+        "inspection belongs below this tab's grid"
+    );
+    click(cx, "native-terminal-output");
+    cx.simulate_input("7");
+    cx.simulate_keystrokes("enter");
+    driver.wait(&mut manager, &app, cx, |cx| {
+        cx.update(|_, cx| {
+            matches!(
+                app.read(cx).run_controls.debug_state(),
+                editor_core::DebugSessionState::Paused { line: 4, .. }
+            )
+        })
+    });
+    driver.wait(&mut manager, &app, cx, |cx| {
+        cx.update(|_, cx| {
+            app.read(cx)
+                .run_controls
+                .selected_debug_frame()
+                .is_some_and(|id| {
+                    app.read(cx)
+                        .run_controls
+                        .debug_variables(id)
+                        .iter()
+                        .any(|v| v.name == "value" && v.value == "7")
+                })
+        })
+    });
+    assert_eq!(
+        std::fs::read_to_string(root.path().join("starts.txt"))
+            .unwrap()
+            .lines()
+            .count(),
+        1
+    );
+    assert!(
+        driver.launches.is_empty(),
+        "no ordinary execution copy of a debug target"
+    );
+    click(cx, "debug-panel-resume");
+    driver.wait(&mut manager, &app, cx, |cx| {
+        crate::terminal::tests::painted(&app, cx).contains("INPUT_RESULT:15")
+    });
+    click(cx, "debug-panel-stop");
+    driver.wait(&mut manager, &app, cx, |cx| {
+        cx.update(|_, cx| {
+            matches!(
+                app.read(cx).run_controls.debug_state(),
+                editor_core::DebugSessionState::Exited
+            )
+        })
+    });
+    assert_eq!(manager.live["native-stdin-debugger"].process_count(), 0);
+    assert!(crate::terminal::tests::painted(&app, cx).contains("INPUT_RESULT:15"));
     manager.shutdown();
 }
 

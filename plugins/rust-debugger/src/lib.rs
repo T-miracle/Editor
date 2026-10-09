@@ -4,7 +4,7 @@ mod transport;
 use plugin_protocol::{
     api::{self, ErrorCode, Failure},
     bindings::{Guest, export},
-    service, ui,
+    service,
 };
 use session::Session;
 use std::{cell::RefCell, collections::BTreeMap};
@@ -13,9 +13,6 @@ use std::{cell::RefCell, collections::BTreeMap};
 struct Debugger {
     sessions: BTreeMap<String, Session>,
     next: u64,
-    revision: u64,
-    /// Selection belongs to the native output view; old histories cannot consume another target's budget.
-    selected: Option<String>,
 }
 thread_local! { static STATE:RefCell<Debugger> = RefCell::new(Debugger::default()); }
 struct Plugin;
@@ -65,12 +62,12 @@ impl Debugger {
                 event: api::Notification::Process { handle, update },
                 ..
             } => {
-                if let Some(session) = self
-                    .sessions
-                    .values_mut()
-                    .find(|session| session.handle == handle)
-                {
-                    session.update(update);
+                for session in self.sessions.values_mut() {
+                    if session.handle == handle {
+                        session.update(update.clone());
+                    } else {
+                        session.terminal_update(&handle, &update);
+                    }
                 }
             }
             api::Input::Event {
@@ -86,60 +83,11 @@ impl Debugger {
                     session.cancel_reply(&request);
                 }
             }
-            api::Input::Event {
-                event: api::Notification::Ui(event),
-                ..
-            } if event.node == "debug-sessions" => {
-                if let ui::Action::Select(id) = event.action
-                    && self.sessions.contains_key(&id)
-                {
-                    self.selected = Some(id);
-                }
-            }
             _ => {}
         }
-        self.revision = self.revision.saturating_add(1);
-        // The provider's output is ordinary native text; inspection uses separate typed debug replies.
-        let text = self
-            .selected
-            .as_ref()
-            .and_then(|id| self.sessions.get(id))
-            .map(Session::transcript)
-            .unwrap_or_default();
-        let choices = self
-            .sessions
-            .iter()
-            .map(|(id, session)| ui::OptionItem::new(id, session.caption()))
-            .collect();
+        // Presentation uses the public process API; this provider contributes no separate panel.
         Ok(api::Output {
             service_reply: reply,
-            views: vec![api::View {
-                panel: "debug-output".into(),
-                document: ui::Document::new(
-                    ui::Node::column(
-                        "debug-output-root",
-                        vec![
-                            ui::Node::new(
-                                "debug-sessions",
-                                ui::Kind::Choice {
-                                    options: choices,
-                                    selected: self.selected.clone(),
-                                },
-                            ),
-                            ui::Node::new(
-                                "debug-scroll",
-                                ui::Kind::Scroll {
-                                    content: Box::new(ui::Node::text("debug-text", text)),
-                                },
-                            )
-                            .grow(),
-                        ],
-                    )
-                    .gap(6.)
-                    .grow(),
-                )
-                .revision(self.revision),
-            }],
             // Logical snapshot excludes native handles and targets; recovery must never replay them.
             snapshot: Some(plugin_protocol::Snapshot {
                 schema: 1,
@@ -173,7 +121,6 @@ impl Debugger {
             .ok_or_else(|| transport::failure("Debug identity exhausted"))?;
         let id = self.next.to_string();
         let session = Session::start(id.clone(), call)?;
-        self.selected = Some(id.clone());
         self.sessions.insert(id, session);
         Ok(None)
     }

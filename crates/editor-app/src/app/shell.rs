@@ -457,9 +457,6 @@ impl Render for EditorApp {
                     .child(self.render_window_controls(window, cx)),
             )
             .child(h_flex().flex_1().min_h_0().child(self.dock_area.clone()))
-            .when_some(self.render_debug_panel(cx), |shell, panel| {
-                shell.child(panel)
-            })
             .child(
                 div()
                     .w_full()

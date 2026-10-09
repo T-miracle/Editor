@@ -1351,6 +1351,7 @@ impl Manager {
     pub(super) fn stop_owned_programs(&mut self) {
         // Debuggers own their targets as a separate resource tree; disconnect before parking a scope.
         self.stop_owned_debuggers();
+        self.retire_workspace_terminals();
         let active = self
             .host_sessions
             .iter()

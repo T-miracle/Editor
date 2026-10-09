@@ -47,13 +47,17 @@ pub use manager::{
     debug_dependency_for_test, frames_from_value, variables_from_value,
 };
 mod native_work;
+mod terminal_presentations;
 pub use native_work::{PreparationRegistry, PreparationSnapshot};
 pub use package::Package;
 pub use plugin_protocol;
+pub use terminal_presentations::{TerminalOwner, TerminalPresentation, TerminalPresentations};
 
 /// Host-owned resources travel with every candidate; guests only see negotiated descriptions.
 #[derive(Clone, Debug, Default)]
 pub struct HostResources {
+    /// Native terminal projection is shared across providers; it never owns or duplicates a child.
+    pub terminals: TerminalPresentations,
     /// Authenticated preparation observation shared with all delegated native-process owners.
     pub preparations: native_work::PreparationRegistry,
     /// No SDK is a supported host configuration; an export failure affects only a requesting guest.

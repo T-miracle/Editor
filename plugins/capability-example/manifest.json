@@ -1,7 +1,7 @@
 {
   "id": "capability-example",
   "name": "Capability Example",
-  "version": "0.17.0",
+  "version": "0.17.1",
   "settings_hook": true,
   "settings": {
     "enabled": { "title": "启用示例功能", "value_type": { "kind": "boolean" }, "default": true, "scope": "project", "apply": "restart_instance" },
@@ -19,6 +19,7 @@
   "permissions": ["assets.read", "workspace.read", "storage", "clipboard", "editor.read", "editor.write", "ui.panels"],
   "panels": [{ "id": "welcome", "title": "Capability Example", "position": "right" }],
   "commands": [
+    { "id": "process-request", "title": "调用已协商的公开进程操作" },
     { "id": "fault-spin", "title": "演示执行预算耗尽", "menu": true },
     { "id": "fault-memory", "title": "演示内存预算耗尽", "menu": true },
     { "id": "service-forge-host-reference", "title": "验证伪造宿主引用拒绝" },

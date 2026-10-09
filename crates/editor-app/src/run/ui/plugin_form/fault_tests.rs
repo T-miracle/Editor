@@ -186,7 +186,7 @@ fn plugin_configuration_execution_rechecks_environment_and_rejects_retired_recei
             app.update(cx, |app, cx| match intent {
                 0 => app.start_selected_run(window, cx),
                 1 => app.build_selected(window, cx),
-                _ => app.debug_configuration(&id, cx),
+                _ => app.debug_configuration(&id, window, cx),
             })
         });
         driver.wait(&mut manager, &app, cx, |cx| {

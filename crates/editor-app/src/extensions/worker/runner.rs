@@ -205,6 +205,17 @@ impl Worker {
                     })
                 } else {
                     match work.and_then(|work| work.admit(&manager, &output)) {
+                        Some(Work::PresentedInput { handle, bytes }) => {
+                            manager.terminal_input(&handle, &bytes)
+                        }
+                        Some(Work::PresentedResize {
+                            handle,
+                            columns,
+                            rows,
+                        }) => manager.terminal_resize(&handle, columns, rows),
+                        Some(Work::PresentedExit { handle, mode }) => {
+                            manager.terminal_exit(&handle, mode)
+                        }
                         Some(Work::ExecutionInput { session, bytes }) => manager
                             .input_execution(session, bytes)
                             .map(|completion| native_operations.push((session, completion))),
@@ -258,7 +269,24 @@ impl Worker {
                             match result {
                                 Ok(pending) => {
                                     if method == "start" {
-                                        output.lock().unwrap().debug_answers.push((
+                                        // This binding exists before native output or the eventual start receipt.
+                                        // Keep at most the same 128 identities allowed for host debug sessions.
+                                        let mut published = output.lock().unwrap();
+                                        if published.debug_terminal_requests.len() >= 128 {
+                                            published.debug_terminal_requests.retain(|id, _| {
+                                                manager.debug_status(id).is_ok_and(|state| {
+                                                    !matches!(
+                                                        state.state,
+                                                        plugin_runtime::DebugState::Exited
+                                                            | plugin_runtime::DebugState::Failed
+                                                    )
+                                                })
+                                            });
+                                        }
+                                        published
+                                            .debug_terminal_requests
+                                            .insert(pending.session().into(), request);
+                                        published.debug_answers.push((
                                             request,
                                             DebugAnswerMessage::Connecting(
                                                 pending.session().into(),
@@ -718,6 +746,35 @@ impl Worker {
                     Err(error) => manager.document_events_failed(error),
                 }
                 manager.poll();
+                if output.lock().unwrap().terminal_presentations.len() < 240 {
+                    let messages = manager
+                        .take_terminal_presentations()
+                        .into_iter()
+                        .map(|presentation| {
+                            let request_id = presentation
+                                .owner
+                                .as_ref()
+                                .and_then(|owner| {
+                                    output
+                                        .lock()
+                                        .unwrap()
+                                        .debug_terminal_requests
+                                        .get(&owner.invocation)
+                                        .copied()
+                                })
+                                .unwrap_or(0);
+                            PresentedTerminalMessage {
+                                request_id,
+                                presentation,
+                            }
+                        })
+                        .collect::<Vec<_>>();
+                    output
+                        .lock()
+                        .unwrap()
+                        .terminal_presentations
+                        .extend(messages);
+                }
                 native_operations.retain(|(session, completion)| match completion.status() {
                     api::RequestUpdate::Accepted | api::RequestUpdate::Progress { .. } => true,
                     api::RequestUpdate::Completed { result: Err(error) } => {

@@ -57,8 +57,8 @@ pub(crate) fn negotiate(manifest: &Manifest) -> anyhow::Result<api::Negotiated> 
         ("configuration".into(), Version::new(1, 0, 0)),
         ("ui.panels".into(), Version::new(1, 0, 0)),
         ("ui.clipboard".into(), Version::new(1, 0, 0)),
-        // 1.6 adds read-only tool resolution; availability never grants execution authority.
-        ("process".into(), Version::new(1, 6, 0)),
+        // 1.7 presents an already-owned PTY; negotiation still grants no execution or UI authority.
+        ("process".into(), Version::new(1, 7, 0)),
         // 1.2 adds owned native roots; 1.3 adds opt-in immutable diagnostic URI snapshots.
         ("language.lsp".into(), Version::new(1, 3, 0)),
         ("language.completion".into(), Version::new(1, 0, 0)),
@@ -73,4 +73,25 @@ pub(crate) fn negotiate(manifest: &Manifest) -> anyhow::Result<api::Negotiated> 
     Ok(requirements
         .negotiate(Version::new(1, 0, 0), &available)
         .map_err(anyhow::Error::msg)?)
+}
+
+/// Terminal presentation is an additive, negotiated process capability available to every identity.
+#[cfg(test)]
+mod terminal_tests {
+    use super::*;
+    #[test]
+    fn process_terminal_presentation_is_negotiated_without_an_identity_exception() {
+        for id in ["first-debug-consumer", "independent-terminal-consumer"] {
+            let manifest: Manifest = serde_json::from_value(serde_json::json!({
+                "id":id,"name":id,"version":"1.0.0","protocol":7,"component":"test.wasm",
+                "permissions":["process.exec","ui.panels"],"storage_limit":1024,
+                "api":{"base":"^1","required":{"process":">=1.7,<2"}}
+            }))
+            .unwrap();
+            assert_eq!(
+                negotiate(&manifest).unwrap().capabilities["process"],
+                Version::new(1, 7, 0)
+            );
+        }
+    }
 }

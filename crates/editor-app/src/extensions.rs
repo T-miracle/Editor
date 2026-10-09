@@ -88,6 +88,7 @@ use std::cell::RefCell;
 use std::collections::BTreeMap;
 pub(crate) use worker::DebugAnswerMessage;
 pub(crate) use worker::NativeExecutionMessage;
+pub(crate) use worker::PresentedTerminalMessage;
 pub(crate) use worker::configurations::{ConfigurationCatalog, ConfigurationReply};
 pub(crate) use worker::targets::TargetCatalog;
 pub use worker::{HostRunSnapshot, RunStatus, Work as HostWork};
@@ -1264,6 +1265,10 @@ impl ExtensionPanel {
     /// Ordered native bytes are drained once, retaining the launch identity needed to reject old rounds.
     pub(crate) fn take_native_execution_updates(&self) -> Vec<worker::NativeExecutionMessage> {
         std::mem::take(&mut self.worker.state.lock().unwrap().native_execution_updates)
+    }
+    /// Presented resources use separate typed publications; adapter protocol bytes never enter the grid.
+    pub(crate) fn take_terminal_presentations(&self) -> Vec<worker::PresentedTerminalMessage> {
+        std::mem::take(&mut self.worker.state.lock().unwrap().terminal_presentations)
     }
     /// Inspect lifecycle without consuming command answers belonging to the run coordinator.
     pub(crate) fn host_run_snapshots(&self) -> Vec<HostRunSnapshot> {

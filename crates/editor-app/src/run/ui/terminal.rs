@@ -16,6 +16,12 @@ impl EditorApp {
         if matches!(action, TaskAction::Reload) {
             self.plugin_configuration_bridge.jobs.reload(key);
         } else if matches!(action, TaskAction::Rerun) {
+            if self.terminal.read(cx).task_is_debug(key)
+                && !self.run_controls.debug_target_active(key)
+            {
+                self.debug_configuration(key, window, cx);
+                return;
+            }
             let workspace = self.workspace_key();
             self.run_controls.select(key, &workspace);
             self.rerun_selected(window, cx);
@@ -24,6 +30,11 @@ impl EditorApp {
             self.stop_terminal_task(key, execution, cx);
         } else {
             self.plugin_configuration_bridge.rerun_jobs.remove(key);
+            if self.run_controls.debug_target_active(key) {
+                self.run_controls.select_debug_session(key);
+                self.force_debug(cx);
+                return;
+            }
             if self.run_controls.configuration(key).is_some() {
                 let workspace = self.workspace_key();
                 self.run_controls.select(key, &workspace);
@@ -35,6 +46,13 @@ impl EditorApp {
                     mode: plugin_runtime::plugin_protocol::process::ExitMode::Force,
                     request_id: 0,
                 });
+            } else if let Some(handle) = self.terminal.read(cx).task_presentation(key) {
+                self.extensions
+                    .read(cx)
+                    .stage_host_run(Work::PresentedExit {
+                        handle,
+                        mode: plugin_runtime::plugin_protocol::process::ExitMode::Force,
+                    });
             }
         }
         cx.notify();
@@ -73,10 +91,16 @@ impl EditorApp {
     /// Drain bytes before advancing preparation, so the last build output precedes the target header.
     pub(super) fn sync_terminal_messages(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let messages = self.extensions.read(cx).take_native_execution_updates();
-        let reveal = messages.iter().any(|message| message.update.locate);
+        let presentations = self.extensions.read(cx).take_terminal_presentations();
+        let mut reveal = messages.iter().any(|message| message.update.locate);
         for message in messages {
             self.terminal
                 .update(cx, |panel, cx| panel.observe_execution(message, cx));
+        }
+        for message in presentations {
+            reveal |= self
+                .terminal
+                .update(cx, |panel, cx| panel.observe_presentation(message, cx));
         }
         if reveal && self.terminal.read(cx).visible() {
             self.reveal_terminal(window, cx);
@@ -208,6 +232,18 @@ impl EditorApp {
     ) {
         // Confirming Close revokes a queued stdio rerun as well as the currently owned process.
         self.plugin_configuration_bridge.rerun_jobs.remove(key);
+        if self.run_controls.debug_target_active(key) {
+            self.run_controls.select_debug_session(key);
+            if matches!(
+                self.run_controls.debug_state(),
+                editor_core::DebugSessionState::Starting
+            ) {
+                self.force_debug(cx);
+            } else {
+                self.debug_action("stop", cx);
+            }
+            return;
+        }
         let workspace = self.workspace_key();
         if self.run_controls.configuration(key).is_some() {
             self.run_controls.select(key, &workspace);
@@ -222,6 +258,13 @@ impl EditorApp {
                 mode: plugin_runtime::plugin_protocol::process::ExitMode::Graceful,
                 request_id: 0,
             });
+        } else if let Some(handle) = self.terminal.read(cx).task_presentation(key) {
+            self.extensions
+                .read(cx)
+                .stage_host_run(Work::PresentedExit {
+                    handle,
+                    mode: plugin_runtime::plugin_protocol::process::ExitMode::Graceful,
+                });
         }
     }
 }

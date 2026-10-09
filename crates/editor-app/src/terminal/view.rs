@@ -244,12 +244,33 @@ impl TerminalPanel {
 
     fn body(&mut self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
         self.reconcile(window, cx);
-        let canvas = div()
-            .debug_selector(|| "native-terminal-output".into())
+        let inspection = self
+            .active_task()
+            .and_then(|key| self.inspections.get(&key))
+            .cloned();
+        let canvas = v_flex()
+            .debug_selector(|| "native-terminal-tab".into())
             .min_w_0()
             .h_full()
             .flex_1()
-            .child(self.canvas.as_ref().unwrap().clone());
+            .min_h_0()
+            .child(
+                div()
+                    .debug_selector(|| "native-terminal-output".into())
+                    .flex_1()
+                    .min_h_0()
+                    .child(self.canvas.as_ref().unwrap().clone()),
+            )
+            .when_some(inspection, |body, view| {
+                body.child(
+                    div()
+                        .h(px(180.))
+                        .max_h(gpui_kit::relative(0.5))
+                        .flex_shrink_0()
+                        .min_h_0()
+                        .child(view),
+                )
+            });
         let sidebar = div()
             .w(px(self.preview_width.get().unwrap_or(self.tab_width)))
             .flex_shrink_0()

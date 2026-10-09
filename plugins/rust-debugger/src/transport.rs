@@ -12,6 +12,33 @@ pub struct Transport {
     sequence: u32,
 }
 impl Transport {
+    /// Reverse requests are answered on the protocol channel, never on target stdin.
+    pub fn response(
+        &mut self,
+        handle: &ResourceHandle,
+        request: &Value,
+        result: Result<Value, String>,
+    ) -> Result<(), Failure> {
+        self.sequence = self
+            .sequence
+            .checked_add(1)
+            .ok_or_else(|| failure("DAP sequence exhausted"))?;
+        let mut message = json!({"seq":self.sequence,"type":"response","request_seq":request["seq"],"command":request["command"],"success":result.is_ok()});
+        match result {
+            Ok(body) => message["body"] = body,
+            Err(error) => message["message"] = json!(error),
+        }
+        let payload = serde_json::to_vec(&message).map_err(|error| failure(error.to_string()))?;
+        let mut bytes = format!("Content-Length: {}\r\n\r\n", payload.len()).into_bytes();
+        bytes.extend(payload);
+        api::guest::request(api::Operation::Process {
+            operation: process::Operation::Write {
+                handle: handle.clone(),
+                bytes,
+            },
+        })?;
+        Ok(())
+    }
     /// Write one literal DAP request to this owned service and return its correlation number.
     pub fn send(
         &mut self,

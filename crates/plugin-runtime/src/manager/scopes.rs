@@ -134,6 +134,7 @@ impl Manager {
             );
         }
         self.environment = environment;
+        self.host_resources.terminals.select_scope(next_key.clone());
         self.trusted = trusted;
         self.workspace_open = true;
         self.native_executions.set_trusted(trusted);
@@ -197,6 +198,9 @@ impl Manager {
             // Trust revocation skips guest callbacks; ordinary close retains its bounded cleanup.
             if self.trusted {
                 self.stop_owned_programs();
+            } else {
+                // Revocation cannot call guests, but must revoke native resources even for global owners.
+                self.retire_workspace_terminals();
             }
             self.retire_workspace_images();
             self.retire_workspace_image_inputs();

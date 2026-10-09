@@ -67,6 +67,21 @@ impl RunStatus {
 }
 
 pub enum Work {
+    /// Native terminal input retains a guest's authenticated presentation handle, not an OS handle.
+    PresentedInput {
+        handle: api::ResourceHandle,
+        bytes: Vec<u8>,
+    },
+    PresentedResize {
+        handle: api::ResourceHandle,
+        columns: u16,
+        rows: u16,
+    },
+    /// Closing an independently presented PTY follows the same observed native exit contract.
+    PresentedExit {
+        handle: api::ResourceHandle,
+        mode: plugin_runtime::plugin_protocol::process::ExitMode,
+    },
     /// Native views use the same pinned execution owner as public service consumers.
     ExecutionInput {
         session: u64,
@@ -375,6 +390,9 @@ pub(super) struct Published {
     pub host_executions: Vec<HostRunSnapshot>,
     /// Ordered native execution bytes; a slow UI applies bounded backpressure rather than dropping VT state.
     pub native_execution_updates: Vec<NativeExecutionMessage>,
+    pub terminal_presentations: Vec<PresentedTerminalMessage>,
+    /// Host debug IDs bind PTY publications to accepted rounds before creation completes.
+    pub debug_terminal_requests: BTreeMap<String, u64>,
     /// Result of a start request the worker could not even queue, keyed by launch identity.
     pub run_errors: Vec<(String, u64, String)>,
     /// Answers to stop requests this editor made, keyed by stop identity.
@@ -538,6 +556,12 @@ pub struct NativeExecutionMessage {
     pub config: String,
     pub request_id: u64,
     pub update: plugin_runtime::NativeExecutionUpdate,
+}
+/// A host invocation is joined to its admitted UI round before any adapter handshake can publish bytes.
+#[derive(Clone, Debug)]
+pub struct PresentedTerminalMessage {
+    pub request_id: u64,
+    pub presentation: plugin_runtime::TerminalPresentation,
 }
 /// The channel disconnect also shuts down when the last UI owner is released.
 pub(super) struct Worker {

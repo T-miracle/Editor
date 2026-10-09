@@ -51,7 +51,7 @@ Independent configurations can run together. Selecting a session only changes wh
 
 ## Debug inspection
 
-Debug requires a compatible enabled provider, a usable configuration and applicable workspace authority. The native debug panel shows session selection, bound/unbound breakpoints, source location, call stack and local variables. Controls unsupported by the provider remain disabled with a reason.
+Debug requires a compatible enabled provider, a usable configuration and applicable workspace authority. Shell, build, run and debug tabs share the bottom terminal panel. Selecting a debug tab shows its controls, bound/unbound breakpoints, source location, call stack and local variables below that tab's command area. Controls unsupported by the provider remain disabled with a reason. A provider that supports terminal presentation can attach its sole debug target to a separate PTY: typing in the command area goes to the target, independently of debugger protocol messages.
 
 A real pause opens the reported source position. Selecting another reported frame requests that frame's locals. Continue and stepping invalidate the previous pause's inspection; late results cannot overwrite a new pause or a different session. In the focused debug panel, F5 continues, Shift+F5 stops, F6 pauses, F10 steps over, F11 steps into, Shift+F11 steps out, and Up/Down selects a frame.
 

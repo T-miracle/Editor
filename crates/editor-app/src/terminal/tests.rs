@@ -10,7 +10,7 @@ mod restore;
 mod tasks;
 
 /// Observe the actual native Canvas projection rather than private parser flags or mocked output.
-fn painted(app: &Entity<EditorApp>, visual: &mut VisualTestContext) -> String {
+pub(crate) fn painted(app: &Entity<EditorApp>, visual: &mut VisualTestContext) -> String {
     visual.update(|_, cx| {
         let terminal = app.read(cx).terminal.read(cx);
         terminal

@@ -243,7 +243,13 @@ impl Manager {
             let id = format!("debug-{}", self.debug_sessions.next);
             let caller = host_caller(&scope);
             let alive = Arc::new(AtomicBool::new(true));
-            let native = Arc::new(Mutex::new(NativeWork::default()));
+            let mut work = NativeWork::default();
+            work.terminal_owner = Some(crate::TerminalOwner {
+                scope: scope.clone(),
+                configuration: configuration.map(str::to_owned),
+                invocation: id.clone(),
+            });
+            let native = Arc::new(Mutex::new(work));
             self.host_resources.preparations.register(&alive, &native);
             let origin = Context {
                 caller: caller.clone(),

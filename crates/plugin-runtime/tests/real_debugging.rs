@@ -61,6 +61,114 @@ fn paused(manager: &mut Manager, session: &str) -> plugin_runtime::DebugSession 
         std::thread::sleep(Duration::from_millis(10));
     }
 }
+
+/// A genuine target blocks on PTY stdin, then hits a PDB breakpoint; there is no ordinary-run copy.
+#[test]
+#[ignore = "build the current rust-debugger package and prepare the pinned official CodeLLDB VSIX"]
+fn real_debugging_stdin_runs_one_target_and_preserves_inspection() {
+    let root = tempfile::tempdir().unwrap();
+    let (source, binary) = packages::interactive_program(root.path());
+    let package = packages::debugger("independent-interactive-debugger");
+    let mut manager = Manager::open(
+        root.path().join("plugins"),
+        Environment {
+            workspace: root.path().display().to_string(),
+            os: "windows".into(),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    manager
+        .install(&package, package.manifest.permissions.clone())
+        .unwrap();
+    let start = manager.begin_configured_debug_call(Some("input-config"), "start",
+        json!({"program":binary.display().to_string(),"args":[],"cwd":root.path().display().to_string(),"name":"Interactive",
+            "breakpoints":[{"source":source.display().to_string(),"line":4}]})).unwrap();
+    let receipt = answer(&mut manager, start);
+    let session = receipt["session"].as_str().unwrap().to_owned();
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let mut terminal = None;
+    let mut transcript = Vec::new();
+    while !String::from_utf8_lossy(&transcript).contains("WAITING_FOR_INPUT") {
+        manager.poll();
+        for message in manager.take_terminal_presentations() {
+            let owner = message
+                .owner
+                .as_ref()
+                .expect("debug invocation authenticates placement");
+            assert_eq!(owner.configuration.as_deref(), Some("input-config"));
+            assert_eq!(owner.invocation, session);
+            terminal = Some(message.handle);
+            for update in message.updates {
+                if let plugin_runtime::plugin_protocol::process::Update::Output { bytes, .. } =
+                    update
+                {
+                    transcript.extend(bytes);
+                }
+            }
+        }
+        assert!(
+            Instant::now() < deadline,
+            "real debug target has no presented stdin/output: {}",
+            String::from_utf8_lossy(&transcript)
+        );
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    let terminal = terminal.unwrap();
+    let mut foreign = terminal.clone();
+    foreign.instance.push_str("-foreign");
+    assert!(manager.terminal_input(&foreign, b"99\r").is_err());
+    manager.terminal_resize(&terminal, 100, 20).unwrap();
+    manager.terminal_input(&terminal, b"7\r").unwrap();
+    let stopped = paused(&mut manager, &session);
+    assert_eq!(stopped.line, Some(4));
+    let frames = manager
+        .debug_frames(&session, stopped.pause.unwrap())
+        .unwrap();
+    let frame = frames
+        .iter()
+        .find(|frame| frame.name.contains("calculate"))
+        .unwrap();
+    let variables = manager
+        .debug_variables(&session, stopped.pause.unwrap(), frame.id)
+        .unwrap();
+    assert!(
+        variables
+            .iter()
+            .any(|value| value.name == "value" && value.value == "7"),
+        "{variables:?}"
+    );
+    assert_eq!(
+        std::fs::read_to_string(root.path().join("starts.txt"))
+            .unwrap()
+            .lines()
+            .count(),
+        1
+    );
+    call(&mut manager, "resume", json!({"session":session}));
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while !String::from_utf8_lossy(&transcript).contains("INPUT_RESULT:15") {
+        manager.poll();
+        for message in manager.take_terminal_presentations() {
+            for update in message.updates {
+                if let plugin_runtime::plugin_protocol::process::Update::Output { bytes, .. } =
+                    update
+                {
+                    transcript.extend(bytes);
+                }
+            }
+        }
+        assert!(Instant::now() < deadline, "input result missing");
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    call(&mut manager, "stop", json!({"session":session}));
+    assert_eq!(
+        manager.live["independent-interactive-debugger"].process_count(),
+        0
+    );
+    assert!(manager.terminal_input(&terminal, b"late\r").is_err());
+    manager.shutdown();
+}
 /// Breakpoints and locals must come from the actual MSVC PDB, through a source-owned deferred call.
 #[test]
 #[ignore = "build rust-debugger through the current host SDK and download the pinned CodeLLDB VSIX first"]
@@ -405,12 +513,8 @@ fn stop_timeout_and_force_wait_for_actual_tree_before_rerun() {
 
 #[test]
 #[ignore = "build rust-debugger through the current public SDK first"]
-/// Each native output selection retains its own bounded tail after five noisy simultaneous targets.
+/// Five independent protocol consumers publish decoded text and diagnostics without leaking DAP.
 fn debug_output_choices_preserve_every_active_and_ended_session() {
-    use plugin_runtime::plugin_protocol::{
-        api,
-        ui::{Action, Kind, UiEvent},
-    };
     let root = tempfile::tempdir().unwrap();
     let id = "debug-output-instrument";
     let package = packages::fault_adapter(id, root.path());
@@ -438,35 +542,37 @@ fn debug_output_choices_preserve_every_active_and_ended_session() {
         paused(&mut manager, &host);
         sessions.push((host, marker));
     }
-    for (index, (host, marker)) in sessions.iter().enumerate() {
-        if index == 0 {
-            call(&mut manager, "stop", json!({"session":host}));
+    call(&mut manager, "stop", json!({"session":sessions[0].0}));
+    assert!(!manager.live[id].views.contains_key("debug-output"));
+    let mut histories = std::collections::BTreeMap::<String, String>::new();
+    for view in manager.take_terminal_presentations() {
+        assert!(
+            !view.interactive,
+            "decoded adapter output cannot accept target input"
+        );
+        let text = histories.entry(view.title).or_default();
+        for update in view.updates {
+            if let plugin_runtime::plugin_protocol::process::Update::Output { bytes, .. } = update {
+                text.push_str(&String::from_utf8_lossy(&bytes));
+            }
         }
-        let scene = manager.live[id].views["debug-output"].clone();
-        let Kind::Choice { options, .. } = &scene.active_node("debug-sessions").unwrap().kind
-        else {
-            panic!("native choices absent");
-        };
-        assert_eq!(options.len(), 5);
-        let selected = options[index].id.clone();
-        manager
-            .event(
-                id,
-                Some("debug-output".into()),
-                api::Notification::Ui(UiEvent {
-                    revision: scene.revision,
-                    node: "debug-sessions".into(),
-                    action: Action::Select(selected),
-                }),
-            )
-            .unwrap();
-        let scene = &manager.live[id].views["debug-output"];
-        let Kind::Text { text } = &scene.active_node("debug-text").unwrap().kind else {
-            panic!("native output absent");
-        };
-        assert!(text.contains(marker), "chosen output was lost: {marker}");
+    }
+    assert_eq!(histories.len(), 5);
+    for (index, (_, marker)) in sessions.iter().enumerate() {
+        let text = &histories[&format!("Output {index}")];
+        assert!(
+            text.contains(marker),
+            "decoded target output was lost: {marker}"
+        );
+        assert!(
+            text.contains(&"d".repeat(100)),
+            "adapter stderr must remain visible"
+        );
+        assert!(
+            !text.contains("Content-Length"),
+            "raw DAP must not enter the terminal"
+        );
         assert!(text.len() < 32768);
-        scene.validate().unwrap();
     }
     manager.shutdown();
 }

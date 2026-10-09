@@ -1,7 +1,7 @@
 {
   "id": "rust-debugger",
   "name": "Rust Debugger",
-  "version": "0.1.1",
+  "version": "0.2.0",
   "protocol": 7,
   "component": "rust-debugger.wasm",
   "permissions": [
@@ -15,20 +15,11 @@
     "base": "^1",
     "required": {
       "plugin.services": ">=1.1,<2",
-      "process": ">=1.5,<2",
-      "ui.native": "^1",
+      "process": ">=1.7,<2",
       "ui.panels": "^1",
       "dependencies": "^1"
     }
   },
-  "panels": [
-    {
-      "id": "debug-output",
-      "title": "调试输出 / Debug Output",
-      "position": "bottom",
-      "default_visible": false
-    }
-  ],
   "plugin_services": {
     "provides": {
       "debug.session": {

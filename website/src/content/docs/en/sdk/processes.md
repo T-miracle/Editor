@@ -6,7 +6,7 @@ order: 3
 alternate: /zh-cn/sdk/processes/
 ---
 
-# Native process capability 1.6
+# Native process capability 1.7
 
 The `process: ^1` capability is negotiated independently. Operations are sent through the
 ordinary SDK request as `api::Operation::Process { operation }`; a capability is never
@@ -112,6 +112,28 @@ capacity of 64, applying backpressure to bound the backlog with a bounded read p
 Insufficient permission, an unnegotiated capability, an invalid handle, an inactive instance,
 an exceeded request limit and native I/O failure are all returned as unified typed errors.
 ## Environment and normal exit
+
+`PresentTerminal { handle, title }` requires `process >=1.7,<2`, `process.exec` and
+`ui.panels`, including delegated caller grants. It presents an existing owned PTY in the
+native terminal and returns `Unit`; it never launches another process or transfers ownership.
+Stdio and foreign or retired handles are rejected. The host routes input and geometry to that
+same resource. An authenticated host invocation associates the view with its task; standalone
+consumers receive their own tab. Titles are nonempty, at most 256 bytes and have no control
+characters. There are at most 64 presentations, with bounded per-stream queues and fair frame
+draining. Output still reaches ordinary process notifications. Retirement preserves the terminal's
+final output through actual tree exit and EOF; stopped tabs retain read-only history.
+
+`TerminalOutput { handle, title, bytes }` uses the same process 1.7 permissions and ownership
+checks, and accepts at most 16 KiB per call. It creates a read-only projection and appends
+only text explicitly decoded by the consumer; raw process stdout is never mirrored. This
+keeps protocol framing out of the terminal while retaining diagnostics in the same host
+invocation's task tab. The diagnostic resource does not replace a separate interactive PTY.
+Read-only views reject input/resize; their owner still controls termination. Workspace views
+are retired on workspace departure and cannot publish into another workspace.
+Host terminal Stop retains the original resource for observation, waits up to 3000 ms after
+an accepted interrupt, then escalates to forceful tree termination. A Stdio view without a
+graceful protocol is forced immediately. Actual tree exit and EOF, rather than acceptance,
+complete closure. A projection's interactive/read-only mode cannot be changed in place.
 
 process 1.4 adds `Execute.env`, a caller-supplied environment overlay: at most 64 entries, names of 128 bytes and values of 32768 bytes. Names must be nonempty and contain neither NUL nor `=`; values must not contain NUL. The child inherits the native environment and receives these explicit overrides. The host neither logs values nor grants access to another instance's environment or process. Declared StartService settings cannot be replaced by this overlay.
 

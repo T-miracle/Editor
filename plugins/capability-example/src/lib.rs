@@ -350,6 +350,18 @@ impl State {
             api::Input::Event {
                 event: api::Notification::Command { id, arguments },
                 ..
+            } if id == "process-request" => {
+                // Any independently packaged consumer uses the same typed API; no host fixture callback exists.
+                let operation = serde_json::from_value(arguments.unwrap_or_default())
+                    .map_err(|error| Failure::new(ErrorCode::InvalidRequest, error.to_string()))?;
+                self.text = serde_json::to_string(&api::guest::request(api::Operation::Process {
+                    operation,
+                }))
+                .map_err(|error| Failure::new(ErrorCode::OperationFailed, error.to_string()))?;
+            }
+            api::Input::Event {
+                event: api::Notification::Command { id, arguments },
+                ..
             } if id == "process-events" => {
                 // Read one bounded event at a time; native text controls are not bulk byte storage.
                 let index = arguments

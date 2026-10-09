@@ -225,6 +225,8 @@ pub struct RunControls {
     debug_owners: std::collections::BTreeMap<String, String>,
     /// Replacing a debug target waits for the original target's actual final observation.
     debug_reruns: std::collections::BTreeMap<String, String>,
+    /// Confirmed closes made before the host creation receipt retain their original start request.
+    debug_closes: std::collections::BTreeMap<String, u64>,
     /// Source often arrives after the stopped receipt; locate each reported pause at most once.
     debug_position_epochs: std::collections::BTreeMap<String, u64>,
     /// Frozen final debug requests wait until every ordinary preparation step actually succeeds.
@@ -444,6 +446,7 @@ impl Default for RunControls {
             debug_epochs: Default::default(),
             debug_owners: Default::default(),
             debug_reruns: Default::default(),
+            debug_closes: Default::default(),
             debug_position_epochs: Default::default(),
             debug_preparations: Default::default(),
             debug_preparation_bindings: Default::default(),
@@ -1677,7 +1680,7 @@ impl RunControls {
         config: &str,
         mut plan: RunPlan,
         workspace: &str,
-    ) -> Result<(), String> {
+    ) -> Result<u64, String> {
         let target = plan
             .steps
             .pop()
@@ -1710,7 +1713,7 @@ impl RunControls {
         self.debug_preparations.insert(config.into(), arguments);
         let request = self.begin(config);
         self.begin_sequence(config, plan, request);
-        Ok(())
+        Ok(request)
     }
     /// Only the completed sequence may consume this once; a stopped preparation discards it.
     pub fn take_prepared_debug(&mut self, config: &str) -> Option<serde_json::Value> {
@@ -2718,6 +2721,7 @@ impl RunControls {
 
     /// Begin the debug session for one configuration, so its identity can be recorded when it answers.
     pub fn begin_debug_session(&mut self, config: &str) {
+        self.debug_closes.remove(config);
         // A restarted target owns a new epoch sequence; old numeric epochs cannot shadow it.
         self.debug_epochs.remove(config);
         self.debug_position_epochs.remove(config);
@@ -2743,6 +2747,48 @@ impl RunControls {
             frame: None,
         });
         Some(request)
+    }
+
+    /// Remember cancellation before creation; it cannot be redirected to a later launch round.
+    pub fn defer_debug_close(&mut self, config: &str) -> bool {
+        let Some(request) = self
+            .debug_requests
+            .iter()
+            .find(|pending| {
+                pending.config.as_deref() == Some(config) && pending.method == DebugMethod::Start
+            })
+            .map(|pending| pending.id)
+        else {
+            return false;
+        };
+        self.debug_closes.insert(config.into(), request);
+        true
+    }
+    /// An early host identity permits forceful cancellation without waiting for a DAP handshake.
+    pub fn take_ready_debug_closes(&mut self) -> Vec<String> {
+        let keys: Vec<_> = self
+            .debug_closes
+            .keys()
+            .filter(|config| {
+                self.debug_sessions.session(config).is_none_or(|session| {
+                    session.provider_session().is_some()
+                        || matches!(
+                            session.state(),
+                            editor_core::DebugSessionState::Failed { .. }
+                                | editor_core::DebugSessionState::Exited
+                        )
+                })
+            })
+            .cloned()
+            .collect();
+        let mut ready = Vec::new();
+        for config in keys {
+            self.debug_closes.remove(&config);
+            if self.debug_target_active(&config) {
+                ready.push(config);
+            }
+        }
+        ready
     }
 
     /// Actual failure clears this action and marks its own start, without failing a different selection.

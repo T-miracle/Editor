@@ -1,4 +1,4 @@
-//! Native execution declarations and typed process events; no terminal parsing belongs to the host.
+//! Native execution declarations and typed process events; the API does not expose parser internals.
 use serde::{Deserialize, Serialize};
 
 /// Installation approves this exact program and argument vector. Calls supply only its map key.
@@ -98,6 +98,22 @@ pub enum ExitMode {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Operation {
+    /// process 1.7: present this caller's existing PTY in the host's native terminal.
+    /// Requires process.exec and ui.panels, including the original service caller's grants.
+    /// This creates no process and transfers no ownership. The host routes input/resize to this
+    /// exact resource, and an authenticated invocation may place it in its existing task tab.
+    PresentTerminal {
+        handle: crate::api::ResourceHandle,
+        title: String,
+    },
+    /// process 1.7: append at most 16 KiB of explicitly decoded text to a resource's read-only view.
+    /// Requires the same ownership, process.exec and ui.panels grants as PresentTerminal. Native
+    /// stdout is never mirrored for this view; a protocol consumer decides what text is meaningful.
+    TerminalOutput {
+        handle: crate::api::ResourceHandle,
+        title: String,
+        bytes: Vec<u8>,
+    },
     /// process 1.6: resolve a bare executable or absolute path without starting it.
     /// Requires process.exec and the active/trusted instance. This is observation only;
     /// Execute still checks permissions and resolves the path again.

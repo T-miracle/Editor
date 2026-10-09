@@ -7,11 +7,12 @@ mod input;
 mod interaction;
 mod io;
 mod persistence;
+mod presentations;
 mod shell;
 pub(crate) mod task_view;
 mod tasks;
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;
 mod view;
 
 use crate::*;
@@ -70,6 +71,8 @@ pub(crate) struct TerminalPanel {
     group: Option<WeakEntity<gpui_base::dock::TabGroup>>,
     supervisor: NativeProcessGroup,
     canvas: Option<Entity<ui::plugin::CanvasView>>,
+    /// Inspection entities are presentation only; hiding/switching a tab keeps their focus/scroll state.
+    inspections: BTreeMap<String, Entity<crate::run::ui::panel::InspectionView>>,
     sidebar: Option<Entity<ui::controls::side_tabs::SideTabBar>>,
     width: f32,
     height: f32,
@@ -139,6 +142,7 @@ impl TerminalPanel {
             group: None,
             supervisor: NativeProcessGroup::new(trusted),
             canvas: None,
+            inspections: Default::default(),
             sidebar: None,
             width: 640.,
             height: 240.,
@@ -339,6 +343,7 @@ impl TerminalPanel {
         }
         if let Some(task) = &self.sessions[index].task {
             self.closed_tasks.insert(task.key.clone());
+            self.inspections.remove(&task.key);
         }
         self.sessions.remove(index);
         if self.pending_close == Some(id) {

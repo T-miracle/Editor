@@ -291,6 +291,35 @@ fn fixture<'a>(
     Entity<EditorApp>,
     &'a mut gpui_kit::VisualTestContext,
 ) {
+    fixture_with_provider(cx, root, program, args, true)
+}
+
+/// Built-in acceptance deliberately runs without an installed terminal package.
+fn builtin_fixture<'a>(
+    cx: &'a mut TestAppContext,
+    root: &std::path::Path,
+    program: &str,
+    args: Vec<String>,
+) -> (
+    plugin_runtime::Manager,
+    Entity<EditorApp>,
+    &'a mut gpui_kit::VisualTestContext,
+) {
+    fixture_with_provider(cx, root, program, args, false)
+}
+
+/// Share only workspace initialization; legacy consumers are retired by the migration ticket.
+fn fixture_with_provider<'a>(
+    cx: &'a mut TestAppContext,
+    root: &std::path::Path,
+    program: &str,
+    args: Vec<String>,
+    legacy: bool,
+) -> (
+    plugin_runtime::Manager,
+    Entity<EditorApp>,
+    &'a mut gpui_kit::VisualTestContext,
+) {
     cx.update(|cx| {
         gpui_kit::init(cx);
         typography::init(cx);
@@ -306,12 +335,23 @@ fn fixture<'a>(
         },
     )
     .unwrap();
-    let terminal = Package::read(
-        &PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../dist/plugins/terminal.zip"),
-    )
-    .unwrap();
-    let grants = terminal.manifest.permissions.clone();
-    manager.install(&terminal, grants).unwrap();
+    if legacy {
+        let terminal = Package::read(
+            &PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../dist/plugins/terminal.zip"),
+        )
+        .unwrap();
+        let grants = terminal.manifest.permissions.clone();
+        manager.install(&terminal, grants).unwrap();
+    } else {
+        let configuration = Package::read(
+            &PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .join("../../target/plugin-api-test/configuration-example.zip"),
+        )
+        .unwrap();
+        manager
+            .install(&configuration, configuration.manifest.permissions.clone())
+            .unwrap();
+    }
 
     // The configuration is created with the same rules the editor uses to create one.
     let key = root.display().to_string();
@@ -352,9 +392,19 @@ fn fixture<'a>(
                 Some(app.workspace.root().join("private-runs")),
                 Some(app.workspace.root().into()),
             );
-            app.run_controls
-                .upsert(set.configurations[0].clone(), &key)
-                .unwrap();
+            if legacy {
+                app.run_controls.upsert(set.configurations[0].clone(), &key).unwrap();
+            } else {
+                let configuration = set.configurations[0].clone();
+                let editor_core::RunTarget::Program { program, args } = &configuration.target else { unreachable!() };
+                let data = editor_core::PluginConfiguration {
+                    provider:"configuration-example".into(), template:"program".into(),
+                    values:serde_json::json!({"name":configuration.name,"program":program,"arguments":args,"horizontal":false}).to_string(),
+                    pending_events:vec![], name:configuration.name.clone(), program:program.clone(),
+                    revision:0, validation:editor_core::ConfigurationValidation::Valid,
+                };
+                app.run_controls.accept_configuration_projection(configuration,data).unwrap();
+            }
             app.run_controls.select(&id, &key);
             cx.notify();
         });

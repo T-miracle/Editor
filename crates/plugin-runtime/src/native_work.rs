@@ -31,6 +31,8 @@ struct Stop {
 /// A single invocation owns this history; output is bounded even if a compiler is noisy.
 #[derive(Debug, Default)]
 pub(crate) struct NativeWork {
+    /// Host-authenticated task placement cannot be supplied or forged by a guest's presentation.
+    pub(crate) terminal_owner: Option<crate::TerminalOwner>,
     output: String,
     /// Each owned process/stream retains at most three incomplete UTF-8 bytes.
     utf8: BTreeMap<((String, String, u64), u8), Vec<u8>>,
@@ -167,6 +169,13 @@ fn key(handle: &ResourceHandle) -> (String, String, u64) {
 #[derive(Clone, Debug, Default)]
 pub struct PreparationRegistry(Arc<Mutex<BTreeMap<usize, Weak<Mutex<NativeWork>>>>>);
 impl PreparationRegistry {
+    /// Presentation inherits the invocation's host identity, while resource ownership stays unchanged.
+    pub(crate) fn terminal_owner(
+        &self,
+        lifetimes: &[Arc<AtomicBool>],
+    ) -> Option<crate::TerminalOwner> {
+        self.find(lifetimes)?.lock().unwrap().terminal_owner.clone()
+    }
     pub(crate) fn register(&self, root: &Arc<AtomicBool>, work: &Arc<Mutex<NativeWork>>) {
         let mut entries = self.0.lock().unwrap();
         entries.retain(|_, entry| entry.strong_count() > 0);

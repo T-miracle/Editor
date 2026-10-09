@@ -7,9 +7,20 @@ use crate::extensions::{HostWork, NativeExecutionMessage};
 #[derive(Clone, Serialize, Deserialize)]
 pub(super) struct Task {
     pub key: String,
+    /// The retained tab's last accepted intent determines rerun; recovery never starts this intent.
+    #[serde(default)]
+    pub debug: bool,
+    #[serde(skip)]
+    pub debug_target: bool,
     /// Persisted logical results never replay tasks after a window restart.
     #[serde(skip)]
     pub execution: Option<u64>,
+    /// Guest-owned PTYs are projected without replacing their immutable resource identity.
+    #[serde(skip)]
+    pub presentation: Option<protocol::api::ResourceHandle>,
+    /// Read-only diagnostic projections retain closure authority but never receive keyboard/resize.
+    #[serde(skip)]
+    pub presentation_input: bool,
     #[serde(skip)]
     pub request: u64,
     #[serde(skip)]
@@ -27,6 +38,25 @@ pub(super) struct Task {
 }
 
 impl TerminalPanel {
+    /// Remember the last admitted intent independently from current process activity.
+    pub(crate) fn task_is_debug(&self, key: &str) -> bool {
+        self.sessions
+            .iter()
+            .filter_map(|session| session.task.as_ref())
+            .any(|task| task.key == key && task.debug)
+    }
+    /// Entering the final debug step rejects late preparation receipts even if numeric IDs coincide.
+    pub(crate) fn mark_debug_task(&mut self, key: &str, target: bool) {
+        if let Some(task) = self
+            .sessions
+            .iter_mut()
+            .filter_map(|session| session.task.as_mut())
+            .find(|task| task.key == key)
+        {
+            task.debug = true;
+            task.debug_target = target;
+        }
+    }
     /// Reveal an existing task without changing its launch round or retained output.
     pub(crate) fn locate_task(&mut self, key: &str, cx: &mut Context<Self>) -> bool {
         let Some(id) = self
@@ -126,7 +156,11 @@ impl TerminalPanel {
                 restored: false,
                 task: Some(Task {
                     key: key.into(),
+                    debug: false,
+                    debug_target: false,
                     execution: None,
+                    presentation: None,
+                    presentation_input: false,
                     request,
                     close_waiting: false,
                     process_alive: false,
@@ -145,6 +179,10 @@ impl TerminalPanel {
         session.exited = false;
         let task = session.task.as_mut().unwrap();
         task.execution = None;
+        task.presentation = None;
+        task.debug = false;
+        task.debug_target = false;
+        self.inspections.remove(key);
         task.request = request;
         task.close_waiting = false;
         task.process_alive = false;
@@ -177,6 +215,7 @@ impl TerminalPanel {
             task.request = request;
             task.requests.insert(request);
             task.execution = None;
+            task.presentation = None;
             task.process_alive = false;
             session.exited = false;
             session
@@ -231,7 +270,7 @@ impl TerminalPanel {
         };
         let session = &mut self.sessions[index];
         let task = session.task.as_mut().unwrap();
-        if task.request != message.request_id {
+        if task.debug_target || task.request != message.request_id {
             return;
         }
         if message.update.locate {
@@ -323,6 +362,24 @@ impl TerminalPanel {
 
     /// A task's input uses its public host execution receipt; Shell tabs use their own native supervisor.
     pub(super) fn send_input(&mut self, id: u64, bytes: Vec<u8>, cx: &mut App) {
+        if let Some(handle) = self
+            .sessions
+            .iter()
+            .find(|session| session.id == id)
+            .and_then(|session| session.task.as_ref())
+            .filter(|task| task.process_alive && task.presentation_input)
+            .and_then(|task| task.presentation.clone())
+        {
+            for bytes in bytes.chunks(1024) {
+                self.io_host
+                    .read(cx)
+                    .stage_host_run(HostWork::PresentedInput {
+                        handle: handle.clone(),
+                        bytes: bytes.to_vec(),
+                    });
+            }
+            return;
+        }
         let execution = self
             .sessions
             .iter()
@@ -358,6 +415,23 @@ impl TerminalPanel {
             .find(|session| session.id == id)
             .and_then(|session| session.task.as_ref());
         if let Some(task) = task {
+            // Retained history has no live PTY; resizing it must not address a retired handle.
+            if !task.process_alive {
+                return;
+            }
+            if let Some(handle) = &task.presentation {
+                if !task.presentation_input {
+                    return;
+                }
+                self.io_host
+                    .read(cx)
+                    .stage_host_run(HostWork::PresentedResize {
+                        handle: handle.clone(),
+                        columns: size.columns as u16,
+                        rows: size.rows as u16,
+                    });
+                return;
+            }
             if let Some(execution) = task.execution {
                 self.io_host
                     .read(cx)
