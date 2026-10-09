@@ -1,6 +1,6 @@
 # 01：文档快照、事件与只读资源比较验收
 
-日期：2026-10-09。对应 [#93](https://github.com/T-miracle/Nanobug/issues/93) 与[工单 01](../../tickets/plugin-api-community-foundation/01-documents-and-virtual-resources.md)。状态：T01–T05、C01–C06 验收及最终双轴复审通过，发布处理中；推送及议题状态以验收入口的实际读回记录为准。
+日期：2026-10-09。对应 [#93](https://github.com/T-miracle/Nanobug/issues/93) 与[工单 01](../../tickets/plugin-api-community-foundation/01-documents-and-virtual-resources.md)。状态：T01–T05、C01–C06 验收及最终双轴复审通过；交付 `7b50045a78dacafacb2bb7a76f0694c91a1b755d` 已推送并核对远端。2026-10-09 07:22:13 UTC，#93 已读回 `closed / completed`。
 
 ## 固定范围与环境
 

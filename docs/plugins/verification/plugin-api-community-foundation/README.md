@@ -16,17 +16,17 @@
 
 | 工单 | 议题 | 当前状态 | 交付条件 |
 | --- | --- | --- | --- |
-| 01 文档与只读资源 | [#93](https://github.com/T-miracle/Nanobug/issues/93) | 候选审查及原生焦点修复中 | T01–T05、C01–C06、双轴审查、推送及议题读回 |
+| 01 文档与只读资源 | [#93](https://github.com/T-miracle/Nanobug/issues/93) | 已验收交付，议题已关闭 | `7b50045a78dacafacb2bb7a76f0694c91a1b755d` 已推送并核对远端；双轴未解决项均为 0 |
 | 02 命令与交互 | [#94](https://github.com/T-miracle/Nanobug/issues/94) | 已验收交付，议题已关闭 | `8506cc8f1f9baee3fca030d59b7d1d21b5227763` 已推送并核对远端；双轴未解决项均为 0 |
-| 03 工作区事务 | [#95](https://github.com/T-miracle/Nanobug/issues/95) | 等待 01、02 | T11–T16 及共同完成条件 |
+| 03 工作区事务 | [#95](https://github.com/T-miracle/Nanobug/issues/95) | 依赖已交付，待整合后实施 | T11–T16 及共同完成条件 |
 | 04 诊断与语言 | [#96](https://github.com/T-miracle/Nanobug/issues/96) | 等待 03 | T17–T20 及共同完成条件 |
-| 05 树与装饰 | [#97](https://github.com/T-miracle/Nanobug/issues/97) | 等待 01、02 | T21–T24 及共同完成条件 |
+| 05 树与装饰 | [#97](https://github.com/T-miracle/Nanobug/issues/97) | 依赖已交付，待整合后实施 | T21–T24 及共同完成条件 |
 | 06 网络与私有状态 | [#98](https://github.com/T-miracle/Nanobug/issues/98) | 实施中，02 依赖已满足 | T25–T30 及共同完成条件 |
 | 07 激活与兼容 | [#99](https://github.com/T-miracle/Nanobug/issues/99) | 等待 04、05、06 | T31–T35 及共同完成条件 |
 
 ## 证据与复用规则
 
-原生窗口初轮记录见 [01 主代理原生验收](native-01.md)和 [02 主代理原生验收](native-02.md)。其中失败项保留原始结果，修复后的候选另行复核，不能用局部通过代替工单交付。
+01 的[逐单验收与双轴结论](01-documents-and-virtual-resources.md)及 [01 主代理原生验收](native-01.md)已经交付；2026-10-09 07:22:13 UTC，按既有 Git 认证更新并读回 #93 为 `closed / completed`。初轮失败保留原始结果，修复候选分别复核；父设计议题 #92 未修改。02 的原生证据见 [02 主代理原生验收](native-02.md)。
 
 02 的[逐单验收与双轴结论](https://github.com/T-miracle/Nanobug/blob/8506cc8f1f9baee3fca030d59b7d1d21b5227763/docs/plugins/verification/plugin-api-community-foundation/02-commands-and-interaction.md)已经发布到独立分支，随后与 01 集成。2026-10-09 06:01:59 UTC，GitHub connector 更新返回 403；按既有工单授权改用既有 Git 认证直接更新，随即读回 #94 为 `closed / completed`。没有输出凭据或修改父设计议题。
 

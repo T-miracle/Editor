@@ -2,7 +2,7 @@
 
 稳定标识：`plugin-api-community-foundation-01-documents`
 
-状态：实施与验收完成，最终双轴剩余发现均为 0；发布处理中。实际推送与 #93 关闭读回见[验收入口](../../verification/plugin-api-community-foundation/README.md)。
+状态：已验收交付。`7b50045a78dacafacb2bb7a76f0694c91a1b755d` 已推送并核对远端，#93 已读回 `closed / completed`；最终双轴剩余发现均为 0，详见[验收入口](../../verification/plugin-api-community-foundation/README.md)。
 
 ## What to build
 
