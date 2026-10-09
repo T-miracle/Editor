@@ -44,7 +44,7 @@ Titles are 1–256 UTF-8 bytes; messages are at most 4096 bytes. Quick pick acce
 
 ## Restricted selection authority
 
-`Select` includes a title, `SelectionMode::{File,Directory,Save}`, multiple-selection flag and optional suggested basename. Save mode is single-selection. A suggestion is at most 255 bytes and contains no slash, backslash, colon, NUL, `.` or `..`; it creates no access authority.
+`Select` includes a title, `SelectionMode::{File,Directory,Save}`, multiple-selection flag and optional suggested basename. Save mode is single-selection. A suggestion is at most 255 bytes, contains no slash, backslash, colon or NUL, and must not equal `.` or `..`; it creates no access authority.
 
 The host alone receives the native path. Each `SelectedResource` returned to the guest contains an opaque `handle`, informational `name` and `kind`. The selecting instance owns the exact target and permitted operation. A handle is temporary and must not be persisted or transferred.
 
