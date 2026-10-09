@@ -6,8 +6,11 @@ use std::borrow::Cow;
 /// Asset path of the supplied product mark, rendered in full color in the native title bar.
 pub(crate) const APP_ICON_PATH: &str = "branding/nanobug.png";
 
-// The default bundle omits these configuration and shortcut actions; embed their catalog SVGs.
-gpui_kit::assets::icon_assets!(ConfigurationIcons, [Lock, SquarePen, Keyboard, RotateCcw]);
+// The default bundle omits these configuration, shortcut and message actions; embed their catalog SVGs.
+gpui_kit::assets::icon_assets!(
+    SupplementalIcons,
+    [Lock, SquarePen, Keyboard, RotateCcw, Broom]
+);
 
 macro_rules! file_icons {
     ($($path:literal => $file:literal),+ $(,)?) => {
@@ -61,7 +64,7 @@ impl AssetSource for AppAssets {
         if let Some(icon) = crate::extensions::contributions::asset(path) {
             return Ok(Some(Cow::Owned(icon)));
         }
-        if let Some(icon) = ConfigurationIcons.load(path)? {
+        if let Some(icon) = SupplementalIcons.load(path)? {
             return Ok(Some(icon));
         }
         Assets.load(path)
@@ -69,7 +72,7 @@ impl AssetSource for AppAssets {
 
     fn list(&self, path: &str) -> Result<Vec<SharedString>> {
         let mut paths = Assets.list(path)?;
-        paths.extend(ConfigurationIcons.list(path)?);
+        paths.extend(SupplementalIcons.list(path)?);
         paths.extend(
             FILE_ICON_PATHS
                 .iter()
@@ -128,14 +131,15 @@ mod tests {
         }
     }
 
-    /// Configuration and shortcut controls resolve from the selected extra icon bundle.
+    /// Configuration, shortcut and message controls resolve from the selected extra icon bundle.
     #[test]
-    fn exposes_configuration_action_icons() {
+    fn exposes_supplemental_action_icons() {
         for icon in [
             gpui_kit::assets::IconName::Lock,
             gpui_kit::assets::IconName::SquarePen,
             gpui_kit::assets::IconName::Keyboard,
             gpui_kit::assets::IconName::RotateCcw,
+            gpui_kit::assets::IconName::Broom,
         ] {
             let path = icon.path();
             assert!(AppAssets.load(&path).unwrap().is_some());

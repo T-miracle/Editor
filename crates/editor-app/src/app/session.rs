@@ -40,6 +40,9 @@ pub struct SessionState {
     /// Cursor tracking may be disabled without disabling tree updates or explicit navigation.
     #[serde(default = "default_true")]
     pub outline_follow_cursor: bool,
+    /// Host messages themselves are transient; only panel visibility is restored across runs.
+    #[serde(default = "default_true")]
+    pub messages_visible: bool,
     /// Newly introduced project roots start expanded for previously saved workspaces too.
     #[serde(default = "default_true")]
     pub explorer_root_expanded: bool,
@@ -132,6 +135,7 @@ impl SessionState {
             explorer_visible: true,
             outline_visible: false,
             outline_follow_cursor: true,
+            messages_visible: true,
             explorer_root_expanded: true,
             explorer_reveal_on_tab_switch: false,
             extension_height: default_extension_height(),

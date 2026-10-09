@@ -8,6 +8,7 @@ pub(crate) mod menu;
 pub(crate) mod transfer;
 pub(crate) mod tree;
 
+use crate::app::messages::MessageLevel;
 use crate::ui::controls::Input;
 use crate::*;
 use gpui_base::input::InputState;
@@ -75,11 +76,14 @@ impl EditorApp {
         let kind = edit.kind;
         let path = edit.path.clone();
         let name = edit.input.read(cx).value().to_string();
+        // Classify the known safety refusal from its condition, never by parsing localized text.
+        let rename_blocked = matches!(kind, ExplorerEditKind::Rename)
+            && self.tabs.iter().any(|tab| tab.path().starts_with(&path));
         let result = match kind {
             ExplorerEditKind::Directory => files::create(&path, &name, true),
             ExplorerEditKind::File => files::create(&path, &name, false),
             ExplorerEditKind::Rename => {
-                if self.tabs.iter().any(|tab| tab.path().starts_with(&path)) {
+                if rename_blocked {
                     Err(t!("explorer.close_before_rename").to_string())
                 } else {
                     files::rename(&path, &name)
@@ -90,9 +94,18 @@ impl EditorApp {
             Ok(()) => {
                 self.explorer_edit = None;
                 self.refresh_files(cx);
+                // The updated tree shows routine success; only refusals and failures need a receipt.
             }
             Err(error) => {
-                self.status = error.clone();
+                self.report_host_message(
+                    if rename_blocked {
+                        MessageLevel::Warning
+                    } else {
+                        MessageLevel::Error
+                    },
+                    error.clone(),
+                    cx,
+                );
                 if let Some(edit) = &mut self.explorer_edit {
                     edit.error = Some(error);
                 }
@@ -102,9 +115,10 @@ impl EditorApp {
     }
 
     pub(crate) fn copy_explorer_path(&mut self, path: &Path, cx: &mut Context<Self>) {
+        // Clipboard transfer remains independent from plugin log destinations.
         match transfer::clipboard::write(&[path.to_path_buf()], transfer::Kind::Copy, cx) {
             Ok(()) => self.status = t!("explorer.copied").to_string(),
-            Err(error) => self.status = error,
+            Err(error) => self.report_host_message(MessageLevel::Error, error, cx),
         }
         cx.notify();
     }
@@ -127,7 +141,12 @@ impl EditorApp {
         cx: &mut Context<Self>,
     ) {
         if self.tabs.iter().any(|tab| tab.path().starts_with(&path)) {
-            self.status = t!("explorer.close_before_delete").to_string();
+            // This refusal protects open buffers rather than reporting a failed disk write.
+            self.report_host_message(
+                MessageLevel::Warning,
+                t!("explorer.close_before_delete").to_string(),
+                cx,
+            );
             cx.notify();
             return;
         }
@@ -149,7 +168,11 @@ impl EditorApp {
         let path = delete.path.clone();
         // A tab may have opened while the confirmation was visible; preserve its editor buffer.
         if self.tabs.iter().any(|tab| tab.path().starts_with(&path)) {
-            self.status = t!("explorer.close_before_delete").to_string();
+            self.report_host_message(
+                MessageLevel::Warning,
+                t!("explorer.close_before_delete").to_string(),
+                cx,
+            );
             self.explorer_delete = None;
             cx.notify();
             return;
@@ -161,7 +184,7 @@ impl EditorApp {
             }
             Err(error) => {
                 let message = t!("explorer.delete_failed", error = error).to_string();
-                self.status = message.clone();
+                self.report_host_message(MessageLevel::Error, message.clone(), cx);
                 if let Some(delete) = &mut self.explorer_delete {
                     delete.error = Some(message);
                 }

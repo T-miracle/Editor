@@ -1,6 +1,7 @@
 //! Owns click selection and folder expansion without filesystem rescans.
 
 use super::tree::{collapse_descendants, root_items};
+use crate::app::messages::MessageLevel;
 use crate::*;
 
 impl EditorApp {
@@ -77,14 +78,12 @@ impl EditorApp {
             Some(_) => None,
         };
         if let Some(message) = error {
-            // Informational failures use the local nonmodal card without changing focus.
-            self.notification = Some(cx.new(|cx| {
-                ui::controls::Notification::new(
-                    t!("explorer.reveal_failed").to_string(),
-                    message,
-                    cx,
-                )
-            }));
+            // A rejected locate action needs attention but its nonmodal card still leaves focus alone.
+            let title = t!("explorer.reveal_failed").to_string();
+            // The replaceable card may expire, but its user-facing result remains in host history.
+            self.record_host_message(MessageLevel::Warning, format!("{title}: {message}"), cx);
+            self.notification =
+                Some(cx.new(|cx| ui::controls::Notification::new(title, message, cx)));
             cx.notify();
             return;
         }

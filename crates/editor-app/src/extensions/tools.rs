@@ -467,6 +467,11 @@ impl EditorApp {
                 ),
             );
         }
+        // Keep the host message button inside the window group and outside plugin overflow,
+        // so its red dot remains reachable even when the available width hides plugin windows.
+        if group == "windows" {
+            row = row.child(self.render_messages_button(cx));
+        }
         row.into_any_element()
     }
 
@@ -482,7 +487,9 @@ impl EditorApp {
         let functions = self.function_entries(cx);
         let slots = (((window.viewport_size().width / px(1.) - 220.).max(84.) / 28.).floor()
             as usize)
-            .min(64);
+            .min(64)
+            // Reserve a fixed slot for the host message window before dividing plugin slots.
+            .saturating_sub(1);
         let window_slots = windows.len().min((slots / 2).max(1));
         let tool_slots = slots.saturating_sub(window_slots).max(1);
         let mut bar = h_flex()

@@ -259,6 +259,8 @@ impl EditorApp {
         let set = match set {
             Ok(set) => set,
             Err(error) => {
+                // Applying the native tree selection failed before any durable host write.
+                self.record_host_message(MessageLevel::Warning, error.clone(), cx);
                 form.update(cx, |form, cx| {
                     let state = form.plugin.as_mut().unwrap();
                     state.commit = None;
@@ -274,6 +276,8 @@ impl EditorApp {
             .commit_configuration_set(set.clone(), &workspace)
         {
             Ok(()) => {
+                // Updating the saved baseline is sufficient feedback for a routine configuration save.
+                // Provider validation and host storage failures keep their separate error destinations.
                 form.update(cx, |form, cx| {
                     let state = form.plugin.as_mut().unwrap();
                     state.baseline = set;
@@ -284,12 +288,17 @@ impl EditorApp {
                     self.close_run_form(cx);
                 }
             }
-            Err(error) => form.update(cx, |form, cx| {
-                let state = form.plugin.as_mut().unwrap();
-                state.commit = None;
-                state.error = Some(error);
-                cx.notify();
-            }),
+            Err(error) => {
+                // A native snapshot/storage failure keeps the existing form open and its inline
+                // error intact; the host history preserves the result after the form is dismissed.
+                self.record_host_message(MessageLevel::Error, error.clone(), cx);
+                form.update(cx, |form, cx| {
+                    let state = form.plugin.as_mut().unwrap();
+                    state.commit = None;
+                    state.error = Some(error);
+                    cx.notify();
+                });
+            }
         }
         cx.notify();
     }
@@ -317,12 +326,19 @@ impl EditorApp {
             .get(id)
             .cloned()
         else {
-            self.status = t!("run.legacy_configuration").into();
+            // Current execution requires a plugin configuration identity. Refusing a retained
+            // legacy identity is the host's compatibility decision, not a provider diagnostic.
+            self.report_host_message(
+                MessageLevel::Warning,
+                t!("run.legacy_configuration").to_string(),
+                cx,
+            );
             cx.notify();
             return true;
         };
         if !self.run_permitted(cx) {
-            self.status = t!("run.restricted").into();
+            // Trust is native authority and refuses before any provider validation is requested.
+            self.report_host_message(MessageLevel::Warning, t!("run.restricted").to_string(), cx);
             cx.notify();
             return true;
         }
@@ -376,7 +392,9 @@ impl EditorApp {
         cx: &mut Context<Self>,
     ) {
         if !self.run_permitted(cx) {
-            self.status = t!("run.restricted").into();
+            // A workspace can become restricted while validation is pending; the renewed host
+            // refusal must be retained without treating the provider's receipt as the cause.
+            self.report_host_message(MessageLevel::Warning, t!("run.restricted").to_string(), cx);
             cx.notify();
             return;
         }
@@ -387,7 +405,13 @@ impl EditorApp {
             .get(id)
             != Some(&snapshot)
         {
-            self.status = t!("run.plugin_stale").into();
+            // The host rejects an obsolete execution intent rather than applying it to a changed
+            // local configuration. Provider validation failures below keep their own destination.
+            self.report_host_message(
+                MessageLevel::Warning,
+                t!("run.plugin_stale").to_string(),
+                cx,
+            );
             cx.notify();
             return;
         }

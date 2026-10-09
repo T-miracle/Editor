@@ -8,6 +8,7 @@ pub(crate) mod distribution;
 pub(crate) mod language_servers;
 pub(crate) mod languages;
 mod layout;
+pub(crate) mod messages;
 pub(crate) mod plugins;
 pub(crate) mod session;
 mod settings;

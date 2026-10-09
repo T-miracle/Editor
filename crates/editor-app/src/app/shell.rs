@@ -474,7 +474,7 @@ impl Render for EditorApp {
                     .child(
                         StatusBar::new()
                             .left(self.render_plugin_toolbar(explorer_panel_icon(cx), window, cx))
-                            // The footer shows controls and document indicators without transient status text.
+                            // Persistent document indicators stay in the footer; operation notices live in host messages.
                             .when(
                                 self.active_text_tab_index().is_some()
                                     && self

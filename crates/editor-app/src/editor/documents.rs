@@ -1,6 +1,7 @@
 //! Coordinates document opening, tab activation, saving, and explorer selection.
 
 use super::file_watch::{DiskContent, WatchedFile};
+use crate::app::messages::MessageLevel;
 use crate::*;
 
 impl EditorApp {
@@ -206,12 +207,21 @@ impl EditorApp {
             if new_state != tab.disk_state {
                 tab.overwrite_confirmed = false;
                 tab.disk_state = new_state;
+                let message = match new_state {
+                    DiskState::Synced => t!("status.disk_updated").to_string(),
+                    DiskState::Conflict => t!("status.disk_conflict").to_string(),
+                    DiskState::Deleted => t!("status.disk_deleted").to_string(),
+                };
                 if self.active_path.as_ref() == Some(&path) {
-                    self.status = match new_state {
-                        DiskState::Synced => t!("status.disk_updated").to_string(),
-                        DiskState::Conflict => t!("status.disk_conflict").to_string(),
-                        DiskState::Deleted => t!("status.disk_deleted").to_string(),
-                    };
+                    self.status = message.clone();
+                }
+                // Retain abnormal transitions once, including background tabs; recovery stays quiet.
+                if new_state != DiskState::Synced {
+                    self.record_host_message(
+                        MessageLevel::Warning,
+                        format!("{}: {message}", path.display()),
+                        cx,
+                    );
                 }
                 cx.notify();
             }
@@ -466,7 +476,12 @@ impl EditorApp {
                     cx.notify();
                     return;
                 }
-                self.status = t!("status.open_failed", error = error.to_string()).to_string()
+                // Preserve the immediate failure while retaining it after the status changes.
+                self.report_host_message(
+                    MessageLevel::Error,
+                    t!("status.open_failed", error = error.to_string()).to_string(),
+                    cx,
+                );
             }
         }
         cx.notify();
@@ -858,7 +873,12 @@ impl EditorApp {
             return;
         };
         if self.tabs[index].is_dirty() {
-            self.status = t!("status.save_before_close").to_string();
+            // A refused user operation needs attention; normal tab activation does not enter history.
+            self.report_host_message(
+                MessageLevel::Warning,
+                t!("status.save_before_close").to_string(),
+                cx,
+            );
             cx.notify();
             return;
         }
@@ -952,6 +972,7 @@ impl EditorApp {
 
     pub(crate) fn save_current(&mut self, cx: &mut Context<Self>) {
         let Some(index) = self.active_text_tab_index() else {
+            // Ordinary saves, including no-ops, remain internal state rather than notifications.
             self.status = t!("status.nothing_to_save").to_string();
             cx.notify();
             return;
@@ -978,19 +999,31 @@ impl EditorApp {
                 Ok(bytes) if Sha256::digest(&bytes).as_slice() != tab.disk_digest => {
                     tab.disk_state = DiskState::Conflict;
                     tab.overwrite_confirmed = true;
-                    self.status = t!("status.confirm_disk_overwrite").to_string();
+                    self.report_host_message(
+                        MessageLevel::Warning,
+                        t!("status.confirm_disk_overwrite").to_string(),
+                        cx,
+                    );
                     cx.notify();
                     return;
                 }
                 Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
                     tab.disk_state = DiskState::Deleted;
                     tab.overwrite_confirmed = true;
-                    self.status = t!("status.confirm_disk_restore").to_string();
+                    self.report_host_message(
+                        MessageLevel::Warning,
+                        t!("status.confirm_disk_restore").to_string(),
+                        cx,
+                    );
                     cx.notify();
                     return;
                 }
                 Err(error) => {
-                    self.status = t!("status.save_failed", error = error.to_string()).to_string();
+                    self.report_host_message(
+                        MessageLevel::Error,
+                        t!("status.save_failed", error = error.to_string()).to_string(),
+                        cx,
+                    );
                     cx.notify();
                     return;
                 }
@@ -1001,11 +1034,12 @@ impl EditorApp {
         if tab.disk_state != DiskState::Synced && !tab.overwrite_confirmed {
             // Saving again is an explicit overwrite confirmation for a disk conflict or deletion.
             tab.overwrite_confirmed = true;
-            self.status = match tab.disk_state {
+            let message = match tab.disk_state {
                 DiskState::Conflict => t!("status.confirm_disk_overwrite").to_string(),
                 DiskState::Deleted => t!("status.confirm_disk_restore").to_string(),
                 DiskState::Synced => unreachable!(),
             };
+            self.report_host_message(MessageLevel::Warning, message, cx);
             cx.notify();
             return;
         }
@@ -1020,12 +1054,17 @@ impl EditorApp {
                 tab.last_saved_at = Instant::now();
                 tab.disk_state = DiskState::Synced;
                 tab.overwrite_confirmed = false;
-                self.status = t!("status.saved", path = tab.path().display()).to_string();
                 let path = tab.path().to_path_buf();
+                // A successful routine save stays quiet; the document session still owns the write.
+                self.status = t!("status.saved", path = path.display()).to_string();
                 self.notify_language_document_saved(&path, value, cx);
             }
             Err(error) => {
-                self.status = t!("status.save_failed", error = error.to_string()).to_string()
+                self.report_host_message(
+                    MessageLevel::Error,
+                    t!("status.save_failed", error = error.to_string()).to_string(),
+                    cx,
+                );
             }
         }
         cx.notify();

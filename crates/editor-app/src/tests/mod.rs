@@ -1,6 +1,7 @@
 //! Exercises editor shell interactions through GPUI's test context.
 
 mod editing_fixture;
+mod host_messages;
 mod language_editing;
 mod language_fixture;
 mod outline;

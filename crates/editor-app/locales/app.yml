@@ -44,6 +44,51 @@ settings.file_association_extension:
 settings.file_association_error:
   en: "Could not save the file association"
   zh-CN: "无法保存文件关联"
+messages.title:
+  en: "Messages"
+  zh-CN: "消息"
+messages.unread:
+  en: "Messages: new warning or error"
+  zh-CN: "消息：有新的警告或错误"
+messages.hide:
+  en: "Hide messages"
+  zh-CN: "收起消息窗口"
+messages.clear:
+  en: "Clear messages"
+  zh-CN: "清空消息"
+messages.empty:
+  en: "No host messages"
+  zh-CN: "暂无宿主消息"
+messages.more:
+  en: "Show more..."
+  zh-CN: "查看更多..."
+messages.info:
+  en: "Information"
+  zh-CN: "信息"
+messages.warning:
+  en: "Warning"
+  zh-CN: "警告"
+messages.error:
+  en: "Error"
+  zh-CN: "错误"
+status.closed:
+  en: "Closed %{path}"
+  zh-CN: "已关闭 %{path}"
+explorer.created_file:
+  en: "Created file: %{path}"
+  zh-CN: "已创建文件：%{path}"
+explorer.created_directory:
+  en: "Created directory: %{path}"
+  zh-CN: "已创建目录：%{path}"
+explorer.renamed:
+  en: "Renamed %{from} to %{to}"
+  zh-CN: "已将 %{from} 重命名为 %{to}"
+explorer.pasted:
+  en: "Pasted %{count} entries into %{path}"
+  zh-CN: "已将 %{count} 个条目粘贴到 %{path}"
+explorer.deleted:
+  en: "Deleted %{path}"
+  zh-CN: "已删除 %{path}"
 plugins.command_menu:
   en: "Plugin commands"
   zh-CN: "插件命令"
@@ -1574,6 +1619,14 @@ run.stopping_named:
 run.saved_named:
   en: "Saved run configuration: %{name}"
   zh-CN: "已保存运行配置：%{name}"
+
+run.saved_configurations:
+  en: "Saved run configurations"
+  zh-CN: "已保存运行配置"
+
+run.deleted_named:
+  en: "Deleted configuration: %{name}"
+  zh-CN: "已删除运行配置：%{name}"
 
 run.save_failed_named:
   en: "Save failed; launch cancelled: %{path}"

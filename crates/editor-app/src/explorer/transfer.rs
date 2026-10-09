@@ -13,6 +13,7 @@ mod snapshot;
 #[cfg(test)]
 mod tests;
 
+use crate::app::messages::MessageLevel;
 use crate::*;
 use futures::channel::{mpsc, oneshot};
 use futures::{FutureExt as _, future::Shared};
@@ -565,7 +566,8 @@ impl EditorApp {
     }
 
     pub(crate) fn file_transfer_error(&mut self, message: String, cx: &mut Context<Self>) {
-        self.status = message.clone();
+        // Transfer failures retain the existing recovery card and the shared host history destination.
+        self.report_host_message(MessageLevel::Error, message.clone(), cx);
         self.notification = Some(cx.new(|_| {
             ui::controls::Notification::persistent(t!("transfer.title").to_string(), message)
         }));

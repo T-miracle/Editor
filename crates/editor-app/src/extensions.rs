@@ -1452,8 +1452,22 @@ impl EditorApp {
             if self.dock_area.read(cx).has_dock(placement)
                 && self.dock_area.read(cx).is_empty(placement, cx)
             {
-                self.dock_area
-                    .update(cx, |area, cx| area.remove_dock(placement, window, cx));
+                let message_id = gpui_base::dock::PanelId::from(self.messages.entity_id());
+                self.dock_area.update(cx, |area, cx| {
+                    if area
+                        .layout(placement)
+                        .is_some_and(|tree| tree.panels().any(|panel| panel == message_id))
+                    {
+                        // The host message panel retains its saved split and peers while hidden.
+                        // Closing the region releases its width without removing the panel identity.
+                        area.set_dock_collapsible(placement, true, window, cx);
+                        if area.is_dock_open(placement) {
+                            area.toggle_dock(placement, window, cx);
+                        }
+                    } else {
+                        area.remove_dock(placement, window, cx);
+                    }
+                });
             }
         }
     }

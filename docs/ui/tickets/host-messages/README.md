@@ -2,7 +2,7 @@
 
 日期：2026-10-07
 
-状态：两单拆分草案，待用户批准粒度与依赖；实施工单尚未发布，未启动实现。
+状态：两单的实现、自动回归、Windows 原生验收与双轴审查均已完成；分支已推送，GitHub [#85](https://github.com/T-miracle/Editor/issues/85)、[#86](https://github.com/T-miracle/Editor/issues/86) 均已核对关闭。原生阻塞关系为 #85 → #86，证据见 [实施验收](../../verification/host-messages.md)。父规格 #84 保持开放。
 
 来源：[宿主消息窗口规格](../../specs/host-messages.md)。产品行为与应用级测试接缝已确认，父规格已发布为 [GitHub #84](https://github.com/T-miracle/Editor/issues/84)，标签 `ready-for-agent`。本目录保留逐单正文，实际跟踪器是 GitHub Issues。
 
@@ -49,6 +49,6 @@
 ## 发布记录
 
 - 父规格 #84 已创建并读回核对正文与 `ready-for-agent` 标签。GitHub 连接器创建权限不足，按仓库约定使用现有 Git 认证调用 GitHub REST API；凭据未写入文件或输出。
-- 实施工单仅有本地草稿，未创建远程 issue，未添加依赖关系；[publication.json](publication.json)不预填工单编号。
-- 用户批准后按 01、02 发布，应用 `ready-for-agent`，回填真实 Parent 与 Blocked by，并用真实数据库 ID 建立、读回 GitHub 原生阻塞边。
-- 发布工单不自动授权实现、提交、推送、关闭议题或修改父规格。
+- 实施工单已发布为 #85、#86，均使用 `ready-for-agent`；[publication.json](publication.json)记录真实议题身份与执行工作区。
+- 已按 01、02 发布并回填真实 Parent 与 Blocked by；用真实数据库 ID 建立、读回 GitHub 原生阻塞边。
+- 用户已明确授权发布并执行全部工单；按现有工作流完成实现、验证与审查后普通提交、推送并核对关闭实施议题。父规格保持开放。

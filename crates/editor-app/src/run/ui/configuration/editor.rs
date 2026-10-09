@@ -1,5 +1,6 @@
 //! Same-window detail editing and unsaved navigation decisions over the retained form.
 use super::*;
+use crate::app::messages::MessageLevel;
 
 /// Detail content replaces the main card inside its owning modal, retaining all collapsed inputs.
 pub(super) fn render_editor(
@@ -172,7 +173,8 @@ impl EditorApp {
             let focus = input.read(cx).focus_handle(cx);
             focus.focus(window, cx);
         }
-        self.status = message.clone();
+        // Native form validation is a host warning; provider validation messages retain their own logs.
+        self.report_host_message(MessageLevel::Warning, message.clone(), cx);
         form.update(cx, |form, cx| {
             form.error = Some(message);
             cx.notify();
@@ -225,6 +227,8 @@ impl EditorApp {
             Ok(Some(mut rows)) => rows.pop(),
             Ok(None) => None,
             Err(message) => {
+                // Parsing an explicitly opened native row is a user-facing host validation result.
+                self.record_host_message(MessageLevel::Warning, message.clone(), cx);
                 form.update(cx, |form, cx| {
                     form.error = Some(message);
                     cx.notify();
@@ -264,6 +268,8 @@ impl EditorApp {
             _ => None,
         };
         if let Some(Err(message)) = row {
+            // Only the explicit Done action publishes validation; ordinary field edits stay transient.
+            self.record_host_message(MessageLevel::Warning, message.clone(), cx);
             if let Some(FormEditor::Step { state, .. }) = &form.read(cx).editor {
                 state
                     .clone()
