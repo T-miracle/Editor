@@ -8,6 +8,8 @@ alternate: /en/sdk/
 
 # 插件 SDK
 
+[类型化命令与原生菜单](/zh-cn/sdk/commands/)提供参数、结果校验及原始来源权限。[原生交互](/zh-cn/sdk/interaction/)提供经确认的输入、消息、可取消进度及受限外部选择。
+
 跨插件协作、版本化契约、提供者选择及来源权限见 [SERVICES.md](/zh-cn/sdk/services/)。
 
 原生服务、交互式进程、权限与回收契约见 [PROCESSES.md](/zh-cn/sdk/processes/)。

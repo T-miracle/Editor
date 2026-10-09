@@ -14,6 +14,25 @@ use std::process::Command;
 use std::{borrow::Cow, io::Write};
 
 const SDK_FILES: &[(&str, &[u8])] = &[
+    // Author-facing contract pages ship with the identical independent guest interface.
+    (
+        "COMMANDS.md",
+        include_bytes!("../../../website/src/content/docs/en/sdk/commands.md"),
+    ),
+    (
+        "INTERACTION.md",
+        include_bytes!("../../../website/src/content/docs/en/sdk/interaction.md"),
+    ),
+    // Typed commands and native menu declarations share the actual independent guest SDK.
+    (
+        "src/commands.rs",
+        include_bytes!("../../plugin-protocol/src/commands.rs"),
+    ),
+    // Independent guests receive the identical native interaction types as the runtime.
+    (
+        "src/interaction.rs",
+        include_bytes!("../../plugin-protocol/src/interaction.rs"),
+    ),
     // The shared project format is shipped beside the public contract for independent authors.
     (
         "PACKAGING.md",

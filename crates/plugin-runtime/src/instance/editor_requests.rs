@@ -34,6 +34,18 @@ impl State {
             ));
         }
         let (capability, permission) = match &operation {
+            EditorOperation::Interaction { operation } => {
+                operation.validate()?;
+                if matches!(
+                    operation,
+                    plugin_protocol::interaction::Operation::Select { .. }
+                ) {
+                    self.check_selection_authority()?;
+                    ("files.selection", "files.select")
+                } else {
+                    ("ui.interaction", "ui.interaction")
+                }
+            }
             EditorOperation::LocateViewport {
                 panel,
                 target,
@@ -120,6 +132,56 @@ impl State {
             ));
         }
         validate_edit_request(&operation)?;
+        // Progress messages modify their existing owner; they cannot allocate or finish another task.
+        if let EditorOperation::Interaction {
+            operation: interaction,
+        } = &operation
+        {
+            let target = match interaction {
+                plugin_protocol::interaction::Operation::UpdateProgress { request, .. }
+                | plugin_protocol::interaction::Operation::FinishProgress { request } => {
+                    Some(request)
+                }
+                _ => None,
+            };
+            if let Some(target) = target {
+                self.roots.resolve(target)?;
+                let pending = self
+                    .editor_requests
+                    .get(&target.resource)
+                    .ok_or_else(|| Failure::new(ErrorCode::InvalidHandle, "Progress task ended"))?;
+                if pending
+                    .context
+                    .as_ref()
+                    .map(|context| &context.caller.instance)
+                    != self
+                        .plugin_services
+                        .context
+                        .as_ref()
+                        .map(|context| &context.caller.instance)
+                {
+                    return Err(Failure::new(
+                        ErrorCode::PermissionDenied,
+                        "Progress belongs to another source",
+                    ));
+                }
+                match interaction {
+                    plugin_protocol::interaction::Operation::UpdateProgress {
+                        message,
+                        percent,
+                        ..
+                    } => pending.call.update_progress(message.clone(), *percent)?,
+                    plugin_protocol::interaction::Operation::FinishProgress { .. } => {
+                        pending.call.update_progress(String::new(), Some(100))?;
+                        pending.call.finish(Ok(api::EditorValue::Interaction(
+                            plugin_protocol::interaction::Value::Finished,
+                        )));
+                    }
+                    _ => unreachable!(),
+                }
+                return Ok(Value::Unit);
+            }
+        }
         let image_input = if let EditorOperation::SaveImageInput { input, name } = &operation {
             if timeout_ms > crate::IMAGE_INPUT_TIMEOUT_MS {
                 return Err(Failure::new(
@@ -233,13 +295,46 @@ impl Instance {
                 ))
             })
             .collect::<Vec<_>>();
-        for (slot, handle, update, context) in updates {
+        for (slot, handle, mut update, context) in updates {
             // A preceding guest callback may explicitly release another request in this batch.
             if !self.store.data().editor_requests.contains_key(&slot) {
                 continue;
             }
             if update.is_terminal() {
                 if let Some(pending) = self.store.data_mut().editor_requests.remove(&slot) {
+                    if let api::RequestUpdate::Completed { result: Ok(_) } = &update {
+                        if let EditorOperation::Interaction {
+                            operation:
+                                plugin_protocol::interaction::Operation::Select {
+                                    mode, multiple, ..
+                                },
+                        } = pending.call.operation()
+                        {
+                            let result = pending
+                                .call
+                                .take_selection()
+                                .ok_or_else(|| {
+                                    Failure::new(
+                                        ErrorCode::InvalidRequest,
+                                        "Missing native selection",
+                                    )
+                                })
+                                .and_then(|paths| {
+                                    // Materialization keeps the same authenticated source that
+                                    // admitted the picker, including its effective permission set.
+                                    let state = self.store.data_mut();
+                                    let previous = std::mem::replace(
+                                        &mut state.plugin_services.context,
+                                        context.clone(),
+                                    );
+                                    let result =
+                                        state.grant_selection(paths, mode.clone(), *multiple);
+                                    state.plugin_services.context = previous;
+                                    result
+                                });
+                            update = api::RequestUpdate::Completed { result };
+                        }
+                    }
                     self.store
                         .data_mut()
                         .finish_image_input_request(&pending.call, &update);

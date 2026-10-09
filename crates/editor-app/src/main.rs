@@ -224,6 +224,12 @@ struct EditorApp {
     tool_overflow: Option<Entity<ui::controls::menu::PopupMenu>>,
     /// An immutable summary boundary separates reminder confirmation from visible-record reading.
     plugin_popup_snapshot: Option<PluginPopupSnapshot>,
+    /// Native prompts retain the runtime gate and are discarded once their owner retires.
+    plugin_interactions: Vec<Entity<ui::controls::interaction::HostInteraction>>,
+    /// Serialize OS picker ownership with native modal prompts; late picker results cannot grant access.
+    plugin_picker_pending: bool,
+    /// Dropping the window's sole controller actively closes its owned native selection dialog.
+    plugin_file_picker: Option<platform_windows::file_picker::FilePickerControl>,
     dark_theme: bool,
     session_state: SessionState,
     /// Saved run configurations and the sessions this editor launched from them.
@@ -515,6 +521,9 @@ impl EditorApp {
             toolbar_focus: cx.focus_handle(),
             tool_overflow: None,
             plugin_popup_snapshot: None,
+            plugin_interactions: Vec::new(),
+            plugin_picker_pending: false,
+            plugin_file_picker: None,
             dark_theme: false,
             session_state,
             run_controls,

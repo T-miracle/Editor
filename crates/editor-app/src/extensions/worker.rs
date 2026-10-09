@@ -195,6 +195,8 @@ pub enum Work {
         plugin: String,
         command: String,
         arguments: serde_json::Value,
+        /// Native context is informational and travels separately from the typed command parameters.
+        context: Option<plugin_runtime::plugin_protocol::commands::Context>,
         /// Capture once when the host accepts this command; never retarget it after a restart.
         expected_epoch: u64,
     },

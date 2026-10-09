@@ -1,6 +1,6 @@
 # 终端 WebAssembly 插件
 
-当前版本 0.12.1 使用清单 protocol 7 和类型化能力接口。插件通过通用布局树组合 `SideTabs`、`Canvas` 和原生菜单，并通过 `ui.tools` 提供右侧功能组的新建与菜单按钮；独立终端窗口显隐在左侧窗口组。图标、ANSI 和内容默认配色由包内 `icons/`、`theme.json` 提供，`ui.content_colors` 允许用户主题覆盖。终端解析、网格、历史、会话与 Shell 配置仍由 WASM 插件持有。宿主提供授权后的通用接口及原生绘制。架构与包格式见 [运行时插件说明](../../docs/plugins/runtime-plugins.md)。
+当前版本 0.12.3 使用清单 protocol 7 和类型化能力接口。插件通过通用布局树组合 `SideTabs`、`Canvas` 和原生菜单，并通过 `ui.tools` 提供右侧功能组的新建与菜单按钮；独立终端窗口显隐在左侧窗口组。图标、ANSI 和内容默认配色由包内 `icons/`、`theme.json` 提供，`ui.content_colors` 允许用户主题覆盖。终端解析、网格、历史、会话与 Shell 配置仍由 WASM 插件持有。宿主提供授权后的通用接口及原生绘制。架构与包格式见 [运行时插件说明](../../docs/plugins/runtime-plugins.md)。 0.12.3 适配公开命令的可选来源上下文；终端自身仍消费原单向命令与参数，忽略不具有授权的描述字段。
 
 0.12.1 增加公开 `run.configurations 1.0` 的 Shell 脚本配置。Windows 只提供本机可用的 Windows PowerShell、PowerShell 7、cmd；Linux/macOS 只提供本机可用的 sh、bash、zsh。未安装和其他系统的解释器不显示，WSL 保留既有交互终端入口，但不以仅存在 wsl.exe 推断脚本环境可用。
 
@@ -10,11 +10,11 @@
 
 本目录同时包含插件源码与打包清单：`src/` 为终端功能实现，`Cargo.toml` 为 WASM crate，`manifest.json` 为安装声明，终端核心直接依赖 [term-wm-vt100 上游](https://github.com/jzombie/term-wm-vt100)，锁定提交 `5ffcf205c709b2378dc91cfa4637ae0f819d6c74`，支持 WASM 编译及主屏幕缩放重排，不包含本地 vendor 源码，Shell 目录元数据使用 `vte`，许可文本随插件包分发。编译接口由编辑器自动缓存和注入，不需要同级 `sdk/` 或主程序源码。独立构建使用 `editor-app.exe --plugin-cargo terminal/Cargo.toml build --target wasm32-wasip2 --release`。Cargo 包名仍为 `terminal-guest`。
 
-通过宿主 `editor-app.exe --plugin-package plugins/terminal` 完整构建并封装 ZIP，默认输出为插件项目根部的 `terminal-0.12.2.zip`。项目描述在 `nanobug-plugin.json`，也可使用宿主“插件打包”配置选择输出位置；不调用归档脚本。
+通过宿主 `editor-app.exe --plugin-package plugins/terminal` 完整构建并封装 ZIP，默认输出为插件项目根部的 `terminal-0.12.3.zip`。项目描述在 `nanobug-plugin.json`，也可使用宿主“插件打包”配置选择输出位置；不调用归档脚本。
 
 同 ID 包执行更新。更新前保存会话并关闭旧 Shell 及其子进程；恢复 Tab、配置和旧输出后，仅为之前仍运行的会话启动新 Shell；已退出会话保留历史，不重启，不重放旧命令。恢复保留原有网格尺寸、文字样式、软换行、光标位置与历史滚动位置，不插入提示文字或新增命令行；旧格式中自动生成的恢复分隔行会在迁移时清除。验证失败保留旧版；切换后失败会重新启用旧版。正常关闭编辑器后再次打开也会恢复这些数据。
 
-修改插件源码或替换编辑器 EXE 不会自动更新已经安装的 WASM。需在插件管理中安装新生成的 `dist/plugins/terminal.zip`，并确认版本为 0.12.1。旧配置和 schema 1 快照会迁移；schema 2 额外记录已退出会话。
+修改插件源码或替换编辑器 EXE 不会自动更新已经安装的 WASM。需在插件管理中安装新生成的 `dist/plugins/terminal.zip`，并确认版本为 0.12.3。旧配置和 schema 1 快照会迁移；schema 2 额外记录已退出会话。
 
 ## 界面与操作
 

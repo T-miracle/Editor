@@ -77,7 +77,7 @@ impl Terminal {
                     arguments: None,
                 }
             }
-            api::Notification::Command { id, arguments } => Event::Command {
+            api::Notification::Command { id, arguments, .. } => Event::Command {
                 id,
                 cwd: None,
                 text: None,

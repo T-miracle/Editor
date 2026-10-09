@@ -307,6 +307,9 @@ mod tests {
             signature,
             arguments: serde_json::json!({}),
             context: crate::plugin_services::Context {
+                native_waits: Vec::new(),
+                menu: None,
+                origin: crate::plugin_services::InvocationOrigin::Delegated,
                 lifetimes: vec![manager.host_alive.clone()],
                 caller: consumer,
                 ancestry: Vec::new(),

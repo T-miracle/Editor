@@ -635,6 +635,17 @@ impl Manager {
         command: &str,
         arguments: serde_json::Value,
     ) -> anyhow::Result<()> {
+        self.invoke_command_with_context(plugin, command, arguments, None)
+    }
+    /// A native command may carry an informational target independently of its checked arguments.
+    /// The host validates the native target before calling; this metadata grants no resource access.
+    pub fn invoke_command_with_context(
+        &mut self,
+        plugin: &str,
+        command: &str,
+        arguments: serde_json::Value,
+        context: Option<plugin_protocol::commands::Context>,
+    ) -> anyhow::Result<()> {
         anyhow::ensure!(
             self.live.contains_key(plugin),
             "Plugin is not running: {plugin}"
@@ -643,6 +654,11 @@ impl Manager {
             .installed
             .get(plugin)
             .ok_or_else(|| anyhow::anyhow!("Plugin is not installed: {plugin}"))?;
+        let context = if entry.manifest.scope == api::InstanceScope::Application {
+            None
+        } else {
+            context
+        };
         anyhow::ensure!(
             entry
                 .manifest
@@ -655,14 +671,45 @@ impl Manager {
             serde_json::to_vec(&arguments)?.len() <= 65536,
             "Plugin command arguments exceed 64 KiB"
         );
+        if entry
+            .manifest
+            .commands
+            .iter()
+            .any(|item| item.id == command && item.signature.is_some())
+        {
+            self.live
+                .get_mut(plugin)
+                .unwrap()
+                .queue_host_command(command, arguments, 30000, context)?;
+            return Ok(());
+        }
         self.event(
             plugin,
             None,
             api::Notification::Command {
                 id: command.into(),
                 arguments: (!arguments.is_null()).then_some(arguments),
+                context,
             },
         )
+    }
+    /// Result-bearing host calls return an immutable gate; legacy commands retain event semantics.
+    pub fn invoke_typed_command(
+        &mut self,
+        plugin: &str,
+        command: &str,
+        arguments: serde_json::Value,
+        timeout_ms: u32,
+    ) -> Result<crate::Completion<serde_json::Value>, api::Failure> {
+        self.live
+            .get_mut(plugin)
+            .ok_or_else(|| {
+                api::Failure::new(
+                    api::ErrorCode::CapabilityUnavailable,
+                    "Command target is not running",
+                )
+            })?
+            .queue_host_command(command, arguments, timeout_ms, None)
     }
     pub fn poll(&mut self) {
         self.route_services();

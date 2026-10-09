@@ -57,6 +57,7 @@ impl State {
                 "subscribe_documents",
                 "process",
                 "service",
+                "commands",
             ]
             .contains(&method)
             {
@@ -139,6 +140,7 @@ impl State {
             }
             self.check_service_authority(&request.operation)?;
             let result = match request.operation {
+                api::Operation::Commands { operation } => self.command_request(operation),
                 api::Operation::Service { operation } => self.service_request(operation),
                 api::Operation::Process { operation } => self.process_request(operation),
                 api::Operation::SubscribeDocuments => self.subscribe_documents(),

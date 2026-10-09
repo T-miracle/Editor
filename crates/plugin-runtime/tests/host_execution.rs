@@ -42,6 +42,7 @@ fn cancelling_a_creation_wait_keeps_the_already_created_program_manageable() {
             panel: None,
             event: api::Notification::Command {
                 id: "execution-defer-next".into(),
+                context: None,
                 arguments: None,
             },
         })
@@ -92,6 +93,7 @@ fn cancelling_a_creation_wait_keeps_the_already_created_program_manageable() {
             panel: None,
             event: api::Notification::Command {
                 id: "execution-release".into(),
+                context: None,
                 arguments: None,
             },
         })

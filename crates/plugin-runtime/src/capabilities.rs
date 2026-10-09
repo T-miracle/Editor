@@ -27,6 +27,9 @@ pub(crate) fn negotiate(manifest: &Manifest) -> anyhow::Result<api::Negotiated> 
     let available = [
         ("package.assets".into(), Version::new(1, 0, 0)),
         ("ui.native".into(), Version::new(1, 1, 0)),
+        ("ui.interaction".into(), Version::new(1, 0, 0)),
+        ("files.selection".into(), Version::new(1, 0, 0)),
+        ("plugin.commands".into(), Version::new(1, 0, 0)),
         ("ui.tools".into(), Version::new(1, 0, 0)),
         ("ui.content_colors".into(), Version::new(1, 0, 0)),
         ("ui.incremental".into(), Version::new(1, 0, 0)),

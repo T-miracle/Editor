@@ -1,15 +1,15 @@
 {
   "id":"example",
   "name":"插件示例：计数与笔记",
-  "version": "0.3.2",
+  "version": "0.4.0",
   "protocol":7,
-  "api":{"base":"^1","required":{"ui.native":"^1"}},
+  "api":{"base":"^1","required":{"ui.native":"^1","plugin.commands":"^1","ui.interaction":"^1"}},
   "component":"example.wasm",
-  "permissions":[],
+  "permissions":["ui.interaction"],
   "storage_limit":1048576,
   "panels":[
     {"id":"counter","title":"计数器","position":"right"},
     {"id":"notes","title":"笔记","position":"bottom"}
   ],
-  "commands":[{"id":"increment","title":"示例：增加一次","menu":true}]
+  "commands":[{"id":"increment","title":"示例：增加一次","menu":true},{"id":"interaction-check","title":"分步骤可取消检查 / Guided check","menu":true,"menus":[{"location":"editor","group":"interaction","order":20,"enabled_when":{"writable":true}},{"location":"selection","group":"interaction","order":20,"when":{"has_selection":true}},{"location":"explorer","group":"interaction","order":20,"when":{"directory":false}},{"location":"tab","group":"interaction","order":20}]},{"id":"interaction-finish-check","title":"完成检查 / Finish check","menu":true}]
 }

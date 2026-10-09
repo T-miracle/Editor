@@ -9,6 +9,7 @@ mod completion_probe;
 mod composition;
 mod discovery;
 mod execution_demo;
+mod interaction_demo;
 mod scope_probe;
 mod service_demo;
 mod structure;
@@ -24,6 +25,10 @@ struct State {
     process_events: Vec<plugin_protocol::process::Update>,
     /// Demonstrate cancellation from inside an output callback, including an already queued exit.
     close_on_output: bool,
+    /// Deferred typed command replies retain their own provider slot, never another guest's wait.
+    command_reply: Option<api::ResourceHandle>,
+    /// Selection flow owns its public request and revocable selected resources independently of probes.
+    interaction_demo: interaction_demo::Demo,
     /// Resolved configuration arrives before activation and carries source metadata for each field.
     configuration: plugin_protocol::settings::Effective,
     text: String,
@@ -57,6 +62,117 @@ impl State {
     /// Preparation is side-effect free; missing optional functionality selects a visible fallback.
     fn handle(&mut self, input: api::Input) -> Result<api::Output, Failure> {
         match input {
+            api::Input::Event { event, .. } if self.interaction_demo.handles(&event) => {
+                self.text = self.interaction_demo.handle(event);
+            }
+            api::Input::Event {
+                event: api::Notification::CommandInvocation(call),
+                ..
+            } => {
+                if call.id == "menu-context" {
+                    // Context is separate from typed arguments and never supplies a file grant.
+                    self.text = serde_json::to_string(&call.context).unwrap();
+                    return Ok(api::Output {
+                        service_reply: Some(Ok(serde_json::json!(self.text))),
+                        ..Default::default()
+                    });
+                }
+                if call.id == "defer" || call.id == "defer-native" {
+                    if call.id == "defer-native" {
+                        // Native work must retain the command wait without borrowing provider authority.
+                        self.task = Some(api::guest::EditorTask::start(
+                            api::EditorOperation::Interaction {
+                                operation: plugin_protocol::interaction::Operation::Input {
+                                    title: "Deferred command".into(),
+                                    value: String::new(),
+                                    placeholder: None,
+                                    password: false,
+                                    max_bytes: 64,
+                                },
+                            },
+                            30000,
+                        )?);
+                    }
+                    self.command_reply = Some(call.reply);
+                    return Ok(api::Output::default());
+                }
+                let result = if call.id == "fail" {
+                    Err(Failure::new(
+                        ErrorCode::OperationFailed,
+                        "Typed command failure",
+                    ))
+                } else if call.id == "authority" {
+                    api::guest::open_workspace().map(|_| serde_json::Value::Null)
+                } else if call.id == "probe" {
+                    // The provider probes only public transport, making delegated denials observable.
+                    call.arguments
+                        .as_str()
+                        .ok_or_else(|| {
+                            Failure::new(ErrorCode::InvalidRequest, "Expected serialized operation")
+                        })
+                        .and_then(|text| {
+                            serde_json::from_str::<api::Operation>(text).map_err(|error| {
+                                Failure::new(ErrorCode::InvalidRequest, error.to_string())
+                            })
+                        })
+                        .map(|operation| {
+                            let editor = matches!(operation, api::Operation::Editor { .. });
+                            let result = api::guest::request(operation);
+                            // The ordinary SDK task consumes the later native result using its
+                            // exact accepted handle, just as the one-way probe does.
+                            if editor {
+                                self.task = match &result {
+                                    Ok(api::Value::Accepted(handle)) => {
+                                        Some(api::guest::EditorTask::from_accepted(handle.clone()))
+                                    }
+                                    _ => None,
+                                };
+                            }
+                            serde_json::json!(serde_json::to_string(&result).unwrap())
+                        })
+                } else {
+                    Ok(call.arguments)
+                };
+                return Ok(api::Output {
+                    service_reply: Some(result),
+                    ..Default::default()
+                });
+            }
+            api::Input::Event {
+                event: api::Notification::CommandCancelled { request, reason },
+                ..
+            } => {
+                if self.command_reply.as_ref() == Some(&request) {
+                    self.command_reply = None;
+                }
+                self.text = serde_json::to_string(&reason).unwrap();
+            }
+            api::Input::Event {
+                event: api::Notification::Command { id, context, .. },
+                ..
+            } if id == "menu-context" => {
+                // One-way commands keep their original event semantics while exposing the native target.
+                self.text = serde_json::to_string(&context).unwrap();
+            }
+            api::Input::Event {
+                event: api::Notification::CommandRequest { update, .. },
+                ..
+            } => {
+                self.text = serde_json::to_string(&update).unwrap();
+            }
+            api::Input::Event {
+                event: api::Notification::Command { id, .. },
+                ..
+            } if id == "command-release" => {
+                let result = self
+                    .command_reply
+                    .take()
+                    .ok_or_else(|| Failure::new(ErrorCode::InvalidHandle, "No deferred command"))
+                    .and_then(|request| {
+                        plugin_protocol::commands::reply(request, Ok(serde_json::json!("released")))
+                    });
+                self.text = serde_json::to_string(&result).unwrap();
+            }
             api::Input::Event {
                 event: api::Notification::LanguageStructure(request),
                 ..
@@ -160,7 +276,7 @@ impl State {
                 }
             }
             api::Input::Event {
-                event: api::Notification::Command { id, arguments },
+                event: api::Notification::Command { id, arguments, .. },
                 ..
             } if id.starts_with("execution-") => {
                 let _ = arguments;
@@ -170,7 +286,7 @@ impl State {
                     .unwrap_or_else(|error| error.to_string());
             }
             api::Input::Event {
-                event: api::Notification::Command { id, arguments },
+                event: api::Notification::Command { id, arguments, .. },
                 ..
             } if id.starts_with("service-") => {
                 self.text = self
@@ -348,7 +464,7 @@ impl State {
                 self.close_on_output = true;
             }
             api::Input::Event {
-                event: api::Notification::Command { id, arguments },
+                event: api::Notification::Command { id, arguments, .. },
                 ..
             } if id == "process-events" => {
                 // Read one bounded event at a time; native text controls are not bulk byte storage.
@@ -367,7 +483,7 @@ impl State {
                 self.text = "Typed errors and request IDs verified.".into();
             }
             api::Input::Event {
-                event: api::Notification::Command { id, arguments },
+                event: api::Notification::Command { id, arguments, .. },
                 ..
             } if id == "scope-write" || id == "scope-read" => {
                 if self.data.is_none() {
@@ -395,7 +511,7 @@ impl State {
                 );
             }
             api::Input::Event {
-                event: api::Notification::Command { id, arguments },
+                event: api::Notification::Command { id, arguments, .. },
                 ..
             } if id == "ui-layout" => {
                 if let Some(demo) = &mut self.ui_demo {
@@ -408,7 +524,7 @@ impl State {
                 }
             }
             api::Input::Event {
-                event: api::Notification::Command { id, arguments },
+                event: api::Notification::Command { id, arguments, .. },
                 ..
             } if id == "scope-probe" => {
                 // Return expected domain failures as data so the host can observe continued liveness.
@@ -427,7 +543,7 @@ impl State {
                 }
             }
             api::Input::Event {
-                event: api::Notification::Command { id, arguments },
+                event: api::Notification::Command { id, arguments, .. },
                 ..
             } if id == "preview-probe" => {
                 // Independent SDK consumers can inspect host publication validation without bypassing it.
@@ -465,7 +581,7 @@ impl State {
                     {
                         self.document = Some(document.clone());
                     }
-                    self.text = format!("{update:?}");
+                    self.text = serde_json::to_string(&update).unwrap();
                 }
                 if let Some(demo) = &mut self.ui_demo {
                     demo.diagnostic(&self.text);

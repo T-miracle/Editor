@@ -87,6 +87,7 @@ fn operation_errors_retain_plugin_ownership_through_worker_publication() {
         .tx
         .send(Work::Invoke {
             plugin: "missing-plugin".into(),
+            context: None,
             command: "unknown".into(),
             arguments: json!(null),
             // The actor must reject an absent owner using the observed publication, not invent one.
@@ -312,6 +313,7 @@ fn run_preparation(restrict: bool) {
         .tx
         .send(Work::Invoke {
             plugin: "capability-example".into(),
+            context: None,
             command: "scope-write".into(),
             arguments: json!({"text":"during preparation"}),
             expected_epoch: worker.state.lock().unwrap().instance_epochs["capability-example"],
@@ -326,6 +328,7 @@ fn run_preparation(restrict: bool) {
         .tx
         .send(Work::Invoke {
             plugin: "capability-example".into(),
+            context: None,
             command: "active-directory".into(),
             arguments: json!(null),
             expected_epoch: worker.state.lock().unwrap().instance_epochs["capability-example"],
@@ -373,6 +376,7 @@ fn run_preparation(restrict: bool) {
             .tx
             .send(Work::Invoke {
                 plugin: "capability-example".into(),
+                context: None,
                 command: "scope-read".into(),
                 arguments: json!(null),
                 expected_epoch: worker.state.lock().unwrap().instance_epochs["capability-example"],
@@ -407,6 +411,7 @@ fn run_preparation(restrict: bool) {
                 None,
                 api::Notification::Command {
                     id: "scope-write".into(),
+                    context: None,
                     arguments: Some(json!({"text":"stale callback"})),
                 },
             ))
@@ -415,6 +420,7 @@ fn run_preparation(restrict: bool) {
             .tx
             .send(Work::Invoke {
                 plugin: "capability-example".into(),
+                context: None,
                 command: "scope-read".into(),
                 arguments: json!(null),
                 expected_epoch: worker.state.lock().unwrap().instance_epochs["capability-example"],

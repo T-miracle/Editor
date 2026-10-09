@@ -106,6 +106,8 @@ execution.
 
 [Configuration templates](/en/sdk/configurations/) provide plugin-owned defaults, native forms and validation for local configuration drafts.
 
+[Typed commands and native menus](/en/sdk/commands/) provide checked parameters, results and original-source permissions. [Native interactions](/en/sdk/interaction/) provide confirmed input, messages, cancellable progress and restricted external selection.
+
 ## workspace.files 1.1 and host.sdk 1.0
 
 `api::guest::find_files(&workspace, FileQuery { include, exclude, max_results })` uses the

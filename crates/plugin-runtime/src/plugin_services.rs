@@ -38,15 +38,46 @@ struct Selection {
     preference: Option<String>,
     revision: u64,
 }
+/// Only the Manager's typed command route creates a host origin; guest caller strings are descriptive.
+#[derive(Clone)]
+pub(crate) enum InvocationOrigin {
+    Delegated,
+    HostCommand { target: String },
+}
+
 /// The original source and shrinking authority survive nested calls; ancestry bounds asynchronous cycles.
 #[derive(Clone)]
 pub(crate) struct Context {
     pub lifetimes: Vec<Arc<AtomicBool>>,
+    /// Pending native interactions observe source waits without revoking already owned programs.
+    pub native_waits: Vec<Completion<Value>>,
+    /// A native menu target is descriptive context, separate from schema-checked arguments.
+    pub menu: Option<plugin_protocol::commands::Context>,
+    /// An internal admission record is never serialized to, or accepted from, a guest.
+    pub origin: InvocationOrigin,
     pub caller: Caller,
     pub ancestry: Vec<String>,
     pub permissions: BTreeSet<String>,
 }
 impl Context {
+    /// A directly invoked provider may use its own picker permission, never through another hop.
+    pub(crate) fn direct_host_selection(&self, instance: &str) -> bool {
+        matches!(&self.origin, InvocationOrigin::HostCommand { target } if target == instance)
+            && self.ancestry.len() == 1
+            && self.ancestry[0] == instance
+            && self.permissions.contains("files.select")
+            && self
+                .lifetimes
+                .iter()
+                .all(|alive| alive.load(Ordering::Acquire))
+            && self.native_waits.iter().all(|wait| {
+                !matches!(
+                    wait.status(),
+                    plugin_protocol::api::RequestUpdate::Cancelled { .. }
+                )
+            })
+    }
+
     /// Each hop keeps the original owner, shrinks authority and adds the target's revocation boundary.
     pub(crate) fn delegate(
         &self,
@@ -110,6 +141,59 @@ pub(crate) struct Broker {
     selections: BTreeMap<(String, String), Selection>,
 }
 impl Broker {
+    /// Discovery exposes only live typed command metadata in the caller's current scope.
+    pub(crate) fn commands(&self, caller: &Caller) -> Vec<plugin_protocol::commands::Descriptor> {
+        self.providers
+            .values()
+            .filter(|provider| {
+                provider.alive.load(Ordering::Acquire) && provider.caller.scope == caller.scope
+            })
+            .flat_map(|provider| {
+                provider.contracts.iter().filter_map(|(id, contract)| {
+                    let command = id
+                        .strip_prefix(plugin_protocol::commands::CONTRACT_PREFIX)?
+                        .split_once('/')?
+                        .1;
+                    Some(plugin_protocol::commands::Descriptor {
+                        plugin: provider.caller.plugin.clone(),
+                        command: command.into(),
+                        signature: contract.methods.get("invoke")?.clone(),
+                    })
+                })
+            })
+            .collect()
+    }
+
+    /// An explicitly named command pins the current provider incarnation, without service preferences.
+    pub(crate) fn command_reference(
+        &self,
+        caller: &Caller,
+        plugin: &str,
+        command: &str,
+    ) -> Result<Reference, Failure> {
+        let id = plugin_protocol::commands::contract(plugin, command);
+        let provider = self
+            .providers
+            .values()
+            .find(|provider| {
+                provider.caller.plugin == plugin
+                    && provider.caller.scope == caller.scope
+                    && provider.alive.load(Ordering::Acquire)
+                    && provider.contracts.contains_key(&id)
+            })
+            .ok_or_else(|| {
+                Failure::new(
+                    ErrorCode::CapabilityUnavailable,
+                    "Typed command is unavailable in this caller scope",
+                )
+            })?;
+        let dependency = Dependency {
+            version: semver::VersionReq::parse("^1").unwrap(),
+            optional: false,
+            methods: provider.contracts[&id].methods.clone(),
+        };
+        self.resolve_pinned(caller, &id, &dependency, &provider.caller.instance)
+    }
     /// Reply admission validates unchanged source authority, original shape and the 64 KiB bound.
     pub(crate) fn complete_deferred(
         &mut self,
@@ -200,6 +284,10 @@ impl Broker {
             .collect();
         for provider in self.providers.values() {
             for contract in provider.contracts.keys() {
+                // Command ownership is explicit; these entries are not selectable service providers.
+                if contract.starts_with(plugin_protocol::commands::CONTRACT_PREFIX) {
+                    continue;
+                }
                 available
                     .entry((provider.caller.scope.clone(), contract.clone()))
                     .or_default()
@@ -388,6 +476,10 @@ impl Broker {
         let mut contracts: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
         for provider in self.providers.values().filter(|p| p.caller.scope == scope) {
             for contract in provider.contracts.keys() {
+                // Explicit command ownership is never a user-selectable service preference.
+                if contract.starts_with(plugin_protocol::commands::CONTRACT_PREFIX) {
+                    continue;
+                }
                 contracts
                     .entry(contract.clone())
                     .or_default()

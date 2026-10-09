@@ -29,6 +29,23 @@ impl EditorApp {
             )
         };
         let app = cx.entity().downgrade();
+        let plugin_target = self
+            .active_path
+            .as_deref()
+            .map(|path| self.plugin_menu_target(path));
+        let plugin_rows = plugin_target
+            .as_ref()
+            .map(|target| {
+                self.plugin_menu_entries(
+                    target,
+                    &[
+                        plugin_runtime::plugin_protocol::commands::Location::Editor,
+                        plugin_runtime::plugin_protocol::commands::Location::Selection,
+                    ],
+                    cx,
+                )
+            })
+            .unwrap_or_default();
         let language = self
             .active_path
             .as_deref()
@@ -45,6 +62,7 @@ impl EditorApp {
             .debug_selector(|| "editor-source-pane".into())
             // Only the host-rendered native editor admits document shortcuts inside a guest layout.
             .key_context("NativeEditorSource")
+            .on_action(cx.listener(Self::plugin_editor_menu_action))
             .flex_1()
             .min_h_0()
             .flex()
@@ -124,49 +142,59 @@ impl EditorApp {
                         .disabled(!enabled)
                         .context_menu(move |menu, _, cx| {
                             // Route the menu action through the same fresh LSP request as F12.
-                            menu.menu_with_disabled(
-                                t!("editor.go_to_definition").to_string(),
-                                !(enabled && has_definition),
-                                Box::new(NavigateToDefinition),
-                            )
-                            .menu_with_disabled(
-                                t!("editor.code_actions").to_string(),
-                                !(editable && has_code_actions),
-                                Box::new(gpui_base::input::ToggleCodeActions),
-                            )
-                            .separator()
-                            .menu_with_disabled(
-                                t!("editor.format_document").to_string(),
-                                !can_format,
-                                Box::new(FormatDocument),
-                            )
-                            .menu_with_disabled(
-                                t!("editor.rename_symbol").to_string(),
-                                !can_rename,
-                                Box::new(RenameSymbol),
-                            )
-                            .separator()
-                            // Cut and Copy validate the live selection when their actions run.
-                            .menu_with_disabled(
-                                t!("editor.cut").to_string(),
-                                !editable,
-                                Box::new(gpui_base::input::Cut),
-                            )
-                            .menu_with_disabled(
-                                t!("editor.copy").to_string(),
-                                !enabled,
-                                Box::new(gpui_base::input::Copy),
-                            )
-                            .menu_with_disabled(
-                                t!("editor.paste").to_string(),
-                                !(editable && cx.read_from_clipboard().is_some()),
-                                Box::new(gpui_base::input::Paste),
-                            )
-                            .separator()
-                            .menu(
-                                t!("editor.select_all").to_string(),
-                                Box::new(gpui_base::input::SelectAll),
-                            )
+                            let menu = menu
+                                .menu_with_disabled(
+                                    t!("editor.go_to_definition").to_string(),
+                                    !(enabled && has_definition),
+                                    Box::new(NavigateToDefinition),
+                                )
+                                .menu_with_disabled(
+                                    t!("editor.code_actions").to_string(),
+                                    !(editable && has_code_actions),
+                                    Box::new(gpui_base::input::ToggleCodeActions),
+                                )
+                                .separator()
+                                .menu_with_disabled(
+                                    t!("editor.format_document").to_string(),
+                                    !can_format,
+                                    Box::new(FormatDocument),
+                                )
+                                .menu_with_disabled(
+                                    t!("editor.rename_symbol").to_string(),
+                                    !can_rename,
+                                    Box::new(RenameSymbol),
+                                )
+                                .separator()
+                                // Cut and Copy validate the live selection when their actions run.
+                                .menu_with_disabled(
+                                    t!("editor.cut").to_string(),
+                                    !editable,
+                                    Box::new(gpui_base::input::Cut),
+                                )
+                                .menu_with_disabled(
+                                    t!("editor.copy").to_string(),
+                                    !enabled,
+                                    Box::new(gpui_base::input::Copy),
+                                )
+                                .menu_with_disabled(
+                                    t!("editor.paste").to_string(),
+                                    !(editable && cx.read_from_clipboard().is_some()),
+                                    Box::new(gpui_base::input::Paste),
+                                )
+                                .separator()
+                                .menu(
+                                    t!("editor.select_all").to_string(),
+                                    Box::new(gpui_base::input::SelectAll),
+                                );
+                            if let Some(target) = plugin_target.clone() {
+                                extensions::command_menus::append_editor(
+                                    menu,
+                                    plugin_rows.clone(),
+                                    target,
+                                )
+                            } else {
+                                menu
+                            }
                         })
                         .bordered(false)
                         .p_0()

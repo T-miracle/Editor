@@ -523,6 +523,30 @@ impl Render for EditorApp {
             .child(self.render_explorer_edit(cx))
             .child(self.render_explorer_delete(cx))
             .child(self.render_file_transfer(cx))
+            .child(
+                div()
+                    .id("plugin-notice-stack")
+                    .absolute()
+                    .bottom(px(36.))
+                    .right(px(12.))
+                    .max_h(px(420.))
+                    .overflow_y_scroll()
+                    .flex()
+                    .flex_col()
+                    .gap_2()
+                    .children(
+                        self.plugin_interactions
+                            .iter()
+                            .filter(|prompt| !prompt.read(cx).is_modal())
+                            .cloned(),
+                    ),
+            )
+            .children(
+                self.plugin_interactions
+                    .iter()
+                    .filter(|prompt| prompt.read(cx).is_modal())
+                    .cloned(),
+            )
             .when_some(self.notification.as_ref(), |this, notification| {
                 // Center the card near the top, keeping a margin when the window is narrow.
                 let width = px(380.).min((window.viewport_size().width - px(24.)).max(px(0.)));

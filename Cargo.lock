@@ -1820,6 +1820,7 @@ dependencies = [
  "platform-windows",
  "plugin-runtime",
  "plugin-schema",
+ "raw-window-handle",
  "regex",
  "resvg 0.45.1",
  "rust-i18n",
@@ -5523,6 +5524,7 @@ dependencies = [
  "editor-core",
  "tempfile",
  "thiserror 2.0.20",
+ "windows 0.62.2",
 ]
 
 [[package]]

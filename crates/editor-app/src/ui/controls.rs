@@ -11,6 +11,7 @@ mod editor_canvas;
 pub(crate) mod file_operation;
 mod icon;
 mod input;
+pub(crate) mod interaction;
 pub(crate) mod menu;
 mod notification;
 mod scrollbar;

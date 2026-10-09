@@ -11,6 +11,7 @@ use wasmtime::{
 };
 use wasmtime_wasi::{ResourceTable, WasiCtx, WasiCtxView, WasiView};
 mod capability_calls;
+mod commands;
 mod data_files;
 mod document_events;
 mod editor_requests;
@@ -20,6 +21,7 @@ mod plugin_services;
 mod preferences;
 mod process_calls;
 mod resource_roots;
+mod selected_resources;
 mod service_replies;
 mod settings;
 mod stdio;
@@ -42,6 +44,8 @@ struct State {
     editor_requests: std::collections::BTreeMap<u64, crate::editor_requests::PendingRequest>,
     /// Native inputs and their slots share this incarnation; pending writers retain their own immutable payload.
     image_inputs: std::collections::BTreeMap<u64, image_inputs::Input>,
+    /// User-selected targets remain separate from workspace and private-data roots.
+    selected_resources: std::collections::BTreeMap<u64, selected_resources::Selection>,
     declared_panels: BTreeSet<String>,
     /// Editor toolbar authority is confined to this package's declared workspace preview surfaces.
     declared_editor_panels: BTreeSet<String>,
@@ -323,6 +327,7 @@ impl Instance {
             roots: ResourceRoots::new(&environment.workspace, application, manifest.storage_limit),
             editor_requests: Default::default(),
             image_inputs: Default::default(),
+            selected_resources: Default::default(),
             subscriptions: Default::default(),
             preference_subscriptions: Default::default(),
             declared_panels: manifest
@@ -365,6 +370,16 @@ impl Instance {
         state.plugin_services.principal =
             state.roots.principal(&manifest.id, &manifest.permissions);
         state.plugin_services.declarations = manifest.plugin_services.clone();
+        state.plugin_services.commands = manifest
+            .commands
+            .iter()
+            .filter_map(|command| {
+                command
+                    .signature
+                    .clone()
+                    .map(|method| (command.id.clone(), method))
+            })
+            .collect();
         let mut store = Store::new(engine, state);
         store.limiter(|s| &mut s.limits);
         store.set_fuel(100_000_000)?;
@@ -609,6 +624,7 @@ impl Instance {
     /// Seal already-published work before the final snapshot, while retaining private-file access for serialization.
     pub(crate) fn quiesce(&mut self) {
         self.clear_image_inputs();
+        self.store.data_mut().clear_selections();
         // Native cleanup keeps its original observer before quiesce seals delegated service roots.
         self.store.data_mut().retire_native_processes();
         self.store.data_mut().plugin_services.clear();

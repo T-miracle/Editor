@@ -1,7 +1,8 @@
-//! Two independent native panels demonstrate UI and snapshots without native permissions.
+//! Independent native panels and an attributed guided check use only public SDK capabilities.
 use plugin_protocol::bindings::{Guest, export};
 use plugin_protocol::{Environment, Snapshot, api, ui};
 use std::cell::RefCell;
+mod interaction_demo;
 mod views;
 struct Example;
 #[derive(Default)]
@@ -14,6 +15,8 @@ struct State {
     selected: Option<String>,
     tab: String,
     env: Environment,
+    /// Guided interaction is ephemeral; persisted notes never serialize active host request handles.
+    interaction: interaction_demo::Demo,
 }
 thread_local! {static STATE:RefCell<State>=RefCell::new(State::default());}
 impl Guest for Example {
@@ -76,6 +79,7 @@ impl State {
     fn event(&mut self, panel: Option<&str>, event: api::Notification) {
         let identity = (self.editing, self.tab.clone());
         match event {
+            event if self.interaction.handles(&event) => self.note = self.interaction.handle(event),
             api::Notification::Theme(env) => self.env = env,
             api::Notification::Command { id, .. } if id == "increment" => self.count += 1,
             api::Notification::Ui(event) => match (panel, event.node.as_str(), event.action) {

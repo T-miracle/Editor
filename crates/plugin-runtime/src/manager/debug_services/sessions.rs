@@ -246,6 +246,9 @@ impl Manager {
             let native = Arc::new(Mutex::new(NativeWork::default()));
             self.host_resources.preparations.register(&alive, &native);
             let origin = Context {
+                native_waits: Vec::new(),
+                menu: None,
+                origin: crate::plugin_services::InvocationOrigin::Delegated,
                 caller: caller.clone(),
                 permissions: caller.permissions.clone(),
                 ancestry: vec![],

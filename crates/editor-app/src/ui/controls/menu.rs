@@ -121,6 +121,16 @@ pub(crate) struct PopupMenu {
     sink: Rc<dyn Fn(Action, &mut Window, &mut App)>,
 }
 impl PopupMenu {
+    /// Align a dropdown with the trigger's lower-right corner in window coordinates.
+    /// Call on measured layout changes as well as opening, so dock moves do not leave a stale popup.
+    pub(crate) fn anchor_to(&mut self, trigger: gpui_kit::Bounds<Pixels>, cx: &mut Context<Self>) {
+        let position = point(trigger.right() - px(self.width), trigger.bottom());
+        if self.position != position || !self.below_anchor {
+            self.position = position;
+            self.below_anchor = true;
+            cx.notify();
+        }
+    }
     pub fn new(
         items: Vec<MenuItem>,
         style: MenuStyle,

@@ -6,6 +6,7 @@ rust-version.workspace = true
 license.workspace = true
 
 [dependencies]
+raw-window-handle = "0.6.2"
 anyhow.workspace = true
 # Use the already-locked date library to render receipt dates in the user's system timezone.
 chrono = { version = "0.4.45", default-features = false, features = ["clock"] }

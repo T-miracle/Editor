@@ -2,6 +2,56 @@
 use super::*;
 use gpui_kit::{AppContext as _, TestAppContext, component::Root, gpui};
 use std::cell::RefCell;
+
+/// A title dropdown uses its measured trigger, and follows later dock relocation.
+#[gpui::test]
+fn popup_menu_follows_nonzero_trigger_bounds(cx: &mut TestAppContext) {
+    cx.update(|cx| {
+        gpui_kit::init(cx);
+        crate::ui::typography::init(cx);
+        crate::ui::theme::apply_theme(crate::ui::theme::builtin_theme(false), cx);
+    });
+    let retained = Rc::new(RefCell::new(None));
+    let capture = retained.clone();
+    let (_, cx) = cx.add_window_view(move |window, cx| {
+        let view = cx.new(|cx| {
+            PopupMenu::new(
+                vec![MenuItem {
+                    id: "run".into(),
+                    label: "Run".into(),
+                    disabled: false,
+                    separator_before: false,
+                }],
+                MenuStyle::current(cx),
+                Point::default(),
+                |_, _, _| {},
+                window,
+                cx,
+            )
+        });
+        capture.replace(Some(view.clone()));
+        Root::new(view, window, cx)
+    });
+    cx.simulate_resize(gpui_kit::size(px(1000.), px(700.)));
+    let popup = retained.borrow().clone().unwrap();
+    for (x, y, width) in [(700., 300., 1000.), (500., 420., 900.)] {
+        cx.simulate_resize(gpui_kit::size(px(width), px(700.)));
+        cx.update(|window, cx| {
+            popup.update(cx, |popup, cx| {
+                popup.anchor_to(
+                    gpui_kit::Bounds::new(point(px(x), px(y)), gpui_kit::size(px(24.), px(24.))),
+                    cx,
+                )
+            });
+            window.draw(cx).clear(cx);
+        });
+        // A later paint must keep the trigger anchor instead of reverting to the viewport origin.
+        cx.update(|window, cx| window.draw(cx).clear(cx));
+        let menu = cx.debug_bounds("native-popup-menu").unwrap();
+        assert_eq!(menu.right(), px(x + 24.));
+        assert_eq!(menu.top(), px(y + 24.));
+    }
+}
 #[gpui::test]
 fn popup_menu_keyboard_navigation_and_escape(cx: &mut TestAppContext) {
     cx.update(|cx| {

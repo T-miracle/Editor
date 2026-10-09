@@ -97,6 +97,9 @@ fn switching_workspaces_does_not_publish_the_previous_session_table() {
 /// Build an ordinary delegation source; no resource or reference internals are opened for tests.
 fn context_for(caller: &Caller, alive: &Arc<AtomicBool>) -> CallContext {
     CallContext {
+        native_waits: Vec::new(),
+        menu: None,
+        origin: crate::plugin_services::InvocationOrigin::Delegated,
         caller: caller.clone(),
         permissions: caller.permissions.clone(),
         lifetimes: vec![alive.clone()],

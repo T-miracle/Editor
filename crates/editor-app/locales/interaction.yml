@@ -1,0 +1,22 @@
+_version: 2
+interaction.search:
+  en: "Search choices"
+  zh-CN: "搜索选项"
+interaction.cancel:
+  en: "Cancel"
+  zh-CN: "取消"
+interaction.confirm:
+  en: "Confirm"
+  zh-CN: "确认"
+interaction.dismiss:
+  en: "Dismiss"
+  zh-CN: "关闭通知"
+interaction.information:
+  en: "Information"
+  zh-CN: "信息"
+interaction.warning:
+  en: "Warning"
+  zh-CN: "警告"
+interaction.error:
+  en: "Error"
+  zh-CN: "错误"
