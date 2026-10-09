@@ -11,6 +11,7 @@
 - 02 工作树：`C:/Users/Tmiracle/.codex/worktrees/plugin-api-interaction/Editor`，分支 `codex/plugin-api-interaction`，从相同基线开始。
 - 06 工作树：`C:/Users/Tmiracle/.codex/worktrees/plugin-api-cloud/Editor`，分支 `codex/plugin-api-cloud`，从已交付 02 的 `8506cc8f1f9baee3fca030d59b7d1d21b5227763` 开始。
 - 03 工作树：`C:/Users/Tmiracle/.codex/worktrees/plugin-api-transactions/Editor`，分支 `codex/plugin-api-transactions`；保持行为的预重构从普通整合候选 `ef6fa2d` 开始，最终公开事务交付需接入下述已修正整合点。
+- 05 工作树：`C:/Users/Tmiracle/.codex/worktrees/plugin-api-trees/Editor`，分支 `codex/plugin-api-trees`；从已验证并推送的整合点 `b54aa46931bc24021791456f47fbe894660742ce` 开始。
 - 原项目工作区已有其他任务的未提交改动，本批代码在独立工作树实施；这些已有改动不计入本批成果。
 
 ## 当前进度
@@ -21,13 +22,13 @@
 | 02 命令与交互 | [#94](https://github.com/T-miracle/Nanobug/issues/94) | 已验收交付，议题已关闭 | `8506cc8f1f9baee3fca030d59b7d1d21b5227763` 已推送并核对远端；双轴未解决项均为 0 |
 | 03 工作区事务 | [#95](https://github.com/T-miracle/Nanobug/issues/95) | 实施中；预重构与 Atomic 行为回归已启动 | T11–T16 及共同完成条件，未验收不关闭 |
 | 04 诊断与语言 | [#96](https://github.com/T-miracle/Nanobug/issues/96) | 等待 03 | T17–T20 及共同完成条件 |
-| 05 树与装饰 | [#97](https://github.com/T-miracle/Nanobug/issues/97) | 准备完成，修正整合点已就绪 | T21–T24 及共同完成条件 |
-| 06 网络与私有状态 | [#98](https://github.com/T-miracle/Nanobug/issues/98) | 修正候选 `d92f79c`；独立复审中 | T25–T30 与原生已执行，待双轴收敛及交付 |
+| 05 树与装饰 | [#97](https://github.com/T-miracle/Nanobug/issues/97) | 实施中，独立工作树依赖已满足 | T21–T24 及共同完成条件 |
+| 06 网络与私有状态 | [#98](https://github.com/T-miracle/Nanobug/issues/98) | 继续修复配置候选的 Temporary 所有权 | `d92f79c` 原四项已解决；Spec 新 P2 待真实回归与复审，尚不交付 |
 | 07 激活与兼容 | [#99](https://github.com/T-miracle/Nanobug/issues/99) | 等待 04、05、06 | T31–T35 及共同完成条件 |
 
 ## 证据与复用规则
 
-01 与 02 的[普通合并连接记录](01-02-integration.md)固定双方交付点，记录真实 SDK 菜单上下文与焦点回归、SDK / 包指纹及整合门禁。`325c9d7` 修正本地左栏精确目标，`91b7e09` 配对澄清两语文档；双轴未解决项均为 0，[新增原生连接](native-integration.md)通过。后续 03 / 05 使用这个已修正整合点；批次其余工单没有因此标记完成。
+01 与 02 的[普通合并连接记录](01-02-integration.md)固定双方交付点，记录真实 SDK 菜单上下文与焦点回归、SDK / 包指纹及整合门禁。`325c9d7` 修正本地左栏精确目标，`91b7e09` 配对澄清两语文档；双轴未解决项均为 0，[新增原生连接](native-integration.md)通过。完整记录提交 `b54aa46931bc24021791456f47fbe894660742ce` 已普通推送，`git ls-remote` 核对远端同 SHA；后续 03 / 05 使用这个已修正整合点。批次其余工单没有因此标记完成。
 
 01 的[逐单验收与双轴结论](01-documents-and-virtual-resources.md)及 [01 主代理原生验收](native-01.md)已经交付；2026-10-09 07:22:13 UTC，按既有 Git 认证更新并读回 #93 为 `closed / completed`。初轮失败保留原始结果，修复候选分别复核；父设计议题 #92 未修改。02 的原生证据见 [02 主代理原生验收](native-02.md)。
 
