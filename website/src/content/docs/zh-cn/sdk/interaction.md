@@ -1,6 +1,6 @@
 ---
 title: 原生交互与所选资源
-description: 经确认的原生输入、取消、带来源消息与受限文件选择。
+description: 经确认的原生输入、取消、带来源消息与受限选择，以及有明确限制的建议文件名。
 section: sdk
 order: 18
 alternate: /en/sdk/interaction/
@@ -37,7 +37,7 @@ Escape、取消按钮、原生对话框关闭、超时和所属实例退役产�
 
 ## 受限选择授权
 
-`Select` 包含标题、`SelectionMode::{File,Directory,Save}`、多选标志和可选建议文件名。Save 模式仅单选。建议名最多 255 字节，不含斜线、反斜线、冒号、NUL，且不为 `.` 或 `..`；建议名本身不产生访问授权。
+`Select` 包含标题、`SelectionMode::{File,Directory,Save}`、多选标志和可选建议文件名。Save 模式仅单选。建议名最多 255 字节，不含斜线、反斜线、冒号、NUL，且名称不能等于 `.` 或 `..`；建议名本身不产生访问授权。
 
 原生路径只交付宿主。每个返回的 `SelectedResource` 包含 opaque `handle`、描述用 `name` 和 `kind`。选择实例拥有精确目标和允许的操作。句柄是临时资源，不应持久化或转授。
 

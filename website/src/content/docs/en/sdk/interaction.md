@@ -1,6 +1,6 @@
 ---
 title: Native interactions and selected resources
-description: Confirmed native input, cancellation, attributed messages and restricted file selection.
+description: Confirmed native input, cancellation, attributed messages and restricted selection with bounded suggested filenames.
 section: sdk
 order: 18
 alternate: /zh-cn/sdk/interaction/
