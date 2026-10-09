@@ -362,6 +362,9 @@ fn exported_bytes<'a>(relative: &str, bytes: &'a [u8]) -> Cow<'a, [u8]> {
             .to_owned();
     }
     for (route, file) in [
+        // Capability pages must precede the SDK root fallback to retain local exported links.
+        ("commands", "COMMANDS.md"),
+        ("interaction", "INTERACTION.md"),
         ("packaging", "PACKAGING.md"),
         ("configurations", "CONFIGURATIONS.md"),
         ("debug", "DEBUG.md"),

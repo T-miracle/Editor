@@ -10,6 +10,8 @@ alternate: /en/sdk/commands/
 
 发现或提供 typed 命令、贡献原生菜单需协商 `plugin.commands ^1`。调用其他插件另需已批准的 `commands.call`。没有 `signature` 的命令保留既有单向 `Notification::Command` 语义，不作为有返回值的命令被发现。
 
+`plugin.commands` **1.0.0 为稳定接口**，不是实验能力。最低宿主需支持当前 `protocol = 7`、`api.base = ^1` 及 `plugin.commands = ^1` 协商。无法缺少命令时声明为 required；声明为 optional 时，能力缺失需禁用这些入口。[公共稳定性、兼容与弃用政策](/zh-cn/sdk/#稳定性与能力兼容)规定同 major 的加法演进和跨 major 的迁移，不承诺未来宿主版本或传输协议。
+
 ## 注册与调用
 
 清单命令可用 `service::Method` 声明 `parameters`、`result` 和 `permissions`。安装后的调用方和提供者必须同时授权签名，提供者需在清单中声明这些权限。schema 支持 null、布尔、有界整数、有界 UTF-8 字符串、有界数组和封闭记录。未知字段与错误参数在执行前拒绝，错误返回值产生明确失败。

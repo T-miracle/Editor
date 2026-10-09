@@ -10,6 +10,17 @@ alternate: /zh-cn/sdk/interaction/
 
 Negotiate `ui.interaction ^1` and approve `ui.interaction` for quick pick, input, confirmation, notices and progress. File, directory and save-location selection instead require `files.selection ^1` and the approved `files.select` permission. These operations use `api::EditorOperation::Interaction`, in an active trusted workspace instance.
 
+`ui.interaction` and `files.selection` **1.0.0 are stable**, not experimental. The minimum host
+supports the current `protocol = 7`, `api.base = ^1` and the relevant capability's `^1` range.
+Required capabilities that cannot be negotiated reject the package; absent optional capabilities
+must disable the corresponding feature or use a plugin fallback. The shared
+[stability, compatibility and deprecation policy](/en/sdk/#stability-and-capability-compatibility)
+applies to both interfaces.
+
+Native file, directory and save-location pickers currently support Windows. On other platforms,
+`Select` returns `UnsupportedOperation`, even when `files.selection` was negotiated; handle this
+failure separately from a user's cancellation.
+
 `interaction::start(operation, timeout_ms)` returns an owned accepted handle. The result arrives in `Notification::Request` as `RequestUpdate<EditorValue>`; successful values are wrapped in `EditorValue::Interaction`. `api::guest::EditorTask` correlates that handle and ignores other tasks and repeated terminal updates. Acceptance means queued work. It does not mean that the user confirmed the operation.
 
 ## Confirmed values and messages
@@ -45,7 +56,7 @@ The host alone receives the native path. Each `SelectedResource` returned to the
 
 Selection does not approve arbitrary workspace or external writes. Directory traversal, absolute/drive/device paths, alternate data streams and links or junctions escaping the selected boundary are rejected. Idle grants do not lock the file against normal rename or atomic replacement; replacing the selected object invalidates the old handle rather than granting access to the new object.
 
-`api::guest::close_resource(&handle)` releases the grant. Disable, uninstall, trust revocation and instance replacement revoke all remaining grants. A cancelled, expired or late picker callback creates no grant. Selection and selected-resource reads are forbidden in delegated service and cross-plugin command contexts, even if both plugins separately have `files.select`; authority cannot be transferred through a JSON value or reply.
+`api::guest::close_resource(handle)` consumes the handle and releases the grant. Disable, uninstall, trust revocation and instance replacement revoke all remaining grants. A cancelled, expired or late picker callback creates no grant. Selection and selected-resource reads are forbidden in delegated service and cross-plugin command contexts, even if both plugins separately have `files.select`; authority cannot be transferred through a JSON value or reply.
 
 A typed command invoked directly by the host may select, read and release its own resources if its signature requires `files.select` and installation approved that permission. The runtime records this host origin internally and admits only the target provider's first hop; a guest-supplied caller name such as `@host` does not establish it. Nested or cross-plugin calls remain denied, and a service method cannot declare `files.select` as a delegatable grant.
 

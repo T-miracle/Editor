@@ -10,6 +10,10 @@ alternate: /en/sdk/interaction/
 
 快选、输入、确认、通知和进度需协商 `ui.interaction ^1` 并批准 `ui.interaction`。文件、目录和保存位置选择则需 `files.selection ^1` 与已批准的 `files.select` 权限。这些操作通过 `api::EditorOperation::Interaction` 在活动、可信的工作区实例中运行。
 
+`ui.interaction` 与 `files.selection` **1.0.0 为稳定接口**，不是实验能力。最低宿主需支持当前 `protocol = 7`、`api.base = ^1` 与相应能力的 `^1` 范围。无法协商 required 能力时拒绝包；optional 能力缺失时，禁用相应功能或使用插件自身降级。[公共稳定性、兼容与弃用政策](/zh-cn/sdk/#稳定性与能力兼容)适用于这两项接口。
+
+文件、目录及保存位置的原生选择器当前支持 Windows。其他平台的 `Select` 返回 `UnsupportedOperation`，即使已协商 `files.selection`；插件应将该失败与用户取消分别处理。
+
 `interaction::start(operation, timeout_ms)` 返回所属实例的 accepted 句柄。结果通过 `Notification::Request` 的 `RequestUpdate<EditorValue>` 投递，成功值包装为 `EditorValue::Interaction`。`api::guest::EditorTask` 关联该句柄并忽略其他任务和重复终态。Accepted 只表示排队，并不表示用户已经确认。
 
 ## 确认值与消息
@@ -45,7 +49,7 @@ Escape、取消按钮、原生对话框关闭、超时和所属实例退役产�
 
 选择不批准任意工作区或外部写入。目录穿越、绝对/驱动器/设备路径、备用数据流，以及越过选择边界的链接或 junction 均拒绝。闲置授权不锁住文件，不阻碍正常改名或原子替换；替换所选对象使旧句柄失效，不会授予访问新对象的权限。
 
-`api::guest::close_resource(&handle)` 释放授权。禁用、卸载、撤销信任和实例替换撤销剩余授权。取消、超时和迟到选择回调不创建授权。委托服务与跨插件命令上下文禁止选择和所选资源读取，即使双方分别拥有 `files.select`；通过 JSON 值或返回值也不能转授权限。
+`api::guest::close_resource(handle)` 按值接收句柄并释放授权。禁用、卸载、撤销信任和实例替换撤销剩余授权。取消、超时和迟到选择回调不创建授权。委托服务与跨插件命令上下文禁止选择和所选资源读取，即使双方分别拥有 `files.select`；通过 JSON 值或返回值也不能转授权限。
 
 宿主直接调用的 typed 命令可以选择、读取和释放自己的资源，前提是其签名要求 `files.select` 且安装时已批准该权限。运行时以内部记录确认宿主来源，只允许目标提供者的第一跳；访客提供的 `@host` 等调用者名称不构成来源证据。嵌套和跨插件调用仍被拒绝，普通服务方法不能把 `files.select` 声明为可委托权限。
 

@@ -10,6 +10,13 @@ alternate: /zh-cn/sdk/commands/
 
 Negotiate `plugin.commands ^1` to discover or provide typed commands and native menu contributions. Calling another plugin also requires approved `commands.call`. A command without `signature` keeps existing one-way `Notification::Command` semantics and is not discoverable as a result-bearing command.
 
+`plugin.commands` **1.0.0 is stable**, not experimental. Its minimum host supports the current
+`protocol = 7`, `api.base = ^1` and `plugin.commands = ^1` negotiation. Declare it as required
+when the plugin cannot operate without commands, or optional and disable these entry points
+when it is absent. The shared [stability, compatibility and deprecation policy](/en/sdk/#stability-and-capability-compatibility)
+defines same-major additions and major-version migrations without promising a future host
+release or wire protocol.
+
 ## Registration and calls
 
 Manifest commands may declare a `service::Method` signature with `parameters`, `result` and `permissions`. Both installed caller and provider must authorize the signature; the provider declares those permissions in its manifest. Supported schemas are null, boolean, bounded integer, bounded UTF-8 string, bounded array and closed record. Unknown fields and malformed arguments are rejected before execution; malformed results return an explicit failure.

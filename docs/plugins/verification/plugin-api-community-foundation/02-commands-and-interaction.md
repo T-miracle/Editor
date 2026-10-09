@@ -2,9 +2,9 @@
 
 日期：2026-10-09。对应 [工单 02 / GitHub #94](https://github.com/T-miracle/Nanobug/issues/94)、[实施正文](../../tickets/plugin-api-community-foundation/02-commands-and-interaction.md)与[总方案](../../specs/plugin-api-community-foundation.md)。
 
-状态：实现与本单自动验收已完成，候选等待根代理原生验收和 Standards / Spec 双轴审查；未推送、未关闭 issue。下文的 GPUI 测试与实际桌面观察分别记载，不能以编译或旧 exe 的观察代替最终原生验收。
+状态：实现与本单自动验收已完成，根代理已记录原生候选复核，最终交付等待集成差异复核和 Standards / Spec 双轴审查；未推送、未关闭 issue。下文的 GPUI 测试与实际桌面观察分别记载，不能以编译或旧 exe 的观察冒充新指纹的物理验收。
 
-## 固定输入与构建
+## 原始构建与行为验收输入
 
 工作树 `C:/Users/Tmiracle/.codex/worktrees/plugin-api-interaction/Editor`，分支 `codex/plugin-api-interaction`，基线 `452994e6d3d6da526803cc62db96ee722580e670`。最终候选提交由同一分支的提交记录确定；本记录随候选提交，避免把自身未形成的 commit hash 写成证据。
 
@@ -20,6 +20,8 @@ cargo build -p editor-app
 ```
 
 三包均由原生验收候选宿主的内嵌 SDK 缓存独立编译并正式打包；访客无仓库 crate 路径依赖或 SDK 源码副本。三包构建使用的 SDK 缓存摘要 `22751a70f284b7363e30323353a4c2dff1b29464c3b94d6889bd68852f457062`。终端本次只适配新增可选命令上下文字段，独立单元测试 **44 passed**。
+
+下表保存原始行为测试的输入指纹。C04 审查修正后的当前 SDK、宿主和三包另列于末节；同名包输出已被最新重建覆盖，不能把原始 hash 当作当前文件 hash。
 
 | 产物 | SHA-256 |
 | --- | --- |
@@ -98,9 +100,9 @@ cargo check --workspace
 
 根代理随后对上表最终 `e62ec53...` exe 完成真实 Windows 复查：panel 菜单在按钮下方右侧；QuickPick 暴露“快速检查 / Quick”“完整检查 / Full”名称，Down 实际切到 Full。另一次默认 Quick 流程中，物理 `n`、`i`、空格提交“你”，Confirm 呈现“你 (brief)”，随后 50% 非模态 Progress 不抢焦点；点击取消回显 `Cancelled / cancelled / not_executed` 且控件撤销。操作超过 30 秒也实际返回 `timed_out`。
 
-同一最终 exe 的文件选择也经根代理实际操作：从编辑器菜单打开真正 Win32 picker，输入自有 `input.txt` 绝对路径并点击 Open；返回 panel 与 Notify 均显示 `input.txt:6490 bytes`，与磁盘 6490 字节一致，关闭通知正常。另一轮选择超过 60 秒后，系统 picker 实际自动关闭并回显 `timed_out / not_executed`。目录/保存系统选择、外部中文 emoji 路径、四类菜单完整入口、桌面缩放与退役可见结果仍待根代理完成记录。
+同一最终 exe 的文件选择也经根代理实际操作：从编辑器菜单打开真正 Win32 picker，输入自有 `input.txt` 绝对路径并点击 Open；返回 panel 与 Notify 均显示 `input.txt:6490 bytes`，与磁盘 6490 字节一致，关闭通知正常。另一轮选择超过 60 秒后，系统 picker 实际自动关闭并回显 `timed_out / not_executed`。根代理集成提交 `586edb2` 的 `native-02.md` 已补齐目录、Save 意图不创建文件、工作区外 `外部😀.txt` 28 字节读取，以及系统取消关闭并返回 `Cancelled / cancelled / not_executed`；其观察指纹仍为 `e62ec53...`。四类菜单、缩放与退役边界结合上文对应的 GPUI / Manager 用例判定。
 
-工单 01 合入后的虚拟只读文档菜单需按资源身份适配 `path=None`，这是根代理集成回归，不能在本单独立树把虚拟资源伪装为磁盘路径。最新原生 C03、集成复核与双轴审查尚未记为通过，因此此记录不授权提前关闭 #94。
+工单 01 合入后的虚拟只读文档菜单需按资源身份适配 `path=None`，这是根代理后续集成回归，不能在本单独立树把虚拟资源伪装为磁盘路径。根代理已记录本单 C03 原生候选复核；审查修正后的差异复核与双轴审查尚待完成，此记录不授权提前关闭 #94。
 
 ## 候选审查 P3 修正
 
@@ -109,3 +111,29 @@ cargo check --workspace
 修正后重新执行三项必需门禁，全部成功：`cargo fmt --check`、非 UI workspace **227 passed / 199 ignored / 0 failed**、`cargo check --workspace`。真实包菜单回归 `cargo test -p editor-app native_plugin_menus_revalidate_context_and_remove_retired_contributions -- --ignored` 为 **1 passed / 0 ignored**，日志 `../target/interaction-review-menu.log`。`website` 的 `npm test` 为 **15 passed / 2 skipped**，仍仅跳过缺少 dist 的搜索索引；`git diff --check` 通过。
 
 随后 `cargo build -p editor-app` 成功，复制到上表 `interaction-review-candidate` 新路径，保留根代理正在验收的 `e62ec53...` 副本。此次只删除同参数转发并校正 SDK 注释与措辞，线协议、schema、权限校验、选择/取消/焦点实现与三包内容均未改变，因此原三包与已有行为测试适用于这一差异；没有重复构建插件包。新 SDK 源文本因注释变化而不同，表中 SDK 缓存摘要仅证明上述三包原始构建。实际 Windows 观察仍属于 `e62ec53...`，没有将其伪称为新 exe hash 的物理验收。
+
+## C04 政策、签名与 SDK 导出补充
+
+Spec 审查追加确认资源释放示例签名与公共兼容政策缺口。已核对 `api/guest.rs` 的 `close_resource(handle: ResourceHandle)`，两语示例均按值传入。双语 SDK 入口现在提供稳定/实验、同 major 加法兼容、required 拒绝/未知 optional 降级、破坏性变化升 major、弃用及迁移的公共政策；最低宿主由当前 `protocol = 7`、`api.base = ^1` 和相关能力协商确定，不猜产品版本，也不新增历史或未来传输协议支持。commands / interaction 两语明确本单三项核心能力为稳定 1.0.0，并链接公共政策。选择器的 Windows 支持与其他平台 `UnsupportedOperation` 已写进公开页面。
+
+公共政策 h2 分别为 `Stability and capability compatibility`、`稳定性与能力兼容`，精确锚点 `/en/sdk/#stability-and-capability-compatibility`、`/zh-cn/sdk/#稳定性与能力兼容`。已将同一政策全文交给 01，要求保留其 documents 链接并同步这一段，避免独立候选引用不存在的锚点或产生第二套政策。
+
+链接检查出现实际红灯：SDK 导出为 **5 passed / 1 failed**，`COMMANDS.md` 指向不存在的 `README.mdinteraction/`；已在 root fallback 之前补齐 commands / interaction 两项页面映射，`cargo test -p editor-app sdk_export::tests` 最终 **6 passed / 0 ignored**，日志 `../target/interaction-review-sdk-tests-final.log`。网站的独立锚点检查通过，但页面检查把 fragment 误作路由；仅修正该测试剥离 fragment，保留单独 heading 校验，最终 `npm test` 为 **15 passed / 2 skipped**，缺少 dist 的搜索索引仍未执行。
+
+SDK 导出修正后重新执行三项必需门禁，fmt 与 check 成功，非 UI workspace **227 passed / 199 ignored / 0 failed**。宿主构建成功，再按正式入口重建三个现有版本包：
+
+```powershell
+cargo build -p editor-app
+& '../target/debug/editor-app.exe' --plugin-package plugins/capability-example plugins/example plugins/terminal --output target/plugin-api-test
+```
+
+实际构建消息中的三包 `plugin-protocol` 路径均指向 SDK key `e6c489a1f6ba891fac413c6658e4cccae50752cdec65a91bf15c71e1bf22cac8`。已直接核对该缓存的 `INTERACTION.md` 包含按值释放、平台失败规则和本地 `README.md#stability-and-capability-compatibility` 链接。曾尝试 `--plugin-cargo ... metadata` 获取 key，该入口只允许 build/check/test 并明确拒绝；该失败没有计入通过，最终 key 取自真正的包构建路径，未扩大工具入口。
+
+| 当前 C04 重建产物 | SHA-256 |
+| --- | --- |
+| `target/plugin-api-test/capability-example-0.18.0.zip` | `a27558f475cf707c26af041d2232493d53d8075d5e0e9c7eae9f2898c0f1f9ef` |
+| `target/plugin-api-test/example-0.4.0.zip` | `970e435495328e79854c6673d9e8410950fe0172ea559670337a1e3775db0e54` |
+| `target/plugin-api-test/terminal-0.12.3.zip` | `6ede935bd3b0980498375a4642418a1cc101eed7499fb90da96a50c25cf37641` |
+| `../target/interaction-docs-candidate/editor-app.exe` | `80621afadc1dba68c284f8727a4e42332c9a6af5f341bd1013998ca6f165de0a` |
+
+此次新增生产代码仅修正 SDK 文档链接导出，访客源码、线协议、schema、权限与 UI 消费行为未变。按根代理明确的复用范围，不重跑完整 negative 或原生矩阵；复用先前相同代码路径的行为断言，当前交付使用新 SDK 与新包指纹。实际 Windows 输入仍绑定 `e62ec53...` 与根代理的原生开发候选，不把它们冒充 `80621a...` 的物理输入。
