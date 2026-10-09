@@ -1,0 +1,133 @@
+{
+  "tickets": [
+    {
+      "title": "插件 API 01：文档快照、事件与只读资源比较",
+      "local": 1,
+      "url": "https://github.com/T-miracle/Nanobug/issues/93",
+      "number": 93,
+      "state": "open",
+      "id": 5772184809
+    },
+    {
+      "title": "插件 API 02：插件命令、宿主交互与选择授权",
+      "local": 2,
+      "url": "https://github.com/T-miracle/Nanobug/issues/94",
+      "number": 94,
+      "state": "open",
+      "id": 5772184930
+    },
+    {
+      "title": "插件 API 03：工作区文件操作与可撤销批量修改",
+      "local": 3,
+      "url": "https://github.com/T-miracle/Nanobug/issues/95",
+      "number": 95,
+      "state": "open",
+      "id": 5772185043
+    },
+    {
+      "title": "插件 API 04：多来源诊断与语言修复闭环",
+      "local": 4,
+      "url": "https://github.com/T-miracle/Nanobug/issues/96",
+      "number": 96,
+      "state": "open",
+      "id": 5772185191
+    },
+    {
+      "title": "插件 API 05：通用树与编辑器装饰",
+      "local": 5,
+      "url": "https://github.com/T-miracle/Nanobug/issues/97",
+      "number": 97,
+      "state": "open",
+      "id": 5772185326
+    },
+    {
+      "title": "插件 API 06：云服务查询、密钥与后台刷新",
+      "local": 6,
+      "url": "https://github.com/T-miracle/Nanobug/issues/98",
+      "number": 98,
+      "state": "open",
+      "id": 5772185445
+    },
+    {
+      "title": "插件 API 07：按需激活、配置热应用与兼容升级",
+      "local": 7,
+      "url": "https://github.com/T-miracle/Nanobug/issues/99",
+      "number": 99,
+      "state": "open",
+      "id": 5772185613
+    }
+  ],
+  "parent": {
+    "number": 92,
+    "url": "https://github.com/T-miracle/Nanobug/issues/92",
+    "id": 5772184614
+  },
+  "edges": [
+    {
+      "from": 1,
+      "verified": true,
+      "blocked_issue": 95,
+      "to": 3,
+      "blocking_issue": 93
+    },
+    {
+      "from": 2,
+      "verified": true,
+      "blocked_issue": 95,
+      "to": 3,
+      "blocking_issue": 94
+    },
+    {
+      "from": 3,
+      "verified": true,
+      "blocked_issue": 96,
+      "to": 4,
+      "blocking_issue": 95
+    },
+    {
+      "from": 1,
+      "verified": true,
+      "blocked_issue": 97,
+      "to": 5,
+      "blocking_issue": 93
+    },
+    {
+      "from": 2,
+      "verified": true,
+      "blocked_issue": 97,
+      "to": 5,
+      "blocking_issue": 94
+    },
+    {
+      "from": 2,
+      "verified": true,
+      "blocked_issue": 98,
+      "to": 6,
+      "blocking_issue": 94
+    },
+    {
+      "from": 4,
+      "verified": true,
+      "blocked_issue": 99,
+      "to": 7,
+      "blocking_issue": 96
+    },
+    {
+      "from": 5,
+      "verified": true,
+      "blocked_issue": 99,
+      "to": 7,
+      "blocking_issue": 97
+    },
+    {
+      "from": 6,
+      "verified": true,
+      "blocked_issue": 99,
+      "to": 7,
+      "blocking_issue": 98
+    }
+  ],
+  "repository": "T-miracle/Nanobug",
+  "transport": "Existing Git authentication / GitHub REST",
+  "verified": true
+}
