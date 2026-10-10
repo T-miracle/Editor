@@ -19,6 +19,18 @@ pub(crate) fn markdown_view(
         .selectable(true)
 }
 
+/// Display untrusted marketplace snapshots without fetching images or activating embedded links.
+pub(crate) fn untrusted_markdown_view(
+    id: &'static str,
+    markdown: String,
+    font_size: Pixels,
+    cx: &App,
+) -> TextView {
+    markdown_view(id, markdown, font_size, cx)
+        .on_link_click(|_, _, _, _| {})
+        .image_source(|_| ImageSource::Custom(Arc::new(|_, _| None)))
+}
+
 /// Render guest-produced rich markup natively with project colors and no implicit external access.
 /// Navigation and images must use separately negotiated host capabilities instead of Base defaults.
 pub(crate) fn rich_text_view(

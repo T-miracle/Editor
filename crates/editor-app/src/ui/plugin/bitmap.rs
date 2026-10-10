@@ -75,7 +75,7 @@ pub(super) fn decode(bytes: &[u8]) -> Result<Bitmap, Failure> {
 }
 
 /// Remaining resident pixel capacity is checked by the decoder before allocating its output buffer.
-pub(super) fn decode_with_budget(bytes: &[u8], remaining: u64) -> Result<Bitmap, Failure> {
+pub(crate) fn decode_with_budget(bytes: &[u8], remaining: u64) -> Result<Bitmap, Failure> {
     let mut buffer = if let Ok(format) = image::guess_format(bytes) {
         if !matches!(
             format,

@@ -5,6 +5,7 @@ mod admission;
 mod bundled_tests;
 mod command_epochs;
 pub(super) mod configurations;
+mod marketplace;
 mod preparation;
 #[cfg(all(test, windows))]
 mod registry_startup_tests;
@@ -358,6 +359,11 @@ pub(super) struct InstallationProgress {
 }
 #[derive(Default)]
 pub(super) struct Published {
+    /// Refresh generations authorize downloads; cached catalogs only support browsing.
+    pub market: plugin_runtime::marketplace::CatalogState,
+    pub market_revision: u64,
+    /// Bounded, predecoded icons never invoke the UI's ambient file or URL resolver.
+    pub market_icons: BTreeMap<String, crate::ui::plugin::bitmap::Bitmap>,
     /// Completion bundles let the session discard only the historical data actually stored.
     pub preference_imports: Vec<PreferenceImport>,
     /// True only after successful private-store recovery and the actor's first complete entry publication.

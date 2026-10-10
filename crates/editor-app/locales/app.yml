@@ -1,4 +1,70 @@
 _version: 2
+plugins.market_fetched_at:
+  en: "Catalog last fetched: %{time}"
+  zh-CN: "目录最后获取时间：%{time}"
+plugins.market_published_at:
+  en: "Published: %{time}"
+  zh-CN: "发布时间：%{time}"
+plugins.market_source:
+  en: "Source repository"
+  zh-CN: "源码仓库"
+plugins.market_feedback:
+  en: "Feedback / issues"
+  zh-CN: "反馈与问题"
+plugins.market_all_categories:
+  en: "All categories (next)"
+  zh-CN: "全部分类（切换）"
+plugins.market_identity:
+  en: "ID: %{id} · Source: %{repository}"
+  zh-CN: "标识：%{id} · 来源：%{repository}"
+plugins.market_compatibility:
+  en: "Editor: %{host} · Platforms: %{platforms}"
+  zh-CN: "编辑器：%{host} · 平台：%{platforms}"
+plugins.market_all_tags:
+  en: "All tags (next)"
+  zh-CN: "全部标签（切换）"
+plugins.market_sort_relevance:
+  en: "Match"
+  zh-CN: "相关"
+plugins.market_sort_downloads:
+  en: "Downloads"
+  zh-CN: "下载"
+plugins.market_sort_updated:
+  en: "Updated"
+  zh-CN: "更新"
+plugins.market_sort_name:
+  en: "Name"
+  zh-CN: "名称"
+plugins.market_refresh:
+  en: "Refresh catalog"
+  zh-CN: "刷新目录"
+plugins.market_refreshing:
+  en: "Refreshing catalog; cached entries are read-only."
+  zh-CN: "正在刷新目录；缓存内容仅供浏览。"
+plugins.market_offline:
+  en: "Catalog unavailable; installation is disabled. %{error}"
+  zh-CN: "目录不可用，已暂停安装。%{error}"
+plugins.market_downloads:
+  en: "Downloads: %{count}"
+  zh-CN: "下载次数：%{count}"
+plugins.market_downloads_unavailable:
+  en: "Download count unavailable"
+  zh-CN: "下载次数暂不可用"
+plugins.market_incompatible:
+  en: "No compatible reviewed version for this editor and platform."
+  zh-CN: "当前编辑器和平台暂无兼容的已审核版本。"
+plugins.market_permissions:
+  en: "Requested permissions: %{permissions}"
+  zh-CN: "申请权限：%{permissions}"
+plugins.market_native_services:
+  en: "Native services (run outside the WASM sandbox): %{services}"
+  zh-CN: "原生服务（在 WASM 沙箱外运行）：%{services}"
+plugins.market_downloading:
+  en: "Downloading package: %{bytes} bytes"
+  zh-CN: "正在下载插件包：%{bytes} 字节"
+plugins.market_preparing:
+  en: "Preparing installation: %{stage}"
+  zh-CN: "正在准备安装：%{stage}"
 terminal.title:
   en: "Terminal"
   zh-CN: "终端"

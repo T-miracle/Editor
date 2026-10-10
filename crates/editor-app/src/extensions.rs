@@ -33,6 +33,7 @@ mod management;
 mod management_tests;
 #[cfg(test)]
 mod markdown_tests;
+mod marketplace;
 #[cfg(test)]
 mod native_build_tests;
 #[cfg(test)]
@@ -121,6 +122,8 @@ pub fn init(cx: &mut App) {
 }
 
 pub struct ExtensionPanel {
+    /// Search filters are local; freshness and installation authority live on the worker.
+    market_view: marketplace::ViewState,
     /// Form observers redraw only when configuration publication changes.
     configuration_revision: u64,
     /// Log arrivals and viewing changes redraw every native consumer of the shared process history.
@@ -388,6 +391,7 @@ impl ExtensionPanel {
             manager_detail_tab: management::DetailTab::Overview,
             manager_log_view: None,
             manager_packages: vec![],
+            market_view: Default::default(),
             confirm: None,
             confirm_dialog_open: false,
             status: None,
@@ -491,6 +495,7 @@ impl ExtensionPanel {
             manager_detail_tab: management::DetailTab::Overview,
             manager_log_view: None,
             manager_packages: vec![],
+            market_view: Default::default(),
             confirm: None,
             confirm_dialog_open: false,
             status: None,
@@ -526,6 +531,10 @@ impl ExtensionPanel {
         let mut contributions_changed = false;
         let editor_requests = {
             let mut state = self.worker.state.lock().unwrap();
+            if self.market_view.revision != state.market_revision {
+                self.market_view.revision = state.market_revision;
+                changed = true;
+            }
             if self.surface_id.is_none() {
                 changed |= self.bundled.ready != state.ready;
                 self.bundled.ready = state.ready;

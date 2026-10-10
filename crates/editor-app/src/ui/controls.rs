@@ -50,7 +50,7 @@ pub(crate) use split::split_container;
 pub(crate) use status_bar::StatusBar;
 pub(crate) use status_icon::StatusIcon;
 pub(crate) use tabs::tab_strip;
-pub(crate) use text::{RichTextColors, markdown_view, rich_text_view};
+pub(crate) use text::{RichTextColors, markdown_view, rich_text_view, untrusted_markdown_view};
 pub(crate) use textarea::Textarea;
 pub(crate) use tooltip::Tooltip;
 pub(crate) use tree::{TreeRowAppearance, tree_row};

@@ -30,6 +30,8 @@ pub mod development;
 mod structure;
 pub use structure::{StructureProvider, StructureSnapshot};
 mod manager;
+/// Reviewed static catalogs and bounded downloads share the public package validation path.
+pub mod marketplace;
 mod migration;
 /// Trusted native host features share the runtime's bounded process-tree supervisor.
 pub mod native_processes;

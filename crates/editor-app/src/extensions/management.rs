@@ -58,6 +58,9 @@ impl ExtensionPanel {
                 this.open_installation_progress(window, cx)
             });
         }
+        if self.manager_market {
+            return self.online_market(window, cx);
+        }
         if let Some(package) = self.pending.clone().filter(|_| !self.pending_dialog_open) {
             // Defer the overlay until the manager render finishes updating its Root.
             self.pending_dialog_open = true;

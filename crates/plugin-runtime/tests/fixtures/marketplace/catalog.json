@@ -1,0 +1,46 @@
+{
+  "schema": 1,
+  "plugins": [
+    {
+      "id": "test.notes",
+      "repository": "author/notes",
+      "maintainers": [
+        "author"
+      ],
+      "summary": "A notes plugin",
+      "category": "tools",
+      "tags": [
+        "notes"
+      ],
+      "versions": [
+        {
+          "manifest": {
+            "id": "test.notes",
+            "name": "Notes",
+            "version": "1.0.0",
+            "protocol": 7,
+            "api": {
+              "base": "^1"
+            },
+            "contributions": "plugin.toml",
+            "storage_limit": 1024
+          },
+          "host_version": ">=0.1.0",
+          "platforms": [],
+          "readme": "# Notes\nOriginal author documentation.\n\nLong original text / 插件原文。\n\nLong original text / 插件原文。\n\nLong original text / 插件原文。\n\nLong original text / 插件原文。\n\nLong original text / 插件原文。\n\nLong original text / 插件原文。\n\nLong original text / 插件原文。\n\nLong original text / 插件原文。\n\nLong original text / 插件原文。\n\nLong original text / 插件原文。\n\nLong original text / 插件原文。\n\nLong original text / 插件原文。\n\nLong original text / 插件原文。\n\nLong original text / 插件原文。\n\nLong original text / 插件原文。\n\nLong original text / 插件原文。\n\nLong original text / 插件原文。\n\nLong original text / 插件原文。\n\nLong original text / 插件原文。\n\nLong original text / 插件原文。\n\nLong original text / 插件原文。\n\nLong original text / 插件原文。\n\nLong original text / 插件原文。\n\nLong original text / 插件原文。\n\nLong original text / 插件原文。\n\nLong original text / 插件原文。\n\nLong original text / 插件原文。\n\nLong original text / 插件原文。\n\nLong original text / 插件原文。\n\nLong original text / 插件原文。\n\nLong original text / 插件原文。\n\nLong original text / 插件原文。\n\nLong original text / 插件原文。\n\nLong original text / 插件原文。\n\nLong original text / 插件原文。\n\nLong original text / 插件原文。\n\nLong original text / 插件原文。\n\nLong original text / 插件原文。\n\nLong original text / 插件原文。\n\nLong original text / 插件原文。\n\nLong original text / 插件原文。\n\nLong original text / 插件原文。\n\nLong original text / 插件原文。\n\nLong original text / 插件原文。\n\nLong original text / 插件原文。\n\nLong original text / 插件原文。\n\nLong original text / 插件原文。\n\nLong original text / 插件原文。\n\nLong original text / 插件原文。\n\nLong original text / 插件原文。\n\nLong original text / 插件原文。\n\nLong original text / 插件原文。\n\nLong original text / 插件原文。\n\nLong original text / 插件原文。\n\nLong original text / 插件原文。\n\nLong original text / 插件原文。\n\nLong original text / 插件原文。\n\nLong original text / 插件原文。\n\nLong original text / 插件原文。\n\nLong original text / 插件原文。\n\nLong original text / 插件原文。\n\nLong original text / 插件原文。\n\nLong original text / 插件原文。\n\nLong original text / 插件原文。\n\nLong original text / 插件原文。\n\nLong original text / 插件原文。\n\nLong original text / 插件原文。\n\nLong original text / 插件原文。\n\nLong original text / 插件原文。\n\nLong original text / 插件原文。\n\nLong original text / 插件原文。\n\nLong original text / 插件原文。\n\nLong original text / 插件原文。\n\nLong original text / 插件原文。\n\nLong original text / 插件原文。\n\nLong original text / 插件原文。\n\nLong original text / 插件原文。\n\nLong original text / 插件原文。\n\nLong original text / 插件原文。\n\nLong original text / 插件原文。\n\nLong original text / 插件原文。\n\nLong original text / 插件原文。\n\nLong original text / 插件原文。\n\nLong original text / 插件原文。\n\nLong original text / 插件原文。\n\nLong original text / 插件原文。\n\nLong original text / 插件原文。\n\nLong original text / 插件原文。\n\nLong original text / 插件原文。\n\nLong original text / 插件原文。\n\nLong original text / 插件原文。\n\nLong original text / 插件原文。\n\nLong original text / 插件原文。\n\nLong original text / 插件原文。\n\nLong original text / 插件原文。\n\nLong original text / 插件原文。\n\nLong original text / 插件原文。\n\nLong original text / 插件原文。\n\nLong original text / 插件原文。\n\nLong original text / 插件原文。\n\nLong original text / 插件原文。\n\nLong original text / 插件原文。\n\nLong original text / 插件原文。\n\nLong original text / 插件原文。\n\nLong original text / 插件原文。\n\nLong original text / 插件原文。\n\nLong original text / 插件原文。\n\nLong original text / 插件原文。\n\nLong original text / 插件原文。\n\nLong original text / 插件原文。\n\nLong original text / 插件原文。\n\nLong original text / 插件原文。\n\nLong original text / 插件原文。\n\nLong original text / 插件原文。\n\nLong original text / 插件原文。\n\nLong original text / 插件原文。\n\nLong original text / 插件原文。\n\nLong original text / 插件原文。\n\nLong original text / 插件原文。\n\nLong original text / 插件原文。\n\nLong original text / 插件原文。\n\nLong original text / 插件原文。\n\nLong original text / 插件原文。\n\nLong original text / 插件原文。\n\nLong original text / 插件原文。\n\nLong original text / 插件原文。\n\nLong original text / 插件原文。\n\nLong original text / 插件原文。\n\nLong original text / 插件原文。\n\nLong original text / 插件原文。\n\nLong original text / 插件原文。\n\nLong original text / 插件原文。\n\nLong original text / 插件原文。\n\nLong original text / 插件原文。\n\nLong original text / 插件原文。\n\nLong original text / 插件原文。\n\nLong original text / 插件原文。\n\nLong original text / 插件原文。\n\nLong original text / 插件原文。\n\nLong original text / 插件原文。\n\nLong original text / 插件原文。\n\nLong original text / 插件原文。\n\nLong original text / 插件原文。\n\nLong original text / 插件原文。\n\nLong original text / 插件原文。\n\nLong original text / 插件原文。\n\nLong original text / 插件原文。\n\nLong original text / 插件原文。\n\nLong original text / 插件原文。\n\nLong original text / 插件原文。\n\nLong original text / 插件原文。\n\nLong original text / 插件原文。\n\nLong original text / 插件原文。\n\nLong original text / 插件原文。\n\nLong original text / 插件原文。\n\nLong original text / 插件原文。\n\nLong original text / 插件原文。\n\nLong original text / 插件原文。\n\nLong original text / 插件原文。\n\nLong original text / 插件原文。\n\n",
+          "icon": "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 24 24\"><path fill=\"#4682b4\" d=\"M2 2h20v20H2z\"/></svg>",
+          "version": "1.0.0",
+          "commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "license": "MIT",
+          "url": "https://github.com/author/notes/releases/download/v1.0.0/notes.zip",
+          "asset_id": 123,
+          "sha256": "1ebba0f7d272fb1d05b29ddd291c6ecaf2c7df9e20005b7c22df29d7c08777f7",
+          "published_at": "2026-10-10T00:00:00Z",
+          "changelog": "First release",
+          "withdrawn": false
+        }
+      ],
+      "downloads": null
+    }
+  ]
+}
